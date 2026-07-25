@@ -132,7 +132,23 @@ expansion), `label` (REQUIRED — human name), `type` (required), `config`
 error rows), `depends_on` (explicit upstream list), `checkpoint` (bool, for `--resume`),
 `enabled` (bool, default true; takes `${ctx.*}` so profiles can toggle it — a disabled
 module is skipped ⏭ at run time and the disable cascades to every downstream consumer),
-`retry` (2.8 — per-module override of the top-level `retry_policy:`; see below).
+`retry` (2.8 — per-module override of the top-level `retry_policy:`; see below),
+`engine` (2.34 — cross-engine handoff; see below).
+
+**`engine:` (2.34)** — a scalar engine NAME (`spark`, `duckdb`) picking which
+engine runs THIS module. NOT the blueprint-level `engine:` BLOCK (per-engine
+session settings, namespaced by name — same word, different level, see the
+Top-level structure section above). Four rules, in order: (1) an explicit
+`engine:` on the module wins; (2) unset → inherit the SINGLE upstream
+parent's resolved engine (a Probe's `attach_to` target counts as its
+parent); (3) unset + multiple parents on DIFFERING engines → `CompileError`
+demanding an explicit pin; (4) unset + no parents (an Ingress) →
+`deployment.engine`. A Blueprint with no `engine:` field anywhere is fully
+portable. The compiler partitions the module graph into engine islands at
+the boundaries this creates (derived, never declared) and gates each island
+against its OWN engine's capability table. Probe/Assert must colocate with
+their target's island (`CompileError` on a mismatched pin); a spillway edge
+may not cross islands (v1). See docs/specs.md §4.3.
 
 **`retry:` (2.8)** overrides the blueprint's `retry_policy:` **per field** — any
 field left unset inherits the blueprint value (same shape as `agent.cascade`

@@ -28,8 +28,8 @@ Each engine declares a verdict for every capability leaf in a YAML data file shi
 
 | Engine | Leaves declared | Supported | Version-gated | Ignored with warning | Unsupported |
 |---|---|---|---|---|---|
-| `duckdb` | 288 | 243 | 0 | 6 | 39 |
-| `spark` | 288 | 287 | 7 | 0 | 1 |
+| `duckdb` | 289 | 244 | 0 | 6 | 39 |
+| `spark` | 289 | 288 | 7 | 0 | 1 |
 
 ### Conditional and refused capabilities
 

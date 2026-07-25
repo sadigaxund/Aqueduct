@@ -60,6 +60,12 @@ macros:
 # Per-engine settings, namespaced by engine name — mirrors aqueduct.yml's
 # top-level engine: block exactly. Merged with the engine-level
 # engine.spark.conf at runtime; Blueprint values win on conflict.
+#
+# Not to be confused with the per-module `engine:` FIELD (a scalar engine
+# NAME, e.g. `engine: duckdb`, set directly on a module below) — same word,
+# two levels. This block configures an engine's session behaviour; the
+# module field picks which engine a module runs on. See the module-level
+# `engine:` note in the Modules section below.
 
 engine:
   spark:
@@ -391,6 +397,18 @@ agent:
 #                                # Disabled modules are skipped (⏭) and the disable
 #                                # cascades to every downstream consumer (a join/union
 #                                # never runs with a missing input).
+#   engine: duckdb               # cross-engine handoff (2.34) — pin which registered
+#                                # engine runs THIS module. Omit to inherit: a single
+#                                # upstream parent's resolved engine, or deployment.engine
+#                                # if this module has no upstream (an Ingress). Multiple
+#                                # upstream parents on DIFFERING engines with no pin here
+#                                # is a compile error demanding an explicit engine:. A
+#                                # Blueprint with no engine: field anywhere is fully
+#                                # portable. Probe/Assert must colocate with their
+#                                # target's resolved engine (compile error otherwise);
+#                                # a spillway edge may not cross engines (v1). The
+#                                # compiler partitions the module graph into engine
+#                                # islands at the boundaries this creates.
 modules: []
 
   # ── INGRESS — load data from any Spark-supported source ──────────────────────

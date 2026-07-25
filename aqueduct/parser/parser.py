@@ -318,6 +318,7 @@ def parse_dict(
                 description=m.description,
                 tags=tuple(m.tags),
                 config=_anchor_paths(resolve_value(m.config, ctx_map), m.type),
+                engine=m.engine,
                 on_failure=m.on_failure,
                 on_failure_webhook=m.on_failure_webhook,
                 retry=_merge_module_retry(m.retry),

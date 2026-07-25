@@ -69,6 +69,7 @@ class Manifest:
                     "description": m.description,
                     "tags": list(m.tags),
                     "config": m.config,
+                    "engine": m.engine,
                     "attach_to": m.attach_to,
                     "spillway": m.spillway,
                     "depends_on": list(m.depends_on),

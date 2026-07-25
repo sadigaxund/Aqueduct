@@ -178,6 +178,14 @@ class Module:
     config: dict[str, Any]
     description: str = ""
     tags: tuple[str, ...] = ()
+    # Cross-engine handoff (2.34) — as authored, `None` means "unresolved":
+    # the parser carries this verbatim (an explicit pin, or unset). The
+    # compiler (`aqueduct/compiler/islands.py::resolve_module_engines`)
+    # replaces this with the FINAL resolved engine name for every enabled
+    # module in the compiled Manifest, so `Manifest.modules[i].engine` is
+    # always a concrete engine name, never None, once compiled. See
+    # `aqueduct.parser.schema.ModuleSchema.engine` for the inheritance rules.
+    engine: str | None = None
     spillway: str | None = None
     depends_on: tuple[str, ...] = ()
     on_failure: dict[str, Any] | None = None

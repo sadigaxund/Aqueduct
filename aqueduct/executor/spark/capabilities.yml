@@ -437,6 +437,14 @@ leaves:
   module.field.depends_on: supported
   module.field.description: supported
   module.field.enabled: supported
+  # Cross-engine handoff (2.34) — compiler-consumed metadata (per-island
+  # engine resolution), not engine-executed behaviour, so `supported` on
+  # every engine regardless of what that engine actually runs. No `tests:`
+  # key: this is a `module.field.*` leaf, out of `execution_leaves()` scope
+  # (see capability_leaves.py) — there is no per-engine runtime dispatch to
+  # exercise, only compile-time island derivation, which is covered by
+  # tests/test_compiler/test_islands.py.
+  module.field.engine: supported
   module.field.id: supported
   module.field.label: supported
   module.field.on_failure: supported

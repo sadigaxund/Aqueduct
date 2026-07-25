@@ -35,6 +35,7 @@ from aqueduct.compiler.capability_check import (
     format_unsupported_error,
 )
 from aqueduct.compiler.expander import ExpandError, expand_arcades
+from aqueduct.compiler.islands import derive_islands, resolve_module_engines, validate_islands
 from aqueduct.compiler.macros import MacroError, resolve_macros_in_config
 from aqueduct.compiler.models import Manifest
 from aqueduct.compiler.provenance import (
@@ -394,6 +395,24 @@ def compile(  # noqa: A001
     _all_modules = list(modules)
     modules = [m for m in modules if m.enabled]
 
+    # ── 6.8. Resolve per-module engine + derive islands (Phase 81 Step 1) ────
+    # Only enabled modules run, so only they get a resolved engine / island
+    # membership — a disabled module's `engine:` (if any) is left as-authored
+    # and never reaches the capability gate below. `engine` (this function's
+    # own parameter) is the DEFAULT engine (`deployment.engine` /
+    # `--set deployment.engine`) — rule 4's fallback only; an explicit
+    # per-module pin (rule 1) or an inherited engine (rule 2) always wins
+    # over it, per the "blueprint expresses semantics, config expresses
+    # environment" precedence.
+    _resolved_engine = resolve_module_engines(modules, edges, default_engine=engine)
+    validate_islands(modules, edges, _resolved_engine)
+    _islands = derive_islands(modules, edges, _resolved_engine)
+    _all_modules = [
+        dataclasses.replace(m, engine=_resolved_engine[m.id]) if m.id in _resolved_engine else m
+        for m in _all_modules
+    ]
+    modules = [m for m in _all_modules if m.enabled]
+
     # ── 7. Delivery semantics warning ─────────────────────────────────────────
     from aqueduct.warnings import _DEFAULT_SUPPRESS
     from aqueduct.warnings import emit as _aq_emit
@@ -660,27 +679,49 @@ def compile(  # noqa: A001
         base_dir=blueprint.base_dir,
     )
 
-    # ── 9. Engine capability gate (Phase 78) ──────────────────────────────────
+    # ── 9. Engine capability gate (Phase 78, per-island since Phase 81) ──────
     # UNSUPPORTED leaves are a hard CompileError; IGNORED_WITH_WARNING leaves
     # are a suppressible warning. Version-constrained SUPPORTED leaves are NOT
     # checked here (compile-time cannot know the installed dependency
-    # versions) — that is `aqueduct/doctor/`'s job. Spark declares
-    # default-ALLOW for the entire grammar today, so this is a no-op for
-    # every existing blueprint. `check_capabilities` itself raises
-    # `UnknownEngineError` (a CompileError subclass) for an unregistered
-    # `engine` — fail-closed, see
-    # `aqueduct/executor/capabilities.py::get_capabilities` — so no separate
-    # try/except is needed here.
-    _cap_problems = check_capabilities(manifest, engine=engine)
-    _unsupported = [p for p in _cap_problems if p.support == Support.UNSUPPORTED]
-    if _unsupported:
-        _msgs = "; ".join(format_unsupported_error(p, engine) for p in _unsupported)
-        raise CompileError(f"Engine capability gate failed: {_msgs}")
-    if not warnings_silence_all:
-        from aqueduct.warnings import emit as _emit_cap
-        for _p in _cap_problems:
-            if _p.support == Support.IGNORED_WITH_WARNING:
-                _emit_cap(RULE_ID_IGNORED, format_ignored_warning(_p, engine), suppress=_supp)
+    # versions) — that is `aqueduct/doctor/`'s job.
+    #
+    # Phase 81 Step 1: a Blueprint may now span multiple engine islands (see
+    # `aqueduct/compiler/islands.py`), so each island is gated against ITS
+    # OWN engine — a module-type/op/mode leaf on island A is never checked
+    # against island B's engine. For a single-engine Blueprint (no module
+    # pins any `engine:`) there is exactly one island whose engine equals
+    # `engine`, so this degenerates to the pre-Phase-81 single-gate call
+    # byte-for-byte. `check_capabilities` itself raises `UnknownEngineError`
+    # (a CompileError subclass) for an unregistered island engine —
+    # fail-closed, see `aqueduct/executor/capabilities.py::get_capabilities`
+    # — so no separate try/except is needed here, and this is also where
+    # "an island whose engine is not registered" becomes a CompileError.
+    #
+    # `manifest.udf_registry` (and therefore the manifest-scoped
+    # `feature.*`/`type.*` leaves it drives — UDF language, UDF return_type)
+    # is NOT partitioned per island: a UDF is registered once and referenced
+    # from SQL by name, with no static trace from a `udf_registry` entry back
+    # to the specific island(s) that actually call it. So every island's
+    # engine is checked against the FULL udf_registry, not just the UDFs its
+    # own modules reference — deliberately conservative (a Python UDF used
+    # only on the Spark side of a polyglot Blueprint will still be gated
+    # against a DuckDB island present elsewhere) rather than silently correct
+    # by omission. Tightening this to per-island UDF attribution is future
+    # work (it needs SQL-reference tracing, out of Step 1's scope).
+    _unsupported_msgs: list[str] = []
+    for _isl in _islands:
+        _island_modules = tuple(m for m in manifest.modules if m.id in _isl.module_ids)
+        _island_manifest = dataclasses.replace(manifest, modules=_island_modules)
+        _cap_problems = check_capabilities(_island_manifest, engine=_isl.engine)
+        _unsupported = [p for p in _cap_problems if p.support == Support.UNSUPPORTED]
+        _unsupported_msgs.extend(format_unsupported_error(p, _isl.engine) for p in _unsupported)
+        if not warnings_silence_all:
+            from aqueduct.warnings import emit as _emit_cap
+            for _p in _cap_problems:
+                if _p.support == Support.IGNORED_WITH_WARNING:
+                    _emit_cap(RULE_ID_IGNORED, format_ignored_warning(_p, _isl.engine), suppress=_supp)
+    if _unsupported_msgs:
+        raise CompileError(f"Engine capability gate failed: {'; '.join(_unsupported_msgs)}")
 
     # ── 9.5. Cross-engine heal-patch provenance gate (Phase 79) ──────────────
     # `blueprint.healed_by` (not the Manifest — this is provenance METADATA,

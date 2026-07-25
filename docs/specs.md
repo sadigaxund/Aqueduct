@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.33: Reference Document**
+**Version 2.34: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -254,6 +254,7 @@ Every Module regardless of type shares these fields:
 | **checkpoint** | Optional boolean. When true, output DataFrame is saved as Parquet for `--resume`. |
 | **enabled** | Optional boolean (default `true`); accepts `${ctx.*}` / `${ENV}` so context profiles can toggle it (coerced from true/false/1/0/yes/no/on/off). A disabled module still compiles but is skipped (⏭) at run time, and the disable **cascades**: every module consuming its output, via edges, `depends_on`, or Probe `attach_to`, is disabled too, transitively and uniformly (a join or union missing one input does not run partially). A disabled Arcade disables all its expanded children. Disabled modules are excluded from compile-time warnings. If the cascade disables every module, compilation fails. |
 | **retry** | Optional. Per-module override of the top-level `retry_policy:` block (2.8), see below. |
+| **engine** | Optional. A scalar execution-engine NAME (`spark`, `duckdb`) selecting which engine runs THIS module (2.34), see below. Distinct from the blueprint-level `engine:` BLOCK (§4.2, per-engine settings namespaced by engine name) — same word, two levels. |
 
 ### Per-module retry override (`retry:`, 2.8)
 
@@ -277,6 +278,28 @@ modules:
 Fields: `max_attempts`, `backoff` (whole-block override: set every backoff sub-field or omit the block entirely; a module `backoff:` does NOT merge field-by-field against the blueprint's `backoff:`), `transient_errors`, `non_transient_errors`, `on_exhaustion`, `deadline_seconds`. One caveat: `deadline_seconds: null`/omitted at module level always means "inherit", there is no module-level way to explicitly clear a blueprint-level deadline back to "no deadline."
 
 This is distinct from `on_failure` (an internal field the self-healing agent writes via the `set_module_on_failure` / `replace_retry_policy` patch ops, a full RetryPolicy replacement, not merged against the blueprint policy). When both are present at runtime, `on_failure` (heal-time) wins over `retry:` (authoring-time) wins over the blueprint-level `retry_policy:`.
+
+### Cross-engine handoff: per-module `engine:` and islands (2.34)
+
+A Blueprint may span more than one execution engine. Every module carries an optional `engine:` field, a scalar engine NAME (`spark`, `duckdb`, …) — deliberately the same word as the blueprint-level `engine:` BLOCK (§4.2, per-engine session SETTINGS namespaced by engine name), but a different level: the block configures an engine's session behaviour, the field picks which engine runs one module. The two never conflict because they live at different keys with different shapes (a block, keyed by engine name; a scalar, on a module), and neither error message ever mentions the other.
+
+Every module resolves to exactly one engine, following four rules in this precedence:
+
+1. **An explicit `engine:` on the module wins.** The Blueprint's own pin is never overridden.
+2. **Unset → inherit the SINGLE upstream parent's (already-resolved) engine.** "Parent" means a module feeding this one over a `main`/`spillway` data edge, a `depends_on` entry, or — for a Probe specifically — its `attach_to` target (a Probe has no incoming data edge, so `attach_to` is its one inheritance parent; this is what makes an unpinned Probe land on its target's engine by default).
+3. **Unset + multiple parents resolved to DIFFERING engines → `CompileError`** demanding an explicit `engine:` on the module — the compiler will not guess which upstream to follow.
+4. **Unset + no parents (an Ingress, typically) → `deployment.engine`** (or `--set deployment.engine`), the configured default.
+
+Precedence against config: `deployment.engine` only moves rule 4's DEFAULT. An explicit per-module pin (rule 1) always wins over it — the Blueprint expresses semantics (which engine this transform needs), the config expresses environment (which engine to default to). A Blueprint with no `engine:` field anywhere is fully portable across every registered engine; a pinned `engine:` is a declared engine dependency for that module's island, enforced by the capability gate below.
+
+**Islands** are derived, never declared — there is no user-facing island syntax. An island is a connected subgraph of modules that share one resolved engine (connectivity follows the same `main`/`spillway` data-edge basis used elsewhere for parallel-component detection, plus a Probe's mandatory bond to its `attach_to` target). A **boundary edge** is a data edge whose two endpoints resolve to different islands — where a synthetic handoff module inserts at a later compiler stage (a separate, additive step: see `docs/roadmap.md` for the storage-spill transport this feeds). Disjoint components pinned to different engines produce **zero** boundary edges — two independent single-engine flows run side by side in one Blueprint with no handoff at all.
+
+Two structural rules keep v1 from claiming more than it can run:
+
+- **A Probe or Assert must colocate with its target's island.** Neither module type may introduce an engine boundary — a Probe's target is its `attach_to` module, an Assert's target is its upstream data parent(s). A mismatch (almost always an explicit `engine:` pin on the Probe/Assert that disagrees with its target) is a `CompileError`.
+- **A spillway edge may not cross islands in v1.** Cross-engine quarantine routing isn't wired yet — route a spillway to a module on its source's own engine.
+
+**The capability gate is per island.** Each island is checked against its OWN engine (§10.9): a module-type/op/mode leaf on one island is never checked against a different island's engine. An island whose engine has no registered capability declaration is a `CompileError` (the same fail-closed `UnknownEngineError` §10.9 already raises for an unregistered `deployment.engine`). For a single-engine Blueprint (no module pins any `engine:`) there is exactly one island, so this degenerates to the pre-2.34 single-engine gate exactly.
 
 ### Ports
 
@@ -1749,6 +1772,8 @@ The gate checks three kinds of leaf:
 3. The `feature.*` leaves the compiled Manifest actually exercises, derived from real Manifest fields rather than a hardcoded list. `feature.python_udf` and `feature.java_udf` come from each `udf_registry` entry's `lang`, so a Blueprint that declares no UDF exercises no UDF feature.
 
 On an engine that declares every leaf `supported`, all three kinds are a no-op and the gate stays silent.
+
+**Per island (2.34).** A Blueprint compiled with one or more modules pinning `engine:` (§4.3's "Cross-engine handoff" subsection) is partitioned into engine islands before this gate runs, and each island's modules are checked against its OWN engine — never against a different island's engine. This is what makes "an island whose engine is not registered" a `CompileError` (the same `UnknownEngineError` above) rather than only ever checking the single `deployment.engine` default. One deliberate scope limit: the manifest-scoped `feature.*`/`type.*` leaves a `udf_registry` entry drives (UDF language, UDF return type) are checked against EVERY island's engine, not just the island(s) that actually reference the UDF — there is no static trace from a `udf_registry` entry back to the SQL that calls it, so this stays conservative rather than silently correct by omission. For a single-engine Blueprint (no module pins `engine:`) there is exactly one island, and this degenerates to the pre-2.34 single-gate call exactly.
 
 ### The version check
 

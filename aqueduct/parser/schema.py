@@ -225,6 +225,19 @@ class ModuleSchema(BaseModel):
     description: str = ""
     tags: list[str] = Field(default_factory=list)
     config: dict[str, Any] = Field(default_factory=dict)
+    # Cross-engine handoff (2.34) — which execution engine runs THIS module.
+    # A scalar engine NAME (e.g. "spark", "duckdb"), distinct from the
+    # blueprint-level `engine:` BLOCK (EngineBlockSchema, per-engine SETTINGS
+    # namespaced by engine name, 2.0). Same word, two levels, deliberately —
+    # see EngineBlockSchema's docstring. None (the default) means "inherit
+    # from an upstream module, or from `deployment.engine` if this module has
+    # no upstream" — resolved by the compiler (`aqueduct/compiler/islands.py`),
+    # never validated against a fixed literal set here (only the compiler
+    # knows which engines are registered). A Blueprint with no `engine:`
+    # field anywhere is fully portable across every registered engine; a
+    # pinned `engine:` is a declared engine dependency for that module's
+    # island, enforced by the per-island capability gate.
+    engine: str | None = None
     on_failure: dict[str, Any] | None = None
     on_failure_webhook: str | dict[str, Any] | None = None
     # Per-module retry policy override — inherits blueprint-level retry_policy
@@ -354,10 +367,12 @@ class EngineBlockSchema(BaseModel):
     dict. Mirrors the `engine:` block in `aqueduct.yml` exactly — see
     `aqueduct.config.EngineConfig`.
 
-    Distinct from a future per-module `engine:` FIELD (not implemented
-    here) that will select which engine runs one module — this is the
+    Distinct from the per-module `engine:` FIELD (`ModuleSchema.engine`,
+    2.34) that selects which engine runs one module — this is the
     per-engine SETTINGS block, keyed by engine name, at the top level of
-    the Blueprint.
+    the Blueprint. Deliberately the same word at two levels: this block
+    configures an engine's session behaviour; the module field picks which
+    engine a module runs on. Never confuse the two in error messages.
     """
     model_config = ConfigDict(extra="forbid")
 
