@@ -5,7 +5,7 @@ description: >
   Channel joins two tables and hints a broadcast on the large table.
   The broadcast fails because the large table exceeds the threshold.
   The agent must remove the broadcast hint or lower
-  autoBroadcastJoinThreshold in spark_config.
+  autoBroadcastJoinThreshold in engine.spark.conf.
 
 modules:
   - id: orders_raw
