@@ -128,9 +128,9 @@ When adding an LLM provider: add `_call_<provider>()` in `aqueduct/agent/provide
 **Spark behavior reference**: read `docs/spark_guide.md` before modifying Executor modules or implementing new Channel operations.
 
 ## TODOs Memory Rule
-`TODOs.md` is the single source of truth for what's next, what's stubbed, and what's deferred.
+`~/.claude/projects/-home-sakhund-Personal-Projects-Aqueduct/memory/TODOs.md` (NOT a file in this repo — it lives in the user's Claude memory directory, outside version control) is the single source of truth for what's next, what's stubbed, and what's deferred.
 
-- **"What's left?" / "What's next?"** → read TODOs.md first.
+- **"What's left?" / "What's next?"** → read that TODOs.md first.
 - **After every planning session** → update TODOs.md with agreed phases.
 - **After every phase completion** → mark phase done in TODOs.md; add entry to CHANGELOG.md.
 - **When adding a stub** → add to Active Stubs with file + line + acceptance criteria.
@@ -259,7 +259,7 @@ Use this table at coding time, not just at the end of a phase. Whenever you touc
 | Any production / deployment / danger-setting / cluster-config detail | `docs/production_guide.md` |
 | Any Spark compiler-warning, performance, or tuning behaviour | `docs/spark_guide.md` |
 | Any change to `pyproject.toml` version pins or supported Python/Spark range | `docs/compatibility.md` |
-| Adding or registering a new execution engine (`aqueduct.engines` entry point) | `version-matrix.yml`'s `compat` job (test paths + `-m` marker expression) **and** `tests/test_meta_ci.py`, which fails the build if a registered engine isn't covered there |
+| Adding or registering a new execution engine (`aqueduct.engines` entry point) | `version-matrix.yml`'s `compat` job (test paths + `-m` marker expression) **and** a PRE-merge lane in `test-suite.yml` (copy the `parser-tests` job shape; add a `changes` path filter for the engine's source + test directories) — `tests/test_meta_ci.py` fails the build if a registered engine isn't covered in either file |
 | Any newly deferred or aspirational item (NOT a current phase) | `docs/roadmap.md` — never inline "this is deferred" prose into `specs.md` |
 | Any new file under `docs/` | `README.md` References list + this Documentation map |
 | Any new flag, command, or behaviour visible from the CLI | `docs/cli_reference.md` |
@@ -682,7 +682,10 @@ push to `feat/**` or `phase/**`, and PRs into `main`/`feat/**`/`phase/**`.
 | `stores-tests` | `aqueduct/stores/**`, `tests/test_stores/**`, `tests/test_depot/**` (PG + Redis services) | `pytest ... -m integration` |
 | `tools-tests` | `aqueduct/tools/**`, `aqueduct/stores/**`, `aqueduct/doctor/**`, or `tests/test_tools/**` | `pytest tests/test_tools/ -m "not spark"` |
 | `mcp-tests` | `aqueduct/mcp/**`, `aqueduct/tools/**`, or `tests/test_mcp/**` (installs the `mcp` extra) | `pytest tests/test_mcp/ -m "not spark"` |
-| `capabilities-tests` | `aqueduct/executor/capabilities.py`, `capability_leaves.py`, `config_leaves.py`, `channel_ops.py`, `spark/capabilities.py`, `aqueduct/compiler/capability_check.py`, `aqueduct/config.py`, `aqueduct/doctor/**`, or `tests/test_capabilities/**` | `pytest tests/test_capabilities/ -m "not spark"` |
+| `capabilities-tests` | `aqueduct/executor/capabilities.py`, `capability_leaves.py`, `config_leaves.py`, `channel_ops.py`, `spark/capabilities.py`, `duckdb_/capabilities.py`, `aqueduct/compiler/capability_check.py`, `aqueduct/config.py`, `aqueduct/doctor/**`, or `tests/test_capabilities/**` | `pytest tests/test_capabilities/ -m "not spark"` |
+| `duckdb-tests` | `aqueduct/executor/duckdb_/**` or `tests/test_executor_duckdb/**` | `pytest tests/test_executor_duckdb/ -m "not spark"` |
+| `typehub-tests` | `aqueduct/typehub.py` or `tests/test_typehub/**` | `pytest tests/test_typehub/ -m "not spark"` |
+| `deploy-tests` | `aqueduct/deploy/**` or `tests/test_deploy/**` | `pytest tests/test_deploy/ -m "not spark"` |
 | `coverage` | `main` pushes + all PRs | `pytest --cov=aqueduct --cov-fail-under=68 -m "not spark"` |
 
 **Branch workflow**: push a change touching only `aqueduct/agent/` → only
@@ -705,5 +708,6 @@ unprompted.
 - **No mocking the SparkSession** for executor tests — use the real `spark` fixture.
 - **Framework**: `pytest`, `pytest-cov` (68% minimum), `pre-commit` with `black` and `ruff`.
 - **Fixtures** in `tests/fixtures/`. Use `pytest.raises(match=...)` for validation errors.
+- **Seed timestamps** come from the `seed_ts` fixture (`tests/conftest.py`), not a hardcoded calendar-date literal.
 - **Immutability**: test `FrozenInstanceError` on dataclass mutation attempts.
 - **Test env vars**: `AQ_SPARK_MASTER` (default `local[1]`), `AQ_OLLAMA_URL` (default `http://localhost:11434`; tests skip if unreachable).
