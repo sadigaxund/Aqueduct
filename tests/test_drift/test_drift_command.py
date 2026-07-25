@@ -44,7 +44,7 @@ edges:
   - { from: load, to: c }
 """
 
-_AQ = "deployment:\n  engine: spark\n  master_url: local[1]\nagent:\n  model: test-model\n"
+_AQ = "deployment:\n  engine: spark\nengine:\n  spark:\n    master_url: local[1]\nagent:\n  model: test-model\n"
 
 
 @pytest.fixture

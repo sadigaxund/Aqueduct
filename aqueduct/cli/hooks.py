@@ -18,7 +18,7 @@ Entry types (parser guarantees exactly one per entry):
                       reusing the live engine session (session reuse — no
                       self-healing loop for the chained target; falls back
                       to the subprocess path when the target's
-                      `spark_config` is non-empty, since merging two
+                      `engine.spark.conf` is non-empty, since merging two
                       Blueprints' Spark configs into one live session isn't
                       generally safe). The target is compiled and executed
                       through the PARENT's engine (whatever `session`
@@ -165,7 +165,7 @@ def run_hooks(
             backward-compatible callers that don't pass one explicitly). An
             in-process chained blueprint is compiled and executed through
             THIS engine — a chained blueprint's own `deployment.engine` (in
-            its `aqueduct.yml`) is not consulted, same as `spark_config` is
+            its `aqueduct.yml`) is not consulted, same as `engine.spark.conf` is
             not merged: matching the parent session is the whole point of
             reusing it in-process.
         _chain: Internal — explicit ancestor chain for recursive in-process
@@ -239,7 +239,7 @@ def run_hooks(
                 if handled:
                     continue
                 # Fell back to subprocess (target had a non-empty
-                # spark_config) — build the same argv as the default path.
+                # engine.spark.conf) — build the same argv as the default path.
 
             argv = [sys.executable, "-c", _RELAUNCH, "run", str(target)]
             env = {**os.environ, _CHAIN_ENV: os.pathsep.join([*chain, str(bp_path)])}
@@ -311,7 +311,7 @@ def _run_in_process_blueprint_hook(
 
     Returns True when the in-process path handled the entry (success or
     failure — both terminal for this entry); False to signal "fall back to
-    the subprocess path" (only when the target's spark_config is non-empty).
+    the subprocess path" (only when the target's engine.spark.conf is non-empty).
     """
     from aqueduct.parser.parser import parse as _parse
 
@@ -322,14 +322,14 @@ def _run_in_process_blueprint_hook(
         return True
 
     if t_bp.spark_config:
-        # Safe subset per design: two Blueprints' spark_config may conflict
+        # Safe subset per design: two Blueprints' engine.spark.conf may conflict
         # in a shared live session (e.g. differing shuffle partitions) —
         # fall back to the isolated subprocess path instead of guessing at
         # a merge policy. (No pyspark import needed on this branch — keeps
         # the fallback usable on a [spark]-less install too.)
         from aqueduct.cli.style import info as _info
         _info(
-            f"[hook_inprocess_fallback] {label} — target sets spark_config, "
+            f"[hook_inprocess_fallback] {label} — target sets engine.spark.conf, "
             "falling back to subprocess (session config would conflict)"
         )
         return False

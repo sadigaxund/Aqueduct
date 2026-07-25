@@ -162,7 +162,7 @@ def _reachability_probe(
             )
             if not has_k8s_keys:
                 k8s_detail += (
-                    "  no spark.kubernetes.* keys in spark_config — "
+                    "  no spark.kubernetes.* keys in engine.spark.conf — "
                     "namespace and container image are normally required"
                 )
             spark_res = CheckResult("spark", "ok" if has_k8s_keys else "warn", k8s_detail, _ms(t))
@@ -366,7 +366,7 @@ def check_storage(
         detected.append("ADLS")
 
     if not detected:
-        return CheckResult("storage", "skip", "no object storage keys in spark_config", _ms(t), group="spark")
+        return CheckResult("storage", "skip", "no object storage keys in engine.spark.conf", _ms(t), group="spark")
 
     if skipped:
         return CheckResult(
@@ -400,7 +400,7 @@ def check_storage(
         if not _tcp_ok(*hp):
             return CheckResult("storage", "fail", f"S3/MinIO endpoint {s3_ep} — TCP connect to {hp[0]}:{hp[1]} failed", _ms(t), group="spark")
         if not has_keys:
-            return CheckResult("storage", "warn", f"endpoint {s3_ep} reachable; no access/secret key in spark_config — {note}", _ms(t), group="spark")
+            return CheckResult("storage", "warn", f"endpoint {s3_ep} reachable; no access/secret key in engine.spark.conf — {note}", _ms(t), group="spark")
         return CheckResult("storage", "ok", f"endpoint {s3_ep} reachable; creds present; {note}", _ms(t), group="spark")
 
     # GCS / ADLS: no single fixed endpoint to TCP-probe cheaply.
@@ -614,8 +614,8 @@ def _check_iceberg_catalog(manifest: Any) -> list[CheckResult]:
     Iceberg needs a catalog (`spark.sql.catalog.<name> = ...`), not just the
     format string — `format: iceberg` with no catalog fails at runtime with a
     cryptic Spark error. This is a `warn`, not a `fail`: the catalog may live in
-    `aqueduct.yml` (engine-level `spark_config`), which the Manifest does not
-    carry, so we only flag the common "forgot the catalog entirely" case.
+    `aqueduct.yml` (engine-level `engine.spark.conf`), which the Manifest does
+    not carry, so we only flag the common "forgot the catalog entirely" case.
     """
     results: list[CheckResult] = []
     uses_iceberg = any(
@@ -634,8 +634,8 @@ def _check_iceberg_catalog(manifest: Any) -> list[CheckResult]:
             status="warn",
             detail=(
                 "A module uses format: iceberg but no `spark.sql.catalog.*` key is "
-                "set in the blueprint spark_config. Configure an Iceberg catalog "
-                "here or in aqueduct.yml (e.g. spark.sql.catalog.local = "
+                "set in the blueprint's engine.spark.conf. Configure an Iceberg "
+                "catalog here or in aqueduct.yml (e.g. spark.sql.catalog.local = "
                 "org.apache.iceberg.spark.SparkCatalog), or reads/writes will fail "
                 "at runtime."
             ),
@@ -1286,7 +1286,7 @@ def run_doctor(
         # env=local → client-mode (local driver), so DuckDB on the local FS
         # persists fine. But a REMOTE master + relative DuckDB path is a smell:
         # switch to --deploy-mode cluster later and it's lost. Soft nudge only.
-        _master = getattr(cfg.deployment, "master_url", None) or ""
+        _master = getattr(cfg.engine.spark, "master_url", None) or ""
         _remote_master = bool(_master) and not _master.startswith("local")
         _rel = [
             name for name, store in (
@@ -1307,7 +1307,7 @@ def run_doctor(
             results.append(CheckResult("cluster-stores", "skip", "local mode — no cluster store check", group="stores"))
 
     # Cloudpickle compatibility (pure version check — no Spark needed)
-    results.append(check_cloudpickle_compat(cfg.deployment.master_url))
+    results.append(check_cloudpickle_compat(cfg.engine.spark.master_url))
 
     # Java runtime the JVM/Spark launches (pure detection — no Spark session)
     results.append(check_java())
@@ -1359,7 +1359,7 @@ def run_doctor(
     # Spark + storage (optional, slow — storage probe runs inside same session)
     if skip_spark:
         results.append(CheckResult("spark", "skip", "--skip-spark flag set", group="spark"))
-        results.append(check_storage(cfg.spark_config, spark_ok=False, skipped=True))
+        results.append(check_storage(cfg.engine.spark.conf, spark_ok=False, skipped=True))
         if blueprint_path is not None:
             results.extend(check_blueprint_sources(blueprint_path))
             results.extend(check_capabilities(blueprint_path, engine=cfg.deployment.engine))
@@ -1370,7 +1370,7 @@ def run_doctor(
         return results
 
     spark_result, storage_result = check_spark(
-        cfg.deployment.master_url, cfg.spark_config,
+        cfg.engine.spark.master_url, cfg.engine.spark.conf,
         preflight=preflight, target=cfg.deployment.target,
     )
     results.append(spark_result)

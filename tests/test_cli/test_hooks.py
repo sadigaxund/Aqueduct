@@ -212,7 +212,11 @@ class TestInProcessBlueprintHook:
     def _write_simple_bp(self, path: Path, *, spark_config: dict | None = None) -> None:
         sc = ""
         if spark_config:
-            sc = "spark_config:\n" + "\n".join(f"  {k}: {v}" for k, v in spark_config.items()) + "\n"
+            sc = (
+                "engine:\n  spark:\n    conf:\n"
+                + "\n".join(f"      {k}: {v}" for k, v in spark_config.items())
+                + "\n"
+            )
         path.write_text(
             "aqueduct: '1.0'\nid: target\nname: Target\n"
             "modules:\n"
@@ -221,7 +225,7 @@ class TestInProcessBlueprintHook:
             f"{sc}"
         )
 
-    def test_in_process_falls_back_when_spark_config_set(self, tmp_path, capsys, monkeypatch):
+    def test_in_process_falls_back_when_engine_spark_conf_set(self, tmp_path, capsys, monkeypatch):
         target = tmp_path / "t.yml"
         self._write_simple_bp(target, spark_config={"spark.sql.shuffle.partitions": 4})
         caller = tmp_path / "caller.yml"

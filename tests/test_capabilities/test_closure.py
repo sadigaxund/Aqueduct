@@ -241,13 +241,13 @@ def test_all_config_leaves_contains_known_examples():
     refactor is a deliberate, visible test update rather than a silent drift."""
     leaves = all_config_leaves()
     for expected in (
-        "config.deployment.master_url",
+        "config.engine.spark.master_url",
         "config.deployment.target",
         "config.deployment.engine",
         "config.agent.sandbox_master_url",
         "config.stores.observability.backend",
         "config.checkpoint_root",
-        "config.spark_config",
+        "config.engine.spark.conf",
     ):
         assert expected in leaves, f"expected config leaf {expected!r} not derived"
 

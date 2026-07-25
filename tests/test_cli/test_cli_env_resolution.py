@@ -230,7 +230,12 @@ def test_load_config_with_env_explicit_path(tmp_path, clean_env):
     from aqueduct.cli import _load_config_with_env
     (tmp_path / ".env").write_text("EXPLICIT_VAR=explicit", encoding="utf-8")
     cfg_p = tmp_path / "aqueduct.yml"
-    cfg_p.write_text("aqueduct_config: '1.0'\n" + 'deployment: {engine: spark, target: local, master_url: "local[*]"}', encoding="utf-8")
+    cfg_p.write_text(
+        "aqueduct_config: '2.0'\n"
+        + 'deployment: {engine: spark, target: local}\n'
+        + 'engine: {spark: {master_url: "local[*]"}}',
+        encoding="utf-8",
+    )
 
     cfg = _load_config_with_env(cfg_p)
     assert os.environ.get("EXPLICIT_VAR") == "explicit"

@@ -39,15 +39,15 @@ def test_load_config_valid_file(tmp_path):
     """valid aqueduct.yml -> returns correctly populated AqueductConfig"""
     path = tmp_path / "valid.yml"
     data = {
-        "aqueduct_config": "1.0",
-        "deployment": {"target": "yarn", "master_url": "yarn"},
-        "spark_config": {"spark.executor.memory": "4g"}
+        "aqueduct_config": "2.0",
+        "deployment": {"target": "yarn"},
+        "engine": {"spark": {"master_url": "yarn", "conf": {"spark.executor.memory": "4g"}}},
     }
     path.write_text(yaml.dump(data))
     config = load_config(path)
     assert config.deployment.target == "yarn"
-    assert config.deployment.master_url == "yarn"
-    assert config.spark_config == {"spark.executor.memory": "4g"}
+    assert config.engine.spark.master_url == "yarn"
+    assert config.engine.spark.conf == {"spark.executor.memory": "4g"}
 
 
 def test_load_config_invalid_yaml(tmp_path):
@@ -83,7 +83,7 @@ def test_load_config_unknown_stores_key(tmp_path):
 def test_config_defaults():
     config = AqueductConfig()
     assert config.deployment.target == "local"
-    assert config.deployment.master_url == "local[*]"
+    assert config.engine.spark.master_url == "local[*]"
     assert config.stores.observability.path is None
     assert not hasattr(config.stores, "lineage")  # removed — merged into observability
     assert config.stores.default_depot().path == ".aqueduct/depot.db"
@@ -103,25 +103,24 @@ def test_config_frozen():
 def test_config_overrides(tmp_path):
     """custom master_url in config read back correctly
     partial config (only deployment section) -> other sections use defaults
-    spark_config dict entries preserved in returned config
+    engine.spark.conf dict entries preserved in returned config
     """
     path = tmp_path / "override.yml"
     data = {
-        "deployment": {"master_url": "local[2]"},
-        "spark_config": {"spark.driver.memory": "2g"}
+        "engine": {"spark": {"master_url": "local[2]", "conf": {"spark.driver.memory": "2g"}}},
     }
     path.write_text(yaml.dump(data))
     config = load_config(path)
-    
+
     # Custom read back
-    assert config.deployment.master_url == "local[2]"
-    
+    assert config.engine.spark.master_url == "local[2]"
+
     # Partial fallback
     assert config.deployment.target == "local"
     assert config.stores.default_depot().backend == "duckdb"
-    
+
     # Dict preserved
-    assert config.spark_config == {"spark.driver.memory": "2g"}
+    assert config.engine.spark.conf == {"spark.driver.memory": "2g"}
 
 
 def test_webhook_config_defaults():
@@ -146,10 +145,10 @@ def test_load_config_postgres_missing_driver(tmp_path, monkeypatch):
     import sys
     monkeypatch.setitem(sys.modules, "psycopg2", None)
     monkeypatch.setitem(sys.modules, "psycopg2.pool", None)
-    
+
     path = tmp_path / "aq_pg.yml"
     path.write_text("stores:\n  observability: {backend: postgres, path: postgresql://localhost/aq}")
-    
+
     from aqueduct.config import ConfigError
     with pytest.raises(ConfigError, match="psycopg2"):
         load_config(path)
@@ -157,10 +156,10 @@ def test_load_config_postgres_missing_driver(tmp_path, monkeypatch):
 def test_load_config_redis_missing_driver(tmp_path, monkeypatch):
     import sys
     monkeypatch.setitem(sys.modules, "redis", None)
-    
+
     path = tmp_path / "aq_redis.yml"
     path.write_text("stores:\n  depots: {default: {backend: redis, path: redis://localhost}}")
-    
+
     from aqueduct.config import ConfigError
     with pytest.raises(ConfigError, match="redis"):
         load_config(path)
@@ -169,7 +168,7 @@ def test_load_config_duckdb_lazy_imports(tmp_path, monkeypatch):
     import sys
     monkeypatch.setitem(sys.modules, "psycopg2", None)
     monkeypatch.setitem(sys.modules, "redis", None)
-    
+
     path = tmp_path / "aq_duck.yml"
     path.write_text("stores:\n  observability: {backend: duckdb, path: obs}")
 
@@ -194,12 +193,12 @@ def test_postgres_dsn_not_rejected_by_dir_rule(tmp_path):
 def test_metrics_config_parsing(tmp_path):
     """MetricsConfig parses use_observe: true and use_observe: false without error"""
     path = tmp_path / "metrics.yml"
-    
+
     # Test true
     path.write_text("metrics:\n  use_observe: true")
     cfg = load_config(path)
     assert cfg.metrics.use_observe is True
-    
+
     # Test false
     path.write_text("metrics:\n  use_observe: false")
     cfg = load_config(path)
@@ -222,7 +221,7 @@ def test_deployment_config_literal_validation(tmp_path):
     path.write_text("deployment:\n  target: the-moon")
     with pytest.raises(ConfigError, match="validation error"):
         load_config(path)
-        
+
     # Invalid env
     path.write_text("deployment:\n  env: void")
     with pytest.raises(ConfigError, match="validation error"):
@@ -249,30 +248,31 @@ def test_engine_spark_registered_ok(tmp_path):
     assert cfg.deployment.engine == "spark"
 
 
-# ── Target ↔ master_url validation tests ──────────────────────────────────────
+# ── Target ↔ engine.spark.master_url validation tests (2.0 — master_url moved
+# off deployment: onto engine.spark:) ─────────────────────────────────────────
 
 def test_target_local_valid_master_url_ok(tmp_path):
     """local target with matching master_url passes"""
     for url in ("local[*]", "local[4]", "local"):
         path = tmp_path / "cfg.yml"
-        path.write_text(f"deployment:\n  target: local\n  master_url: {url}")
+        path.write_text(f"deployment:\n  target: local\nengine:\n  spark:\n    master_url: {url}")
         cfg = load_config(path)
         assert cfg.deployment.target == "local"
-        assert cfg.deployment.master_url == url
+        assert cfg.engine.spark.master_url == url
 
 
 def test_target_local_wrong_master_url_raises(tmp_path):
     """local target with non-local master_url raises ConfigError"""
     path = tmp_path / "cfg.yml"
-    path.write_text("deployment:\n  target: local\n  master_url: spark://host:7077")
-    with pytest.raises(ConfigError, match="requires master_url starting with 'local'"):
+    path.write_text("deployment:\n  target: local\nengine:\n  spark:\n    master_url: spark://host:7077")
+    with pytest.raises(ConfigError, match="requires engine.spark.master_url starting with 'local'"):
         load_config(path)
 
 
 def test_target_standalone_valid_master_url_ok(tmp_path):
     """standalone target with spark:// master_url passes"""
     path = tmp_path / "cfg.yml"
-    path.write_text("deployment:\n  target: standalone\n  master_url: spark://my-master:7077")
+    path.write_text("deployment:\n  target: standalone\nengine:\n  spark:\n    master_url: spark://my-master:7077")
     cfg = load_config(path)
     assert cfg.deployment.target == "standalone"
 
@@ -280,15 +280,15 @@ def test_target_standalone_valid_master_url_ok(tmp_path):
 def test_target_standalone_wrong_master_url_raises(tmp_path):
     """standalone target with non-spark:// master_url raises ConfigError"""
     path = tmp_path / "cfg.yml"
-    path.write_text("deployment:\n  target: standalone\n  master_url: local[*]")
-    with pytest.raises(ConfigError, match="requires master_url starting with 'spark://'"):
+    path.write_text("deployment:\n  target: standalone\nengine:\n  spark:\n    master_url: local[*]")
+    with pytest.raises(ConfigError, match="requires engine.spark.master_url starting with 'spark://'"):
         load_config(path)
 
 
 def test_target_yarn_valid_master_url_ok(tmp_path):
     """yarn target with master_url='yarn' passes"""
     path = tmp_path / "cfg.yml"
-    path.write_text("deployment:\n  target: yarn\n  master_url: yarn")
+    path.write_text("deployment:\n  target: yarn\nengine:\n  spark:\n    master_url: yarn")
     cfg = load_config(path)
     assert cfg.deployment.target == "yarn"
 
@@ -296,15 +296,15 @@ def test_target_yarn_valid_master_url_ok(tmp_path):
 def test_target_yarn_wrong_master_url_raises(tmp_path):
     """yarn target with master_url != 'yarn' raises ConfigError (exact match)"""
     path = tmp_path / "cfg.yml"
-    path.write_text("deployment:\n  target: yarn\n  master_url: \"yarn-client\"")
-    with pytest.raises(ConfigError, match="requires master_url='yarn'"):
+    path.write_text("deployment:\n  target: yarn\nengine:\n  spark:\n    master_url: \"yarn-client\"")
+    with pytest.raises(ConfigError, match="requires engine.spark.master_url='yarn'"):
         load_config(path)
 
 
 def test_target_kubernetes_valid_master_url_ok(tmp_path):
     """kubernetes target with k8s:// master_url passes"""
     path = tmp_path / "cfg.yml"
-    path.write_text("deployment:\n  target: kubernetes\n  master_url: k8s://https://apiserver:6443")
+    path.write_text("deployment:\n  target: kubernetes\nengine:\n  spark:\n    master_url: k8s://https://apiserver:6443")
     cfg = load_config(path)
     assert cfg.deployment.target == "kubernetes"
 
@@ -312,15 +312,15 @@ def test_target_kubernetes_valid_master_url_ok(tmp_path):
 def test_target_kubernetes_wrong_master_url_raises(tmp_path):
     """kubernetes target without k8s:// prefix raises ConfigError"""
     path = tmp_path / "cfg.yml"
-    path.write_text("deployment:\n  target: kubernetes\n  master_url: spark://host:7077")
-    with pytest.raises(ConfigError, match="requires master_url starting with 'k8s://'"):
+    path.write_text("deployment:\n  target: kubernetes\nengine:\n  spark:\n    master_url: spark://host:7077")
+    with pytest.raises(ConfigError, match="requires engine.spark.master_url starting with 'k8s://'"):
         load_config(path)
 
 
 def test_target_databricks_requires_block(tmp_path):
     """databricks is now an implemented remote-submit target; without its config block it errors."""
     path = tmp_path / "cfg.yml"
-    path.write_text("deployment:\n  target: databricks\n  master_url: local[*]")
+    path.write_text("deployment:\n  target: databricks\nengine:\n  spark:\n    master_url: local[*]")
     with pytest.raises(ConfigError, match="requires the deployment.databricks block"):
         load_config(path)
 
@@ -328,7 +328,7 @@ def test_target_databricks_requires_block(tmp_path):
 def test_target_emr_raises(tmp_path):
     """emr target is not yet supported → ConfigError"""
     path = tmp_path / "cfg.yml"
-    path.write_text("deployment:\n  target: emr\n  master_url: local[*]")
+    path.write_text("deployment:\n  target: emr\nengine:\n  spark:\n    master_url: local[*]")
     with pytest.raises(ConfigError, match="not yet supported"):
         load_config(path)
 
@@ -336,7 +336,7 @@ def test_target_emr_raises(tmp_path):
 def test_target_dataproc_raises(tmp_path):
     """dataproc target is not yet supported → ConfigError"""
     path = tmp_path / "cfg.yml"
-    path.write_text("deployment:\n  target: dataproc\n  master_url: local[*]")
+    path.write_text("deployment:\n  target: dataproc\nengine:\n  spark:\n    master_url: local[*]")
     with pytest.raises(ConfigError, match="not yet supported"):
         load_config(path)
 
@@ -344,10 +344,10 @@ def test_target_dataproc_raises(tmp_path):
 def test_target_default_master_url_passes(tmp_path):
     """Default local target with default local[*] master_url passes"""
     path = tmp_path / "cfg.yml"
-    path.write_text("deployment:\n  target: local\n  master_url: \"local[*]\"")
+    path.write_text("deployment:\n  target: local\nengine:\n  spark:\n    master_url: \"local[*]\"")
     cfg = load_config(path)
     assert cfg.deployment.target == "local"
-    assert cfg.deployment.master_url == "local[*]"
+    assert cfg.engine.spark.master_url == "local[*]"
 
 
 def test_target_validation_rejects_flink_engine(tmp_path):
@@ -355,7 +355,7 @@ def test_target_validation_rejects_flink_engine(tmp_path):
     (Phase 78 Step 1: engine names are validated against the aqueduct.engines
     entry-point registry, not a fixed Literal; flink is out of scope)."""
     path = tmp_path / "cfg.yml"
-    path.write_text("deployment:\n  engine: flink\n  target: databricks\n  master_url: local[*]")
+    path.write_text("deployment:\n  engine: flink\n  target: databricks\nengine:\n  spark:\n    master_url: local[*]")
     with pytest.raises(ConfigError, match=r"not a registered engine"):
         load_config(path)
 
@@ -377,9 +377,9 @@ def test_load_config_secret_resolved_env(monkeypatch, tmp_path):
     redaction.clear()
 
     path = tmp_path / "secret_env.yml"
-    path.write_text("spark_config:\n  spark.password: \"@aq.secret('MY_SECRET_KEY')\"")
+    path.write_text("engine:\n  spark:\n    conf:\n      spark.password: \"@aq.secret('MY_SECRET_KEY')\"")
     cfg = load_config(path)
-    assert cfg.spark_config["spark.password"] == "super-secret-value-12345"
+    assert cfg.engine.spark.conf["spark.password"] == "super-secret-value-12345"
     assert redaction.is_registered("super-secret-value-12345")
 
 
@@ -390,7 +390,7 @@ def test_load_config_secret_unresolved_env(tmp_path):
         del os.environ["MY_UNSET_KEY"]
 
     path = tmp_path / "secret_env_unset.yml"
-    path.write_text("spark_config:\n  spark.password: \"@aq.secret('MY_UNSET_KEY')\"")
+    path.write_text("engine:\n  spark:\n    conf:\n      spark.password: \"@aq.secret('MY_UNSET_KEY')\"")
     with pytest.raises(ConfigError, match=r"Unresolved secrets.*MY_UNSET_KEY"):
         load_config(path)
 
@@ -403,8 +403,10 @@ def test_load_config_secret_resolved_aws(tmp_path):
     path.write_text(
         "secrets:\n"
         "  provider: aws\n"
-        "spark_config:\n"
-        "  spark.password: \"@aq.secret('MY_AWS_KEY')\""
+        "engine:\n"
+        "  spark:\n"
+        "    conf:\n"
+        "      spark.password: \"@aq.secret('MY_AWS_KEY')\""
     )
 
     # importlib.util is imported inline inside _validate_secrets_backend, so
@@ -418,7 +420,7 @@ def test_load_config_secret_resolved_aws(tmp_path):
     with patch("importlib.util.find_spec", side_effect=_fake_find_spec), \
          patch("aqueduct.secrets.resolve_secret", return_value="aws-secret-value-12345"):
         cfg = load_config(path)
-    assert cfg.spark_config["spark.password"] == "aws-secret-value-12345"
+    assert cfg.engine.spark.conf["spark.password"] == "aws-secret-value-12345"
 
 
 def test_load_config_secret_aws_sdk_missing(tmp_path, monkeypatch):
@@ -430,8 +432,10 @@ def test_load_config_secret_aws_sdk_missing(tmp_path, monkeypatch):
     path.write_text(
         "secrets:\n"
         "  provider: aws\n"
-        "spark_config:\n"
-        "  spark.password: \"@aq.secret('MY_AWS_KEY')\""
+        "engine:\n"
+        "  spark:\n"
+        "    conf:\n"
+        "      spark.password: \"@aq.secret('MY_AWS_KEY')\""
     )
 
     with pytest.raises(ConfigError, match="boto3"):
@@ -448,8 +452,10 @@ def test_load_config_env_provider_resolution(monkeypatch, tmp_path):
     path.write_text(
         "secrets:\n"
         "  provider: ${CHOSEN_PROVIDER}\n"
-        "spark_config:\n"
-        "  spark.password: \"@aq.secret('MY_AWS_KEY')\""
+        "engine:\n"
+        "  spark:\n"
+        "    conf:\n"
+        "      spark.password: \"@aq.secret('MY_AWS_KEY')\""
     )
 
     real_find_spec = importlib.util.find_spec
@@ -462,7 +468,7 @@ def test_load_config_env_provider_resolution(monkeypatch, tmp_path):
          patch("aqueduct.secrets.resolve_secret", return_value="aws-resolved-value"):
         cfg = load_config(path)
     assert cfg.secrets.provider == "aws"
-    assert cfg.spark_config["spark.password"] == "aws-resolved-value"
+    assert cfg.engine.spark.conf["spark.password"] == "aws-resolved-value"
 
 
 def test_load_config_pass2_invalid_yaml(monkeypatch, tmp_path):
@@ -471,7 +477,7 @@ def test_load_config_pass2_invalid_yaml(monkeypatch, tmp_path):
     monkeypatch.setenv("BAD_YAML_SECRET", "\n  invalid: - : : oops")
 
     path = tmp_path / "secret_bad_yaml.yml"
-    path.write_text("spark_config:\n  spark.password: \"@aq.secret('BAD_YAML_SECRET')\"")
+    path.write_text("engine:\n  spark:\n    conf:\n      spark.password: \"@aq.secret('BAD_YAML_SECRET')\"")
     with pytest.raises(ConfigError, match="after secret expansion"):
         load_config(path)
 
@@ -483,8 +489,8 @@ def test_load_config_pass2_registers_redaction(monkeypatch, tmp_path):
     redaction.clear()
 
     path = tmp_path / "secret_register.yml"
-    path.write_text("spark_config:\n  spark.password: \"@aq.secret('SECRET_TO_REGISTER')\"")
-    
+    path.write_text("engine:\n  spark:\n    conf:\n      spark.password: \"@aq.secret('SECRET_TO_REGISTER')\"")
+
     load_config(path)
     assert redaction.is_registered("reg-secret-999999")
 
@@ -518,3 +524,23 @@ def test_stores_depot_property_removed():
     s = StoresConfig()
     assert s.default_depot().backend == "duckdb"          # explicit accessor works
     assert s.depots["default"].backend == "duckdb"        # or index the map
+
+
+def test_legacy_spark_config_block_rejected(tmp_path):
+    """2.0 BREAKING: the pre-2.0 top-level `spark_config:` block is no longer
+    accepted — `extra="forbid"` rejects it directly, naming the key. No
+    legacy-key migration guard: the loud rejection IS the migration path
+    (see AGENTS.md's "a breaking change ships as documentation" rule)."""
+    path = tmp_path / "cfg.yml"
+    path.write_text("spark_config:\n  spark.sql.shuffle.partitions: 200")
+    with pytest.raises(ConfigError, match="spark_config"):
+        load_config(path)
+
+
+def test_legacy_deployment_master_url_rejected(tmp_path):
+    """2.0 BREAKING: `deployment.master_url` moved to `engine.spark.master_url`
+    — the old location is rejected by `extra="forbid"` naming the key."""
+    path = tmp_path / "cfg.yml"
+    path.write_text("deployment:\n  target: local\n  master_url: \"local[*]\"")
+    with pytest.raises(ConfigError, match="master_url"):
+        load_config(path)

@@ -7,7 +7,7 @@ Read and write data by catalog identifier (`catalog.schema.table`) instead of a 
 Ingress modules with `table:` use `spark.read.table(table)` — the catalog resolves
 the table's location, schema, and format. Egress modules use `df.write.saveAsTable(table)`.
 
-The catalog is configured through standard `spark_config` properties
+The catalog is configured through standard `engine.spark.conf` properties
 (`spark.sql.catalog.*`). No Aqueduct-specific catalog config is needed —
 Spark's own catalog configuration (Unity Catalog, Hive, Iceberg REST, Polaris, Glue)
 is used as-is.
@@ -46,7 +46,7 @@ aqueduct doctor blueprint.yml     # doctor checks table existence
 aqueduct run blueprint.yml
 ```
 
-> The blueprint's `spark_config` enables **Hive catalog** (`spark.sql.catalogImplementation: hive`)
+> The blueprint's `engine.spark.conf` enables **Hive catalog** (`spark.sql.catalogImplementation: hive`)
 > so the managed table created by `populate.py` persists across Spark sessions via
 > a Derby metastore (`metastore_db/`). Without this the catalog is in-memory only
 > and `table: demo_table` would fail with `TABLE_OR_VIEW_NOT_FOUND`.

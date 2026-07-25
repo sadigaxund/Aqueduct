@@ -158,8 +158,9 @@ leaves:
   config.deployment.databricks.workspace_url: supported
   config.deployment.engine: supported
   config.deployment.env: supported
-  config.deployment.master_url: supported
   config.deployment.target: supported
+  config.engine.spark.conf: supported
+  config.engine.spark.master_url: supported
   config.lineage.openlineage_namespace: supported
   config.lineage.openlineage_url: supported
   config.metrics.use_observe: supported
@@ -168,7 +169,6 @@ leaves:
   config.secrets.provider: supported
   config.secrets.region: supported
   config.secrets.resolver: supported
-  config.spark_config: supported
   config.stores.benchmark.backend: supported
   config.stores.benchmark.gate_on_regression: supported
   config.stores.benchmark.path: supported

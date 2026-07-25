@@ -30,11 +30,13 @@ def test_doctor_render_hides_skip_and_quiet_ok(tmp_path, verbose_flag):
     runner = CliRunner()
     config = tmp_path / "aqueduct.yml"
     config.write_text("""
-aqueduct_config: '1.0'
+aqueduct_config: '2.0'
 deployment:
   engine: spark
   target: local
-  master_url: "local[*]"
+engine:
+  spark:
+    master_url: "local[*]"
 """, encoding="utf-8")
 
     # Mock run_doctor to return specific status rows
@@ -329,8 +331,8 @@ def test_skip_spark_short_circuits():
     """--skip-spark short circuits before any probe, spark and storage checks skipped."""
     # A config with a remote master URL that would otherwise probe
     config = MagicMock()
-    config.deployment.master_url = "spark://remote:7077"
-    config.spark_config = {}
+    config.engine.spark.master_url = "spark://remote:7077"
+    config.engine.spark.conf = {}
 
     with patch("aqueduct.doctor.check_spark") as mock_check_spark:
         results = run_doctor(config_path=None, skip_spark=True, preflight=False)
@@ -386,12 +388,14 @@ def test_cluster_stores_relative_duckdb_warns(tmp_path):
     """
     config_file = tmp_path / "aqueduct.yml"
     config_file.write_text("""
-aqueduct_config: '1.0'
+aqueduct_config: '2.0'
 deployment:
   engine: spark
   target: local
-  master_url: "local[*]"
   env: cluster
+engine:
+  spark:
+    master_url: "local[*]"
 stores:
   observability: {backend: duckdb, path: ".aqueduct/obs"}
   depots: {default: {backend: duckdb, path: ".aqueduct/depot.db"}}
@@ -444,11 +448,13 @@ def test_doctor_additive_scenario_and_config(tmp_path):
     """doctor positional config + --aqscenario runs config probe AND scenario pre-flight in one go."""
     config_file = tmp_path / "aqueduct.yml"
     config_file.write_text("""
-aqueduct_config: '1.0'
+aqueduct_config: '2.0'
 deployment:
   engine: spark
   target: local
-  master_url: "local[*]"
+engine:
+  spark:
+    master_url: "local[*]"
 """, encoding="utf-8")
 
     bp_file = tmp_path / "blueprint.yml"
@@ -557,12 +563,14 @@ def test_run_cluster_relative_store_dir_warning(tmp_path):
     """run under env=cluster and relative store dir warns via AQ-WARN [cluster_store_path_relative]."""
     config_file = tmp_path / "aqueduct.yml"
     config_file.write_text("""
-aqueduct_config: '1.0'
+aqueduct_config: '2.0'
 deployment:
   engine: spark
   target: local
-  master_url: "local[*]"
   env: cluster
+engine:
+  spark:
+    master_url: "local[*]"
 stores:
   observability: {backend: duckdb, path: ".aqueduct/obs"}
   depots: {default: {backend: duckdb, path: ".aqueduct/depot.db"}}

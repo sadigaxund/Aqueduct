@@ -153,16 +153,16 @@ class TestContextResolution:
         inc = next(m for m in manifest.modules if m.id == "inc")
         assert "${ctx._watermark}" in inc.config["query"]
 
-    # ── ISSUE-027: Tier-0 resolution in spark_config + macros ─────────────────
+    # ── ISSUE-027: Tier-0 resolution in engine.spark.conf + macros ────────────
 
     def test_spark_config_env_default_applied(self, tmp_path, monkeypatch):
-        """spark_config ${MY_PKG:-default} → default applied when env unset."""
+        """engine.spark.conf ${MY_PKG:-default} → default applied when env unset."""
         monkeypatch.delenv("MY_PKG", raising=False)
         bp_file = tmp_path / "sc_env.yml"
         bp_file.write_text(
             "aqueduct: '1.0'\nid: sc\nname: SC\n"
-            "spark_config:\n"
-            "  spark.jars.packages: \"${MY_PKG:-org.example:pkg:1.0}\"\n"
+            "engine:\n  spark:\n    conf:\n"
+            "      spark.jars.packages: \"${MY_PKG:-org.example:pkg:1.0}\"\n"
             "modules:\n  - id: m\n    type: Ingress\n    label: M\n"
             "edges: []\n"
         )
@@ -184,13 +184,13 @@ class TestContextResolution:
         assert bp.macros["region_filter"] == "country = 'US' AND id = {{ id }}"
 
     def test_spark_config_ctx_resolves_from_context_map(self, tmp_path):
-        """${ctx.key} in spark_config resolves from the context map."""
+        """${ctx.key} in engine.spark.conf resolves from the context map."""
         good = tmp_path / "sc_ctx_ok.yml"
         good.write_text(
             "aqueduct: '1.0'\nid: scok\nname: SCOK\n"
             "context:\n  warehouse: /data/wh\n"
-            "spark_config:\n"
-            "  spark.sql.warehouse.dir: \"${ctx.warehouse}\"\n"
+            "engine:\n  spark:\n    conf:\n"
+            "      spark.sql.warehouse.dir: \"${ctx.warehouse}\"\n"
             "modules:\n  - id: m\n    type: Ingress\n    label: M\n"
             "edges: []\n"
         )
@@ -198,12 +198,12 @@ class TestContextResolution:
         assert bp.spark_config["spark.sql.warehouse.dir"] == "/data/wh"
 
     def test_spark_config_undefined_ctx_raises_parseerror(self, tmp_path):
-        """Undefined non-reserved ${ctx.x} in spark_config → ParseError (ISSUE-027 fixed)."""
+        """Undefined non-reserved ${ctx.x} in engine.spark.conf → ParseError (ISSUE-027 fixed)."""
         bad = tmp_path / "sc_ctx_bad.yml"
         bad.write_text(
             "aqueduct: '1.0'\nid: scbad\nname: SCBAD\n"
-            "spark_config:\n"
-            "  spark.sql.warehouse.dir: \"${ctx.does_not_exist}\"\n"
+            "engine:\n  spark:\n    conf:\n"
+            "      spark.sql.warehouse.dir: \"${ctx.does_not_exist}\"\n"
             "modules:\n  - id: m\n    type: Ingress\n    label: M\n"
             "edges: []\n"
         )

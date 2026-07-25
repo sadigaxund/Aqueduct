@@ -7,39 +7,32 @@
 # All sections are optional — omitting this file entirely uses local Spark with
 # DuckDB stores in .aqueduct/.
 #
-# CLI flags override values here. Blueprint spark_config overrides spark_config
-# below (Blueprint wins on conflict). LLM policy (approval, forbidden_ops)
-# belongs in each Blueprint's agent: block — not here.
+# CLI flags override values here. Blueprint engine.spark.conf overrides
+# engine.spark.conf below (Blueprint wins on conflict). LLM policy (approval,
+# forbidden_ops) belongs in each Blueprint's agent: block — not here.
 #
 # Usage:
 #   aqueduct run blueprint.yml                       # auto-discovers aqueduct.yml in CWD
 #   aqueduct run blueprint.yml --config aqueduct.yml
 #   aqueduct validate aqueduct.yml                  # static check (no run)
 
-aqueduct_config: "1.0"
+aqueduct_config: "2.0"
 
-  
+
 # ── Deployment ────────────────────────────────────────────────────────────────
 
 deployment:
   # engine: execution engine. Validated against the engines registered
-  # through the aqueduct.engines entry-point group — currently: spark.
+  # through the aqueduct.engines entry-point group — currently: spark, duckdb.
   engine: spark
 
-  # target: deployment target. Validated against master_url at config-load;
-  # a mismatch raises a clear ConfigError naming both values and the expected shape.
+  # target: deployment target. Validated against engine.spark.master_url at
+  # config-load; a mismatch raises a clear ConfigError naming both values and
+  # the expected shape. Meaningful for engine: spark only.
   #   local | standalone | yarn | kubernetes — Aqueduct runs on the Spark driver (in-process).
   #   databricks | emr | dataproc — remote-submit targets planned for a future release;
   #   currently rejected at config-load with a "not yet supported" message.
   target: local
-
-  # master_url: passed verbatim to SparkSession.builder.master().
-  # Must match the declared target (validated at config-load):
-  #   local       → starts with "local"   (e.g. local[*], local[4])
-  #   standalone  → starts with "spark://" (e.g. spark://host:7077)
-  #   yarn        → exactly "yarn"         (needs HADOOP_CONF_DIR / YARN_CONF_DIR)
-  #   kubernetes  → starts with "k8s://"   (e.g. k8s://https://apiserver:443)
-  master_url: "local[*]"
 
   # env: deployment environment tier.
   # local (default) — dev machine, no cluster validation.
@@ -49,19 +42,35 @@ deployment:
   # env: cluster
 
 
-# ── Spark Configuration ───────────────────────────────────────────────────────
+# ── Engine configuration (2.0) ────────────────────────────────────────────────
 #
-# Any spark.* key accepted. Merged with Blueprint spark_config at runtime;
-# Blueprint values win on conflict.
+# Per-engine settings, namespaced by engine name. A key under engine.<name>.
+# belongs to that engine; every other engine ignores it (accepted, warned,
+# never a hard error — the same aqueduct.yml stays valid across engines).
 
-spark_config: {}
+engine:
+  spark:
+    # master_url: passed verbatim to SparkSession.builder.master(). Must match
+    # deployment.target (validated at config-load):
+    #   local       → starts with "local"   (e.g. local[*], local[4])
+    #   standalone  → starts with "spark://" (e.g. spark://host:7077)
+    #   yarn        → exactly "yarn"         (needs HADOOP_CONF_DIR / YARN_CONF_DIR)
+    #   kubernetes  → starts with "k8s://"   (e.g. k8s://https://apiserver:443)
+    master_url: "local[*]"
 
-  # ── Object storage — MinIO / S3-compatible ──────────────────────────────────
-  # spark.hadoop.fs.s3a.endpoint: "http://minio:9000"
-  # spark.hadoop.fs.s3a.path.style.access: "true"
-  # spark.hadoop.fs.s3a.access.key: "@aq.secret('MINIO_ACCESS_KEY')"
-  # spark.hadoop.fs.s3a.secret.key: "@aq.secret('MINIO_SECRET_KEY')"
-  # spark.jars.packages: "org.apache.hadoop:hadoop-aws:3.3.4"
+    # conf: any spark.* key accepted. Merged with the Blueprint's own
+    # engine.spark.conf at runtime; Blueprint values win on conflict.
+    conf: {}
+
+      # ── Object storage — MinIO / S3-compatible ────────────────────────────
+      # spark.hadoop.fs.s3a.endpoint: "http://minio:9000"
+      # spark.hadoop.fs.s3a.path.style.access: "true"
+      # spark.hadoop.fs.s3a.access.key: "@aq.secret('MINIO_ACCESS_KEY')"
+      # spark.hadoop.fs.s3a.secret.key: "@aq.secret('MINIO_SECRET_KEY')"
+      # spark.jars.packages: "org.apache.hadoop:hadoop-aws:3.3.4"
+
+  # duckdb: {}   # no engine.duckdb knob is wired to real behaviour yet —
+                 # the DuckDB executor always opens a bare :memory: connection.
 
   # ── Object storage — AWS S3 (IAM role or key-pair) ──────────────────────────
   # spark.hadoop.fs.s3a.aws.credentials.provider: "com.amazonaws.auth.InstanceProfileCredentialsProvider"
@@ -204,17 +213,27 @@ stores:
 # For YARN, Kubernetes, Spark Standalone, or Databricks/EMR/Dataproc:
 #
 #   1. Set deployment.env: cluster (triggers doctor validation of store paths)
-#   2. Set master_url to your cluster endpoint
+#   2. Set engine.spark.master_url to your cluster endpoint
 #   3. Set all store paths to absolute paths on shared FS (NFS/EFS/PVC)
 #      — driver CWD is ephemeral on YARN/K8s; relative paths lose data on restart
-#   4. Move all hadoop FS credentials into spark_config (not Ingress options)
+#   4. Move all hadoop FS credentials into engine.spark.conf (not Ingress options)
 #
 # Example (Spark Standalone + NFS shared store + S3A data):
 #
 # deployment:
 #   target: standalone
-#   master_url: "spark://spark-master.internal:7077"
 #   env: cluster
+#
+# engine:
+#   spark:
+#     master_url: "spark://spark-master.internal:7077"
+#     conf:
+#       spark.executor.memory: "8g"
+#       spark.executor.cores: "4"
+#       spark.executor.instances: "20"
+#       spark.jars.packages: "org.apache.hadoop:hadoop-aws:3.3.4,io.delta:delta-spark_2.12:3.2.0"
+#       spark.sql.extensions: "io.delta.sql.DeltaSparkSessionExtension"
+#       spark.sql.catalog.spark_catalog: "org.apache.spark.sql.delta.catalog.DeltaCatalog"
 #
 # stores:
 #   observability:
@@ -224,14 +243,6 @@ stores:
 #     default:
 #       backend: duckdb
 #       path: "/mnt/nfs/aqueduct/depot.db"
-#
-# spark_config:
-#   spark.executor.memory: "8g"
-#   spark.executor.cores: "4"
-#   spark.executor.instances: "20"
-#   spark.jars.packages: "org.apache.hadoop:hadoop-aws:3.3.4,io.delta:delta-spark_2.12:3.2.0"
-#   spark.sql.extensions: "io.delta.sql.DeltaSparkSessionExtension"
-#   spark.sql.catalog.spark_catalog: "org.apache.spark.sql.delta.catalog.DeltaCatalog"
 #   spark.hadoop.fs.s3a.aws.credentials.provider: "com.amazonaws.auth.InstanceProfileCredentialsProvider"
 
 

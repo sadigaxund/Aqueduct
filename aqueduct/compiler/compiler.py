@@ -558,7 +558,7 @@ def compile(  # noqa: A001
                 "See docs/spark_guide.md#caching-strategy.",
             )
 
-    # 8f. Hadoop filesystem keys in Ingress options — must be in spark_config instead
+    # 8f. Hadoop filesystem keys in Ingress options — must be in engine.spark.conf instead
     _HADOOP_FS_PREFIXES = ("fs.s3a.", "fs.gs.", "fs.azure.", "fs.hdfs.", "fs.abfs.")
     for m in modules:
         if m.type != ModuleType.Ingress:
@@ -573,8 +573,8 @@ def compile(  # noqa: A001
                 f"Ingress '{m.id}' has Hadoop filesystem keys in 'options': "
                 f"{bad_keys}. DataFrameReader.option() does NOT propagate these to "
                 "Spark's HadoopConfiguration — the S3A/GCS/Azure FileSystem will not "
-                "see them and authentication will fail. Move these to spark_config with "
-                "the 'spark.hadoop.' prefix instead: e.g. "
+                "see them and authentication will fail. Move these to engine.spark.conf "
+                "with the 'spark.hadoop.' prefix instead: e.g. "
                 "'spark.hadoop.fs.s3a.access.key'. "
                 "See docs/spark_guide.md#hadoop-fs-in-options.",
             )

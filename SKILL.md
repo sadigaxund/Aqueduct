@@ -53,8 +53,10 @@ modules:                              # REQUIRED — the module list
 edges:                                # optional (see linear-edge sugar)
   - { from: read_orders, to: dedup, port: main }
 
-spark_config:                         # optional — merged with engine defaults
-  spark.sql.shuffle.partitions: 200
+engine:                                # optional — per-engine settings, namespaced by name
+  spark:
+    conf:                             # merged with engine-level engine.spark.conf
+      spark.sql.shuffle.partitions: 200
 
 retry_policy: { max_attempts: 3 }     # optional
 
@@ -99,7 +101,7 @@ cannot self-authorize it. `blueprint:` entries may set `in_process: true` to
 parse+compile+execute the target in-process, reusing the caller's live
 SparkSession, instead of spawning an `aqueduct run` subprocess — falls back
 to subprocess (with an info message) when the target sets its own
-`spark_config`. `when_error: [ErrorType, ...]` on `on_failure`/
+`engine.spark.conf`. `when_error: [ErrorType, ...]` on `on_failure`/
 `on_patch_pending`/`on_healed` entries filters by the run's error_type /
 stack-trace exception class (same matching as `agent.guardrails.
 heal_on_errors`); unset = fires unconditionally; setting it on `on_success`
@@ -165,14 +167,14 @@ or omit the block, never merges field-by-field), `transient_errors`,
     format: parquet        # parquet|delta|iceberg|hudi|csv|json|orc|avro|jdbc|kafka|custom
     path: "${ctx.tables.orders_raw}"
     # OR address an external-catalog table (mutually exclusive with path):
-    # table: "catalog.schema.orders"   # spark.read.table(); catalog wired in spark_config
+    # table: "catalog.schema.orders"   # spark.read.table(); catalog wired in engine.spark.conf
     schema_hint: { order_id: STRING, amount: "DECIMAL(18,2)" }   # optional
     partition_filters: "event_date >= '${ctx.start_date}'"        # optional
     on_new_columns: fail   # allow(default)|fail|alert — schema-drift contract
     options: { mergeSchema: true }
 ```
 - `path:` and `table:` are **mutually exclusive** (engine errors if both). `format:` not required with `table:`.
-- Credentials are NEVER per-Ingress — they live in `spark_config:` (Hadoop/Spark keys), values may use `@aq.secret('KEY')` / `${ENV}`.
+- Credentials are NEVER per-Ingress — they live in `engine.spark.conf:` (Hadoop/Spark keys), values may use `@aq.secret('KEY')` / `${ENV}`.
 - `time_travel: {version: N}` or `{timestamp: "..."}` only with `path:` (Delta/Iceberg). For `table:`, use a Channel with `TIMESTAMP AS OF` SQL.
 
 ### Channel — transform
@@ -379,7 +381,7 @@ agent:
 `approval` values: `disabled` (never heal) · `human` (stage patch for review) · `auto` (apply validated patch; with `max_patches > 1` enables the multi-patch loop) · `ci` (stage + webhook). Engine-level defaults for provider/model/base_url/api_key/mode/max_tool_calls/supports_tools/progressive/max_chain live in `aqueduct.yml`; the Blueprint `agent:` block overrides them. API key precedence (highest first): per-cascade-tier `api_key` → blueprint `agent.api_key` → engine `agent.api_key` → env var (`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`). Prefer `@aq.secret('NAME')` or `${ENV_VAR}` over a plaintext literal in any config file. `supports_tools` also has a per-cascade-tier override (`cascade[].supports_tools`). `progressive: true` (`agent.approval: auto`, non-cascade path) chains multi-patch healing across DIFFERENT-module failures instead of re-diagnosing the same first bug every attempt — see `docs/specs.md` §8.13; `max_patches` semantics are unchanged.
 
 ## Engine config (`aqueduct.yml`) — NOT the Blueprint
-Separate file. Configures deployment target, Spark, stores, secrets, webhooks, and engine-level agent connection. Author it only when asked; Blueprints reference its results. Key blocks: `deployment` (engine/target/master_url/env), `spark_config`, `stores` (observability/depots/blob/benchmark + backend), `agent` (provider/base_url/model/api_key/cascade defaults), `danger` (allow_multi_patch, allow_full_probe_actions). Engine `agent.cascade` provides a project-wide default; a Blueprint's `agent.cascade` (or `model: [list]` shorthand) overrides it. See `aqueduct/templates/default/aqueduct.yml.template`.
+Separate file. Configures deployment target, Spark, stores, secrets, webhooks, and engine-level agent connection. Author it only when asked; Blueprints reference its results. Key blocks: `deployment` (engine/target/env), `engine` (per-engine settings namespaced by name — `engine.spark.master_url`, `engine.spark.conf`, `engine.duckdb`), `stores` (observability/depots/blob/benchmark + backend), `agent` (provider/base_url/model/api_key/cascade defaults), `danger` (allow_multi_patch, allow_full_probe_actions). Engine `agent.cascade` provides a project-wide default; a Blueprint's `agent.cascade` (or `model: [list]` shorthand) overrides it. See `aqueduct/templates/default/aqueduct.yml.template`.
 
 ## Path resolution
 Relative paths in a Blueprint anchor to **the Blueprint file's directory**, never the cwd (portable across run locations). `s3://`, `postgresql://`, absolute paths pass through unchanged. Same rule for `aqueduct.yml` (anchors to the config file dir).
@@ -394,7 +396,7 @@ Relative paths in a Blueprint anchor to **the Blueprint file's directory**, neve
 - `mode: merge` needs `merge_key`; `overwrite_partitions` (dynamic) needs `partition_by`.
 - Sample-based Probe signals need `danger.allow_full_probe_actions`.
 - UDF/custom-probe/custom-datasource = importable pointer, never inline code.
-- Cloud creds go in `spark_config`, not in modules.
+- Cloud creds go in `engine.spark.conf`, not in modules.
 
 ## Worked example (end to end)
 ```yaml

@@ -61,7 +61,7 @@ hooks:
     # process, reusing the live SparkSession instead of spawning a fresh
     # `aqueduct run` subprocess. Only valid on a blueprint: entry; falls
     # back to the subprocess path (with an info message) if the target
-    # sets its own spark_config.
+    # sets its own engine.spark.conf.
     - blueprint: chained/chain_target.yml
       in_process: true
       timeout: 60

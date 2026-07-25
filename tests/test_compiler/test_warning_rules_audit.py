@@ -93,7 +93,7 @@ class TestPythonUdfArrowGate:
               "config": {"format": "parquet", "path": "o", "coalesce": 1}}],
             [{"from": "raw", "to": "out"}],
             udf_registry=[{"id": "my_udf", "lang": "python", "module": "m", "entry": "f"}],
-            spark_config=spark_config or {},
+            engine={"spark": {"conf": spark_config or {}}},
         )
 
     def test_fires_without_arrow_flag(self):

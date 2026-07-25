@@ -65,8 +65,9 @@ def read_ingress(module: Module, spark: SparkSession, base_dir: str | None = Non
 
     # Table-addressable read via catalog identifier (catalog.schema.table).
     # When ``table:`` is set, read via ``spark.read.table(table)`` — no ``path``
-    # and no ``format`` required. The catalog is wired through ``spark_config``
-    # (e.g. ``spark.sql.catalog.*``), entirely external to Aqueduct.
+    # and no ``format`` required. The catalog is wired through
+    # ``engine.spark.conf`` (e.g. ``spark.sql.catalog.*``), entirely
+    # external to Aqueduct.
     table: str | None = cfg.get("table")
     path: str | None = cfg.get("path")
     fmt: str | None = cfg.get("format")

@@ -11,10 +11,12 @@ pytestmark = pytest.mark.unit
 
 RUNNER = CliRunner()
 
-CFG_VALID = """aqueduct_config: "1.0"
+CFG_VALID = """aqueduct_config: "2.0"
 deployment:
   target: local
-  master_url: local[*]
+engine:
+  spark:
+    master_url: local[*]
 stores:
   observability:
     path: .aqueduct/obs

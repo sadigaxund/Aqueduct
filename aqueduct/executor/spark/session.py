@@ -1,7 +1,9 @@
 """SparkSession factory.
 
-Creates (or reuses) a SparkSession and applies blueprint-level spark_config.
-The factory is the only place in the codebase that calls SparkSession.builder.
+Creates (or reuses) a SparkSession and applies the resolved Spark conf (2.0:
+merged from aqueduct.yml's engine.spark.conf and the Blueprint's own
+engine.spark.conf — see aqueduct.config.SparkEngineConfig). The factory is
+the only place in the codebase that calls SparkSession.builder.
 """
 
 from __future__ import annotations

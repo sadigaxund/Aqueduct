@@ -128,10 +128,11 @@ class SessionSpec:
     Attributes:
         blueprint_id: Used as the session's app/label where an engine has one
             (Spark app name). Always available (every Manifest has one).
-        engine_config: The engine's own config bag — Spark's merged
-            ``spark_config`` (``{**cfg.spark_config, **manifest.spark_config}``)
-            for the Spark engine; ``{}`` (ignored) for DuckDB this stage. A
-            future ``duckdb_config`` would be read from here.
+        engine_config: The engine's own config bag — Spark's merged conf
+            (``{**cfg.engine.spark.conf, **manifest.spark_config}``) for the
+            Spark engine; ``{}`` (ignored) for DuckDB this stage. A future
+            DuckDB knob would be read from ``cfg.engine.duckdb`` and passed
+            through here.
         master_url: Cluster/connection URL for engines that submit to one
             (Spark). Meaningless and ignored for a single-node engine.
         quiet: Full log suppression during and after session startup (health

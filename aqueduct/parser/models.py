@@ -279,6 +279,10 @@ class Blueprint:
     modules: tuple[Module, ...]
     edges: tuple[Edge, ...]
     description: str = ""
+    # NOTE (2.0): sourced from the YAML `engine.spark.conf:` key (was the
+    # top-level `spark_config:` block pre-2.0) — see
+    # `aqueduct.parser.schema.BlueprintSchema.engine`. Field name kept as-is:
+    # engine-agnostic AST plumbing, not the user-facing authoring contract.
     spark_config: dict[str, Any] = field(default_factory=dict)
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
     agent: AgentConfig = field(default_factory=AgentConfig)

@@ -1,4 +1,4 @@
-aqueduct_config: "1.0"
+aqueduct_config: "2.0"
 
 danger:
   allow_command_hooks: true
@@ -10,7 +10,10 @@ warnings:
 deployment:
   engine: spark
   target: local
-  master_url: "local[*]"
+
+engine:
+  spark:
+    master_url: "local[*]"
 
 stores:
   observability:

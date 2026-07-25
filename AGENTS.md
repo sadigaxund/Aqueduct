@@ -583,6 +583,9 @@ Any regex or string transform applied to raw text for structural clean-up must v
 ### Schema/template sync at change time
 When you change a pydantic field, its key name, its nesting level, or its allowed values — update the corresponding template comment block in the same commit. A template showing `guardrails:` flat when the schema requires `agent.guardrails:` nested cost users parse errors when they uncommented the example. A renamed file (`SPARK_GUIDE.md` → `spark_guide.md`) left 8 compiler warnings pointing to dead links for an entire release.
 
+### A breaking change ships as documentation, not as code that keeps the old shape alive
+When a schema field moves or is renamed, `extra="forbid"` plus a loud `CHANGELOG.md` **BREAKING** entry (and a specs.md update) is the migration path — not a legacy-key validator, an accept-both-shapes reader, a back-compat shim, or a defensive `ALTER`-chain for a schema that was never released. A hand-written "you used the old key, here's the new path" guard duplicates what pydantic's own extra-field rejection already reports (the offending key, named), while adding a second place that can drift from the schema and a second thing to delete later. This is not "no migration guidance ever" — it is "the guidance lives in docs the user reads once, not in a code path every future load pays for." The one exception: an unavoidable shim (a genuinely still-supported old input format) must carry, in a comment at the shim itself, the exact condition under which it gets deleted — never an open-ended "for backward compatibility."
+
 ### Import ordering
 `from __future__ import annotations` must be the first import in every file (after the module docstring). An import placed above it raises `SyntaxError` whenever bytecode cache is cold — it passes CI (warm cache) and fails in production. Ruff I002 enforces this; the pre-commit hook catches it locally, CI catches it on push.
 

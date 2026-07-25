@@ -113,8 +113,8 @@ def drift(
     from aqueduct.executor.spark.ingress import read_source_schema
     from aqueduct.executor.spark.session import make_spark_session
 
-    merged_spark_config = {**cfg.spark_config, **manifest.spark_config}
-    session = make_spark_session(manifest.blueprint_id, merged_spark_config, master_url=cfg.deployment.master_url)
+    merged_spark_config = {**cfg.engine.spark.conf, **manifest.spark_config}
+    session = make_spark_session(manifest.blueprint_id, merged_spark_config, master_url=cfg.engine.spark.master_url)
 
     results: list[dict[str, Any]] = []
     undiffable = False

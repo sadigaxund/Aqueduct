@@ -128,7 +128,7 @@ class TestConfigAqGuard:
 
     def test_run_scope_in_config_rejected(self, tmp_path):
         from aqueduct.config import ConfigError
-        p = self._write(tmp_path, 'deployment:\n  master_url: "@aq.run.id()"\n')
+        p = self._write(tmp_path, 'engine:\n  spark:\n    master_url: "@aq.run.id()"\n')
         with pytest.raises(ConfigError, match=r"@aq\.run\.id"):
             load_config(p)
 

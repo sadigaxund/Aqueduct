@@ -105,23 +105,23 @@ def validate(
             file_results.append({
                 "path": str(path), "kind": "config", "valid": True,
                 "engine": cfg.deployment.engine, "target": cfg.deployment.target,
-                "master_url": cfg.deployment.master_url,
+                "master_url": cfg.engine.spark.master_url,
                 "stores": {
                     "observability": cfg.stores.observability.path or "(default)",
                     "depot": cfg.stores.default_depot().path,
                 },
                 "secrets_provider": cfg.secrets.provider,
                 "webhooks": wh,
-                "spark_config": cfg.spark_config or {},
+                "spark_config": cfg.engine.spark.conf or {},
             })
             if text:
                 emit(f"✓ {path}  [engine config]", fmt="text", redact=True)
-                emit(f"  engine:  {cfg.deployment.engine}  target={cfg.deployment.target}  master={cfg.deployment.master_url}", fmt="text", redact=True)
+                emit(f"  engine:  {cfg.deployment.engine}  target={cfg.deployment.target}  master={cfg.engine.spark.master_url}", fmt="text", redact=True)
                 emit(f"  stores:  observability={cfg.stores.observability.path or '(default)'}  depot={cfg.stores.default_depot().path}", fmt="text", redact=True)
                 emit(f"  secrets: provider={cfg.secrets.provider}", fmt="text", redact=True)
                 emit(f"  webhooks: {', '.join(f'{k}={v}' for k, v in wh.items()) if wh else '(not configured)'}", fmt="text", redact=True)
-                if cfg.spark_config:
-                    emit(f"  spark_config: {json.dumps(cfg.spark_config)}", fmt="text", redact=True)
+                if cfg.engine.spark.conf:
+                    emit(f"  spark_config: {json.dumps(cfg.engine.spark.conf)}", fmt="text", redact=True)
 
         elif kind == "blueprint" or kind is None:
             # Unknown header → attempt blueprint parse (most common case);
@@ -381,7 +381,7 @@ def schema(target: str, output: str) -> None:
     "preflight",
     is_flag=True,
     default=False,
-    help="Full Spark session test with real spark_config (builds a session, runs a task). "
+    help="Full Spark session test with real engine.spark.conf (builds a session, runs a task). "
          "Unbounded — waits out cluster cold-start / jar shipping (Ctrl-C to abort). "
          "Default is a fast bounded TCP reachability probe, no session.",
 )

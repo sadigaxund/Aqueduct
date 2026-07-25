@@ -12,7 +12,7 @@ def test_cwd_restoration_after_run(tmp_path):
     project_dir = tmp_path / "repro_project"
     project_dir.mkdir()
     (project_dir / "blueprint.yml").write_text("aqueduct: '1.0'\nid: repro\nname: Repro\nmodules: []\nedges: []")
-    (project_dir / "aqueduct.yml").write_text("deployment:\n  engine: spark\n  master_url: local[1]\n")
+    (project_dir / "aqueduct.yml").write_text("deployment:\n  engine: spark\nengine:\n  spark:\n    master_url: local[1]\n")
     
     try:
         # Mock executor to avoid Spark overhead

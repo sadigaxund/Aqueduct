@@ -9,9 +9,10 @@ name: "Custom DataSource Snippet"
 # The CLI chdirs to this directory but Python's sys.path doesn't include CWD
 # for CLI entry points — UDFs work around this in udf.py but custom_source.py
 # doesn't, so we tell Spark to distribute the file.
-spark_config:
-  spark.submit.pyFiles: datasource.py
-
+engine:
+  spark:
+    conf:
+      spark.submit.pyFiles: datasource.py
 modules:
   - id: src
     label: "Custom Source"

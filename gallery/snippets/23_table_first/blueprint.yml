@@ -7,9 +7,10 @@ name: "Table-First Addressing Snippet"
 
 # Hive catalog (Derby metastore) so populate.py's table survives into our session.
 # Without it Spark's catalog is in-memory and per-session — tables vanish.
-spark_config:
-  spark.sql.catalogImplementation: hive
-
+engine:
+  spark:
+    conf:
+      spark.sql.catalogImplementation: hive
 modules:
   - id: src
     label: "Read from session catalog table"

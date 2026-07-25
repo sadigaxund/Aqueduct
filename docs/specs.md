@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.32: Reference Document**
+**Version 2.33: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -192,9 +192,11 @@ edges:                                 # explicit edge definitions
     to:   dedup_orders
     port: main                         # main (default) or spillway
 
-spark_config:                          # merged with Aqueduct defaults
-  spark.sql.shuffle.partitions: 200
-  spark.sql.adaptive.enabled: true
+engine:                                 # per-engine settings, namespaced by engine name (2.0)
+  spark:
+    conf:                               # merged with aqueduct.yml's engine.spark.conf
+      spark.sql.shuffle.partitions: 200
+      spark.sql.adaptive.enabled: true
 
 retry_policy:                          # per-pipeline retry config
   max_attempts: 3
@@ -225,7 +227,7 @@ hooks:                                 # optional — lifecycle actions after te
 
 | Entry | Semantics | Gate |
 | :- | :- | :- |
-| `blueprint: <path>` | Chains another Blueprint. By default a fresh `aqueduct run` subprocess, own session, run_id, and report. Loose coupling by design: the child's failure is one `hook_failed` warning, not a parent failure. Tightly-coupled work belongs in ONE Blueprint (Arcades / `--parallel` / `enabled:`). `in_process: true` opts into parsing+compiling+executing the target in the SAME process, reusing the caller's live SparkSession, no self-healing loop for the chained target (a failure is still just `[hook_failed]`); falls back to the subprocess path with an info message when the target Blueprint sets its own `spark_config` (merging two Blueprints' Spark configs into one live session isn't generally safe). | none (declarative) |
+| `blueprint: <path>` | Chains another Blueprint. By default a fresh `aqueduct run` subprocess, own session, run_id, and report. Loose coupling by design: the child's failure is one `hook_failed` warning, not a parent failure. Tightly-coupled work belongs in ONE Blueprint (Arcades / `--parallel` / `enabled:`). `in_process: true` opts into parsing+compiling+executing the target in the SAME process, reusing the caller's live SparkSession, no self-healing loop for the chained target (a failure is still just `[hook_failed]`); falls back to the subprocess path with an info message when the target Blueprint sets its own `engine.spark.conf` (merging two Blueprints' Spark configs into one live session isn't generally safe). | none (declarative) |
 | `webhook: <url \| map>` | Fires the same endpoint model as the engine-level `webhooks:` block, bare URL shorthand or full `{url, method, headers, payload}` with `${run_id}`/`${blueprint_id}` payload templating. Fire-and-forget, background thread. | none (declarative) |
 | `command: "<argv>"` | Arbitrary subprocess: shlex argv, **no shell**; only `${run.id}` / `${run.status}` / `${blueprint.id}` are interpolated. Per-entry `timeout:` (default 300 s). | `danger.allow_command_hooks: true` in **aqueduct.yml**: the gate is operator-owned engine config, so a Blueprint cannot self-authorize; ungated entries are skipped with `[hook_command_disabled]`. |
 
@@ -326,8 +328,8 @@ Every spillway row carries the system columns `_aq_error_module`, `_aq_error_typ
 
 | Config field | Description |
 | :- | :- |
-| **format** | Spark data source format. Supports: parquet, delta, iceberg, hudi, csv, json, orc, avro, jdbc, kafka. `iceberg`/`hudi` require the matching `spark.jars.packages` and (Iceberg) a `spark.sql.catalog.*` in `spark_config`, see the Spark Guide. `format: custom` + `class:` registers a user Python DataSource (Spark 4.0+, see below). The `dataframe` format (Arcade cross-pipeline reference) is documented on the roadmap and not yet implemented. Not required when `table:` is set and mutual-exclusive with `table:` (set one or the other). |
-| **table** | Catalog table identifier (`catalog.schema.table`): passthrough to an external catalog. Read via `spark.read.table(table)`. The catalog is configured entirely through `spark_config` (e.g. `spark.sql.catalog.*` keys), external to Aqueduct. Mutually exclusive with `path:`, if both are set the engine raises an error. When `table:` is set, `format:` is not required. |
+| **format** | Spark data source format. Supports: parquet, delta, iceberg, hudi, csv, json, orc, avro, jdbc, kafka. `iceberg`/`hudi` require the matching `spark.jars.packages` and (Iceberg) a `spark.sql.catalog.*` in `engine.spark.conf`, see the Spark Guide. `format: custom` + `class:` registers a user Python DataSource (Spark 4.0+, see below). The `dataframe` format (Arcade cross-pipeline reference) is documented on the roadmap and not yet implemented. Not required when `table:` is set and mutual-exclusive with `table:` (set one or the other). |
+| **table** | Catalog table identifier (`catalog.schema.table`): passthrough to an external catalog. Read via `spark.read.table(table)`. The catalog is configured entirely through `engine.spark.conf` (e.g. `spark.sql.catalog.*` keys), external to Aqueduct. Mutually exclusive with `path:`, if both are set the engine raises an error. When `table:` is set, `format:` is not required. |
 | **path** | Source path or URL. Context Registry references allowed. Optional for `format: custom` and the pathless formats (jdbc/kafka/depot). Mutually exclusive with `table:`. |
 | **class** | For `format: custom`. Fully-qualified `module.Class` pointing at a `pyspark.sql.datasource.DataSource` subclass. |
 | **partition_filters** | Optional SQL predicate for manual partition pruning. |
@@ -337,7 +339,7 @@ Every spillway row carries the system columns `_aq_error_module`, `_aq_error_typ
 | **known_columns** | Optional explicit baseline column list for `on_new_columns`. |
 | **options** | Passed directly to Spark DataFrameReader.option(k,v). |
 
-**Cloud credentials:** There is no per-Ingress `credentials:` field. Credentials live at the engine level in `spark_config:`, keyed by standard Hadoop/Spark property names. Use `@aq.secret('KEY')` or `${ENV_VAR}` inside those values.
+**Cloud credentials:** There is no per-Ingress `credentials:` field. Credentials live at the engine level in `engine.spark.conf:`, keyed by standard Hadoop/Spark property names. Use `@aq.secret('KEY')` or `${ENV_VAR}` inside those values.
 
 ### Channel
 
@@ -704,7 +706,7 @@ only where it exists:
 | Resolution point | Allowed syntax | Why |
 | :- | :- | :- |
 | **`aqueduct.yml`** (engine config) | `${ENV}`, `${VAR:-default}`, `@aq.secret('KEY')` only | Loaded first, standalone: no Blueprint and no run exist yet, so per-pipeline / per-run scopes have nothing to resolve against. |
-| **Blueprint compile** (per run: `context`, module `config`, blueprint-level `agent:` / `retry_policy:` / `spark_config:`, …) | **All `@aq.*`**: `date`, `run`, `blueprint`, `deployment`, `depot`, `secret`, `env`, `version` | The single point where the whole stack is in scope: deployment (from the loaded config) ⊃ blueprint (id/path) ⊃ run (run_id), plus the depot built from config. |
+| **Blueprint compile** (per run: `context`, module `config`, blueprint-level `agent:` / `retry_policy:` / `engine:`, …) | **All `@aq.*`**: `date`, `run`, `blueprint`, `deployment`, `depot`, `secret`, `env`, `version` | The single point where the whole stack is in scope: deployment (from the loaded config) ⊃ blueprint (id/path) ⊃ run (run_id), plus the depot built from config. |
 
 The model is **override-downstream, not propagate-uphill**: one config is shared
 by many Blueprints, and one Blueprint by many runs; values flow config → blueprint
@@ -996,7 +998,7 @@ Supported operations: `set_module_config_key`, `replace_module_config`, `replace
 
 `defer_to_human` signals an unhealable failure. It makes zero Blueprint changes and terminates the loop with `stop_reason='deferred'`. The payload carries `diagnosis`, `suggestions`, and `confidence_reason` for human review. Opt-in via `agent.allow_defer: true`, when false (default), the op is hidden from the LLM prompt.
 
-`set_spark_config` sets a single key in the Blueprint `spark_config:` block. Covers OOM, shuffle fetch failures, Kryo buffer overflow, dynamic allocation thrashing, GC issues, and driver MaxResultSize, seven of the 20 most common Spark errors. Auto-creates the `spark_config` block if absent. Recommended default: add to `guardrails.forbidden_ops` to require human review before auto-apply.
+`set_spark_config` sets a single key in the Blueprint `engine.spark.conf:` block (2.0 — was the top-level `spark_config:` block; the op name is unchanged). Covers OOM, shuffle fetch failures, Kryo buffer overflow, dynamic allocation thrashing, GC issues, and driver MaxResultSize, seven of the 20 most common Spark errors. Auto-creates `engine.spark.conf` if absent. Recommended default: add to `guardrails.forbidden_ops` to require human review before auto-apply.
 
 `replace_macro` replaces the body of an **existing** macro in the Blueprint `macros:` block, the one place bad SQL was previously unreachable, since the agent is told to preserve `{{ macros.* }}` references rather than inline them. Replace-only: unknown macro names are rejected at apply time (also catches name hallucinations). Re-expansion runs through the normal compile + lineage gates, so parameter mismatches and broken columns in *any* consuming module are caught before the patch lands. Because one macro change affects every module referencing it, the recommended default is to add `replace_macro` to `guardrails.forbidden_ops` so it always gets human review.
 
@@ -1492,7 +1494,8 @@ The canonical field reference with descriptions and defaults lives in the `aqued
 
 | Block | Owns |
 | :- | :- |
-| `deployment` | Engine selection (`engine: spark` or `engine: duckdb`), cluster target, master URL |
+| `deployment` | Engine selection (`engine: spark` or `engine: duckdb`), cluster target |
+| `engine` | Per-engine settings, namespaced by engine name (2.0 — see below): `engine.spark.master_url`, `engine.spark.conf`, `engine.duckdb` |
 | `stores` | Backend selection for observability, depot, blob, and benchmark (DuckDB / Postgres / Redis / local / s3 / gcs / adls) |
 | `probes` | Default probe signal limits |
 | `danger` | Safety-gate overrides |
@@ -1502,7 +1505,46 @@ The canonical field reference with descriptions and defaults lives in the `aqued
 | `agent` | LLM connection defaults (provider, base_url, model, api_key, cascade, timeout, budget), CI webhook URL |
 | `warnings` | Compiler/executor warning suppression rules |
 | `checkpoint_root` | Local filesystem path overriding the derived `<store_dir>/checkpoints/` location for module checkpoint/resume state (2.8) |
-| `spark_config` | Per-run Spark session configuration |
+
+### The `engine:` block (2.0)
+
+Per-engine configuration is namespaced by engine name, mirrored identically between `aqueduct.yml` (engine-level defaults) and the Blueprint (`engine:` block, per-Blueprint overrides — see §4.2). A key under `engine.<name>.` belongs to that engine; every other engine accepts and ignores it (a suppressible `engine_key_ignored` warning, never an error — see §10.9 "Config-leaf governance"). Adding a new engine's settings is a new sub-block here, never a new top-level `<engine>_config` dict.
+
+```yaml
+engine:
+  spark:
+    master_url: "local[*]"           # SparkSession.builder.master() — validated against deployment.target
+    conf:                            # per-run Spark session configuration
+      spark.sql.shuffle.partitions: 200
+  duckdb: {}                         # reserved — no knob is wired to real behaviour yet
+```
+
+**2.0 BREAKING — moved off two pre-2.0 locations.** `deployment.master_url` (it is Spark's own cluster-connection string, not a cross-engine deployment concern — `deployment.target` stays where it is) and the top-level `spark_config` dict (named after one engine, with nowhere for a second engine's knobs to live) both move under `engine.spark:`. `aqueduct_config` bumps `"1.0"` → `"2.0"`. Both are now hard-rejected (`extra="forbid"`) at their old location — a pre-2.0 file fails at config-load naming the rejected key directly (`ConfigError`, exit code `CONFIG_ERROR`), never silently accepted or auto-migrated:
+
+```text
+# Before (1.0)                          # After (2.0)
+aqueduct_config: "1.0"                  aqueduct_config: "2.0"
+deployment:                             deployment:
+  engine: spark                           engine: spark
+  target: local                           target: local
+  master_url: "local[*]"                engine:
+spark_config:                             spark:
+  spark.sql.shuffle.partitions: 200         master_url: "local[*]"
+                                             conf:
+                                               spark.sql.shuffle.partitions: 200
+```
+
+The Blueprint-level `spark_config:` block moves the same way, into a Blueprint-level `engine:` block with the identical inner shape (§4.2):
+
+```text
+# Before (1.0)                     # After
+spark_config:                      engine:
+  spark.sql.shuffle.partitions: 200  spark:
+                                        conf:
+                                          spark.sql.shuffle.partitions: 200
+```
+
+`engine.spark.conf` at both levels merge the same way `spark_config` always did (Blueprint wins on conflict). The `set_spark_config` PatchSpec op (§8) is unchanged by name; only its write target moved to `engine.spark.conf.<key>`. `engine.duckdb` exists as an accepted, empty block — no DuckDB session-creation knob (`memory_limit`, `threads`, ...) is wired to real behaviour yet, so none is declared (a config field nothing reads is worse than no field — see AGENTS.md).
 
 ## **10.2 Environment variables & .env**
 
@@ -1515,7 +1557,7 @@ The canonical field reference with descriptions and defaults lives in the `aqued
 ## **10.3 SparkSession lifecycle**
 
 - The Executor creates one SparkSession per pipeline run.
-- Session configuration from the Blueprint `spark_config` block is merged with engine defaults (Blueprint takes precedence).
+- Session configuration from the Blueprint `engine.spark.conf` block is merged with `aqueduct.yml`'s `engine.spark.conf` (Blueprint takes precedence).
 - On self-healing patch and resume: the SparkSession is preserved if the failure was application-level; recycled if JVM/network-level.
 - On run completion or abort, the one-shot CLI relies on process-exit teardown to release the JVM, it deliberately does **not** call `session.stop()`, because `getOrCreate()` may have returned a shared/long-lived cluster (or test) session that other code still depends on. Short-lived helper commands that create a throwaway session (`doctor`, scaffolding) do stop theirs.
 
@@ -1566,16 +1608,16 @@ resolved against the project root (the `aqueduct.yml` directory).
 ## **10.5 Deployment targets**
 
 The `deployment.target` field selects the Spark cluster type. Aqueduct validates
-that `master_url` matches the declared `target` at config-load (for
-`engine: spark` only), and `aqueduct doctor` provides target-specific
+that `engine.spark.master_url` matches the declared `target` at config-load
+(for `engine: spark` only), and `aqueduct doctor` provides target-specific
 reachability and configuration guidance.
 
-| Target | Status | Required `master_url` shape | Doctor checks |
+| Target | Status | Required `engine.spark.master_url` shape | Doctor checks |
 | :- | :- | :- | :- |
 | **local** | Supported (in-cluster) | Starts with `"local"` (e.g. `local[*]`) | In-process session: always ok |
 | **standalone** | Supported (in-cluster) | Starts with `"spark://"` (e.g. `spark://host:7077`) | TCP probe to master host:port |
 | **yarn** | Supported (in-cluster) | Exactly `"yarn"` | Warns if `HADOOP_CONF_DIR` / `YARN_CONF_DIR` env var is unset |
-| **kubernetes** | Supported (in-cluster) | Starts with `"k8s://"` (e.g. `k8s://https://apiserver:443`) | TCP probe to API server host:port; warns if no `spark.kubernetes.*` keys in `spark_config` |
+| **kubernetes** | Supported (in-cluster) | Starts with `"k8s://"` (e.g. `k8s://https://apiserver:443`) | TCP probe to API server host:port; warns if no `spark.kubernetes.*` keys in `engine.spark.conf` |
 | **databricks** | Supported (remote-submit) | N/A (remote-submit) | Requires `deployment.databricks` block; TCP probe to workspace URL |
 | **emr** | Deferred | n/a | Rejected at config-load with a "not yet supported" error |
 | **dataproc** | Deferred | n/a | Rejected at config-load with a "not yet supported" error |
@@ -1587,11 +1629,11 @@ planned for a future release; in the current release they are rejected with a
 "not yet supported" error at config-load.
 
 See the **[Production Guide](production_guide.md)** for per-target cluster setup,
-required env vars, `spark_config` keys, and the production readiness checklist.
+required env vars, `engine.spark.conf` keys, and the production readiness checklist.
 
 ## **10.6 `aqueduct test`: Isolated module testing**
 
-`aqueduct test <test_file.yml>` runs Channel, Junction, Funnel, and Assert modules against inline data with no external I/O. Ingress and Egress are never executed. The session always runs on `local[*]`, `deployment.master_url` is deliberately ignored for cluster-pointed configs.
+`aqueduct test <test_file.yml>` runs Channel, Junction, Funnel, and Assert modules against inline data with no external I/O. Ingress and Egress are never executed. The session always runs on `local[*]`, `engine.spark.master_url` is deliberately ignored for cluster-pointed configs.
 
 ## **10.7 Orchestrator integration contract**
 
@@ -1770,9 +1812,9 @@ Constructing an engine's protocol object never imports the engine's own heavy de
 
 ### Config-leaf governance
 
-Everything above governs the Blueprint grammar. `aqueduct.yml`, the engine config, has its own leaf set: every `AqueductConfig` pydantic field, derived the same way (`aqueduct/executor/config_leaves.py::all_config_leaves()` walks the real `aqueduct/config.py` models rather than a hand-written list) and namespaced `config.*`, giving leaf ids like `config.deployment.master_url`, `config.stores.observability.backend`, and `config.agent.sandbox_master_url`. A field typed as a list or dict of sub-models (`stores.depots`, `agent.cascade`) is one atomic leaf rather than one per dynamic key. These leaves fold into the same closure test as the grammar leaves, so a registered engine must carry an explicit verdict for the union of both sets.
+Everything above governs the Blueprint grammar. `aqueduct.yml`, the engine config, has its own leaf set: every `AqueductConfig` pydantic field, derived the same way (`aqueduct/executor/config_leaves.py::all_config_leaves()` walks the real `aqueduct/config.py` models rather than a hand-written list) and namespaced `config.*`, giving leaf ids like `config.engine.spark.master_url`, `config.stores.observability.backend`, and `config.agent.sandbox_master_url`. A field typed as a list or dict of sub-models (`stores.depots`, `agent.cascade`) is one atomic leaf rather than one per dynamic key. These leaves fold into the same closure test as the grammar leaves, so a registered engine must carry an explicit verdict for the union of both sets.
 
-The gate exists because a key that means nothing on the selected engine, `deployment.master_url` on a single-node engine for instance, was otherwise a silent no-op: accepted, validated, then ignored with no signal. At config-resolution time the gate checks every leaf the user explicitly set (pydantic's `model_fields_set`, at each nesting level, so untouched defaults never warn) against the target engine's verdict.
+The gate exists because a key that means nothing on the selected engine, `engine.spark.master_url` on a single-node engine for instance, was otherwise a silent no-op: accepted, validated, then ignored with no signal. At config-resolution time the gate checks every leaf the user explicitly set (pydantic's `model_fields_set`, at each nesting level, so untouched defaults never warn) against the target engine's verdict.
 
 Config-leaf verdicts always warn and never error. That asymmetry with the Blueprint gate is deliberate. A Blueprint is written for one pipeline on one engine, so an `unsupported` leaf there is a `CompileError`. An `aqueduct.yml` is not: the same file is expected to stay valid across engines, deployment profiles, and test overrides, and hard-failing config load over one inert key would make that impossible. So a config leaf resolving to anything other than `supported` emits one suppressible `engine_key_ignored` warning, using the same rule id and suppression machinery as the compile-time gate, and loading proceeds. `aqueduct/config.py::load_config()` runs the check once `deployment.engine` is validated, immediately before returning the resolved `AqueductConfig`.
 

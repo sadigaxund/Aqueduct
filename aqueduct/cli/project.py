@@ -72,7 +72,7 @@ def completion_cmd(shell: str) -> None:
     "--master",
     default=None,
     help="Spark master for the test session. Default: local[*] (unit tests "
-    "ignore deployment.master_url). Set only for cluster-runtime-dependent modules.",
+    "ignore engine.spark.master_url). Set only for cluster-runtime-dependent modules.",
 )
 @_env_options
 def test_cmd(
@@ -132,20 +132,20 @@ def test_cmd(
         _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
-    merged_spark_config = dict(cfg.spark_config)
+    merged_spark_config = dict(cfg.engine.spark.conf)
 
     # aqtests are isolated unit tests over inline data — they run local by
-    # default and deliberately ignore deployment.master_url so a cluster-
+    # default and deliberately ignore engine.spark.master_url so a cluster-
     # pointed config never drags unit tests onto the cluster. --master is
     # the escape hatch for modules whose correctness needs cluster runtime.
     if master:
         master_url = master
     else:
         master_url = "local[*]"
-        config_master = cfg.deployment.master_url
+        config_master = cfg.engine.spark.master_url
         if config_master and not config_master.startswith("local"):
             click.echo(
-                f"(test: ignoring deployment.master_url={config_master!r}; "
+                f"(test: ignoring engine.spark.master_url={config_master!r}; "
                 f"running on {master_url} — pass --master to override)",
                 err=True,
             )

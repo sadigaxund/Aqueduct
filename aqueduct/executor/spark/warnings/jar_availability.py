@@ -132,7 +132,7 @@ def check(manifest: Any, spark: Any) -> list[str]:
             f"{frag_hint} is loaded in this Spark session. The connector "
             "will fail at first read/write. Add the appropriate JAR via "
             "spark.jars / spark.jars.packages in your aqueduct.yml "
-            "`spark_config:` block."
+            "`engine.spark.conf:` block."
         )
 
     # JDBC drivers — `options.driver: com.mysql.cj.jdbc.Driver` style.
@@ -152,7 +152,7 @@ def check(manifest: Any, spark: Any) -> list[str]:
                 "driver JAR appears to be loaded. Ingress will fail with "
                 "`ClassNotFoundException`. Add the driver JAR via "
                 "spark.jars / spark.jars.packages in your "
-                "`spark_config:` block."
+                "`engine.spark.conf:` block."
             )
 
     return out

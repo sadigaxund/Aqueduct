@@ -319,6 +319,52 @@ class UdfSchema(BaseModel):
         return v
 
 
+class SparkEngineBlockSchema(BaseModel):
+    """Blueprint-level Spark session configuration (`engine.spark:` block, 2.0).
+
+    Mirrors ``aqueduct.yml``'s ``engine.spark.conf`` inner shape exactly
+    (``aqueduct/config.py::SparkEngineConfig``). No ``master_url`` here —
+    a Blueprint doesn't pick a cluster to run on, that's a deployment
+    concern; only the engine-level `engine.spark:` block has one.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    conf: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Per-run Spark session configuration, merged with the engine-"
+            "level engine.spark.conf from aqueduct.yml (Blueprint wins). "
+            "Replaces the pre-2.0 top-level spark_config block."
+        ),
+    )
+
+
+class DuckDBEngineBlockSchema(BaseModel):
+    """Blueprint-level DuckDB configuration (`engine.duckdb:` block, 2.0).
+
+    Empty today — see ``aqueduct.config.DuckDBEngineConfig`` for why no
+    field is declared until something actually reads it.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+
+class EngineBlockSchema(BaseModel):
+    """Per-engine Blueprint configuration, namespaced by engine name
+    (`engine:` block, 2.0). Replaces the pre-2.0 top-level `spark_config`
+    dict. Mirrors the `engine:` block in `aqueduct.yml` exactly — see
+    `aqueduct.config.EngineConfig`.
+
+    Distinct from a future per-module `engine:` FIELD (not implemented
+    here) that will select which engine runs one module — this is the
+    per-engine SETTINGS block, keyed by engine name, at the top level of
+    the Blueprint.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    spark: SparkEngineBlockSchema = Field(default_factory=SparkEngineBlockSchema)
+    duckdb: DuckDBEngineBlockSchema = Field(default_factory=DuckDBEngineBlockSchema)
+
+
 class WarningsSchema(BaseModel):
     """Per-Blueprint compile-warning suppression (see `docs/specs.md` §4.2).
 
@@ -372,8 +418,8 @@ class HookEntrySchema(BaseModel):
     # blueprint: entries only — parse+compile+execute the target Blueprint
     # in-process, reusing the live SparkSession, instead of spawning an
     # `aqueduct run` subprocess. Falls back to subprocess (with an info
-    # message) when the target's spark_config is non-empty (session config
-    # conflict risk).
+    # message) when the target's engine.spark.conf is non-empty (session
+    # config conflict risk).
     in_process: bool = False
 
     @model_validator(mode="after")
@@ -465,7 +511,7 @@ class BlueprintSchema(BaseModel):
     context_profiles: dict[str, dict[str, Any]] = Field(default_factory=dict)
     modules: list[ModuleSchema]
     edges: list[EdgeSchema] = Field(default_factory=list)
-    spark_config: dict[str, Any] = Field(default_factory=dict)
+    engine: EngineBlockSchema = Field(default_factory=EngineBlockSchema)
     retry_policy: RetryPolicySchema = Field(default_factory=RetryPolicySchema)
     agent: AgentSchema = Field(default_factory=AgentSchema)
     udf_registry: list[UdfSchema] = Field(default_factory=list)

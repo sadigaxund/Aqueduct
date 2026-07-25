@@ -342,16 +342,19 @@ def apply_defer_to_human(bp: dict, op: DeferToHumanOp) -> dict:
 
 
 def apply_set_spark_config(bp: dict, op: SetSparkConfigOp) -> dict:
-    """Set a key in the Blueprint's ``spark_config`` block (Phase 42).
+    """Set a key in the Blueprint's ``engine.spark.conf`` block (Phase 42).
 
-    Auto-creates the ``spark_config`` block if absent.  Seven of the
-    20 most common Spark errors (OOM, container kills, shuffle fetch
-    failures, Kryo overflow, dynamic allocation thrashing, GC issues,
-    driver MaxResultSize) are fixed purely by changing spark config
-    values — this operation makes those healable.
+    Auto-creates ``engine.spark.conf`` (2.0 — was the top-level
+    ``spark_config`` block) if absent.  Seven of the 20 most common Spark
+    errors (OOM, container kills, shuffle fetch failures, Kryo overflow,
+    dynamic allocation thrashing, GC issues, driver MaxResultSize) are fixed
+    purely by changing spark config values — this operation makes those
+    healable.
     """
-    bp.setdefault("spark_config", {})
-    bp["spark_config"][op.key] = op.value
+    bp.setdefault("engine", {})
+    bp["engine"].setdefault("spark", {})
+    bp["engine"]["spark"].setdefault("conf", {})
+    bp["engine"]["spark"]["conf"][op.key] = op.value
     return bp
 
 

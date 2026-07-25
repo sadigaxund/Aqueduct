@@ -93,9 +93,11 @@ def _make_session(spec: SessionSpec) -> Any:
     """``ExecutorProtocol.make_session`` for DuckDB — an in-memory connection.
 
     Stage A always opens a fresh ``:memory:`` connection (see the engine's
-    capability table: ``config.spark_config``/``master_url`` are
-    ``ignored_with_warning`` and there is no ``duckdb_config`` knob yet). The
-    ``SessionSpec``'s ``engine_config``/``master_url``/``quiet*`` fields are
+    capability table: ``config.engine.spark.conf``/``config.engine.spark.
+    master_url`` are ``ignored_with_warning`` and there is no
+    ``config.engine.duckdb.*`` knob yet — see ``aqueduct.config.
+    DuckDBEngineConfig``). The ``SessionSpec``'s
+    ``engine_config``/``master_url``/``quiet*`` fields are
     accepted for cross-engine parity and ignored here. ``duckdb`` is imported
     inside the body so constructing the protocol object never requires it.
     """

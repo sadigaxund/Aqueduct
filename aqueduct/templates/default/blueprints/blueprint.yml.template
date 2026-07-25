@@ -55,12 +55,16 @@ macros:
   trunc:  "DATE_TRUNC('{{ period }}', {{ col }})"
 
 
-# ── Spark config (blueprint-level overrides) ───────────────────────────────────
+# ── Engine config (blueprint-level overrides, 2.0) ─────────────────────────────
 #
-# Merged with engine spark_config at runtime; Blueprint values win on conflict.
+# Per-engine settings, namespaced by engine name — mirrors aqueduct.yml's
+# top-level engine: block exactly. Merged with the engine-level
+# engine.spark.conf at runtime; Blueprint values win on conflict.
 
-spark_config:
-  spark.sql.shuffle.partitions: "200"
+engine:
+  spark:
+    conf:
+      spark.sql.shuffle.partitions: "200"
 
 
 # ── Retry policy (blueprint-level default) ─────────────────────────────────────
@@ -134,7 +138,7 @@ spark_config:
 #                       target in THIS process instead, reusing the live
 #                       SparkSession (no self-healing loop for the target;
 #                       falls back to the subprocess path when the target
-#                       sets its own spark_config). Cycle-guarded, ungated.
+#                       sets its own engine.spark.conf). Cycle-guarded, ungated.
 #   webhook: <url|map>  same endpoint model as aqueduct.yml `webhooks:`
 #                       (url shorthand, or url/method/headers/payload) — ungated
 #   command: "<argv>"   subprocess (shlex, no shell); interpolates ${run.id},
@@ -324,7 +328,7 @@ agent:
   #   #     replace_retry_policy      replace the blueprint-level RetryPolicy
   #   #     add_arcade_ref            insert an Arcade (sub-Blueprint) reference
   #   #     defer_to_human            signal unhealable failure (requires allow_defer: true)
-  #   #     set_spark_config          change a spark_config value (recommended: block in auto mode)
+  #   #     set_spark_config          change an engine.spark.conf value (recommended: block in auto mode)
   #   #     replace_macro             replace an existing macros: body (recommended: block in auto mode)
   #   forbidden_ops:
   #     - remove_module

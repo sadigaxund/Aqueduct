@@ -1,7 +1,7 @@
 """Create demo tables in the local Derby-based Hive catalog.
 
 Must share the same Hive metastore (Derby) with the blueprint's
-``spark_config`` so ``table: demo_table`` resolves in ``aqueduct run``.
+``engine.spark.conf`` so ``table: demo_table`` resolves in ``aqueduct run``.
 Purges stale warehouse and metastore directories before creating the table.
 """
 import logging

@@ -3,7 +3,7 @@
 Closes the gap left by Step 0's leaf walker: it covers the BLUEPRINT grammar
 only (`parser/schema.py`), so an ENGINE-CONFIG key (`aqueduct.yml` ->
 `aqueduct/config.py`) that means nothing on the target engine (e.g.
-`deployment.master_url` on a single-node engine) was a silent no-op. This
+`engine.spark.master_url` on a single-node engine) was a silent no-op. This
 file proves:
 
   1. The gate is a genuine NO-OP for Spark today — every real `aqueduct.yml`
@@ -11,7 +11,7 @@ file proves:
      explicitly-set config leaf to `SUPPORTED` on `engine="spark"`, and the
      actual `warnings.warn` call path never fires for a representative file.
   2. The mechanism works for a FUTURE engine: a fake engine that declares
-     `config.deployment.master_url` as `IGNORED_WITH_WARNING` gets a
+     `config.engine.spark.master_url` as `IGNORED_WITH_WARNING` gets a
      suppressible `engine_key_ignored` warning at config-resolution time
      when a user's `aqueduct.yml` sets that key — the exact DuckDB-day proof
      the brief asks for, without registering anything DuckDB-specific.
@@ -103,14 +103,14 @@ def test_load_config_default_missing_file_is_noop(tmp_path, monkeypatch):
 @pytest.fixture
 def _fake_engine():
     """Register a throwaway engine, default-ALLOW like Spark, except
-    `config.deployment.master_url` is IGNORED_WITH_WARNING — exactly the
+    `config.engine.spark.master_url` is IGNORED_WITH_WARNING — exactly the
     DuckDB-day scenario the brief describes, with zero DuckDB-specific code."""
     all_governed = bp_leaves() | all_config_leaves()
     # Built explicitly rather than via a default sweep — the sweep is exactly the
     # tautology this phase removed. This is a TEST double standing in for an
     # engine's YAML declaration; a real engine ships capabilities.yml instead.
     table = {leaf: Capability(support=Support.SUPPORTED) for leaf in all_governed}
-    table["config.deployment.master_url"] = Capability(
+    table["config.engine.spark.master_url"] = Capability(
         support=Support.IGNORED_WITH_WARNING,
         hint="fake_single_node is single-node; master_url is meaningless here.",
     )
@@ -122,7 +122,10 @@ def _fake_engine():
 
 
 def _cfg_for_fake_engine(**overrides) -> AqueductConfig:
-    data = {"deployment": {"engine": "fake_single_node", "target": "local", "master_url": "local[2]"}}
+    data = {
+        "deployment": {"engine": "fake_single_node", "target": "local"},
+        "engine": {"spark": {"master_url": "local[2]"}},
+    }
     data.update(overrides)
     return AqueductConfig.model_validate(data)
 
@@ -133,7 +136,7 @@ def test_fake_engine_ignored_config_key_warns(_fake_engine):
         warnings.simplefilter("always")
         _warn_ignored_config_keys(cfg)
     msgs = [str(w.message) for w in caught if issubclass(w.category, AqueductWarning)]
-    matching = [m for m in msgs if "engine_key_ignored" in m and "config.deployment.master_url" in m]
+    matching = [m for m in msgs if "engine_key_ignored" in m and "config.engine.spark.master_url" in m]
     assert len(matching) == 1, f"expected exactly one engine_key_ignored warning for master_url, got: {msgs}"
     assert "fake_single_node" in matching[0]
     assert "master_url is meaningless" in matching[0]  # the hint is actionable, not just the rule id

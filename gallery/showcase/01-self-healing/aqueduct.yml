@@ -1,10 +1,17 @@
 # aqueduct.yml — Engine config for the Self-Healing Showcase
-aqueduct_config: "1.0"
+aqueduct_config: "2.0"
 
 deployment:
   engine: spark
   target: local
-  master_url: "local[*]"
+
+engine:
+  spark:
+    master_url: "local[*]"
+    conf:
+      spark.sql.shuffle.partitions: "4"
+      spark.sql.adaptive.enabled: "true"
+      spark.sql.adaptive.coalescePartitions.enabled: "true"
 
 stores:
   observability:
@@ -19,11 +26,6 @@ danger:
 probes:
   max_sample_rows: 100
   default_sample_fraction: 0.1
-
-spark_config:
-  spark.sql.shuffle.partitions: "4"
-  spark.sql.adaptive.enabled: "true"
-  spark.sql.adaptive.coalescePartitions.enabled: "true"
 
 # ── Local Ollama (default) — commented out in favor of DeepSeek below.
 #    Uncomment this block and comment the DeepSeek one to go back to local.

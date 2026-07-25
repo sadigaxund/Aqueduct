@@ -34,9 +34,9 @@ Aqueduct has no built-in scheduler. `aqueduct run` is a one-shot CLI command des
 
 ## Spark cluster configuration
 
-Aqueduct creates a `SparkSession` on the driver. Cluster connection is controlled via the `deployment:` and `spark_config:` blocks in `aqueduct.yml`.
+Aqueduct creates a `SparkSession` on the driver. Cluster connection is controlled via the `deployment:` and `engine.spark:` blocks in `aqueduct.yml` (2.0 — `master_url` and Spark session config live under `engine.spark:`, namespaced by engine name so a second engine's own settings have somewhere to live; see [specs.md §10.1](specs.md)).
 
-The `target` field is validated against `master_url` at config-load. A
+The `target` field is validated against `engine.spark.master_url` at config-load. A
 mismatch raises a `ConfigError` naming both values and the expected shape.
 `databricks` is a fully wired **remote‑submit** target, the engine packages
 the blueprint, uploads to DBFS, submits via the Databricks Jobs API, and
@@ -47,25 +47,28 @@ packaging/submit layer planned for a future release.
 deployment:
   env: cluster
   target: standalone                   # local | standalone | yarn | kubernetes | databricks | emr | dataproc
-  master_url: "spark://master:7077"    # consumed by SparkSession.builder.master()
 
-spark_config:
-  spark.sql.shuffle.partitions: "200"
-  spark.hadoop.fs.s3a.impl: "org.apache.hadoop.fs.s3a.S3AFileSystem"
-  spark.hadoop.fs.s3a.aws.credentials.provider: "com.amazonaws.auth.InstanceProfileCredentialsProvider"
+engine:
+  spark:
+    master_url: "spark://master:7077"  # consumed by SparkSession.builder.master()
+    conf:
+      spark.sql.shuffle.partitions: "200"
+      spark.hadoop.fs.s3a.impl: "org.apache.hadoop.fs.s3a.S3AFileSystem"
+      spark.hadoop.fs.s3a.aws.credentials.provider: "com.amazonaws.auth.InstanceProfileCredentialsProvider"
 ```
 
-`spark_config` keys are forwarded verbatim to `SparkSession.builder.config()`. Blueprint-level `spark_config` overrides engine-level keys on conflict.
+`engine.spark.conf` keys are forwarded verbatim to `SparkSession.builder.config()`. The Blueprint's own `engine.spark.conf` overrides engine-level keys on conflict.
 
-**Catalog wiring (`table:` addressing).** When Blueprint modules use `table:` instead of `path:`, Spark resolves the `catalog.schema.table` identifier through the session's configured catalog. The catalog connection lives entirely in `spark_config`, standard Spark properties like `spark.sql.catalog.*`, no Aqueduct-specific config. See the [Spark Guide](spark_guide.md#catalog-wiring) for examples.
+**Catalog wiring (`table:` addressing).** When Blueprint modules use `table:` instead of `path:`, Spark resolves the `catalog.schema.table` identifier through the session's configured catalog. The catalog connection lives entirely in `engine.spark.conf`, standard Spark properties like `spark.sql.catalog.*`, no Aqueduct-specific config. See the [Spark Guide](spark_guide.md#catalog-wiring) for examples.
 
 `table:` and `path:` are **mutually exclusive** on both Ingress and Egress, setting both raises a parse error.
 
 Environment variable substitution works inside config values:
 
 ```yaml
-deployment:
-  master_url: "${SPARK_MASTER_URL:-local[*]}"   # falls back to local if unset
+engine:
+  spark:
+    master_url: "${SPARK_MASTER_URL:-local[*]}"   # falls back to local if unset
 ```
 
 Running on a cluster:
@@ -82,7 +85,9 @@ In K8s, mount a PersistentVolumeClaim at `.aqueduct/` and `patches/` so observab
 ```yaml
 deployment:
   target: local
-  master_url: "local[*]"              # or local[4], local[8], …
+engine:
+  spark:
+    master_url: "local[*]"            # or local[4], local[8], …
 ```
 
 The session runs in‑process inside the driver JVM. No external connectivity
@@ -93,10 +98,12 @@ needed: `aqueduct doctor` always reports `ok`.
 ```yaml
 deployment:
   target: standalone
-  master_url: "spark://spark-master.internal:7077"
+engine:
+  spark:
+    master_url: "spark://spark-master.internal:7077"
 ```
 
-`master_url` must start with `spark://`. The doctor TCP‑probes `<host>:<port>`
+`engine.spark.master_url` must start with `spark://`. The doctor TCP‑probes `<host>:<port>`
 from the master URL (default port 7077) to verify the Spark master is reachable
 before a run.
 
@@ -105,11 +112,13 @@ before a run.
 ```yaml
 deployment:
   target: yarn
-  master_url: "yarn"
   env: cluster
+engine:
+  spark:
+    master_url: "yarn"
 ```
 
-`master_url` must be exactly `"yarn"`. The driver uses the Hadoop configuration
+`engine.spark.master_url` must be exactly `"yarn"`. The driver uses the Hadoop configuration
 on the node to locate the ResourceManager. Set `HADOOP_CONF_DIR` (or
 `YARN_CONF_DIR`) to the directory containing `yarn-site.xml`:
 
@@ -126,23 +135,25 @@ trigger a full YARN negotiation); use `--preflight` for a real session test.
 ```yaml
 deployment:
   target: kubernetes
-  master_url: "k8s://https://k8s-api.internal:6443"
   env: cluster
 
-spark_config:
-  spark.kubernetes.namespace: "aqueduct"
-  spark.kubernetes.container.image: "my-registry/aqueduct:latest"
-  spark.kubernetes.authenticate.driver.serviceAccountName: "aqueduct-sa"
+engine:
+  spark:
+    master_url: "k8s://https://k8s-api.internal:6443"
+    conf:
+      spark.kubernetes.namespace: "aqueduct"
+      spark.kubernetes.container.image: "my-registry/aqueduct:latest"
+      spark.kubernetes.authenticate.driver.serviceAccountName: "aqueduct-sa"
 ```
 
-`master_url` must start with `k8s://`. The doctor parses the API server
+`engine.spark.master_url` must start with `k8s://`. The doctor parses the API server
 host:port from the URL and TCP‑probes it (port defaults to 443). It also warns
-if no `spark.kubernetes.*` keys are present in `spark_config`, at minimum a
+if no `spark.kubernetes.*` keys are present in `engine.spark.conf`, at minimum a
 namespace and container image are normally required.
 
 Credentials come from the pod's service account (no `@aq.secret()` needed when
 using in‑cluster `spark.kubernetes.authenticate.*` config). For out‑of‑cluster
-submission, add a kubeconfig path under `spark_config`.
+submission, add a kubeconfig path under `engine.spark.conf`.
 
 ### Write-mode features
 
@@ -169,7 +180,7 @@ format-aware post-write ops (`delta`: `OPTIMIZE` + `VACUUM`, `iceberg`:
 `rewrite_data_files` + `expire_snapshots`, `hudi`: `run_compaction` +
 `run_clean`). Timing lands in `maintenance_metrics`. `aqueduct doctor` emits an
 `iceberg_catalog` warning when a `format: iceberg` module has no catalog key in
-the blueprint `spark_config`.
+the blueprint's `engine.spark.conf`.
 
 ---
 

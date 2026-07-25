@@ -122,18 +122,14 @@ class DeploymentConfig(BaseModel):
         default="local",
         description="Deployment target: local | standalone | yarn | kubernetes | databricks | emr | dataproc",
     )
-    master_url: str = Field(
-        default="local[*]",
-        description="Engine-specific cluster URL (Spark: SparkSession.builder.master()).",
-    )
     env: Literal["local", "cluster", "cloud"] = Field(
         default="local",
         description="Deployment environment tier. Doctor warns on local paths in cluster/cloud mode.",
     )
 
     @model_validator(mode="after")
-    def _validate_target_master_url(self) -> DeploymentConfig:
-        """Validate ``engine`` and enforce target ↔ master_url consistency.
+    def _validate_engine(self) -> DeploymentConfig:
+        """Validate ``engine`` against the registered ``aqueduct.engines`` set.
 
         ``engine`` is checked against the engines actually registered through
         the ``aqueduct.engines`` entry-point group (Phase 78 Step 1,
@@ -151,9 +147,11 @@ class DeploymentConfig(BaseModel):
         engines: []". That is a packaging problem, not a config problem, and
         says so: reinstall.
 
-        Remote-submit targets (databricks / emr / dataproc) are rejected with
-        a forward pointer to Phase 64. Target/master_url consistency is only
-        meaningful for the spark engine today.
+        Target/``engine.spark.master_url`` consistency (2.0 — master_url
+        moved off this block, see ``SparkEngineConfig``) is checked at
+        ``AqueductConfig`` level (``_validate_target_master_url`` below),
+        since it needs both this block AND the ``engine:`` block; this
+        validator only owns engine-name registration, which needs neither.
         """
         from aqueduct.executor.capabilities import (
             CAPABILITY_REGISTRY,
@@ -184,48 +182,17 @@ class DeploymentConfig(BaseModel):
         if self.engine != "spark":
             return self
 
-        target = self.target
-        master = self.master_url
-
-        # ── Remote-submit targets (not yet implemented) ─────────────────────
-        if target == "databricks":
-            if self.databricks is None:
-                raise ConfigError(
-                    "deployment.target=databricks requires the "
-                    "deployment.databricks block to be set"
-                )
-            return self
-
-        if target in ("emr", "dataproc"):
+        if self.target == "databricks" and self.databricks is None:
             raise ConfigError(
-                f"deployment.target={target!r} is a remote-submit target not "
-                f"yet supported. "
-                f"Use local | standalone | yarn | kubernetes | databricks."
+                "deployment.target=databricks requires the "
+                "deployment.databricks block to be set"
             )
 
-        # ── In-cluster targets ────────────────────────────────────────────────
-        _EXPECTED: dict[str, str] = {
-            "local":       "local",
-            "standalone":  "spark://",
-            "yarn":        "yarn",
-            "kubernetes":  "k8s://",
-        }
-        expected = _EXPECTED.get(target)
-        if expected is None:
-            return self
-
-        if expected == "yarn":
-            if master != "yarn":
-                raise ConfigError(
-                    f"deployment.target={target!r} requires "
-                    f"master_url={expected!r}, "
-                    f"got master_url={master!r}"
-                )
-        elif not master.startswith(expected):
+        if self.target in ("emr", "dataproc"):
             raise ConfigError(
-                f"deployment.target={target!r} requires "
-                f"master_url starting with {expected!r}, "
-                f"got master_url={master!r}"
+                f"deployment.target={self.target!r} is a remote-submit target "
+                f"not yet supported. "
+                f"Use local | standalone | yarn | kubernetes | databricks."
             )
 
         return self
@@ -1082,6 +1049,67 @@ class LineageConfig(BaseModel):
     )
 
 
+class SparkEngineConfig(BaseModel):
+    """Engine-level Spark session configuration (`engine.spark:` block, 2.0).
+
+    Replaces two pre-2.0 fields: ``deployment.master_url`` (Spark-specific —
+    ``SparkSession.builder.master()`` — not a cross-engine deployment
+    concern) and the top-level ``spark_config`` dict (named after one engine
+    when it was the only one). ``master_url``/``conf`` here are both
+    Spark-only; every other engine ignores them (config-leaf governance,
+    docs/specs.md §10.9) without ceremony.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    master_url: str = Field(
+        default="local[*]",
+        description=(
+            "Spark cluster URL (SparkSession.builder.master()). Moved from "
+            "deployment.master_url in 2.0."
+        ),
+    )
+    conf: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Per-run Spark session configuration, merged with the "
+            "Blueprint's own engine.spark.conf (Blueprint wins). Replaces "
+            "the pre-2.0 top-level spark_config dict."
+        ),
+    )
+
+
+class DuckDBEngineConfig(BaseModel):
+    """Engine-level DuckDB configuration (`engine.duckdb:` block, 2.0).
+
+    Empty today. ``aqueduct/executor/duckdb_/engine.py::_make_session``
+    always opens a bare ``:memory:`` connection and reads nothing from
+    ``SessionSpec.engine_config`` yet — there is no session-creation knob
+    (``memory_limit``, ``threads``, ...) wired to real behaviour. Per
+    AGENTS.md's "no silent no-ops" rule, a field nothing reads is worse than
+    no field at all, so none is declared here until one is actually
+    consumed. The block still exists (and is still `extra="forbid"`) so
+    `engine.duckdb: {}` is valid config/Blueprint YAML ahead of the first
+    real knob.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class EngineConfig(BaseModel):
+    """Per-engine configuration, namespaced by engine name (`engine:` block, 2.0).
+
+    Replaces the pre-2.0 top-level `spark_config` dict — named after one
+    engine — now that DuckDB is a second registered engine (docs/specs.md
+    §10.9). A key under `engine.<name>.` belongs to that engine; every other
+    engine ignores it (warn, never error — see config-leaf governance).
+    Adding a new engine's settings is a new sub-block here, not a new
+    top-level `<engine>_config` dict.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    spark: SparkEngineConfig = Field(default_factory=SparkEngineConfig)
+    duckdb: DuckDBEngineConfig = Field(default_factory=DuckDBEngineConfig)
+
+
 class AqueductConfig(BaseModel):
     """Fully validated engine configuration.
 
@@ -1093,8 +1121,9 @@ class AqueductConfig(BaseModel):
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    aqueduct_config: str = Field(default="1.0", description="Config schema version")
+    aqueduct_config: str = Field(default="2.0", description="Config schema version")
     deployment: DeploymentConfig = Field(default_factory=DeploymentConfig)
+    engine: EngineConfig = Field(default_factory=EngineConfig)
     stores: StoresConfig = Field(default_factory=StoresConfig)
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
     probes: ProbesConfig = Field(default_factory=ProbesConfig)
@@ -1114,10 +1143,6 @@ class AqueductConfig(BaseModel):
             "docs/roadmap.md 'Remote-Filesystem Checkpoint Root'."
         ),
     )
-    spark_config: dict[str, Any] = Field(
-        default_factory=dict,
-        description="Engine-level Spark conf merged with Blueprint spark_config (Blueprint wins)",
-    )
 
     @field_validator("checkpoint_root")
     @classmethod
@@ -1135,6 +1160,56 @@ class AqueductConfig(BaseModel):
                 "to fall back to the derived <store_dir>/checkpoints/ default."
             )
         return v
+
+    @model_validator(mode="after")
+    def _validate_target_master_url(self) -> AqueductConfig:
+        """Enforce ``deployment.target`` ↔ ``engine.spark.master_url`` consistency.
+
+        Moved here (2.0) from ``DeploymentConfig`` because it now needs
+        fields from two blocks: ``deployment.target`` and
+        ``engine.spark.master_url`` (the pre-2.0 ``deployment.master_url``).
+        Only meaningful for ``deployment.engine == "spark"`` — a non-Spark
+        engine has no cluster master to validate against a target shape.
+        Remote-submit targets (emr/dataproc) and the databricks-block
+        requirement are handled in ``DeploymentConfig._validate_engine``,
+        which runs first (field-level validators run before this
+        model-level one) and already rejects/accepts those independent of
+        master_url.
+        """
+        if self.deployment.engine != "spark":
+            return self
+
+        target = self.deployment.target
+        master = self.engine.spark.master_url
+
+        if target in ("databricks", "emr", "dataproc"):
+            return self  # handled by DeploymentConfig._validate_engine
+
+        _EXPECTED: dict[str, str] = {
+            "local":       "local",
+            "standalone":  "spark://",
+            "yarn":        "yarn",
+            "kubernetes":  "k8s://",
+        }
+        expected = _EXPECTED.get(target)
+        if expected is None:
+            return self
+
+        if expected == "yarn":
+            if master != "yarn":
+                raise ConfigError(
+                    f"deployment.target={target!r} requires "
+                    f"engine.spark.master_url={expected!r}, "
+                    f"got engine.spark.master_url={master!r}"
+                )
+        elif not master.startswith(expected):
+            raise ConfigError(
+                f"deployment.target={target!r} requires "
+                f"engine.spark.master_url starting with {expected!r}, "
+                f"got engine.spark.master_url={master!r}"
+            )
+
+        return self
 
 
 # ── Loader ────────────────────────────────────────────────────────────────────

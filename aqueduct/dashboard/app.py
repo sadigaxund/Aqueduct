@@ -1560,9 +1560,13 @@ def _config_tab(cfg):
     rows = []
     dep = getattr(cfg, "deployment", None)
     if dep is not None:
-        for f in ("engine", "target", "master_url", "env"):
+        for f in ("engine", "target", "env"):
             if hasattr(dep, f):
                 rows.append({"key": f"deployment.{f}", "value": str(getattr(dep, f))})
+    eng = getattr(cfg, "engine", None)
+    spark_eng = getattr(eng, "spark", None) if eng is not None else None
+    if spark_eng is not None and hasattr(spark_eng, "master_url"):
+        rows.append({"key": "engine.spark.master_url", "value": str(spark_eng.master_url)})
     stores = getattr(cfg, "stores", None)
     if stores is not None:
         for sname in ("observability", "depot", "blob", "benchmark"):

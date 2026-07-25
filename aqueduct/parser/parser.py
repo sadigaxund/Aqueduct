@@ -400,14 +400,19 @@ def parse_dict(
         raise ParseError(f"agent config resolution failed: {exc}") from exc
 
     # Tier-0 resolution applies here too (parity with module config /
-    # context_override) — ${ENV:-default} / ${ctx.*} in spark_config and
+    # context_override) — ${ENV:-default} / ${ctx.*} in engine.spark.conf and
     # macros must be substituted, Spark/macros do no var expansion (ISSUE-027).
     # Wrapped so a bad ${ctx.*} surfaces as ParseError, not raw ValueError.
+    # NOTE (2.0): the YAML-facing key is `engine.spark.conf:` (was the
+    # top-level `spark_config:` block); the internal `Blueprint.spark_config`
+    # dataclass field keeps its pre-2.0 name — it is engine-agnostic AST
+    # plumbing, not part of the Blueprint-authoring contract this rename
+    # covers, and only Spark reads it today.
     try:
-        resolved_spark_config = resolve_value(dict(validated.spark_config), ctx_map)
+        resolved_spark_config = resolve_value(dict(validated.engine.spark.conf), ctx_map)
         resolved_macros = resolve_value(dict(validated.macros), ctx_map)
     except (ValueError, ParseError) as exc:
-        raise ParseError(f"spark_config / macros resolution failed: {exc}") from exc
+        raise ParseError(f"engine.spark.conf / macros resolution failed: {exc}") from exc
 
     return Blueprint(
         aqueduct_version=validated.aqueduct,

@@ -80,7 +80,7 @@ class TestParseSetItems:
 
     def test_json_syntax_invalid_raises(self):
         with pytest.raises(OverrideError, match="invalid JSON"):
-            parse_set_items(["spark_config:=not-json"])
+            parse_set_items(["engine.spark.conf:=not-json"])
 
     def test_rejects_item_without_equals(self):
         with pytest.raises(OverrideError, match="must be PATH=VALUE"):
@@ -106,9 +106,9 @@ class TestParseSetItems:
 
 class TestToNested:
     def test_single_path(self):
-        items = parse_set_items(["deployment.master_url=spark://h:7077"])
+        items = parse_set_items(["engine.spark.master_url=spark://h:7077"])
         result = to_nested(items)
-        assert result == {"deployment": {"master_url": "spark://h:7077"}}
+        assert result == {"engine": {"spark": {"master_url": "spark://h:7077"}}}
 
     def test_multiple_paths_merged(self):
         items = parse_set_items(["a.b=1", "a.c=2"])
@@ -155,8 +155,8 @@ class TestDeepMerge:
 class TestApplyToModel:
     def test_simple_override(self):
         cfg = AqueductConfig()
-        result = apply_to_model(cfg, {"deployment": {"master_url": "local[2]"}})
-        assert result.deployment.master_url == "local[2]"
+        result = apply_to_model(cfg, {"engine": {"spark": {"master_url": "local[2]"}}})
+        assert result.engine.spark.master_url == "local[2]"
 
     def test_nested_override(self):
         cfg = AqueductConfig()
@@ -171,13 +171,13 @@ class TestApplyToModel:
     def test_invalid_value_raises(self):
         cfg = AqueductConfig()
         with pytest.raises(OverrideError, match="invalid config"):
-            apply_to_model(cfg, {"deployment": {"master_url": 123}})
+            apply_to_model(cfg, {"engine": {"spark": {"master_url": 123}}})
 
     def test_immutable_original(self):
         cfg = AqueductConfig()
-        original = cfg.deployment.master_url
-        apply_to_model(cfg, {"deployment": {"master_url": "local[4]"}})
-        assert cfg.deployment.master_url == original
+        original = cfg.engine.spark.master_url
+        apply_to_model(cfg, {"engine": {"spark": {"master_url": "local[4]"}}})
+        assert cfg.engine.spark.master_url == original
 
 
 # ── model_accepts_path ─────────────────────────────────────────────────────────
@@ -187,11 +187,15 @@ class TestModelAcceptsPath:
     def test_agent_budget_seconds_accepted(self):
         assert model_accepts_path(AqueductConfig, ("agent", "budget", "max_seconds"))
 
-    def test_deployment_master_accepted(self):
-        assert model_accepts_path(AqueductConfig, ("deployment", "master_url"))
+    def test_engine_spark_master_url_accepted(self):
+        assert model_accepts_path(AqueductConfig, ("engine", "spark", "master_url"))
 
-    def test_spark_config_open_dict(self):
-        assert model_accepts_path(AqueductConfig, ("spark_config", "spark.sql.shuffle.partitions"))
+    def test_deployment_master_url_no_longer_accepted(self):
+        """2.0 BREAKING: master_url moved off deployment: onto engine.spark:."""
+        assert not model_accepts_path(AqueductConfig, ("deployment", "master_url"))
+
+    def test_engine_spark_conf_open_dict(self):
+        assert model_accepts_path(AqueductConfig, ("engine", "spark", "conf", "spark.sql.shuffle.partitions"))
 
     def test_unknown_path_rejected(self):
         assert not model_accepts_path(AqueductConfig, ("agent", "approval_mode"))
@@ -199,8 +203,8 @@ class TestModelAcceptsPath:
     def test_bogus_top_level_rejected(self):
         assert not model_accepts_path(AqueductConfig, ("nonexistent", "key"))
 
-    def test_accepts_deep_spark_config(self):
-        assert model_accepts_path(AqueductConfig, ("spark_config", "any", "depth"))
+    def test_accepts_deep_engine_spark_conf(self):
+        assert model_accepts_path(AqueductConfig, ("engine", "spark", "conf", "any", "depth"))
 
 
 # ── suggest_for_path ───────────────────────────────────────────────────────────
@@ -233,9 +237,9 @@ class TestRouteOverrides:
 
     def test_config_path_routed_to_config(self):
         config_nested, blueprint_nested = route_overrides(
-            ["deployment.master_url=spark://h:7077"], allow_blueprint=True
+            ["engine.spark.master_url=spark://h:7077"], allow_blueprint=True
         )
-        assert config_nested == {"deployment": {"master_url": "spark://h:7077"}}
+        assert config_nested == {"engine": {"spark": {"master_url": "spark://h:7077"}}}
         assert blueprint_nested == {}
 
     def test_unknown_path_raises(self):

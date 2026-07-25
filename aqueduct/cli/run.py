@@ -344,7 +344,7 @@ def _load_engine_config(
 
     resolved_webhook = WebhookEndpointConfig(url=webhook) if webhook else cfg.webhooks.on_failure
     engine = cfg.deployment.engine
-    master_url = cfg.deployment.master_url
+    master_url = cfg.engine.spark.master_url
 
     # ── Danger settings startup warning ──────────────────────────────────────
     danger_pairs = []
@@ -880,7 +880,7 @@ def _setup_surveyor(
     # raises a clean EnginePluginError (naming the engine) via session_factory(),
     # the AqueductError replacement for the bare NotImplementedError.
     from aqueduct.executor.protocol import SessionSpec, get_protocol
-    merged_spark_config = {**cfg.spark_config, **manifest.spark_config}
+    merged_spark_config = {**cfg.engine.spark.conf, **manifest.spark_config}
     _protocol = get_protocol(engine)
     session = _protocol.session_factory()(
         SessionSpec(
@@ -1007,7 +1007,7 @@ def _setup_surveyor(
     metavar="PATH=VALUE",
     help="Override a config or blueprint value for this run only (repeatable, "
          "in-memory, never persisted). Dotted path — e.g. "
-         "--set agent.approval_mode=auto --set deployment.master_url=spark://h:7077. "
+         "--set agent.approval_mode=auto --set engine.spark.master_url=spark://h:7077. "
          "Values coerce to bool/int/float/null else string; use PATH:=JSON for "
          "structured values. Highest precedence (beats blueprint + aqueduct.yml).",
 )
@@ -1202,7 +1202,7 @@ def run(
                 sys.exit(exit_codes.CONFIG_ERROR)
 
             sandboxed_manifest, egress_targets = build_sandbox_manifest(manifest, sample)
-            merged_spark_config = {**cfg.spark_config, **manifest.spark_config}
+            merged_spark_config = {**cfg.engine.spark.conf, **manifest.spark_config}
             sandbox_run_id = f"sandbox-{run_id or uuid.uuid4().hex}"  # full uuid — queryable, no collisions
 
             _limit_desc = f"≤{sample} row(s)/Ingress" if sample and sample > 0 else "no row limit"

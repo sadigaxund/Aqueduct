@@ -210,12 +210,15 @@ leaves:
     hint: "single-node engine — schedule the container on one node. Databricks is a Spark deployment target."
   config.deployment.engine: supported
   config.deployment.env: supported
-  config.deployment.master_url:
-    support: ignored_with_warning
-    hint: "DuckDB is single-process and has no cluster master to submit to; master_url is ignored. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
   config.deployment.target:
     support: supported
     hint: "DuckDB is a single-node engine — only target=local is meaningful. Remote-submit / cluster targets (databricks, emr, dataproc, yarn, kubernetes, standalone) have no DuckDB execution path; use the spark engine for those."
+  config.engine.spark.conf:
+    support: ignored_with_warning
+    hint: "engine.spark.conf configures a SparkSession that does not exist here; ignored. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
+  config.engine.spark.master_url:
+    support: ignored_with_warning
+    hint: "DuckDB is single-process and has no cluster master to submit to; master_url is ignored. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
   config.lineage.openlineage_namespace:
     support: ignored_with_warning
     hint: "the DuckDB executor does not emit OpenLineage events; the namespace key is accepted but inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
@@ -234,9 +237,6 @@ leaves:
   config.secrets.provider: supported
   config.secrets.region: supported
   config.secrets.resolver: supported
-  config.spark_config:
-    support: ignored_with_warning
-    hint: "spark_config has no meaning for the DuckDB engine (it configures a SparkSession that does not exist here); ignored. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
   config.stores.benchmark.backend: supported
   config.stores.benchmark.gate_on_regression: supported
   config.stores.benchmark.path: supported

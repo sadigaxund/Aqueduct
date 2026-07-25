@@ -207,14 +207,16 @@ class ReplaceMacroOp(BaseModel, extra="forbid"):
 
 
 class SetSparkConfigOp(BaseModel, extra="forbid"):
-    """Set a single key in the Blueprint's ``spark_config`` block (Phase 42).
+    """Set a single key in the Blueprint's ``engine.spark.conf`` block (Phase 42).
 
     Seven of the 20 most common Spark errors are fixed purely by changing
     spark config values: OOM, container kills, shuffle fetch failures,
     Kryo buffer overflow, dynamic allocation thrashing, GC/heartbeat
     issues, driver MaxResultSize.  This operation makes those healable.
 
-    Auto-creates the ``spark_config`` block if absent.
+    Auto-creates the ``engine.spark.conf`` block (2.0 — was the top-level
+    ``spark_config`` block) if absent. The op NAME is unchanged; only the
+    Blueprint-dict write path moved with the schema.
 
     Guardrail: ``set_spark_config`` is **default-forbidden in auto mode**
     via ``guardrails.forbidden_ops``.  The LLM can always propose it —

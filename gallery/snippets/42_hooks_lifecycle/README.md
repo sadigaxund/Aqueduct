@@ -66,7 +66,7 @@ hooks:
   live SparkSession, instead of spawning a fresh `aqueduct run` subprocess.
   No self-healing loop for the chained target — a failure is still just a
   `[hook_failed]` warning. Falls back to the subprocess path (with an info
-  message) when the target Blueprint sets its own `spark_config`.
+  message) when the target Blueprint sets its own `engine.spark.conf`.
 
 ## `on_patch_pending` / `on_healed` (mid-run heal milestones)
 

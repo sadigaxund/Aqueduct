@@ -21,12 +21,14 @@ The transform module is cheap (UPPER + select), but in a real pipeline
 it might be an expensive JOIN or a JDBC pull. Checkpointing it means
 the retry doesn't redo the expensive work.
 
-> **`spark_config` on a Blueprint:** Add a `spark_config:` block at the
+> **`engine.spark.conf` on a Blueprint:** Add an `engine:` block at the
 > Blueprint root to set Spark conf values scoped to that pipeline:
 > ```yaml
-> spark_config:
->   spark.sql.shuffle.partitions: 8
->   spark.sql.adaptive.enabled: "true"
+> engine:
+>   spark:
+>     conf:
+>       spark.sql.shuffle.partitions: 8
+>       spark.sql.adaptive.enabled: "true"
 > ```
 >
 > **`tags` / `description` on modules:** All modules accept optional

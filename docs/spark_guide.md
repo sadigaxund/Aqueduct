@@ -55,7 +55,7 @@ warnings are **not suppressible**.
 | `delivery_append_retry_dupes` | `mode: append` with `max_attempts > 1`: retries may produce duplicate rows | [delivery-append-retry-dupes](#delivery-append-retry-dupes) |
 | ~~`maintenance_optimize_non_delta`~~ | Escalated to a **compile error** (deterministic runtime failure, OPTIMIZE is Delta-only); no longer suppressible | [maintenance-optimize-non-delta](#maintenance-optimize-non-delta) |
 | `perf_delta_append_no_partition` | `mode: append` without `partition_by`/repartition accumulates small files | [append-no-partition](#append-no-partition) |
-| `perf_hadoop_fs_in_options` | Hadoop FS credentials in `options:` don't reach HadoopConfiguration, use `spark_config:` | [hadoop-fs-in-options](#hadoop-fs-in-options) |
+| `perf_hadoop_fs_in_options` | Hadoop FS credentials in `options:` don't reach HadoopConfiguration, use `engine.spark.conf:` | [hadoop-fs-in-options](#hadoop-fs-in-options) |
 | `perf_incremental_watermark_scan` | `materialize: incremental` re-reads the WRITTEN output for `MAX(watermark_column)` (all-Delta outputs exempt) | [incremental-watermark-scan](#incremental-watermark-scan) |
 | `perf_multi_consumer_no_cache` | Multi-consumer Channel without a Checkpoint re-evaluates the DAG per branch | [caching-strategy](#caching-strategy) |
 | `perf_probe_sample_full_scan` | Probe sample-based signal: `df.sample()` is a full dataset scan | [probe-sample-cost](#probe-sample-cost) |
@@ -78,7 +78,7 @@ warnings are **not suppressible**.
 
 | Rule id | Flags | Detail |
 |---|---|---|
-| `iceberg_catalog` | `format: iceberg` module has no catalog key in blueprint `spark_config` | [iceberg-hudi](#iceberg--hudi-jars-catalog-and-maintenance) |
+| `iceberg_catalog` | `format: iceberg` module has no catalog key in blueprint `engine.spark.conf` | [iceberg-hudi](#iceberg--hudi-jars-catalog-and-maintenance) |
 
 #### `probe-sample-cost`
 
@@ -143,7 +143,7 @@ Checkpoint upstream" advice from that era no longer applies.)*
 #### `python-udf-performance`
 
 **Triggered when:** A UDF in `udf_registry` has `lang: python` (the default) AND
-the Blueprint's `spark_config` does not enable Arrow-optimized Python UDFs.
+the Blueprint's `engine.spark.conf` does not enable Arrow-optimized Python UDFs.
 
 Without Arrow-optimized UDF execution, Python UDFs execute **row-at-a-time** in
 the Python interpreter:
@@ -154,7 +154,7 @@ the Python interpreter:
 
 Since Spark 3.5, `spark.sql.execution.pythonUDF.arrow.enabled: true` (or
 `useArrow=True` per UDF) switches plain Python UDFs to Arrow-batched execution,
-setting that flag in the Blueprint's `spark_config` silences this warning
+setting that flag in the Blueprint's `engine.spark.conf` silences this warning
 automatically. Semantics caveat: Arrow-optimized UDFs can differ on edge-case
 type coercions, so validate before flipping it on an existing pipeline.
 
@@ -241,7 +241,7 @@ but **does not** propagate them to Spark's `HadoopConfiguration`. The S3A, GCS,
 Azure, or HDFS filesystem delegate reads Hadoop configuration to resolve credentials,
 endpoints, and timeouts: so these keys are silently ignored.
 
-**Fix:** Move them to `spark_config:` with the `spark.hadoop.` prefix:
+**Fix:** Move them to `engine.spark.conf:` with the `spark.hadoop.` prefix:
 
 ```yaml
 # Wrong — silently ignored:
@@ -253,9 +253,11 @@ config:
     fs.s3a.secret.key: "${AWS_SECRET_ACCESS_KEY}"
 
 # Correct:
-spark_config:
-  spark.hadoop.fs.s3a.access.key: "${AWS_ACCESS_KEY_ID}"
-  spark.hadoop.fs.s3a.secret.key: "${AWS_SECRET_ACCESS_KEY}"
+engine:
+  spark:
+    conf:
+      spark.hadoop.fs.s3a.access.key: "${AWS_ACCESS_KEY_ID}"
+      spark.hadoop.fs.s3a.secret.key: "${AWS_SECRET_ACCESS_KEY}"
 ```
 
 See the [S3A committer](#s3a-committer) section for committer-specific options
@@ -452,33 +454,35 @@ the catalog (Unity Catalog, AWS Glue, Hive metastore, Iceberg REST, Polaris)
 owns the location, schema, format, and permissions.
 
 The catalog connection is configured through standard `spark.sql.catalog.*`
-properties in `spark_config:` (blueprint-level or `aqueduct.yml` engine-level).
+properties in `engine.spark.conf:` (blueprint-level or `aqueduct.yml` engine-level).
 There is no Aqueduct-specific catalog config:
 
 ```yaml
-spark_config:
-  # Spark session catalog (default in-memory — tables are session-scoped)
-  # No special config needed; `table: my_table` works out of the box.
+engine:
+  spark:
+    conf:
+      # Spark session catalog (default in-memory — tables are session-scoped)
+      # No special config needed; `table: my_table` works out of the box.
 
-  # Unity Catalog (Databricks) — Spark automatically discovers UC tables
-  # through the Databricks Runtime; no extra spark_config needed when
-  # running on a Databricks cluster.
+      # Unity Catalog (Databricks) — Spark automatically discovers UC tables
+      # through the Databricks Runtime; no extra engine.spark.conf needed when
+      # running on a Databricks cluster.
 
-  # Hive metastore
-  spark.sql.catalogImplementation: "hive"
-  spark.sql.warehouse.dir: "s3a://my-bucket/warehouse"
-  # spark.hadoop.hive.metastore.uris: "thrift://metastore:9083"
+      # Hive metastore
+      spark.sql.catalogImplementation: "hive"
+      spark.sql.warehouse.dir: "s3a://my-bucket/warehouse"
+      # spark.hadoop.hive.metastore.uris: "thrift://metastore:9083"
 
-  # Iceberg REST catalog
-  spark.sql.catalog.iceberg: "org.apache.iceberg.spark.SparkCatalog"
-  spark.sql.catalog.iceberg.type: "rest"
-  spark.sql.catalog.iceberg.uri: "https://iceberg-rest.example.com/"
+      # Iceberg REST catalog
+      spark.sql.catalog.iceberg: "org.apache.iceberg.spark.SparkCatalog"
+      spark.sql.catalog.iceberg.type: "rest"
+      spark.sql.catalog.iceberg.uri: "https://iceberg-rest.example.com/"
 
-  # Polaris (Iceberg catalog)
-  spark.sql.catalog.polaris: "org.apache.iceberg.spark.SparkCatalog"
-  spark.sql.catalog.polaris.type: "rest"
-  spark.sql.catalog.polaris.credential: "${POLARIS_CREDENTIAL}"
-  spark.sql.catalog.polaris.rest-catalog.uri: "https://polaris.example.com/api/catalog"
+      # Polaris (Iceberg catalog)
+      spark.sql.catalog.polaris: "org.apache.iceberg.spark.SparkCatalog"
+      spark.sql.catalog.polaris.type: "rest"
+      spark.sql.catalog.polaris.credential: "${POLARIS_CREDENTIAL}"
+      spark.sql.catalog.polaris.rest-catalog.uri: "https://polaris.example.com/api/catalog"
 ```
 
 Once configured, use `table: catalog.db.table` in your Blueprint modules --- the
@@ -499,26 +503,28 @@ Aqueduct only wires the config. Read/write need no special blueprint syntax
 beyond the `format:` value, but two prerequisites apply.
 
 **1. Jars (must match your Spark version exactly).** Add the runtime bundle via
-`spark_config` (blueprint or `aqueduct.yml`). The Hudi bundle in particular is
+`engine.spark.conf` (blueprint or `aqueduct.yml`). The Hudi bundle in particular is
 Spark-version-pinned: a mismatch fails at session start.
 
 ```yaml
-spark_config:
-  # Iceberg (Spark 3.5 line shown — bump the 3.5 to match your Spark)
-  spark.jars.packages: "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.6.1"
-  spark.sql.extensions: "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
-  spark.sql.catalog.local: "org.apache.iceberg.spark.SparkCatalog"
-  spark.sql.catalog.local.type: "hadoop"
-  spark.sql.catalog.local.warehouse: "/data/warehouse"
-  # Hudi (match the 3.5 to your Spark)
-  # spark.jars.packages: "org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0"
-  # spark.serializer: "org.apache.spark.serializer.KryoSerializer"
+engine:
+  spark:
+    conf:
+      # Iceberg (Spark 3.5 line shown — bump the 3.5 to match your Spark)
+      spark.jars.packages: "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.6.1"
+      spark.sql.extensions: "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
+      spark.sql.catalog.local: "org.apache.iceberg.spark.SparkCatalog"
+      spark.sql.catalog.local.type: "hadoop"
+      spark.sql.catalog.local.warehouse: "/data/warehouse"
+      # Hudi (match the 3.5 to your Spark)
+      # spark.jars.packages: "org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0"
+      # spark.serializer: "org.apache.spark.serializer.KryoSerializer"
 ```
 
 **2. Iceberg needs a catalog, not just a path.** `format: iceberg` with no
 `spark.sql.catalog.*` fails at runtime; `aqueduct doctor` emits an
 `iceberg_catalog` **warning** when a `format: iceberg` module has no catalog key
-in the blueprint `spark_config`. Address Iceberg tables by their catalog
+in the blueprint's `engine.spark.conf`. Address Iceberg tables by their catalog
 identifier (`table: local.db.orders`).
 
 **Post-write maintenance** is format-aware (under the Egress `maintenance:` key):
@@ -705,7 +711,7 @@ Never use positional `union()`: column order is not guaranteed across sources.
 | UDF throws exception → whole task fails, not just that row | Write defensive UDFs: catch internally, return sentinel struct; route via `spillway_condition: "struct.error IS NOT NULL"` |
 | `broadcast_side` hint overridden silently by AQE | Disable AQE for that join or rely on `autoBroadcastJoinThreshold` instead of hints |
 | Broadcast table too large → driver OOM | `broadcast()` hint triggers a `collect()` on the driver. If the "small" table exceeds driver memory, the driver crashes. Check table size before broadcasting; rely on `autoBroadcastJoinThreshold` for automatic safe broadcast. |
-| Catalyst chooses suboptimal join strategy on small tables | Expose `spark_config` overrides (`spark.sql.autoBroadcastJoinThreshold`): do not force hints in Aqueduct code |
+| Catalyst chooses suboptimal join strategy on small tables | Expose `engine.spark.conf` overrides (`spark.sql.autoBroadcastJoinThreshold`): do not force hints in Aqueduct code |
 | `COUNT(*)` counts null rows; `COUNT(col)` does not | `SELECT COUNT(*) FROM t` includes rows where all columns are null. `SELECT COUNT(col) FROM t` skips rows where `col` is null. Assert `min_rows` rules use `COUNT(*)`, be aware if the DataFrame has all-null rows. |
 | Grouping sets / cube / rollup with nulls produce wrong results | Null values in grouping columns are used as aggregation-level markers. Pre-filter nulls from grouping columns before any `GROUPING SETS`, `ROLLUP`, or `CUBE` operation. |
 | `nullable=false` in schema is not enforced by Spark | Spark treats `nullable=false` as a Catalyst optimizer hint, not a constraint. Nulls can still appear. Aqueduct's `schema_hint` validation is the enforcement layer, do not rely on schema alone. |
@@ -744,28 +750,30 @@ df.sortWithinPartitions("event_ts").groupBy("user_id").agg(...)
 
 ### Resource tuning for production
 
-Aqueduct exposes the full `spark_config` block: any Spark property can be set there.
+Aqueduct exposes the full `engine.spark.conf` block: any Spark property can be set there.
 Key settings for production and backfill jobs:
 
 ```yaml
-spark_config:
-  # Dynamic allocation — scale executors with workload
-  spark.dynamicAllocation.enabled: "true"
-  spark.dynamicAllocation.minExecutors: "2"
-  spark.dynamicAllocation.maxExecutors: "20"
-  spark.dynamicAllocation.executorIdleTimeout: "60s"
+engine:
+  spark:
+    conf:
+      # Dynamic allocation — scale executors with workload
+      spark.dynamicAllocation.enabled: "true"
+      spark.dynamicAllocation.minExecutors: "2"
+      spark.dynamicAllocation.maxExecutors: "20"
+      spark.dynamicAllocation.executorIdleTimeout: "60s"
 
-  # Task failure tolerance — default is 4; increase for flaky sources
-  spark.task.maxFailures: "8"
+      # Task failure tolerance — default is 4; increase for flaky sources
+      spark.task.maxFailures: "8"
 
-  # Adaptive Query Execution — on by default in Spark 3.2+
-  # Handles skew joins, coalesces shuffle partitions automatically
-  spark.sql.adaptive.enabled: "true"
-  spark.sql.adaptive.skewJoin.enabled: "true"
+      # Adaptive Query Execution — on by default in Spark 3.2+
+      # Handles skew joins, coalesces shuffle partitions automatically
+      spark.sql.adaptive.enabled: "true"
+      spark.sql.adaptive.skewJoin.enabled: "true"
 
-  # Executor decommissioning — graceful shutdown on spot/preemptible nodes
-  spark.decommission.enabled: "true"
-  spark.storage.decommission.enabled: "true"
+      # Executor decommissioning — graceful shutdown on spot/preemptible nodes
+      spark.decommission.enabled: "true"
+      spark.storage.decommission.enabled: "true"
 ```
 
 For backfill jobs (large date range, many partitions): increase
@@ -777,9 +785,11 @@ For backfill jobs (large date range, many partitions): increase
 Two properties control how Spark splits input files into tasks:
 
 ```yaml
-spark_config:
-  spark.sql.files.maxPartitionBytes: "134217728"   # 128 MB (default) — max bytes per task
-  spark.sql.files.openCostInBytes: "4194304"        # 4 MB (default) — file open overhead estimate
+engine:
+  spark:
+    conf:
+      spark.sql.files.maxPartitionBytes: "134217728"   # 128 MB (default) — max bytes per task
+      spark.sql.files.openCostInBytes: "4194304"        # 4 MB (default) — file open overhead estimate
 ```
 
 **Small files:** thousands of tiny Parquet files create thousands of tiny tasks, overwhelming the scheduler.
@@ -797,12 +807,14 @@ If this off-heap allocation exceeds `spark.executor.memoryOverhead`, YARN/K8s ki
 with exit code 137 (OOM killer): the error looks like an executor loss, not an OOM.
 
 ```yaml
-spark_config:
-  spark.executor.memoryOverhead: "1g"   # default is max(384MB, 10% of executor.memory)
-                                         # increase to 1–2 GB when using Python UDFs
-  spark.executor.extraJavaOptions: "-XX:+UseG1GC -XX:MaxGCPauseMillis=200"
-  spark.memory.offHeap.enabled: "true"
-  spark.memory.offHeap.size: "2g"        # for large shuffles or Arrow-backed operations
+engine:
+  spark:
+    conf:
+      spark.executor.memoryOverhead: "1g"   # default is max(384MB, 10% of executor.memory)
+                                             # increase to 1–2 GB when using Python UDFs
+      spark.executor.extraJavaOptions: "-XX:+UseG1GC -XX:MaxGCPauseMillis=200"
+      spark.memory.offHeap.enabled: "true"
+      spark.memory.offHeap.size: "2g"        # for large shuffles or Arrow-backed operations
 ```
 
 #### External Shuffle Service (required for dynamic allocation)
@@ -821,19 +833,21 @@ severely limited. Do not run dynamic allocation in production without it.
 Adaptive Query Execution (AQE) is on by default in Spark 3.2+. Key sub-configs to tune:
 
 ```yaml
-spark_config:
-  spark.sql.adaptive.enabled: "true"
-  spark.sql.adaptive.coalescePartitions.enabled: "true"
-  spark.sql.adaptive.advisoryPartitionSizeInBytes: "134217728"       # 128 MB target partition size
-  spark.sql.adaptive.skewJoin.skewedPartitionThresholdInBytes: "268435456"  # 256 MB skew threshold
-  spark.sql.adaptive.localShuffleReader.enabled: "true"              # reduces network for broadcast joins
+engine:
+  spark:
+    conf:
+      spark.sql.adaptive.enabled: "true"
+      spark.sql.adaptive.coalescePartitions.enabled: "true"
+      spark.sql.adaptive.advisoryPartitionSizeInBytes: "134217728"       # 128 MB target partition size
+      spark.sql.adaptive.skewJoin.skewedPartitionThresholdInBytes: "268435456"  # 256 MB skew threshold
+      spark.sql.adaptive.localShuffleReader.enabled: "true"              # reduces network for broadcast joins
 ```
 
 **AQE and `broadcast_side` hints:** Blueprint `op: join` supports a `broadcast_side` hint.
 This is advisory: AQE may override it at runtime based on actual partition statistics.
 If the physical plan must use a specific join strategy (e.g. for correctness in skewed data),
 disable AQE for that join by setting `spark.sql.adaptive.enabled: "false"` in the Blueprint's
-`spark_config`. Document the reason: disabling AQE is a tradeoff (you lose partition coalescing
+`engine.spark.conf`. Document the reason: disabling AQE is a tradeoff (you lose partition coalescing
 and skew handling).
 
 #### S3A committers (cloud deployments)
@@ -844,14 +858,16 @@ On S3, rename = copy + delete: **slow for large outputs and a data integrity ris
 Use S3A committers instead:
 
 ```yaml
-spark_config:
-  # Directory committer — safe, widely supported
-  spark.hadoop.fs.s3a.committer.name: "directory"
-  spark.hadoop.mapreduce.fileoutputcommitter.algorithm.version: "2"
+engine:
+  spark:
+    conf:
+      # Directory committer — safe, widely supported
+      spark.hadoop.fs.s3a.committer.name: "directory"
+      spark.hadoop.mapreduce.fileoutputcommitter.algorithm.version: "2"
 
-  # Magic committer — fastest (no rename phase), requires S3 object consistency
-  # spark.hadoop.fs.s3a.committer.name: "magic"
-  # spark.hadoop.fs.s3a.committer.magic.enabled: "true"
+      # Magic committer — fastest (no rename phase), requires S3 object consistency
+      # spark.hadoop.fs.s3a.committer.name: "magic"
+      # spark.hadoop.fs.s3a.committer.magic.enabled: "true"
 ```
 
 The magic committer writes directly to the final S3 path during the task write phase, no
@@ -864,8 +880,10 @@ Delta MERGE operations can produce severe write skew when the merge key distribu
 Enable pre-write repartitioning:
 
 ```yaml
-spark_config:
-  spark.databricks.delta.merge.repartitionBeforeWrite.enabled: "true"
+engine:
+  spark:
+    conf:
+      spark.databricks.delta.merge.repartitionBeforeWrite.enabled: "true"
 ```
 
 This repartitions the target DataFrame by the merge key before writing, distributing the output
