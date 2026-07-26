@@ -32,6 +32,22 @@ containing island "uncertain" on a parse failure):
   - Channel `op: sql`'s `query` (full SELECT statement)
   - Channel `op: join`'s `condition`, `op: filter`'s `condition`/`expr`
     (wrapped as a `WHERE` fragment)
+  - Channel `op: deduplicate`'s `order_by` (a single string on both engines
+    — `aqueduct/executor/spark/channel.py::_execute_deduplicate` feeds it
+    straight to `F.expr(order_by)`, `duckdb_/channel.py`'s equivalent embeds
+    it verbatim in a raw `ORDER BY {order_by}` clause — a real SQL
+    expression on both, so a UDF call there is legal on either engine)
+  - Channel `op: sort`'s `order_by`/`columns` (either spelling; a string OR
+    a list of strings — `_execute_sort` on both engines reads
+    `cfg.get("order_by") or cfg.get("columns")` then normalises
+    `[order_by] if isinstance(order_by, str) else list(order_by)`, and each
+    element is a real ORDER BY expression on both engines — DuckDB's
+    `.order()` passes it straight to SQL; Spark's own `_to_col` only
+    special-cases a trailing `ASC`/`DESC` token via a plain `F.col()` on the
+    *first* whitespace-split token, so a UDF call embedded there fails at
+    Spark RUNTIME rather than being invoked — but the same Blueprint field
+    genuinely can invoke a UDF on a DuckDB-resolved island, so it must still
+    be scanned)
   - Any Channel's `spillway_condition` (wrapped as a `WHERE` fragment)
   - Junction `mode: conditional` branch `condition` (wrapped; the `_else_`
     sentinel is not SQL and is skipped, not treated as unparseable)
@@ -39,13 +55,14 @@ containing island "uncertain" on a parse failure):
 
 **NOT scanned, and not tracked as "uncertain" either** — a UDF reachable
 ONLY through one of these degrades to the "empty attribution -> fall back
-to every island" case above, same as pre-attribution behavior: Channel
-`deduplicate`'s `order_by`, `sort`'s order expressions, `select`'s column
-list, Probe `type: custom` driver code, and Assert `type: custom`'s `fn:`
-(a Python dotted path, not SQL — irrelevant to this attribution anyway).
-These are column/expression LISTS or non-SQL references, not free-form
-boolean SQL text, and are rare sites for a UDF call; narrowing them is
-future work if it turns out to matter in practice.
+to every island" case above, same as pre-attribution behavior:
+  - Channel `op: select`'s `columns`/`cols` — `df.select(*cols)` /
+    `rel.project(*columns)` treat each string as a column NAME, not an
+    expression, so a UDF call written there fails at runtime on EITHER
+    engine regardless of any capability gate. Not a real call site.
+  - Probe `type: custom`'s driver-side callable and Assert `type: custom`'s
+    `fn:` — a Python dotted path, not SQL text; irrelevant to a SQL-UDF
+    attribution pass by construction.
 """
 
 from __future__ import annotations
@@ -108,6 +125,23 @@ def attribute_udfs_to_islands(
                 expr = cfg.get("condition") or cfg.get("expr") or ""
                 if expr:
                     _record(island, referenced_function_names_in_expr(expr))
+            elif op == "deduplicate":
+                # Both engines' `_execute_deduplicate` read `order_by` as a
+                # single string (never a list) and use it as a real SQL
+                # expression — see module docstring.
+                order_by = cfg.get("order_by")
+                if isinstance(order_by, str) and order_by:
+                    _record(island, referenced_function_names_in_expr(order_by))
+            elif op == "sort":
+                # Both engines' `_execute_sort` accept EITHER key spelling
+                # and EITHER a bare string or a list of strings — mirror
+                # that exact normalisation (see module docstring).
+                order_by = cfg.get("order_by") or cfg.get("columns")
+                if order_by:
+                    exprs = [order_by] if isinstance(order_by, str) else list(order_by)
+                    for one_expr in exprs:
+                        if isinstance(one_expr, str) and one_expr:
+                            _record(island, referenced_function_names_in_expr(one_expr))
             spillway_condition = cfg.get("spillway_condition") or ""
             if spillway_condition:
                 _record(island, referenced_function_names_in_expr(spillway_condition))

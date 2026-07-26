@@ -153,6 +153,87 @@ def test_assert_sql_row_rule_attributes_udf():
     assert attribution["mask"] == set(islands)
 
 
+def test_deduplicate_order_by_attributes_udf():
+    modules = [_m("a", config={
+        "op": "deduplicate", "key": "id", "order_by": "mask(name) DESC",
+    })]
+    islands = derive_islands(modules, [], {"a": "spark"})
+    attribution = attribute_udfs_to_islands(
+        modules, ({"id": "mask", "lang": "python"},), islands,
+    )
+    assert attribution["mask"] == set(islands)
+
+
+def test_deduplicate_order_by_only_attributes_its_own_island():
+    modules = [
+        _m("extract", config={"op": "deduplicate", "key": "id", "order_by": "mask(name) DESC"}),
+        _m("agg", config={"op": "sql", "query": "SELECT * FROM extract"}),
+    ]
+    from aqueduct.parser.models import Edge
+
+    edges = [Edge(from_id="extract", to_id="agg")]
+    resolved = {"extract": "spark", "agg": "duckdb"}
+    islands = derive_islands(modules, edges, resolved)
+    spark_island = next(i for i in islands if i.engine == "spark")
+    duckdb_island = next(i for i in islands if i.engine == "duckdb")
+
+    attribution = attribute_udfs_to_islands(
+        modules, ({"id": "mask", "lang": "python"},), islands,
+    )
+    assert spark_island in attribution["mask"]
+    assert duckdb_island not in attribution["mask"]
+
+
+def test_sort_order_by_string_attributes_udf():
+    modules = [_m("a", config={"op": "sort", "order_by": "mask(name) DESC"})]
+    islands = derive_islands(modules, [], {"a": "spark"})
+    attribution = attribute_udfs_to_islands(
+        modules, ({"id": "mask", "lang": "python"},), islands,
+    )
+    assert attribution["mask"] == set(islands)
+
+
+def test_sort_order_by_list_attributes_udf():
+    modules = [_m("a", config={"op": "sort", "order_by": ["region ASC", "mask(name) DESC"]})]
+    islands = derive_islands(modules, [], {"a": "spark"})
+    attribution = attribute_udfs_to_islands(
+        modules, ({"id": "mask", "lang": "python"},), islands,
+    )
+    assert attribution["mask"] == set(islands)
+
+
+def test_sort_columns_spelling_attributes_udf():
+    """`sort` accepts EITHER key spelling — `columns` is the fallback when
+    `order_by` is absent (`_execute_sort`: `cfg.get("order_by") or
+    cfg.get("columns")`)."""
+    modules = [_m("a", config={"op": "sort", "columns": ["mask(name) DESC"]})]
+    islands = derive_islands(modules, [], {"a": "spark"})
+    attribution = attribute_udfs_to_islands(
+        modules, ({"id": "mask", "lang": "python"},), islands,
+    )
+    assert attribution["mask"] == set(islands)
+
+
+def test_sort_order_by_only_attributes_its_own_island():
+    modules = [
+        _m("extract", config={"op": "sort", "order_by": "mask(name) DESC"}),
+        _m("agg", config={"op": "sql", "query": "SELECT * FROM extract"}),
+    ]
+    from aqueduct.parser.models import Edge
+
+    edges = [Edge(from_id="extract", to_id="agg")]
+    resolved = {"extract": "spark", "agg": "duckdb"}
+    islands = derive_islands(modules, edges, resolved)
+    spark_island = next(i for i in islands if i.engine == "spark")
+    duckdb_island = next(i for i in islands if i.engine == "duckdb")
+
+    attribution = attribute_udfs_to_islands(
+        modules, ({"id": "mask", "lang": "python"},), islands,
+    )
+    assert spark_island in attribution["mask"]
+    assert duckdb_island not in attribution["mask"]
+
+
 # ── Full compile(): both directions ─────────────────────────────────────────
 
 
@@ -190,6 +271,66 @@ def test_compile_udf_referenced_from_duckdb_island_raises():
              "config": {"op": "sql", "query": "SELECT name FROM up"}},
             {"id": "agg", "label": "agg", "type": "Channel", "engine": "duckdb",
              "config": {"op": "sql", "query": "SELECT mask(name) AS name FROM extract"}},
+        ],
+        edges=[{"from": "extract", "to": "agg"}],
+        udf_registry=[{"id": "mask", "lang": "python", "module": "udfs.mask", "entry": "mask"}],
+    )
+    with pytest.raises(CompileError, match="feature.python_udf"):
+        ccompile(bp, engine="spark")
+
+
+def test_compile_spark_dedup_order_by_udf_with_duckdb_island_compiles_cleanly():
+    bp = _bp(
+        [
+            {"id": "extract", "label": "extract", "type": "Channel", "engine": "spark",
+             "config": {"op": "deduplicate", "key": "id", "order_by": "mask(name) DESC"}},
+            {"id": "agg", "label": "agg", "type": "Channel", "engine": "duckdb",
+             "config": {"op": "sql", "query": "SELECT * FROM extract"}},
+        ],
+        edges=[{"from": "extract", "to": "agg"}],
+        udf_registry=[{"id": "mask", "lang": "python", "module": "udfs.mask", "entry": "mask"}],
+    )
+    manifest = ccompile(bp, engine="spark")
+    assert {m.id: m.engine for m in manifest.modules} == {"extract": "spark", "agg": "duckdb"}
+
+
+def test_compile_udf_referenced_from_duckdb_dedup_order_by_raises():
+    bp = _bp(
+        [
+            {"id": "extract", "label": "extract", "type": "Channel", "engine": "spark",
+             "config": {"op": "sql", "query": "SELECT name, id FROM up"}},
+            {"id": "agg", "label": "agg", "type": "Channel", "engine": "duckdb",
+             "config": {"op": "deduplicate", "key": "id", "order_by": "mask(name) DESC"}},
+        ],
+        edges=[{"from": "extract", "to": "agg"}],
+        udf_registry=[{"id": "mask", "lang": "python", "module": "udfs.mask", "entry": "mask"}],
+    )
+    with pytest.raises(CompileError, match="feature.python_udf"):
+        ccompile(bp, engine="spark")
+
+
+def test_compile_spark_sort_order_by_udf_with_duckdb_island_compiles_cleanly():
+    bp = _bp(
+        [
+            {"id": "extract", "label": "extract", "type": "Channel", "engine": "spark",
+             "config": {"op": "sort", "order_by": "mask(name) DESC"}},
+            {"id": "agg", "label": "agg", "type": "Channel", "engine": "duckdb",
+             "config": {"op": "sql", "query": "SELECT * FROM extract"}},
+        ],
+        edges=[{"from": "extract", "to": "agg"}],
+        udf_registry=[{"id": "mask", "lang": "python", "module": "udfs.mask", "entry": "mask"}],
+    )
+    manifest = ccompile(bp, engine="spark")
+    assert {m.id: m.engine for m in manifest.modules} == {"extract": "spark", "agg": "duckdb"}
+
+
+def test_compile_udf_referenced_from_duckdb_sort_order_by_raises():
+    bp = _bp(
+        [
+            {"id": "extract", "label": "extract", "type": "Channel", "engine": "spark",
+             "config": {"op": "sql", "query": "SELECT name FROM up"}},
+            {"id": "agg", "label": "agg", "type": "Channel", "engine": "duckdb",
+             "config": {"op": "sort", "order_by": ["mask(name) DESC"]}},
         ],
         edges=[{"from": "extract", "to": "agg"}],
         udf_registry=[{"id": "mask", "lang": "python", "module": "udfs.mask", "entry": "mask"}],
