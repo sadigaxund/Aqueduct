@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from aqueduct.compiler.islands import Island
 from aqueduct.parser.models import AgentConfig, Edge, Hooks, Module, RetryPolicy
 
 if TYPE_CHECKING:
@@ -52,6 +53,17 @@ class Manifest:
     # anchoring at parse time, but callable refs inside an arcade resolve
     # against THIS (the parent blueprint's) dir.
     base_dir: str = ""
+    # Engine islands (Phase 81 Step 1, `aqueduct.compiler.islands`), derived
+    # once at compile time from the enabled modules' resolved `.engine` and
+    # carried on the Manifest so the Phase 81 step 3 runtime orchestrator
+    # (`aqueduct/executor/orchestrator.py`) never has to re-derive them (and
+    # never has to import compiler internals to do so). Deliberately NOT
+    # part of `to_dict()`/the manifest hash — fully redundant with
+    # `modules`/`edges` (both already serialized), so including it a second
+    # time would only be a different encoding of the same information, not
+    # new content, while bloating the persisted manifest_json and shifting
+    # the hash for no semantic reason. In-process plumbing only.
+    islands: tuple[Island, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-compatible dict for writing to disk."""

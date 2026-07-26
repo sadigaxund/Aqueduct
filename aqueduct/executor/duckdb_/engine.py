@@ -53,6 +53,11 @@ _DUCKDB_EXECUTE_KWARGS: frozenset[str] = frozenset({
     "run_id", "store_dir", "checkpoint_root", "surveyor", "depot",
     "resume_run_id", "from_module", "to_module", "block_full_actions",
     "warnings_suppress", "warnings_silence_all",
+    # Phase 81 step 3 — `observability_store` backs the Handoff module's OWN
+    # (limited, handoff-only) module_metrics write; `handoff_spill_uris` is
+    # the {handoff_module_id: spill_uri} map the orchestrator resolves. Both
+    # are no-ops for a Manifest with no Handoff module (the common case).
+    "observability_store", "handoff_spill_uris",
 })
 
 

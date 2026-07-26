@@ -270,6 +270,7 @@ class Surveyor:
         result: ExecutionResult,
         exc: Exception | None = None,
         patched: bool = False,
+        engine: str | None = None,
     ) -> FailureContext | None:
         """Persist the final run outcome.
 
@@ -282,10 +283,21 @@ class Surveyor:
             exc:    Optional unhandled ``ExecuteError`` that escaped execute().
                     Used to populate ``stack_trace`` when the exception was not
                     caught inside the Executor loop.
+            engine: Phase 81 step 3 — override the engine used to resolve
+                    ``ExecutorProtocol.extract_error`` and to populate
+                    ``FailureContext.engine``, for a polyglot run where the
+                    module that actually failed lives on a DIFFERENT engine
+                    than this Surveyor's own ``self._engine`` (the
+                    `deployment.engine` default it was constructed with —
+                    see ``aqueduct/executor/orchestrator.py``, which passes
+                    the FAILING ISLAND's engine here). ``None`` (the default)
+                    preserves the single-engine behavior every existing
+                    caller relies on: falls back to ``self._engine``.
 
         Returns:
             ``FailureContext`` if the run failed, else ``None``.
         """
+        _engine = engine or self._engine
         if not self._started or self._observability is None or self._run_id is None:
             raise RuntimeError("Surveyor.start() must be called before record()")
 
@@ -352,7 +364,7 @@ class Surveyor:
         # <-> executor.capabilities); see AGENTS.md's documented lazy-import
         # exceptions for the precedent (surveyor's own pyspark import above).
         from aqueduct.executor.protocol import get_protocol as _get_protocol
-        structured = _get_protocol(self._engine).extract_error(live_exc)
+        structured = _get_protocol(_engine).extract_error(live_exc)
         if live_exc is not None:
             stack_trace = "".join(traceback.format_exception(type(live_exc), live_exc, live_exc.__traceback__))
 
@@ -417,7 +429,7 @@ class Surveyor:
             sql_state=(structured or {}).get("sql_state"),
             suggested_columns=tuple((structured or {}).get("suggested_columns") or ()),
             object_name=(structured or {}).get("object_name"),
-            engine=self._engine,
+            engine=_engine,
         )
 
         with self._observability.connect() as cur:

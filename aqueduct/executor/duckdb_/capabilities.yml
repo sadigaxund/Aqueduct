@@ -533,8 +533,11 @@ leaves:
     tests:
       - tests/test_executor_duckdb/test_executor.py::test_module_type_funnel_driven_through_execute
   module.type.Handoff:
-    support: unsupported
-    hint: "Compiler-synthesized only — a Blueprint can never declare one, and this verdict is inert today (the per-island capability gate never checks a real Handoff module against it, by construction — see aqueduct/compiler/handoff.py). No engine implements a cross-engine transport handler yet; a future release adds one and re-declares this leaf with tests."
+    support: supported
+    hint: "Compiler-synthesized only — a Blueprint can never declare one (see aqueduct/compiler/handoff.py). Real engine-native parquet transport: COPY ... TO ... (FORMAT PARQUET) on the write side, read_parquet on the read side. A Handoff module's id is never a member of any island's module_ids (islands are derived from the pre-insertion graph), so this verdict is never actually consulted by the per-island capability gate; it is declared supported here because the transport is real and tested, not because the gate depends on it."
+    tests:
+      - tests/test_executor/test_orchestrator_e2e.py::test_spark_to_duckdb_handoff_e2e_success
+      - tests/test_executor/test_orchestrator_e2e.py::test_duckdb_to_spark_handoff_e2e_success
   module.type.Ingress:
     support: supported
     tests:

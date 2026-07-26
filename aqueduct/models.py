@@ -7,7 +7,8 @@ live in their original modules — this is a pure re-export surface.
 
 from __future__ import annotations
 
+from aqueduct.compiler.islands import Island
 from aqueduct.compiler.models import Manifest
 from aqueduct.parser.models import Edge, Module, ModuleType, RetryPolicy
 
-__all__ = ["Edge", "Manifest", "Module", "ModuleType", "RetryPolicy"]
+__all__ = ["Edge", "Island", "Manifest", "Module", "ModuleType", "RetryPolicy"]

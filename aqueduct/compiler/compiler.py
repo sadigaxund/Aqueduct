@@ -725,6 +725,11 @@ def compile(  # noqa: A001
         # dirs for FsPath anchoring at parse time, but the ONE Manifest per
         # compilation unit carries the parent's (see Manifest.base_dir doc).
         base_dir=blueprint.base_dir,
+        # Phase 81 step 3: carry the already-derived islands so the runtime
+        # orchestrator (aqueduct/executor/orchestrator.py) never has to
+        # re-derive them or import compiler internals. Not part of
+        # to_dict()/the manifest hash — see Manifest.islands' own docstring.
+        islands=tuple(_islands),
     )
 
     # ── 9. Engine capability gate (Phase 78, per-island since Phase 81) ──────
@@ -779,16 +784,30 @@ def compile(  # noqa: A001
     if _unsupported_msgs:
         raise CompileError(f"Engine capability gate failed: {'; '.join(_unsupported_msgs)}")
 
-    # ── 9.5. Cross-engine heal-patch provenance gate (Phase 79) ──────────────
-    # `blueprint.healed_by` (not the Manifest — this is provenance METADATA,
-    # deliberately excluded from Manifest assembly so it can never perturb
-    # `manifest.to_dict()`'s hash — see the manifest-hash-invariance test).
-    # `engine_key_ignored`-style suppressible WARNING by default
-    # (`cross_engine_heal`); `warnings.strict` (aqueduct.yml) promotes it to a
-    # hard CompileError — see aqueduct/warnings.py::_DEFAULT_STRICT.
+    # ── 9.5. Cross-engine heal-patch provenance gate (Phase 79; per-island ───
+    # since Phase 81 step 3) `blueprint.healed_by` (not the Manifest — this is
+    # provenance METADATA, deliberately excluded from Manifest assembly so it
+    # can never perturb `manifest.to_dict()`'s hash — see the
+    # manifest-hash-invariance test). `engine_key_ignored`-style suppressible
+    # WARNING by default (`cross_engine_heal`); `warnings.strict`
+    # (aqueduct.yml) promotes it to a hard CompileError — see
+    # aqueduct/warnings.py::_DEFAULT_STRICT.
+    #
+    # A polyglot Blueprint has no per-module attribution on `healed_by`
+    # records (a patch's provenance is blueprint-wide — see
+    # `HealedByRecordSchema`), so the finest comparison available without a
+    # new schema field is PER ISLAND ENGINE rather than the single
+    # `deployment.engine` default: a record healed on an engine that differs
+    # from ANY island present in this compile, and not yet validated_on that
+    # island's engine, is a problem for that island. `check_cross_engine_heal`
+    # itself is unchanged (still one engine in, one engine out) — called once
+    # per DISTINCT island engine, de-duplicated so two islands sharing an
+    # engine don't double-report the same record.
     from aqueduct.warnings import _DEFAULT_STRICT
     _strict = set(warnings_strict) if warnings_strict is not None else set(_DEFAULT_STRICT)
-    _cross_engine_problems = check_cross_engine_heal(blueprint, engine)
+    _cross_engine_problems: list = []
+    for _isl_engine in sorted({isl.engine for isl in _islands}) or [engine]:
+        _cross_engine_problems.extend(check_cross_engine_heal(blueprint, _isl_engine))
     if _cross_engine_problems:
         if RULE_ID_CROSS_ENGINE_HEAL in _strict:
             _msgs = "; ".join(format_cross_engine_heal_warning(p) for p in _cross_engine_problems)

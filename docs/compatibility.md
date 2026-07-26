@@ -28,8 +28,8 @@ Each engine declares a verdict for every capability leaf in a YAML data file shi
 
 | Engine | Leaves declared | Supported | Version-gated | Ignored with warning | Unsupported |
 |---|---|---|---|---|---|
-| `duckdb` | 292 | 246 | 0 | 6 | 40 |
-| `spark` | 292 | 290 | 7 | 0 | 2 |
+| `duckdb` | 292 | 247 | 0 | 6 | 39 |
+| `spark` | 292 | 291 | 7 | 0 | 1 |
 
 ### Conditional and refused capabilities
 
@@ -80,7 +80,6 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 | `duckdb` | `ingress.format.jdbc` | unsupported | — | Requires the postgres scanner extension (ATTACH ... (TYPE POSTGRES), the same wire protocol jdbc: postgres:// targets). Not implemented. |
 | `duckdb` | `ingress.format.kafka` | unsupported | — | Kafka streaming ingress has no DuckDB equivalent — DuckDB is a batch, single-process engine. |
 | `duckdb` | `module.type.Assert` | unsupported | — | Assert (row-quality rules + quarantine) is not implemented on DuckDB. The DuckDB handlers cover Ingress/Channel/Junction/Funnel/Egress only. |
-| `duckdb` | `module.type.Handoff` | unsupported | — | Compiler-synthesized only — a Blueprint can never declare one, and this verdict is inert today (the per-island capability gate never checks a real Handoff module against it, by construction — see aqueduct/compiler/handoff.py). No engine implements a cross-engine transport handler yet; a future release adds one and re-declares this leaf with tests. |
 | `duckdb` | `module.type.Probe` | unsupported | — | Probe (signal sampling for Regulator gates) is not implemented on DuckDB. The DuckDB handlers cover Ingress/Channel/Junction/Funnel/Egress only. |
 | `duckdb` | `type.native.spark` | unsupported | — | 'spark:<spelling>' names a type in Spark's native type system, which DuckDB's SQL parser does not understand. Use the hub vocabulary (bigint, array<T>, ...) or 'duckdb:<spelling>' for a DuckDB-native escape hatch. |
 | `spark` | `egress.format.custom` | supported | `pyspark>=4.0` | format: custom requires pyspark>=4.0 (the spark.dataSource registry). See docs/compatibility.md. |
@@ -90,7 +89,6 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 | `spark` | `feature.delta_write` | supported | `delta-spark>=4.0` | Delta Lake features require the delta-spark package (aqueduct-core[spark] extra). See docs/compatibility.md. |
 | `spark` | `ingress.format.custom` | supported | `pyspark>=4.0` | format: custom requires pyspark>=4.0 (the spark.dataSource registry). See docs/compatibility.md. |
 | `spark` | `ingress.format.delta` | supported | `delta-spark>=4.0` | Delta Lake features require the delta-spark package (aqueduct-core[spark] extra). See docs/compatibility.md. |
-| `spark` | `module.type.Handoff` | unsupported | — | Compiler-synthesized only — a Blueprint can never declare one, and this verdict is inert today (the per-island capability gate never checks a real Handoff module against it, by construction — see aqueduct/compiler/handoff.py). No engine implements a cross-engine transport handler yet; a future release adds one and re-declares this leaf with tests. |
 | `spark` | `type.native.duckdb` | unsupported | — | 'duckdb:<spelling>' names a type in DuckDB's native type system, which Spark's SQL parser does not understand. Use the hub vocabulary (bigint, array<T>, ...) or 'spark:<spelling>' for a Spark-native escape hatch. |
 <!-- ENGINE_MATRIX_END -->
 

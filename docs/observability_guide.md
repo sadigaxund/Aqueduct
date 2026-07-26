@@ -113,7 +113,7 @@ plain `UPDATE` and silently dropped iterations 1..N).
 | `sql_state`         | VARCHAR             | ANSI SQLSTATE from `PySparkException.getSqlState()` |
 | `suggested_columns` | JSON                | Parsed list of backtick-quoted suggestions from Spark's "Did you mean …?" segment |
 | `object_name`       | VARCHAR             | Offending column / table / object |
-| `engine`            | VARCHAR             | Execution engine the failure occurred on (`spark` \| `duckdb`). Stamped by `Surveyor.record()` from its required `engine` constructor arg |
+| `engine`            | VARCHAR             | Execution engine the failure occurred on (`spark` \| `duckdb`). Stamped by `Surveyor.record()` from its required `engine` constructor arg by default; a polyglot run (§10.9's Handoff/islands) passes `Surveyor.record(result, engine=<failing island's engine>)` explicitly, so this column — and the `ExecutorProtocol.extract_error` used to populate the structured fields below it — reflects the island that actually failed, not the run's nominal `deployment.engine` default |
 
 The structured fields populate from `_extract_structured_error()`:
 best-effort, lazy-imported. When extraction returned None the row carries
@@ -225,6 +225,8 @@ broadcast counts). Compared to the previous snapshot by the explain gate.
 Per-module I/O metrics (`records_read`, `bytes_read`, `records_written`,
 `bytes_written`, `duration_ms`) from SparkListener and `DataFrame.observe()`.
 `NULL` means "not collected", never "zero records".
+
+**Cross-engine handoff (2.36).** A synthetic Handoff module (`aqueduct.compiler.handoff`, §10.9) gets a row here like any other module: `bytes_written`/`duration_ms` on the upstream (write) side, `bytes_read`/`duration_ms` on the downstream (read) side, measured from the spill directory's on-disk size. This is DuckDB's first `module_metrics` write — the DDL and writer (`MODULE_METRICS_DDL`/`write_module_metrics`, `aqueduct/executor/models.py`) are engine-agnostic and shared, but DuckDB's own executor otherwise still writes no per-module metrics outside the Handoff case (see that engine's own docstring). `records_read`/`records_written` stay NULL for a Handoff row — the transport is a byte-level parquet copy, not a row-counted operation.
 
 **Resource profiling.** `aqueduct report <run_id> --profile` ranks a run's
 modules by duration (heaviest first) with each module's share of total time and

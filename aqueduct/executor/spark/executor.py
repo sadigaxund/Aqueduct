@@ -76,6 +76,7 @@ from aqueduct.executor.models import (
     ModuleResult,
     _collect_module_warnings,
     concise_error,
+    manifest_hash as _manifest_hash,
 )
 from aqueduct.executor.spark.assert_ import AssertError, execute_assert
 from aqueduct.executor.spark.channel import ChannelError, execute_channel
@@ -259,12 +260,10 @@ def _module_checkpoint_enabled(module: Module, manifest: Manifest) -> bool:
     return manifest.checkpoint or module.checkpoint
 
 
-def _manifest_hash(manifest: Manifest) -> str:
-    import hashlib
-    import json as _json
-    return hashlib.sha256(
-        _json.dumps(manifest.to_dict(), sort_keys=True).encode()
-    ).hexdigest()[:12]
+# _manifest_hash: see the top-of-file import from aqueduct.executor.models —
+# hoisted there (engine-agnostic) so this and DuckDB's copy can never
+# silently diverge, and so the Phase 81 step 3 orchestrator can compute the
+# SAME hash without importing pyspark.
 
 
 _MODULE_METRICS_DDL = """
@@ -743,6 +742,7 @@ def execute(
     warnings_suppress: set[str] | None = None,
     warnings_silence_all: bool = False,
     sampling: ProbeSampling | None = None,
+    handoff_spill_uris: dict[str, str] | None = None,
 ) -> ExecutionResult:
     """Execute a compiled Manifest.
 
@@ -774,6 +774,14 @@ def execute(
                         source trees (e.g. two separate Ingress→Egress chains).
                         Junction fan-out is already parallel via Spark's lazy
                         evaluation — serial mode is sufficient for those.
+        handoff_spill_uris: Phase 81 step 3 — ``{handoff_module_id: spill_uri}``
+                        for every synthetic Handoff module in THIS manifest
+                        (there may be zero, one for the write side, or one for
+                        the read side — never both for the same call, see the
+                        Handoff dispatch branch). Resolved and supplied by
+                        ``aqueduct/executor/orchestrator.py``; a single-engine
+                        run this manifest was compiled for never has a Handoff
+                        module at all, so this is ``None``/``{}`` there.
 
     Returns:
         Frozen ExecutionResult.
@@ -1493,6 +1501,83 @@ def execute(
                             )
 
                 local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
+
+            # ── Handoff (Phase 81 step 3 — cross-engine boundary) ───────────────
+            # A synthetic Handoff module (aqueduct.compiler.handoff) always has
+            # EXACTLY ONE main-port edge attached in any single sub-manifest it
+            # appears in: an incoming edge from `from_module` when THIS island
+            # produced the data (WRITE side), or none at all when this island
+            # only consumes it via the outgoing edge to `to_module` (READ side)
+            # — the orchestrator (aqueduct/executor/orchestrator.py) builds each
+            # island's sub-manifest so only the relevant half of the boundary's
+            # two edges is ever present. Engine-native parquet on both sides —
+            # no fsspec here; Spark's own `dir_bytes` already understands local
+            # and Hadoop-FS-native remote paths.
+            elif module.type == ModuleType.Handoff:
+                main_edges = _incoming_main(module.id, manifest.edges)
+                spill_uri = (handoff_spill_uris or {}).get(module.id)
+                if not spill_uri:
+                    err = f"[{module.id}] no spill URI resolved for this handoff module"
+                    local_results.append(
+                        _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=err)
+                    )
+                    _signal_fail()
+                    return
+
+                _t0 = time.monotonic()
+                if main_edges:
+                    # WRITE side.
+                    edge = main_edges[0]
+                    key = _frame_key(edge.from_id, edge.port)
+                    val = frame_store.get(key)
+                    if _is_gate_closed(val):
+                        local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
+                        continue
+                    if val is None:
+                        err = f"[{module.id}] upstream {edge.from_id!r} produced no DataFrame."
+                        local_results.append(
+                            _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=err)
+                        )
+                        _signal_fail()
+                        return
+                    try:
+                        val.write.mode("overwrite").parquet(spill_uri)
+                    except Exception as exc:
+                        err = f"[{module.id}] handoff spill write to {spill_uri!r} failed: {exc}"
+                        local_results.append(
+                            _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=err, exception=exc)
+                        )
+                        _signal_fail()
+                        return
+                    _write_stage_metrics(
+                        module.id, run_id,
+                        {**null_metrics(),
+                         "bytes_written": dir_bytes(spill_uri),
+                         "duration_ms": int((time.monotonic() - _t0) * 1000)},
+                        store_dir,
+                        observability_store=observability_store,
+                    )
+                    local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
+                else:
+                    # READ side.
+                    try:
+                        frame_store[module.id] = spark.read.parquet(spill_uri)
+                    except Exception as exc:
+                        err = f"[{module.id}] handoff spill read from {spill_uri!r} failed: {exc}"
+                        local_results.append(
+                            _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=err, exception=exc)
+                        )
+                        _signal_fail()
+                        return
+                    _write_stage_metrics(
+                        module.id, run_id,
+                        {**null_metrics(),
+                         "bytes_read": dir_bytes(spill_uri),
+                         "duration_ms": int((time.monotonic() - _t0) * 1000)},
+                        store_dir,
+                        observability_store=observability_store,
+                    )
+                    local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
 
             # ── Probe ─────────────────────────────────────────────────────────
             elif module.type == ModuleType.Probe:

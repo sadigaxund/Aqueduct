@@ -141,3 +141,13 @@ Aqueduct currently runs one pipeline per invocation. Cross-pipeline dependencies
 A native Aqueduct workflow layer (a Blueprint of Blueprints) is a potential future feature.
 
 **Status:** Deferred. The external-orchestrator pattern works well for current use cases.
+
+---
+
+## `aqueduct run` CLI integration for polyglot Blueprints
+
+`aqueduct.executor.orchestrator.run_polyglot()` (2.36) is a complete, independently-tested runtime unit that executes a multi-island Manifest island by island, but `aqueduct/cli/run.py`'s existing single-engine run loop (the healing loop, patch gates, retries, lifecycle hooks, sandbox replay, `--resume` reload, run-header rendering) does not yet route through it — that loop is large and separately-evolving, and wiring a second execution path through it is integration work, not something to bolt on alongside the runtime primitive itself.
+
+Also deferred to this integration pass: the run header naming which engine ran which module, per-module engine tags in `aqueduct report`/`--format json`, rendering a Handoff step's bytes-transferred and duration in the CLI output, a fan-shape conformance matrix for constructs (Junction/Funnel modes) whose behavior is validated per-engine but not yet cross-checked when a fan spans a boundary, a `timezone:` config key for a cross-engine `timestamp_ntz` boundary, and a doctor free-space check at `handoff.root`.
+
+**Status:** Deferred. `run_polyglot()` itself is not a stub — see specs.md §10.9's "Runtime execution of a Handoff module" — only its CLI wiring is future work.

@@ -55,7 +55,7 @@ if TYPE_CHECKING:
 
 from aqueduct.errors import AqueductError
 from aqueduct.executor.duckdb_.channel import ChannelError, execute_channel
-from aqueduct.executor.duckdb_.egress import EgressError, write_egress
+from aqueduct.executor.duckdb_.egress import EgressError, _escape, write_egress
 from aqueduct.executor.duckdb_.funnel import FunnelError, execute_funnel
 from aqueduct.executor.duckdb_.ingress import IngressError, read_ingress
 from aqueduct.executor.duckdb_.junction import JunctionError, execute_junction
@@ -65,7 +65,10 @@ from aqueduct.executor.models import (
     ModuleResult,
     _collect_module_warnings,
     concise_error,
+    manifest_hash as _manifest_hash,
+    write_module_metrics as _write_handoff_metrics,
 )
+from aqueduct.executor.spill import dir_size_bytes, is_remote_uri
 from aqueduct.models import Edge, Manifest, Module, ModuleType, RetryPolicy
 
 logger = logging.getLogger(__name__)
@@ -88,7 +91,8 @@ class ExecuteError(AqueductError):
 # as Spark's `_SUPPORTED_TYPES`.
 _SUPPORTED_TYPES: frozenset[str] = frozenset(
     {ModuleType.Ingress, ModuleType.Channel, ModuleType.Egress,
-     ModuleType.Junction, ModuleType.Funnel, ModuleType.Regulator}
+     ModuleType.Junction, ModuleType.Funnel, ModuleType.Regulator,
+     ModuleType.Handoff}
 )
 
 _SIGNAL_PORTS: frozenset[str] = frozenset({"signal"})
@@ -264,12 +268,6 @@ def _write_checkpoint(
     logger.debug("Checkpoint written: %s", module_ckpt)
 
 
-def _manifest_hash(manifest: Manifest) -> str:
-    import hashlib
-    import json as _json
-    return hashlib.sha256(_json.dumps(manifest.to_dict(), sort_keys=True).encode()).hexdigest()[:12]
-
-
 def _fail(blueprint_id: str, run_id: str, module_results: list[ModuleResult], *, trigger_agent: bool = False) -> ExecutionResult:
     return ExecutionResult(
         blueprint_id=blueprint_id, run_id=run_id, status=ExecutionStatus.ERROR,
@@ -346,6 +344,8 @@ def execute(
     block_full_actions: bool = False,
     warnings_suppress: set[str] | None = None,
     warnings_silence_all: bool = False,
+    observability_store: Any = None,
+    handoff_spill_uris: dict[str, str] | None = None,
 ) -> ExecutionResult:
     """Execute a compiled Manifest against a live DuckDB connection.
 
@@ -360,6 +360,10 @@ def execute(
     ``config.danger.allow_full_probe_actions`` leaf is SUPPORTED even though
     Probe itself is not — see capabilities.yml) but Stage A never executes a
     Probe module, so it is currently inert.
+
+    ``observability_store``/``handoff_spill_uris`` (Phase 81 step 3) back the
+    Handoff module ONLY — see the Handoff dispatch branch below. A Manifest
+    with no Handoff module never touches either.
 
     Raises:
         ExecuteError: Unsupported module type, cycle detected.
@@ -632,6 +636,85 @@ def execute(
                 return fail_result
             _write_checkpoint(con, module, checkpoint_dir, manifest)
             module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
+
+        # ── Handoff (Phase 81 step 3 — cross-engine boundary) ───────────────
+        # Same shape as Spark's Handoff branch (executor/spark/executor.py):
+        # a main-port incoming edge present in THIS sub-manifest means this
+        # island produced the data (WRITE side); its absence means this
+        # island only consumes it via the outgoing edge to `to_module`
+        # (READ side). Engine-native parquet on both sides — DuckDB's own
+        # `COPY ... TO ... (FORMAT PARQUET)` / `read_parquet`, no fsspec.
+        # Spill directories are treated as a single-file-per-boundary
+        # directory (`<spill_uri>/part-0.parquet`), the same convention
+        # DuckDB's own checkpoint writer already uses — this and Spark's
+        # multi-part `df.write.parquet(dir)` are cross-readable because both
+        # sides glob/scan every `*.parquet` file under the directory.
+        elif module.type == ModuleType.Handoff:
+            main_edges = _incoming_main(module.id, manifest.edges)
+            spill_uri = (handoff_spill_uris or {}).get(module.id)
+            if not spill_uri:
+                module_results.append(_mr(
+                    module_id=module.id, status=ExecutionStatus.ERROR,
+                    error=f"[{module.id}] no spill URI resolved for this handoff module",
+                ))
+                return _fail(manifest.blueprint_id, run_id, module_results)
+
+            _t0 = time.monotonic()
+            if main_edges:
+                # WRITE side.
+                edge = main_edges[0]
+                key = _frame_key(edge.from_id, edge.port)
+                val = frame_store.get(key)
+                if _is_gate_closed(val):
+                    module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
+                    continue
+                if val is None:
+                    module_results.append(_mr(
+                        module_id=module.id, status=ExecutionStatus.ERROR,
+                        error=f"[{module.id}] upstream {edge.from_id!r} produced no relation.",
+                    ))
+                    return _fail(manifest.blueprint_id, run_id, module_results)
+
+                if not is_remote_uri(spill_uri):
+                    Path(spill_uri).mkdir(parents=True, exist_ok=True)
+                part_path = f"{spill_uri.rstrip('/')}/part-0.parquet"
+                input_name = f"__handoff_write_{module.id.replace('-', '_')}__"
+                con.register(input_name, val)
+                try:
+                    con.sql(f"COPY {input_name} TO '{_escape(part_path)}' (FORMAT PARQUET)")
+                except Exception as exc:
+                    module_results.append(_mr(
+                        module_id=module.id, status=ExecutionStatus.ERROR,
+                        error=f"[{module.id}] handoff spill write to {spill_uri!r} failed: {exc}",
+                        exception=exc,
+                    ))
+                    return _fail(manifest.blueprint_id, run_id, module_results)
+                finally:
+                    con.unregister(input_name)
+                _write_handoff_metrics(
+                    store_dir, observability_store, run_id, module.id,
+                    {"bytes_written": dir_size_bytes(spill_uri),
+                     "duration_ms": int((time.monotonic() - _t0) * 1000)},
+                )
+                module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
+            else:
+                # READ side.
+                glob_path = f"{spill_uri.rstrip('/')}/*.parquet"
+                try:
+                    frame_store[module.id] = con.read_parquet(glob_path)
+                except Exception as exc:
+                    module_results.append(_mr(
+                        module_id=module.id, status=ExecutionStatus.ERROR,
+                        error=f"[{module.id}] handoff spill read from {spill_uri!r} failed: {exc}",
+                        exception=exc,
+                    ))
+                    return _fail(manifest.blueprint_id, run_id, module_results)
+                _write_handoff_metrics(
+                    store_dir, observability_store, run_id, module.id,
+                    {"bytes_read": dir_size_bytes(spill_uri),
+                     "duration_ms": int((time.monotonic() - _t0) * 1000)},
+                )
+                module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
 
     return ExecutionResult(
         blueprint_id=manifest.blueprint_id, run_id=run_id, status=ExecutionStatus.SUCCESS,

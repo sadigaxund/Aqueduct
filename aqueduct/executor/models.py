@@ -2,9 +2,125 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+# ── module_metrics DDL + writer (Phase 81 step 3) ───────────────────────────
+#
+# Historically only Spark's executor (`spark/executor.py`) wrote this table —
+# DuckDB's Stage A executor writes NO per-module metrics at all (a documented
+# gap: "per-module runtime metrics persistence to the observability store...
+# left to the caller", see that module's docstring). The Handoff module
+# (`aqueduct.compiler.handoff`) needs a `bytes_written`/`bytes_read` row on
+# EITHER engine — the boundary might be written by DuckDB and read by Spark,
+# or vice versa — so this is DuckDB's first module_metrics write, scoped
+# ONLY to the Handoff module (not a retrofit of metrics for every DuckDB
+# module type, which stays out of this step's scope). Spark's own
+# `_write_stage_metrics`/`_MODULE_METRICS_DDL` are UNCHANGED and unrelated to
+# this — the DDL text is intentionally duplicated (not imported) rather than
+# risk pulling `spark/executor.py` (which imports `pyspark` at module scope)
+# into a pyspark-free file.
+MODULE_METRICS_DDL = """
+CREATE TABLE IF NOT EXISTS module_metrics (
+    run_id        VARCHAR     NOT NULL,
+    module_id     VARCHAR     NOT NULL,
+    records_read  BIGINT,
+    bytes_read    BIGINT,
+    records_written BIGINT,
+    bytes_written BIGINT,
+    duration_ms   BIGINT,
+    captured_at   TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_module_metrics_module
+    ON module_metrics (module_id);
+"""
+
+
+def resolve_observability_store(store_dir: Any, observability_store: Any) -> Any:
+    """Return the supplied observability-store backend, or build a default
+    local DuckDB one from ``store_dir``, or ``None`` if neither is available.
+
+    Engine-agnostic — hoisted out of ``spark/executor.py`` (where an
+    identical private copy lives, now aliased to this one) so DuckDB's
+    executor and the Phase 81 step 3 orchestrator can resolve a store
+    without importing pyspark.
+    """
+    if observability_store is not None:
+        return observability_store
+    if store_dir is None:
+        return None
+    from pathlib import Path
+
+    from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+
+    store_dir = Path(store_dir)
+    store_dir.mkdir(parents=True, exist_ok=True)
+    return DuckDBObservabilityStore(store_dir / "observability.db")
+
+
+def write_module_metrics(
+    store_dir: Any,
+    observability_store: Any,
+    run_id: str,
+    module_id: str,
+    metrics: dict[str, Any],
+) -> None:
+    """Persist one ``module_metrics`` row (non-fatal — metrics writing must
+    never abort a run). Engine-agnostic; see ``MODULE_METRICS_DDL`` above."""
+    store = resolve_observability_store(store_dir, observability_store)
+    if store is None:
+        return
+    try:
+        from datetime import UTC, datetime
+
+        with store.connect() as cur:
+            cur.execute(MODULE_METRICS_DDL)
+            cur.execute(
+                """
+                INSERT INTO module_metrics
+                    (run_id, module_id, records_read, bytes_read,
+                     records_written, bytes_written, duration_ms, captured_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    run_id,
+                    module_id,
+                    metrics.get("records_read"),
+                    metrics.get("bytes_read"),
+                    metrics.get("records_written"),
+                    metrics.get("bytes_written"),
+                    metrics.get("duration_ms"),
+                    datetime.now(tz=UTC).isoformat(),
+                ],
+            )
+    except Exception as exc:
+        logger.debug("write_module_metrics failed for %r: %s", module_id, exc)
+
+
+def manifest_hash(manifest: Any) -> str:
+    """Deterministic content hash of a compiled Manifest.
+
+    Engine-agnostic (only calls ``manifest.to_dict()``) — the single source
+    of truth both engines' executors use for checkpoint/resume hash
+    comparison (``spark/executor.py``, ``duckdb_/executor.py`` each used to
+    define an identical private copy of this function; hoisted here so the
+    two can never silently diverge) and that the Phase 81 step 3 handoff
+    spill-path orchestrator (``aqueduct/executor/orchestrator.py``) uses to
+    lay out ``<root>/<manifest_hash>/<run_id>/<edge_id>/`` — the SAME hash
+    for the SAME compiled Manifest regardless of which engine(s) a run
+    touches.
+    """
+    import hashlib
+    import json as _json
+
+    return hashlib.sha256(
+        _json.dumps(manifest.to_dict(), sort_keys=True).encode()
+    ).hexdigest()[:12]
 
 
 class ExecutionStatus(StrEnum):
