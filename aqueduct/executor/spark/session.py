@@ -94,6 +94,29 @@ def make_spark_session(
     if "spark.log.structuredLogging.enabled" not in spark_config:
         builder = builder.config("spark.log.structuredLogging.enabled", "false")
 
+    # Spark's own default for `spark.sql.parquet.outputTimestampType` is
+    # INT96 — a legacy Hive-interop encoding with no Parquet logical-type
+    # annotation distinguishing an instant-aware timestamp from a naive one.
+    # A hub `timestamp_tz` column (Spark's plain `timestamp`) written under
+    # that default silently reads back on DuckDB as a naive `TIMESTAMP`
+    # instead of `TIMESTAMPTZ` across the cross-engine handoff boundary — no
+    # error, just quiet loss of timezone awareness. `TIMESTAMP_MICROS` is
+    # annotated correctly and round-trips faithfully; it is also what Spark's
+    # own docs recommend over the deprecated INT96 encoding. This must be set
+    # ONCE here, at session creation — never toggled around a single write —
+    # because every connected component in `--parallel` mode shares this one
+    # SparkSession across threads; a toggle-and-restore would make a user's
+    # own Egress output encoding depend on thread timing. `DataFrameWriter
+    # .option("outputTimestampType", ...)` is silently ignored by Spark's
+    # Parquet writer, so this SQLConf is the only lever. A user's own
+    # `engine.spark.conf` setting for this key still wins — the loop below
+    # applies `spark_config` AFTER this default, and Spark's builder keeps the
+    # last `.config()` call for a given key (documented `getOrCreate()`
+    # behaviour: config options on the builder are applied to an existing
+    # global session too, not just a freshly created one).
+    if "spark.sql.parquet.outputTimestampType" not in spark_config:
+        builder = builder.config("spark.sql.parquet.outputTimestampType", "TIMESTAMP_MICROS")
+
     if quiet:
         # Inject log4j suppress flags before JVM init so startup messages are
         # silenced. Prepend so user-supplied extraJavaOptions still take effect.

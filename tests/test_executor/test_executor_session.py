@@ -65,6 +65,26 @@ def test_make_spark_session_blueprint_config_precedence():
     assert spark.conf.get("spark.executor.memory") == "5g"
 
 
+# ── outputTimestampType default (cross-engine timestamp_tz fidelity) ─────────
+
+class TestOutputTimestampTypeDefault:
+    def test_defaults_to_timestamp_micros(self):
+        """No user override -> Aqueduct's own default (TIMESTAMP_MICROS)
+        applies, not Spark's own INT96 default, so a hub `timestamp_tz`
+        column keeps its Parquet logical-type annotation across a handoff."""
+        spark = make_spark_session("app-ts-default", {})
+        assert spark.conf.get("spark.sql.parquet.outputTimestampType") == "TIMESTAMP_MICROS"
+
+    def test_user_override_wins(self):
+        """A user-supplied `engine.spark.conf` value for this key must not be
+        silently clobbered by Aqueduct's own default."""
+        spark = make_spark_session(
+            "app-ts-override",
+            {"spark.sql.parquet.outputTimestampType": "INT96"},
+        )
+        assert spark.conf.get("spark.sql.parquet.outputTimestampType") == "INT96"
+
+
 class TestSessionQuietMode:
     def test_make_spark_session_quiet_injects_log4j_opts(self):
         from aqueduct.executor.spark.session import _LOG4J_QUIET_OPTS
