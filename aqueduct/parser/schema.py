@@ -12,7 +12,14 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from aqueduct.parser.models import ModuleType
 
-VALID_MODULE_TYPES: frozenset[str] = frozenset(m.value for m in ModuleType)
+# `Handoff` is a compiler-synthesized module kind (Phase 81 step 2) — the
+# compiler inserts one at each cross-engine island boundary
+# (`aqueduct.compiler.handoff`); it is never legal in authored Blueprint
+# YAML. Excluded from the user-facing legal type set here; `validate_type`
+# below gives it a dedicated, clearer rejection message than the generic
+# "unknown module type" one.
+_COMPILER_SYNTHESIZED_TYPES: frozenset[str] = frozenset({ModuleType.Handoff})
+VALID_MODULE_TYPES: frozenset[str] = frozenset(m.value for m in ModuleType) - _COMPILER_SYNTHESIZED_TYPES
 
 # Note: edge `port` is NOT constrained to a fixed set at schema level — Junction
 # branch ids are valid dynamic port names, so membership is validated downstream
@@ -277,6 +284,13 @@ class ModuleSchema(BaseModel):
     @field_validator("type")
     @classmethod
     def validate_type(cls, v: str) -> str:
+        if v in _COMPILER_SYNTHESIZED_TYPES:
+            raise ValueError(
+                f"Module type {v!r} is reserved for the compiler's synthetic "
+                "cross-engine handoff insertion (Phase 81) and cannot be "
+                "declared in a Blueprint — remove it; the compiler inserts "
+                "one automatically at each engine boundary."
+            )
         if v not in VALID_MODULE_TYPES:
             raise ValueError(
                 f"Unknown module type: {v!r}. Must be one of {sorted(VALID_MODULE_TYPES)}"

@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.34: Reference Document**
+**Version 2.35: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -292,7 +292,7 @@ Every module resolves to exactly one engine, following four rules in this preced
 
 Precedence against config: `deployment.engine` only moves rule 4's DEFAULT. An explicit per-module pin (rule 1) always wins over it — the Blueprint expresses semantics (which engine this transform needs), the config expresses environment (which engine to default to). A Blueprint with no `engine:` field anywhere is fully portable across every registered engine; a pinned `engine:` is a declared engine dependency for that module's island, enforced by the capability gate below.
 
-**Islands** are derived, never declared — there is no user-facing island syntax. An island is a connected subgraph of modules that share one resolved engine (connectivity follows the same `main`/`spillway` data-edge basis used elsewhere for parallel-component detection, plus a Probe's mandatory bond to its `attach_to` target). A **boundary edge** is a data edge whose two endpoints resolve to different islands — where a synthetic handoff module inserts at a later compiler stage (a separate, additive step: see `docs/roadmap.md` for the storage-spill transport this feeds). Disjoint components pinned to different engines produce **zero** boundary edges — two independent single-engine flows run side by side in one Blueprint with no handoff at all.
+**Islands** are derived, never declared — there is no user-facing island syntax. An island is a connected subgraph of modules that share one resolved engine (connectivity follows the same `main`/`spillway` data-edge basis used elsewhere for parallel-component detection, plus a Probe's mandatory bond to its `attach_to` target). A **boundary edge** is a data edge whose two endpoints resolve to different islands — the compiler splices a synthetic Handoff module in at each one (`A -> B` becomes `A -> handoff -> B`; see §10.9). Disjoint components pinned to different engines produce **zero** boundary edges — two independent single-engine flows run side by side in one Blueprint with no handoff at all.
 
 Two structural rules keep v1 from claiming more than it can run:
 
@@ -1528,6 +1528,7 @@ The canonical field reference with descriptions and defaults lives in the `aqued
 | `agent` | LLM connection defaults (provider, base_url, model, api_key, cascade, timeout, budget), CI webhook URL |
 | `warnings` | Compiler/executor warning suppression rules |
 | `checkpoint_root` | Local filesystem path overriding the derived `<store_dir>/checkpoints/` location for module checkpoint/resume state (2.8) |
+| `handoff` | Cross-engine handoff spill location + failure-retention policy (`root`, `keep_on_failure`) for the compiler-synthesized Handoff module (2.35) — see §10.9 |
 
 ### The `engine:` block (2.0)
 
@@ -1627,6 +1628,20 @@ at config-load with an actionable error: remote checkpoint roots require
 Hadoop-FS-API bookkeeping that Aqueduct does not yet implement (tracked as
 "Remote-Filesystem Checkpoint Root" in `docs/roadmap.md`). A relative path is
 resolved against the project root (the `aqueduct.yml` directory).
+
+### **10.4.3 Cross-engine handoff spill (2.35)**
+
+`handoff:` (top-level `aqueduct.yml` block) configures WHERE the compiler-synthesized Handoff module's storage-spill parquet lands, and whether it survives a failed run. See §10.9 for what a Handoff module is and when the compiler inserts one; this section is the config surface only.
+
+```yaml
+handoff:
+  root: ".aqueduct/handoff"   # default; any URI both engines can read+write (s3://…)
+  keep_on_failure: true       # default — the resume story
+```
+
+Unlike `checkpoint_root`, `root` is **not** local-filesystem-only: a handoff spill must be reachable by BOTH engines on either side of a boundary, so a remote URI scheme (`s3://`, `gs://`, `abfss://`, ...) is accepted with no rejection. `handoff:` borrows `checkpoint`'s LIFECYCLE semantics (kept on failure, cleaned up on success) — not its location or its local-only constraint, and not its config key (`handoff:` is its own top-level block, never nested under `checkpoint_root`).
+
+Directory layout: `<root>/<manifest_hash>/<run_id>/<edge_id>/`, one subdirectory per boundary per run. Deleted when the run succeeds; kept when it fails and `keep_on_failure` is true (the default), so a rerun — most commonly after a self-heal — can read the upstream island's already-materialized spill instead of recomputing it. Parquet is a fixed internal transport detail: there is no format knob, on either the Blueprint or the config side.
 
 ## **10.5 Deployment targets**
 
@@ -1776,6 +1791,33 @@ On an engine that declares every leaf `supported`, all three kinds are a no-op a
 **Per island (2.34).** A Blueprint compiled with one or more modules pinning `engine:` (§4.3's "Cross-engine handoff" subsection) is partitioned into engine islands before this gate runs, and each island's modules are checked against its OWN engine — never against a different island's engine. This is what makes "an island whose engine is not registered" a `CompileError` (the same `UnknownEngineError` above) rather than only ever checking the single `deployment.engine` default. For a single-engine Blueprint (no module pins `engine:`) there is exactly one island, and this degenerates to the pre-2.34 single-gate call exactly.
 
 The manifest-scoped `feature.*`/`type.*` leaves a `udf_registry` entry drives (UDF language, UDF return type) are NOT owned by one module — a UDF is registered once and referenced from SQL text by name — so `aqueduct/compiler/udf_attribution.py::attribute_udfs_to_islands` attributes each UDF to the island(s) whose SQL can actually reference it before the gate runs, reusing the same sqlglot parse `aqueduct/compiler/lineage.py`'s column lineage already does (never a second SQL parser). This is what makes the phase's flagship shape work: a Python UDF used only inside a Spark island's Channel SQL compiles cleanly even with an unrelated DuckDB island present elsewhere in the same Blueprint, because DuckDB's `feature.python_udf: unsupported` verdict is only checked against islands that actually reference the UDF. Attribution is fail-closed: a SQL-bearing construct sqlglot cannot parse keeps its island in that UDF's checked set rather than dropping it, and a UDF with no positively-attributed island AND no unparseable construct anywhere falls back to every island — the same conservative behavior as before per-island UDF attribution existed. The scanned surfaces are Channel `op: sql`'s `query`; `op: join`/`op: filter`'s `condition`/`expr`; `op: deduplicate`'s `order_by`; `op: sort`'s `order_by`/`columns` (either spelling, a string or a list — a UDF call there is legal on both engines even though Spark's own sort implementation only honors a trailing `ASC`/`DESC` token and would fail such a call at runtime, since the same field genuinely invokes the UDF on a DuckDB-resolved island); any Channel's `spillway_condition`; a Junction `conditional` branch's `condition`; and an Assert `sql`/`sql_row` rule's `expr`. Channel `op: select`'s column list is deliberately excluded — it names columns, not expressions, so a UDF call written there fails at runtime on either engine regardless of the gate — as are Probe/Assert `type: custom`'s Python callables, which carry no SQL text to scan.
+
+### The synthetic Handoff module (2.35)
+
+A boundary edge is where a compiled Blueprint actually crosses engines. The compiler splices in a synthetic **Handoff** module at each one, immediately after island derivation and before the per-island capability gate above: `A -> B` becomes `A -> handoff -> B`, with the original edge's port (`main` — a cross-island spillway edge is already a `CompileError` in v1, §4.3) preserved on both new edges. Disjoint components pinned to different engines have no edge between them at all, so they get zero handoff modules — the same free lunch as the disjoint-component case in §4.3.
+
+`Handoff` is a real `ModuleType` value, but it is **not authorable**: `parser.schema.ModuleSchema.validate_type` rejects `type: Handoff` in Blueprint YAML by name, with a dedicated message rather than the generic "unknown module type" one. Every handoff `Module` the compiler builds carries `synthetic=True` (mirroring `Edge.injected` one level up) and `engine=None` — it bridges two engines rather than resolving to one, so its config carries `from_engine`/`to_engine` instead. Its id is generated (`<from_id>__handoff__<to_id>`, collision-proof because `__` is reserved and rejected in authored module ids) and it gets its own rows in the observability store like any other module, and a passthrough row in column lineage (`output_column`/`source_column` both `"*"`, `source_table` the upstream module) rather than a SQL-parsed one.
+
+**Transport contract (v1).** An engine-native parquet write to a URI: the upstream island materializes its output (`df.write.parquet` on Spark, `COPY ... TO ... (FORMAT PARQUET)` on DuckDB), the downstream island reads it back. Parquet is fixed, not a config key. A handoff module's `config` carries everything the executor needs to perform that write and read:
+
+```json
+{
+  "edge_id": "extract__handoff__agg",
+  "from_module": "extract",
+  "to_module": "agg",
+  "from_engine": "spark",
+  "to_engine": "duckdb",
+  "port": "main"
+}
+```
+
+`edge_id` (equal to the handoff module's own id) is the one piece of the `<root>/<manifest_hash>/<run_id>/<edge_id>/` directory template (§10.4.3) only the compiler can supply — `root` comes from `aqueduct.yml`'s `handoff:` block, `manifest_hash`/`run_id` are resolved by the executor at run time, the same way `checkpoint_root` is threaded to `execute()` rather than baked into the Manifest.
+
+**Compile-time visibility.** Every insertion emits a suppressible warning, rule id `cross_engine_handoff_io`, naming the boundary (`Cross-engine handoff 'extract__handoff__agg': 'extract' (spark) -> 'agg' (duckdb)...`) through the same `aqueduct.warnings.emit` machinery as every other compiler warning — the extra I/O a split introduces is a real cost, visible before the run rather than discovered mid-run.
+
+**Capability-gate interaction.** `module.type.Handoff` is a governed capability leaf like any other `ModuleType` member, declared `unsupported` on both shipped engines: honest (no engine has a real cross-engine transport handler yet) and inert (a handoff module's id is never a member of any island's `module_ids` — islands are derived from the pre-insertion graph — so the per-island gate's per-island `manifest.modules` filter excludes it from every island's check by construction, the same way a disabled module is already excluded). A later phase gives this leaf a real per-engine verdict once the executor-side transport exists.
+
+This is compile-time synthesis only — no SparkSession/DuckDB connection is touched and no directory is created; a later phase implements the executor-side write/read, the per-island session lifecycle, `bytes_written`/duration metrics, and the orphan sweep for abandoned spill directories.
 
 ### The version check
 

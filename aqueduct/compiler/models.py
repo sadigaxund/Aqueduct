@@ -70,6 +70,7 @@ class Manifest:
                     "tags": list(m.tags),
                     "config": m.config,
                     "engine": m.engine,
+                    "synthetic": m.synthetic,
                     "attach_to": m.attach_to,
                     "spillway": m.spillway,
                     "depends_on": list(m.depends_on),

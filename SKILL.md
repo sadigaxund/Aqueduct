@@ -174,6 +174,8 @@ or omit the block, never merges field-by-field), `transient_errors`,
 
 `Ingress | Channel | Egress | Junction | Funnel | Probe | Regulator | Arcade | Assert`
 
+`Handoff` is a 10th type name that exists ONLY as compiler-synthesized output (2.35, cross-engine handoff — see `engine:` above) — the compiler inserts one at each engine-boundary edge in a polyglot Blueprint. `type: Handoff` is never legal in authored YAML; `aqueduct validate` rejects it by name.
+
 ### Ingress — read data
 ```yaml
 - id: read_orders
@@ -397,7 +399,7 @@ agent:
 `approval` values: `disabled` (never heal) · `human` (stage patch for review) · `auto` (apply validated patch; with `max_patches > 1` enables the multi-patch loop) · `ci` (stage + webhook). Engine-level defaults for provider/model/base_url/api_key/mode/max_tool_calls/supports_tools/progressive/max_chain live in `aqueduct.yml`; the Blueprint `agent:` block overrides them. API key precedence (highest first): per-cascade-tier `api_key` → blueprint `agent.api_key` → engine `agent.api_key` → env var (`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`). Prefer `@aq.secret('NAME')` or `${ENV_VAR}` over a plaintext literal in any config file. `supports_tools` also has a per-cascade-tier override (`cascade[].supports_tools`). `progressive: true` (`agent.approval: auto`, non-cascade path) chains multi-patch healing across DIFFERENT-module failures instead of re-diagnosing the same first bug every attempt — see `docs/specs.md` §8.13; `max_patches` semantics are unchanged.
 
 ## Engine config (`aqueduct.yml`) — NOT the Blueprint
-Separate file. Configures deployment target, Spark, stores, secrets, webhooks, and engine-level agent connection. Author it only when asked; Blueprints reference its results. Key blocks: `deployment` (engine/target/env), `engine` (per-engine settings namespaced by name — `engine.spark.master_url`, `engine.spark.conf`, `engine.duckdb`), `stores` (observability/depots/blob/benchmark + backend), `agent` (provider/base_url/model/api_key/cascade defaults), `danger` (allow_multi_patch, allow_full_probe_actions). Engine `agent.cascade` provides a project-wide default; a Blueprint's `agent.cascade` (or `model: [list]` shorthand) overrides it. See `aqueduct/templates/default/aqueduct.yml.template`.
+Separate file. Configures deployment target, Spark, stores, secrets, webhooks, and engine-level agent connection. Author it only when asked; Blueprints reference its results. Key blocks: `deployment` (engine/target/env), `engine` (per-engine settings namespaced by name — `engine.spark.master_url`, `engine.spark.conf`, `engine.duckdb`), `stores` (observability/depots/blob/benchmark + backend), `agent` (provider/base_url/model/api_key/cascade defaults), `danger` (allow_multi_patch, allow_full_probe_actions), `handoff` (`root` — cross-engine spill location, any engine-reachable URI, default `.aqueduct/handoff`; `keep_on_failure` — keep a boundary's spill after a failed run so a rerun skips recomputing it, default true). Engine `agent.cascade` provides a project-wide default; a Blueprint's `agent.cascade` (or `model: [list]` shorthand) overrides it. See `aqueduct/templates/default/aqueduct.yml.template`.
 
 ## Path resolution
 Relative paths in a Blueprint anchor to **the Blueprint file's directory**, never the cwd (portable across run locations). `s3://`, `postgresql://`, absolute paths pass through unchanged. Same rule for `aqueduct.yml` (anchors to the config file dir).

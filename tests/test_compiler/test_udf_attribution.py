@@ -261,7 +261,13 @@ def test_compile_spark_only_udf_with_duckdb_island_present_compiles_cleanly():
         udf_registry=[{"id": "mask", "lang": "python", "module": "udfs.mask", "entry": "mask"}],
     )
     manifest = ccompile(bp, engine="spark")
-    assert {m.id: m.engine for m in manifest.modules} == {"extract": "spark", "agg": "duckdb"}
+    # A real cross-engine handoff module now exists at this boundary (Phase 81
+    # Step 2) — assert the two authored modules keep their engines rather than
+    # the exact module set, so this UDF-attribution test doesn't also pin
+    # down handoff-naming details that belong to test_handoff.py.
+    engines = {m.id: m.engine for m in manifest.modules}
+    assert engines["extract"] == "spark"
+    assert engines["agg"] == "duckdb"
 
 
 def test_compile_udf_referenced_from_duckdb_island_raises():
@@ -291,7 +297,13 @@ def test_compile_spark_dedup_order_by_udf_with_duckdb_island_compiles_cleanly():
         udf_registry=[{"id": "mask", "lang": "python", "module": "udfs.mask", "entry": "mask"}],
     )
     manifest = ccompile(bp, engine="spark")
-    assert {m.id: m.engine for m in manifest.modules} == {"extract": "spark", "agg": "duckdb"}
+    # A real cross-engine handoff module now exists at this boundary (Phase 81
+    # Step 2) — assert the two authored modules keep their engines rather than
+    # the exact module set, so this UDF-attribution test doesn't also pin
+    # down handoff-naming details that belong to test_handoff.py.
+    engines = {m.id: m.engine for m in manifest.modules}
+    assert engines["extract"] == "spark"
+    assert engines["agg"] == "duckdb"
 
 
 def test_compile_udf_referenced_from_duckdb_dedup_order_by_raises():
@@ -321,7 +333,13 @@ def test_compile_spark_sort_order_by_udf_with_duckdb_island_compiles_cleanly():
         udf_registry=[{"id": "mask", "lang": "python", "module": "udfs.mask", "entry": "mask"}],
     )
     manifest = ccompile(bp, engine="spark")
-    assert {m.id: m.engine for m in manifest.modules} == {"extract": "spark", "agg": "duckdb"}
+    # A real cross-engine handoff module now exists at this boundary (Phase 81
+    # Step 2) — assert the two authored modules keep their engines rather than
+    # the exact module set, so this UDF-attribution test doesn't also pin
+    # down handoff-naming details that belong to test_handoff.py.
+    engines = {m.id: m.engine for m in manifest.modules}
+    assert engines["extract"] == "spark"
+    assert engines["agg"] == "duckdb"
 
 
 def test_compile_udf_referenced_from_duckdb_sort_order_by_raises():

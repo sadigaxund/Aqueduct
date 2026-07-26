@@ -13,7 +13,15 @@ from typing import Any
 
 
 class ModuleType(StrEnum):
-    """Canonical module type names for the 9 blueprint module kinds."""
+    """Canonical module type names for the 9 authorable blueprint module
+    kinds, plus one compiler-synthesized kind (`Handoff`, Phase 81 step 2).
+
+    `Handoff` is NEVER legal in authored Blueprint YAML — see
+    `aqueduct.parser.schema.ModuleSchema.validate_type`, which rejects it
+    explicitly. It only ever appears on a `Module` the compiler inserts at
+    a cross-engine island boundary (`aqueduct.compiler.handoff`), always
+    with `Module.synthetic=True`.
+    """
     Ingress = "Ingress"
     Channel = "Channel"
     Egress = "Egress"
@@ -23,6 +31,7 @@ class ModuleType(StrEnum):
     Regulator = "Regulator"
     Arcade = "Arcade"
     Assert = "Assert"
+    Handoff = "Handoff"
 
 
 @dataclass(frozen=True)
@@ -183,7 +192,10 @@ class Module:
     # compiler (`aqueduct/compiler/islands.py::resolve_module_engines`)
     # replaces this with the FINAL resolved engine name for every enabled
     # module in the compiled Manifest, so `Manifest.modules[i].engine` is
-    # always a concrete engine name, never None, once compiled. See
+    # always a concrete engine name, never None, once compiled — EXCEPT a
+    # synthetic Handoff module (see `synthetic` below), which bridges TWO
+    # engines and deliberately carries `engine=None`; its bridged engines
+    # live in `config["from_engine"]`/`config["to_engine"]` instead. See
     # `aqueduct.parser.schema.ModuleSchema.engine` for the inheritance rules.
     engine: str | None = None
     spillway: str | None = None
@@ -207,6 +219,13 @@ class Module:
     # Arcade-specific: sub-Blueprint path and context overrides
     ref: str | None = None
     context_override: dict[str, Any] | None = None
+    # True ONLY for a compiler-synthesized module (currently: a Handoff —
+    # `aqueduct.compiler.handoff.insert_handoff_modules`). Never settable
+    # from Blueprint YAML (`ModuleSchema` has no such field), so a module
+    # parsed from user YAML always has `synthetic=False` — mirrors
+    # `Edge.injected`'s "compiler-inserted vs. user-authored" provenance
+    # marker one level up, at the module rather than the edge.
+    synthetic: bool = False
 
 
 @dataclass(frozen=True)

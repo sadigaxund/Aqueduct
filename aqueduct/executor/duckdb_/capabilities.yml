@@ -219,6 +219,8 @@ leaves:
   config.engine.spark.master_url:
     support: ignored_with_warning
     hint: "DuckDB is single-process and has no cluster master to submit to; master_url is ignored. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
+  config.handoff.keep_on_failure: supported
+  config.handoff.root: supported
   config.lineage.openlineage_namespace:
     support: ignored_with_warning
     hint: "the DuckDB executor does not emit OpenLineage events; the namespace key is accepted but inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
@@ -530,6 +532,9 @@ leaves:
     support: supported
     tests:
       - tests/test_executor_duckdb/test_executor.py::test_module_type_funnel_driven_through_execute
+  module.type.Handoff:
+    support: unsupported
+    hint: "Compiler-synthesized only — a Blueprint can never declare one, and this verdict is inert today (the per-island capability gate never checks a real Handoff module against it, by construction — see aqueduct/compiler/handoff.py). No engine implements a cross-engine transport handler yet; a future release adds one and re-declares this leaf with tests."
   module.type.Ingress:
     support: supported
     tests:

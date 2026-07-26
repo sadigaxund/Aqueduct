@@ -408,7 +408,13 @@ agent:
 #                                # target's resolved engine (compile error otherwise);
 #                                # a spillway edge may not cross engines (v1). The
 #                                # compiler partitions the module graph into engine
-#                                # islands at the boundaries this creates.
+#                                # islands at the boundaries this creates and splices
+#                                # in a synthetic handoff module at each one (2.35) —
+#                                # never authored, never a valid `type:` value; it
+#                                # spills the upstream island's output as parquet
+#                                # (see aqueduct.yml's `handoff:` block) and the
+#                                # downstream island reads it back. A suppressible
+#                                # cross_engine_handoff_io warning names each one.
 modules: []
 
   # ── INGRESS — load data from any Spark-supported source ──────────────────────

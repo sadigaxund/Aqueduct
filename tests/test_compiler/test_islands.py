@@ -256,10 +256,10 @@ def test_disjoint_components_different_engines_zero_boundaries():
     }
 
 
-def test_compile_two_registered_engines_boundary_allowed_no_handoff_yet():
-    """Step 1 derives/validates islands and boundary edges but does not
-    synthesize a handoff module — a legitimate two-engine boundary must
-    still compile cleanly (the handoff insertion is later work)."""
+def test_compile_two_registered_engines_boundary_gets_a_handoff_module():
+    """Step 2: a legitimate two-engine boundary compiles cleanly AND gets a
+    real synthetic Handoff module spliced in (`aqueduct/compiler/handoff.py`)
+    — `extract -> agg` becomes `extract -> handoff -> agg`."""
     bp = _bp(
         [
             {"id": "extract", "label": "extract", "type": "Channel", "engine": "spark",
@@ -271,7 +271,7 @@ def test_compile_two_registered_engines_boundary_allowed_no_handoff_yet():
     )
     manifest = ccompile(bp, engine="spark")
     engines = {m.id: m.engine for m in manifest.modules}
-    assert engines == {"extract": "spark", "agg": "duckdb"}
+    assert engines == {"extract": "spark", "agg": "duckdb", "extract__handoff__agg": None}
 
 
 # ── Probe / Assert colocation ───────────────────────────────────────────────
@@ -392,3 +392,75 @@ def test_compile_unregistered_engine_pin_raises():
     )
     with pytest.raises(UnknownEngineError):
         ccompile(bp, engine="spark")
+
+
+# ── Invariant enforcement: a handoff module must never reach the gate ──────
+
+
+def test_handoff_modules_never_reach_the_capability_gate(monkeypatch):
+    """Enforces the invariant `module.type.Handoff: unsupported` (both
+    engines' capabilities.yml) depends on for safety: a synthetic handoff
+    module's id must NEVER be a member of any island's `module_ids`, because
+    `compiler.compile()`'s per-island capability-gate loop filters
+    `manifest.modules` down to island membership before calling
+    `check_capabilities` (see `aqueduct/compiler/handoff.py`'s module
+    docstring and `docs/specs.md` §10.9). Today that holds because islands
+    are derived from the PRE-insertion module graph and handoff synthesis
+    runs strictly after.
+
+    This is exactly the shape of guarantee that holds by inspection and can
+    silently stop holding later — the most likely breaker is a future step
+    that must make a handoff module actually EXECUTE (upstream writes,
+    downstream reads), which is a natural reason to fold it into an island.
+    The moment that happens, `check_capabilities` sees a Handoff module,
+    looks up `module.type.Handoff`, finds `unsupported`, and EVERY polyglot
+    Blueprint stops compiling — a change that will look like a capability
+    regression, not like a broken invariant, unless something here catches
+    it first.
+
+    Spies on `aqueduct.compiler.compiler.check_capabilities` (the exact call
+    site) rather than re-deriving islands independently, so this proves the
+    REAL code path, not a parallel computation of the same thing.
+    """
+    import aqueduct.compiler.compiler as compiler_module
+
+    seen_manifests: list = []
+    real_check_capabilities = compiler_module.check_capabilities
+
+    def _spy(manifest, engine):
+        seen_manifests.append(manifest)
+        return real_check_capabilities(manifest, engine=engine)
+
+    monkeypatch.setattr(compiler_module, "check_capabilities", _spy)
+
+    bp = _bp(
+        [
+            {"id": "extract", "label": "extract", "type": "Channel", "engine": "spark",
+             "config": {"op": "sql", "query": "SELECT 1 AS x"}},
+            {"id": "agg", "label": "agg", "type": "Channel", "engine": "duckdb",
+             "config": {"op": "sql", "query": "SELECT * FROM extract"}},
+        ],
+        edges=[{"from": "extract", "to": "agg"}],
+    )
+    manifest = ccompile(bp, engine="spark")
+
+    # Sanity: a handoff module really was synthesized — otherwise the rest
+    # of this test proves nothing.
+    assert any(m.type == ModuleType.Handoff for m in manifest.modules)
+    assert seen_manifests, "check_capabilities was never called — test setup is broken"
+
+    for island_manifest in seen_manifests:
+        offenders = [m.id for m in island_manifest.modules if m.type == ModuleType.Handoff]
+        assert not offenders, (
+            f"check_capabilities was called with Handoff module(s) {offenders} "
+            "present in a per-island filtered manifest. A handoff module's id "
+            "must NEVER be a member of any island's module_ids — see "
+            "aqueduct/compiler/handoff.py's module docstring. If handoff "
+            "modules have started participating in islands (e.g. because a "
+            "later step wires them into real per-island execution), "
+            "module.type.Handoff MUST be re-declared with a REAL verdict "
+            "(and a `tests:` link, if `supported`) in BOTH capabilities.yml "
+            "files BEFORE that change ships — otherwise every polyglot "
+            "Blueprint will fail to compile against the current "
+            "`unsupported` verdict."
+        )

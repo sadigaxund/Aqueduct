@@ -218,9 +218,18 @@ def compute_lineage_rows(
     (Phase 55, which serializes them into a ``columnLineage`` facet). Each row is
     ``{channel_id, output_column, source_table, source_column}``; unresolved
     columns fall back to ``UNKNOWN`` inside ``_extract_sql_lineage``.
+
+    A synthetic cross-engine Handoff module (Phase 81 Step 2,
+    ``aqueduct.compiler.handoff``) gets a PASSTHROUGH row instead of SQL
+    parsing — it moves data verbatim (a storage-spill write + read), so
+    every column crosses unchanged. Same wildcard convention
+    ``_opaque_row`` already uses for a Channel lineage can't resolve
+    column-by-column (e.g. a subquery/CTE) — precise enough at this
+    fidelity level, and consistent with the rest of this module.
     """
     channel_modules = [m for m in modules if m.type == ModuleType.Channel and m.config.get("op") == "sql"]
-    if not channel_modules:
+    handoff_modules = [m for m in modules if m.type == ModuleType.Handoff]
+    if not channel_modules and not handoff_modules:
         return []
 
     upstream_map: dict[str, list[str]] = {}
@@ -236,6 +245,12 @@ def compute_lineage_rows(
         if not query:
             continue
         all_rows.extend(_extract_sql_lineage(m.id, query, upstream_map.get(m.id, [])))
+
+    for m in handoff_modules:
+        from_module = m.config.get("from_module") if isinstance(m.config, dict) else None
+        if from_module:
+            all_rows.extend(_opaque_row(m.id, [from_module]))
+
     return all_rows
 
 

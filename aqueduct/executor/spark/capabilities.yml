@@ -161,6 +161,8 @@ leaves:
   config.deployment.target: supported
   config.engine.spark.conf: supported
   config.engine.spark.master_url: supported
+  config.handoff.keep_on_failure: supported
+  config.handoff.root: supported
   config.lineage.openlineage_namespace: supported
   config.lineage.openlineage_url: supported
   config.metrics.use_observe: supported
@@ -474,6 +476,9 @@ leaves:
     support: supported
     tests:
       - tests/test_executor/test_executor_orchestration.py::test_execute_funnel_union_all
+  module.type.Handoff:
+    support: unsupported
+    hint: "Compiler-synthesized only — a Blueprint can never declare one, and this verdict is inert today (the per-island capability gate never checks a real Handoff module against it, by construction — see aqueduct/compiler/handoff.py). No engine implements a cross-engine transport handler yet; a future release adds one and re-declares this leaf with tests."
   module.type.Ingress:
     support: supported
     tests:

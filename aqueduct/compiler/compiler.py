@@ -6,7 +6,12 @@ Pipeline:
     → [2] Arcade expansion (flat module list)
     → [3] Probe / Spillway validation
     → [4] Passive Regulator compile-away
-    → [5] Engine capability gate (Phase 78 — see capability_check.py)
+    → [4.5] Per-module engine resolution + island derivation (Phase 81
+            Step 1 — see islands.py) and synthetic cross-engine handoff
+            module insertion at each boundary edge (Phase 81 Step 2 — see
+            handoff.py)
+    → [5] Engine capability gate (Phase 78 — see capability_check.py),
+           now per island since Phase 81 Step 1
     → Manifest (JSON-ready)
 
 The Compiler does NOT:
@@ -35,7 +40,16 @@ from aqueduct.compiler.capability_check import (
     format_unsupported_error,
 )
 from aqueduct.compiler.expander import ExpandError, expand_arcades
-from aqueduct.compiler.islands import derive_islands, resolve_module_engines, validate_islands
+from aqueduct.compiler.handoff import (
+    RULE_ID_CROSS_ENGINE_HANDOFF,
+    insert_handoff_modules,
+)
+from aqueduct.compiler.islands import (
+    derive_islands,
+    find_boundary_edges,
+    resolve_module_engines,
+    validate_islands,
+)
 from aqueduct.compiler.macros import MacroError, resolve_macros_in_config
 from aqueduct.compiler.models import Manifest
 from aqueduct.compiler.udf_attribution import attribute_udfs_to_islands
@@ -414,7 +428,10 @@ def compile(  # noqa: A001
     ]
     modules = [m for m in _all_modules if m.enabled]
 
-    # ── 7. Delivery semantics warning ─────────────────────────────────────────
+    # Hoisted from section 7 below: the suppress set / `_w` warning helper
+    # are needed one step earlier now, by 6.9's `cross_engine_handoff_io`
+    # warning. Nothing here depends on anything computed in 7/8 — moving it
+    # up is a pure reorder, not a behavior change for the checks below.
     from aqueduct.warnings import _DEFAULT_SUPPRESS
     from aqueduct.warnings import emit as _aq_emit
     # Per-Blueprint suppression (`blueprint.warning_suppress`, from the
@@ -422,8 +439,8 @@ def compile(  # noqa: A001
     # suppress set HERE, scoped to this one compile pass only — it never
     # mutates the process-global `set_default_suppress` default, so it can't
     # leak into other blueprints, session warnings, or runtime warnings.
-    # Covers BOTH the inline section-7/8 warnings below and the modular
-    # registry pass (Phase 30a tier 1) further down.
+    # Covers 6.9, sections 7/8, and the modular registry pass (Phase 30a
+    # tier 1) further down.
     _supp = (
         set(warnings_suppress) if warnings_suppress is not None
         else set(_DEFAULT_SUPPRESS)
@@ -436,6 +453,36 @@ def compile(  # noqa: A001
             return
         _aq_emit(rule_id, msg, suppress=_supp)
 
+    # ── 6.9. Insert synthetic cross-engine handoff modules (Phase 81 Step 2) ─
+    # A boundary edge (differing resolved engines on either endpoint) gets a
+    # synthetic Handoff module spliced in: `A -> B` becomes
+    # `A -> handoff -> B` (see `aqueduct/compiler/handoff.py` for the full
+    # transport contract). Disjoint same-Blueprint components pinned to
+    # different engines have no edge between them at all, so
+    # `find_boundary_edges` returns `[]` and this is a no-op — the "zero
+    # handoff nodes" free lunch from Step 1 survives unchanged. A
+    # single-engine Blueprint (no module pins `engine:`) has exactly one
+    # island and therefore zero boundary edges too, so `modules`/`edges`
+    # come back byte-identical to Step 1's output. `_islands` (just derived
+    # above) is NOT recomputed after insertion — a handoff module's id is
+    # never a member of any island's `module_ids` by construction, which is
+    # what lets the per-island capability gate (section 9) skip it for
+    # free, the same way it already skips a disabled module.
+    _boundaries = find_boundary_edges(modules, edges, _resolved_engine)
+    modules, edges, _handoff_insertions = insert_handoff_modules(modules, edges, _boundaries)
+    _all_modules = _all_modules + [ins.module for ins in _handoff_insertions]
+    for _ins in _handoff_insertions:
+        _w(
+            RULE_ID_CROSS_ENGINE_HANDOFF,
+            f"Cross-engine handoff {_ins.module.id!r}: "
+            f"{_ins.boundary.edge.from_id!r} ({_ins.boundary.from_engine}) -> "
+            f"{_ins.boundary.edge.to_id!r} ({_ins.boundary.to_engine}). The "
+            "upstream island materializes its output as parquet; the "
+            "downstream island reads it back — a real I/O cost, visible here "
+            "before the run. See docs/specs.md §10.9 (cross-engine handoff).",
+        )
+
+    # ── 7. Delivery semantics warning ─────────────────────────────────────────
     if blueprint.retry_policy.max_attempts > 1:
         for m in modules:
             if m.type == ModuleType.Egress and m.config.get("mode") == "append":

@@ -47,6 +47,15 @@ DEFAULT_OBS_DB_FILENAME: str = "observability.db"
 # change; the value is unchanged.
 DEFAULT_OBS_ROUTING_ROOT: str = ".aqueduct/observability"
 
+# Default root for cross-engine handoff spill files (Phase 81 step 2's
+# `handoff:` block, `handoff.root`). Unlike `checkpoint_root` (LOCAL
+# filesystem only — a same-engine Spark resume concept), a handoff spill
+# must be reachable by BOTH engines on either side of an island boundary,
+# so this default is just a relative directory convention, not a
+# local-only guarantee — `handoff.root` accepts a remote URI scheme
+# (s3://, gs://, abfss://, ...) with no rejection.
+DEFAULT_HANDOFF_ROOT: str = ".aqueduct/handoff"
+
 # Matches any RFC3986-shaped URI scheme prefix (s3://, s3a://, gs://, hdfs://,
 # abfss://, postgresql://, ...). Used to reject remote URIs on LOCAL-PATH-ONLY
 # config fields (e.g. `checkpoint_root`) with an actionable error instead of
@@ -1110,6 +1119,51 @@ class EngineConfig(BaseModel):
     duckdb: DuckDBEngineConfig = Field(default_factory=DuckDBEngineConfig)
 
 
+class HandoffConfig(BaseModel):
+    """Cross-engine handoff transport config (top-level `handoff:` block,
+    Phase 81 step 2).
+
+    Governs WHERE the compiler-synthesized Handoff module's storage-spill
+    parquet lands, and whether that spill directory survives a failed run
+    so a rerun (e.g. after a self-heal) can skip recomputing an
+    already-materialized upstream island. NOT nested under
+    `checkpoint_root` — checkpoint is a same-engine Spark resume concept
+    (local filesystem only, see `AqueductConfig.checkpoint_root`); handoff
+    is cross-engine and borrows checkpoint's LIFECYCLE semantics (kept on
+    failure, cleaned up on success), not its location or its local-only
+    constraint. Parquet is a fixed internal transport detail, not a config
+    key — there is deliberately no format knob here.
+
+    Directory layout the executor lays out per run (step 3 implements the
+    actual write/read; this block only configures WHERE):
+    `<root>/<manifest_hash>/<run_id>/<edge_id>/`. Deleted on a successful
+    run; kept when `keep_on_failure` is true (the default) so a rerun
+    reads the existing spill instead of recomputing it.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    root: str = Field(
+        default=DEFAULT_HANDOFF_ROOT,
+        description=(
+            "Root directory/URI for cross-engine handoff spill files. Any "
+            "location BOTH engines on either side of a boundary can read "
+            "and write — a local path, or a remote URI (s3://, gs://, "
+            "abfss://, ...). Unlike `checkpoint_root`, remote URI schemes "
+            "are NOT rejected here."
+        ),
+    )
+    keep_on_failure: bool = Field(
+        default=True,
+        description=(
+            "Keep a boundary's spilled parquet after a failed run so a "
+            "rerun (e.g. after a self-heal) can read the upstream "
+            "island's already-materialized output instead of recomputing "
+            "it. When false, spill directories are removed regardless of "
+            "outcome."
+        ),
+    )
+
+
 class AqueductConfig(BaseModel):
     """Fully validated engine configuration.
 
@@ -1133,6 +1187,7 @@ class AqueductConfig(BaseModel):
     lineage: LineageConfig = Field(default_factory=LineageConfig)
     agent: AgentConnectionConfig = Field(default_factory=AgentConnectionConfig)
     warnings: WarningsConfig = Field(default_factory=lambda: WarningsConfig())
+    handoff: HandoffConfig = Field(default_factory=HandoffConfig)
     checkpoint_root: str | None = Field(
         default=None,
         description=(

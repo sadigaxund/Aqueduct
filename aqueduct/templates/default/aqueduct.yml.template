@@ -208,6 +208,25 @@ stores:
 #
 # checkpoint_root: "/mnt/fast-local/aqueduct-checkpoints"
 
+
+# ── Cross-engine handoff (2.35) ─────────────────────────────────────────────
+#
+# A polyglot Blueprint (a module `engine:` field pins a DIFFERENT engine than
+# an upstream module) gets a synthetic handoff module spliced in at each
+# engine boundary — see blueprint.yml.template's `engine:` module-field note.
+# The handoff spills the upstream island's output as parquet (fixed transport
+# detail, not configurable here) at a location under `root`, then the
+# downstream island reads it back. `root` must be reachable by BOTH engines —
+# a local path, or a remote URI (s3://, gs://, abfss://, ...); unlike
+# `checkpoint_root` above, a remote scheme is NOT rejected here. Layout:
+# <root>/<manifest_hash>/<run_id>/<edge_id>/ — deleted on a successful run,
+# kept on failure (when keep_on_failure is true) so a rerun after a self-heal
+# reads the existing spill instead of recomputing the upstream island.
+#
+# handoff:
+#   root: ".aqueduct/handoff"    # default
+#   keep_on_failure: true        # default — the resume story
+
 # ── Cluster / Cloud deployment example ───────────────────────────────────────
 #
 # For YARN, Kubernetes, Spark Standalone, or Databricks/EMR/Dataproc:
