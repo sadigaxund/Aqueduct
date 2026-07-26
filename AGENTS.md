@@ -570,6 +570,20 @@ Every path-typed field in a schema model must use `Annotated[str, FsPath()]`. Ev
 ### User-code imports go through `infra/module_loading.py`
 Any feature that imports **user-authored** code from a Blueprint/config reference (a dotted `fn:`, a `module:`+`entry:` pointer, a `module.Class` path) must use `infra.module_loading.load_callable`/`load_module` with `manifest.base_dir` — never a bare `importlib.import_module`. Bare imports only search `sys.path`, and the `aqueduct` console script never has the blueprint's directory there — a sibling `.py` next to the blueprint is invisible. This exact bug shipped independently 5 times (secrets resolver, custom Assert, custom Probe pointer, python UDF, custom DataSource) before being fixed once at the root (see failure_taxonomy.md #11). Bare `import_module` remains correct only for engine-internal/bundled modules (e.g. `udf.py`'s bundled-cloudpickle probe).
 
+### Fix the defect you found; do not write it up
+
+If you discover a real defect while implementing something and the fix is contained, **fix it in the same change**. Writing it up as a "known issue", a docstring caveat, or a documented limitation is only correct when the fix is genuinely large or needs a decision that is not yours. The test is blunt: **if documenting the limitation costs more to carry than the fix costs to write, write the fix.**
+
+This rule exists because the opposite keeps happening, twice in one day on the cross-engine work. A UDF-attribution gap that produced a false `CompileError` on valid blueprints was documented as an unscanned-surface limitation; the fix was ~10 lines against a helper that already existed. A handoff boundary that silently degraded a timezone-aware timestamp to a naive one — semantic corruption, no error — was written into `CHANGELOG.md` under an invented `### Known Issues` heading, *including the verified one-option fix that was not applied*. Both would have shipped.
+
+Three specifics:
+
+- **A verified fix is never a known issue.** If you tested that something fixes it, you have already done the expensive part.
+- **Silent-wrong-answer defects are never deferrable.** A loud failure can wait behind a caveat; a wrong value that no one is told about cannot. This is the same reasoning as "No silent no-ops" below, applied to defects you find rather than ones you write.
+- **Defer through the repo's mechanism, not through prose.** A genuine deferral is a `@pytest.mark.todo("…")` stub in `tests/test_backlog.py` (see Testing) so it stays enumerable via `pytest --collect-only -m todo`. Prose in a docstring or a changelog is not a backlog. `CHANGELOG.md` uses Keep-a-Changelog sections only — `Added` / `Changed` / `Deprecated` / `Removed` / `Fixed` / `Security`. There is no `Known Issues` section; do not add one.
+
+When a fix is genuinely out of scope, say so explicitly and name what it would take, rather than leaving a caveat that reads as a decision nobody made.
+
 ### No silent no-ops
 When you add a config field, a callback, a flag, or a schema field — trace it to every consumer. Code that executes but produces no effect and no error is worse than a crash because it silently lies to the user. Examples: a pydantic field with a docstring that no code reads (user thinks they're tuning behavior), a field in the schema that's accepted but never consumed at runtime (user sets it, nothing happens), a callback that's wired but silently skipped under a condition the caller doesn't know about.
 
