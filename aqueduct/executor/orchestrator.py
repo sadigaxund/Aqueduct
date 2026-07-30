@@ -274,6 +274,7 @@ def run_polyglot(
     engine_configs: dict[str, dict[str, Any]] | None = None,
     master_url: str = "",
     quiet_startup: bool = True,
+    timezone: str | None = None,
     block_full_actions: bool = False,
     parallel: bool = False,
     use_observe: bool = False,
@@ -329,6 +330,15 @@ def run_polyglot(
                          present here gets ``{}``.
         master_url:      Passed to every island's ``SessionSpec`` (engines
                          that ignore it, e.g. DuckDB, simply don't read it).
+        timezone:        ``aqueduct.yml``'s top-level ``timezone:`` (Phase
+                         81/82), passed to EVERY island's ``SessionSpec`` —
+                         each engine applies it its own way (Spark's
+                         ``spark.sql.session.timeZone``, DuckDB's ``SET
+                         TimeZone``) and Spark warns on a divergence from its
+                         own ``engine.spark.conf`` override. This is
+                         precisely the shape that makes cross-engine
+                         timezone divergence visible instead of silent —
+                         the whole reason this key exists.
         record_result:   When True (the default — preserves this function's
                          existing standalone/tested contract), this call
                          records the run's outcome itself via
@@ -446,6 +456,7 @@ def run_polyglot(
                 engine_config=(engine_configs or {}).get(island.engine, {}),
                 master_url=master_url,
                 quiet_startup=quiet_startup,
+                timezone=timezone,
             )
         )
         try:

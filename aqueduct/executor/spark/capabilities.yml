@@ -180,6 +180,7 @@ leaves:
   config.stores.depots: supported
   config.stores.observability.backend: supported
   config.stores.observability.path: supported
+  config.timezone: supported
   config.warnings.strict: supported
   config.warnings.suppress: supported
   config.webhooks.on_ci_patch.backoff_seconds: supported
@@ -527,7 +528,7 @@ leaves:
   # One leaf per hub type CONSTRUCTOR (aqueduct/typehub.py), not per
   # instantiation — `type.array` covers every `array<T>`. Every constructor
   # is a real Spark DDL cast target (see the test cases linked below) so all
-  # sixteen are honestly `supported` on Spark, the reference engine. The
+  # seventeen are honestly `supported` on Spark, the reference engine. The
   # native-namespace pair below is the governed escape hatch: `type.native.spark`
   # ("spark:<spelling>") is Spark's own type system, so it is `supported`
   # (proven primarily by `interval day to second`, a real Spark-only DDL type
@@ -564,6 +565,10 @@ leaves:
     tests:
       - tests/test_executor/test_executor_channel.py::test_cast_hub_type_constructors
   type.double:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_cast_hub_type_constructors
+  type.duration:
     support: supported
     tests:
       - tests/test_executor/test_executor_channel.py::test_cast_hub_type_constructors

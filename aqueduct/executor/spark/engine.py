@@ -106,6 +106,7 @@ def _make_session(spec: SessionSpec) -> Any:
         master_url=spec.master_url or "local[*]",
         quiet=spec.quiet,
         quiet_startup=spec.quiet_startup,
+        timezone=spec.timezone,
     )
 
 

@@ -415,6 +415,7 @@ def _run_patch_gates_inline(  # noqa: F811
     sandbox_mode: str = "sample",
     sandbox_master_url: str | None = None,
     warnings_suppress=None,
+    timezone: str | None = None,
 ):
     """Phase 29a/b — run the lineage, sandbox, and explain gates inline.
 
@@ -480,6 +481,7 @@ def _run_patch_gates_inline(  # noqa: F811
             explain_capture=explain_after,
             sandbox_master_url=sandbox_master_url,
             warnings_suppress=warnings_suppress,
+            timezone=timezone,
         )
     try:
         surveyor.record_patch_simulation(

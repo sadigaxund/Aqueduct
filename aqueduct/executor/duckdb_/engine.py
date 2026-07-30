@@ -105,10 +105,19 @@ def _make_session(spec: SessionSpec) -> Any:
     ``engine_config``/``master_url``/``quiet*`` fields are
     accepted for cross-engine parity and ignored here. ``duckdb`` is imported
     inside the body so constructing the protocol object never requires it.
+
+    ``spec.timezone`` (Phase 81/82 — ``aqueduct.yml``'s top-level
+    ``timezone:``) IS applied, via ``SET TimeZone`` — DuckDB has no
+    ``engine.duckdb.*`` knob at all yet (see above), so there is no
+    engine-native override to defer to and no divergence to check for
+    (unlike Spark's ``engine.spark.conf.spark.sql.session.timeZone``).
     """
     import duckdb
 
-    return duckdb.connect(":memory:")
+    conn = duckdb.connect(":memory:")
+    if spec.timezone:
+        conn.execute("SET TimeZone=?", [spec.timezone])
+    return conn
 
 
 def _close_session(session: Any) -> None:

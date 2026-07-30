@@ -47,6 +47,11 @@ def render_spark_type(t: "hub.HubType | hub.NativeType") -> str:
         return "timestamp_ntz"
     if isinstance(t, hub.Decimal):
         return f"decimal({t.precision},{t.scale})"
+    if isinstance(t, hub.Duration):
+        # Integer-backed by design (see typehub.Duration's docstring) — the
+        # unit is Aqueduct's own metadata, never consulted by Spark's cast
+        # machinery, which only ever sees a plain 64-bit integer.
+        return "bigint"
     if isinstance(t, hub.Array):
         return f"array<{render_spark_type(t.element)}>"
     if isinstance(t, hub.Map):

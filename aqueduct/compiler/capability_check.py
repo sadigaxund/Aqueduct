@@ -63,7 +63,7 @@ def _type_leaves_for_hub_type(t: Any) -> list[str]:
     nesting level, so ``array<map<string,int>>`` yields
     ``["type.array", "type.map", "type.string", "type.int"]``.
     """
-    from aqueduct.typehub import Array, Decimal, Map, NativeType, Struct, render
+    from aqueduct.typehub import Array, Decimal, Duration, Map, NativeType, Struct, render
 
     if isinstance(t, NativeType):
         return [f"type.native.{t.engine}"]
@@ -82,6 +82,13 @@ def _type_leaves_for_hub_type(t: Any) -> list[str]:
         return leaves
     if isinstance(t, Decimal):
         return ["type.decimal"]
+    if isinstance(t, Duration):
+        # Same parametrized-constructor shape as Decimal above: the leaf is
+        # per CONSTRUCTOR (`type.duration` covers every `duration(unit)`),
+        # never per instantiation — `render(t)` includes the unit argument
+        # (`"duration(us)"`), which would otherwise mint a bogus leaf id
+        # per distinct unit instead of the single governed `type.duration`.
+        return ["type.duration"]
     return [f"type.{render(t)}"]
 
 

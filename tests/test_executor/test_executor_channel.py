@@ -326,6 +326,12 @@ _HUB_TYPE_CAST_CASES = [
     ("type.decimal", [(1.5,)], "decimal(10,2)"),
     ("type.timestamp_tz", [("2020-01-01",)], "timestamp"),
     ("type.timestamp_ntz", [("2020-01-01",)], "timestamp_ntz"),
+    # Phase 81/82 — duration(unit) is integer-backed (typehub.Duration), so
+    # this genuinely exercises normalize_type_spelling's real hub mapping
+    # (parse_type("duration(us)") -> Duration("us") -> render_spark_type ->
+    # "bigint"), unlike the bare "timestamp"/"timestamp_ntz" rows above which
+    # hit the raw-passthrough fallback for a Spark-only spelling.
+    ("type.duration", [(1,)], "duration(us)"),
 ]
 
 

@@ -284,6 +284,7 @@ def run_sandbox_gate(
     explain_capture: dict[str, dict] | None = None,
     sandbox_master_url: str | None = None,
     warnings_suppress: Iterable[str] | None = None,
+    timezone: str | None = None,
 ) -> SandboxGateResult:
     """Compile and replay the patched Blueprint with a row limit + Egress skipped.
 
@@ -314,6 +315,11 @@ def run_sandbox_gate(
     builds and owns its own sandbox session via the target engine's
     ``ExecutorProtocol.session_factory()`` and tears it down afterwards
     through ``session_closer()``.
+
+    ``timezone``: ``aqueduct.yml``'s top-level ``timezone:`` (Phase 81/82),
+    forwarded to the owned sandbox session's ``SessionSpec`` when this gate
+    builds its own session (ignored when ``spark_session`` is given — that
+    session's timezone was already resolved by whoever built it).
 
     Status:
       `pass`  manifest compiled and executed without raising
@@ -434,6 +440,7 @@ def run_sandbox_gate(
                         master_url=master,
                         quiet=True,
                         quiet_startup=True,
+                        timezone=timezone,
                     )
                 )
             except Exception as exc:

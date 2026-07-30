@@ -85,6 +85,64 @@ class TestOutputTimestampTypeDefault:
         assert spark.conf.get("spark.sql.parquet.outputTimestampType") == "INT96"
 
 
+# ── timezone: universal key (Phase 81/82) ────────────────────────────────────
+
+class TestSessionTimezone:
+    def test_universal_timezone_applied_when_no_native_override(self):
+        """No engine-native `spark.sql.session.timeZone` in spark_config ->
+        the universal `timezone:` value is applied directly."""
+        spark = make_spark_session("app-tz-default", {}, timezone="America/New_York")
+        assert spark.conf.get("spark.sql.session.timeZone") == "America/New_York"
+
+    def test_native_override_wins_over_universal_timezone(self):
+        """An explicit engine-native `engine.spark.conf.spark.sql.session.
+        timeZone` always wins over the universal `timezone:` value — the same
+        "explicit beats default" precedent as outputTimestampType above."""
+        spark = make_spark_session(
+            "app-tz-native-wins",
+            {"spark.sql.session.timeZone": "UTC"},
+            timezone="America/New_York",
+        )
+        assert spark.conf.get("spark.sql.session.timeZone") == "UTC"
+
+    def test_native_override_divergence_warns(self):
+        """A universal `timezone:` that disagrees with an explicit
+        engine-native override fires a suppressible warning naming the
+        divergence — the whole point of the universal key is making a
+        cross-engine timezone mismatch visible instead of silent."""
+        import warnings as _warnings
+
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+            make_spark_session(
+                "app-tz-divergence-warn",
+                {"spark.sql.session.timeZone": "UTC"},
+                timezone="America/New_York",
+            )
+        messages = [str(w.message) for w in caught]
+        assert any("engine_timezone_conflict" in m for m in messages)
+        assert any("America/New_York" in m and "UTC" in m for m in messages)
+
+    def test_native_override_agreeing_with_universal_does_not_warn(self):
+        """No divergence when the two already agree -> no warning fires."""
+        import warnings as _warnings
+
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+            make_spark_session(
+                "app-tz-agree",
+                {"spark.sql.session.timeZone": "UTC"},
+                timezone="UTC",
+            )
+        assert not any("engine_timezone_conflict" in str(w.message) for w in caught)
+
+    def test_no_universal_timezone_is_a_no_op(self):
+        """`timezone=None` (the default) touches nothing — no error, no conf
+        write forced."""
+        spark = make_spark_session("app-tz-unset", {})
+        assert isinstance(spark, SparkSession)
+
+
 class TestSessionQuietMode:
     def test_make_spark_session_quiet_injects_log4j_opts(self):
         from aqueduct.executor.spark.session import _LOG4J_QUIET_OPTS

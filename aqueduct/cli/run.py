@@ -913,6 +913,7 @@ def _setup_surveyor(
                 engine_config=merged_spark_config,
                 master_url=master_url,
                 quiet_startup=not verbose,
+                timezone=cfg.timezone,
             )
         )
 
@@ -1707,6 +1708,7 @@ def run(
                 engine_configs=_engine_configs,
                 master_url=master_url,
                 quiet_startup=not verbose,
+                timezone=cfg.timezone,
                 block_full_actions=kw.get("block_full_actions", False),
                 parallel=kw.get("parallel", False),
                 use_observe=kw.get("use_observe", False),
@@ -1905,6 +1907,7 @@ def run(
                                 sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
                                 sandbox_master_url=resolved_sandbox_master_url,
                                 warnings_suppress=cfg.warnings.suppress,
+                                timezone=cfg.timezone,
                             )
                             _announce_polyglot_sandbox_skip(_rg3)
                             if _rg3 is not None and not _rg3_passed:
@@ -2162,6 +2165,7 @@ def run(
                             sandbox_mode=_vc_sandbox_mode,
                             sandbox_master_url=resolved_sandbox_master_url,
                             warnings_suppress=cfg.warnings.suppress,
+                            timezone=cfg.timezone,
                         )
                         _announce_polyglot_sandbox_skip(_g3)
                         failures: list[str] = []
@@ -2755,6 +2759,7 @@ def run(
                         sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
                         sandbox_master_url=resolved_sandbox_master_url,
                         warnings_suppress=cfg.warnings.suppress,
+                        timezone=cfg.timezone,
                     )
                     _announce_polyglot_sandbox_skip(_g3)
                 _block_on_g4 = (

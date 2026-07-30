@@ -46,6 +46,31 @@ def test_leaves_for_module_emits_module_type():
     assert "module.type.Ingress" in leaves_for_module(_module("i", "Ingress", {"format": "csv"}))
 
 
+# ── Parametrized constructors emit the CONSTRUCTOR leaf, never a per-argument
+# one (Phase 81/82 regression — found while adding `duration(unit)`: the
+# fallback branch in `_type_leaves_for_hub_type` renders the WHOLE spelling,
+# including the argument, unless the constructor has its own special case —
+# `Decimal` already had one; `Duration` initially did not, so a Channel cast
+# to `duration(us)` minted a bogus `type.duration(us)` leaf with no row in
+# either engine's capabilities.yml instead of the governed `type.duration`,
+# and compilation failed with a CompileError naming a leaf that doesn't
+# exist. Both constructors are pinned here so neither regresses silently.) ──
+
+
+def test_duration_cast_emits_type_duration_not_the_parametrized_spelling():
+    m = _module("ch", "Channel", {"op": "cast", "columns": {"n": "duration(us)"}})
+    leaves = leaves_for_module(m)
+    assert "type.duration" in leaves
+    assert not any(leaf.startswith("type.duration(") for leaf in leaves)
+
+
+def test_decimal_cast_emits_type_decimal_not_the_parametrized_spelling():
+    m = _module("ch", "Channel", {"op": "cast", "columns": {"n": "decimal(10,2)"}})
+    leaves = leaves_for_module(m)
+    assert "type.decimal" in leaves
+    assert not any(leaf.startswith("type.decimal(") for leaf in leaves)
+
+
 # ── feature_leaves_for_manifest derives UDF-language features off udf_registry ──
 
 

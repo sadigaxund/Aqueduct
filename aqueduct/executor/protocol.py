@@ -148,6 +148,16 @@ class SessionSpec:
             everywhere); it exists so a third-party engine can receive
             engine-specific session options without a breaking change to this
             frozen dataclass.
+        timezone: ``aqueduct.yml``'s top-level ``timezone:`` value (Phase
+            81/82), applied to EVERY registered engine's session at creation
+            — Spark's ``spark.sql.session.timeZone``, DuckDB's ``SET
+            TimeZone``. ``None`` (the default) means the key is unset — an
+            engine leaves its session timezone at whatever it would already
+            default to. An engine that also has its own native override
+            configured (Spark's ``engine.spark.conf.spark.sql.session.
+            timeZone``) honours that explicit value instead and warns on a
+            divergence (rule_id ``engine_timezone_conflict``) — see
+            ``aqueduct.executor.spark.session.make_spark_session``.
     """
 
     blueprint_id: str
@@ -156,6 +166,7 @@ class SessionSpec:
     quiet: bool = False
     quiet_startup: bool = False
     engine_options: dict[str, Any] = field(default_factory=dict)
+    timezone: str | None = None
 
 
 # (session spec) -> engine session handle (SparkSession, duckdb connection, ...).

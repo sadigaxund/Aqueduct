@@ -82,16 +82,16 @@ aqueduct dev capabilities scaffold --engine <name>
 
 This writes a complete `capabilities.yml` under
 `aqueduct/executor/<name>/` with **every** governed leaf present and set to
-`undeclared` — currently 261 rows: ~160 Blueprint-grammar leaves (module
+`undeclared` — currently 294 rows: ~189 Blueprint-grammar leaves (module
 types, Channel ops, Egress write modes, Junction/Funnel fan modes, feature
-flags) plus ~101 `aqueduct.yml` config leaves. The leaf set is derived live
-from the grammar and config walkers (`capability_leaves.py`,
-`config_leaves.py`), so the scaffold cannot go stale the way a checked-in
-template would, and it cannot be gamed — there is no default-verdict sweep
-anywhere in the framework.
+flags, hub type constructors) plus ~105 `aqueduct.yml` config leaves. The
+leaf set is derived live from the grammar and config walkers
+(`capability_leaves.py`, `config_leaves.py`), so the scaffold cannot go stale
+the way a checked-in template would, and it cannot be gamed — there is no
+default-verdict sweep anywhere in the framework.
 
-**Do not copy another engine's `capabilities.yml`.** Spark's table has 261
-`supported` rows because Spark actually implements 261 things. Cloning it
+**Do not copy another engine's `capabilities.yml`.** Spark's table has 294
+`supported` rows because Spark actually implements 294 things. Cloning it
 onto a new engine is a silent claim that the new engine supports the entire
 grammar — precisely the blind spot this framework exists to catch. Read
 Spark's table as a reference for what a verdict/`requires`/`hint` row looks

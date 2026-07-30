@@ -159,6 +159,33 @@ class TimestampNtz(HubType):
 
 
 @dataclass(frozen=True)
+class Duration(HubType):
+    """A span of time, stored as a plain signed 64-bit integer count of
+    ``unit`` ticks (one of ``s``/``ms``/``us``/``ns`` — Arrow's own
+    ``TimeUnit`` granularities) — modeled on Arrow ``duration[unit]``
+    VALUE semantics, deliberately NOT rendered as either engine's own native
+    interval type.
+
+    This is integer-backed by measurement, not preference: Spark's day-time
+    ``INTERVAL`` and DuckDB's ``INTERVAL`` do not share a Parquet
+    representation an engine-native round-trip can rely on, so a hub
+    constructor built on top of either one would inherit that same
+    cross-engine fragility the hub exists to avoid. A plain ``BIGINT``
+    column has no such ambiguity — every engine's Parquet reader/writer
+    already agrees on a signed 64-bit integer's on-disk encoding, so a
+    ``duration(unit)`` column round-trips faithfully across a cross-engine
+    handoff the same way any other ``bigint`` column does. ``unit`` is
+    metadata Aqueduct's own type system carries (which tick size the
+    integer counts); it is not consulted by either engine's cast machinery,
+    which only ever sees the integer. An author who genuinely wants one
+    engine's native interval type (with its own calendar-arithmetic
+    semantics) uses the ``<engine>:`` native namespace directly.
+    """
+
+    unit: str
+
+
+@dataclass(frozen=True)
 class Array(HubType):
     """An ordered, variable-length list of ``element``-typed values, one
     element type shared by every item (Arrow ``list<element>``).
@@ -263,7 +290,15 @@ _ARRAY_RE = re.compile(r"^array<(.+)>$", re.IGNORECASE | re.DOTALL)
 _MAP_RE = re.compile(r"^map<(.+)>$", re.IGNORECASE | re.DOTALL)
 _STRUCT_RE = re.compile(r"^struct<(.*)>$", re.IGNORECASE | re.DOTALL)
 _DECIMAL_RE = re.compile(r"^decimal\(\s*(\d+)\s*,\s*(\d+)\s*\)$", re.IGNORECASE)
+_DURATION_RE = re.compile(r"^duration\(\s*([a-zA-Z]+)\s*\)$", re.IGNORECASE)
 _NATIVE_RE = re.compile(r"^([a-zA-Z][a-zA-Z0-9_]*):(.+)$", re.DOTALL)
+
+# Arrow's own TimeUnit granularities — the only spellings `duration(unit)`
+# accepts. Kept as short tick-size abbreviations (matching the `duration(us)`
+# spelling already used as a worked example ahead of this constructor's
+# implementation) rather than words like "microseconds" — Arrow's own
+# vocabulary for the same four granularities.
+_DURATION_UNITS: frozenset[str] = frozenset({"s", "ms", "us", "ns"})
 
 
 def _split_top_level(s: str, sep: str) -> list[str]:
@@ -291,15 +326,16 @@ def _split_top_level(s: str, sep: str) -> list[str]:
 
 
 def _unknown_spelling_message(spelling: str) -> str:
-    candidates = sorted(set(_SCALAR_ALIASES) | {"decimal", "timestamp"})
+    candidates = sorted(set(_SCALAR_ALIASES) | {"decimal", "timestamp", "duration"})
     close = difflib.get_close_matches(spelling.strip().lower(), candidates, n=3)
     hint = f" Did you mean: {', '.join(close)}?" if close else ""
     return (
         f"Unknown type spelling {spelling!r}.{hint} Composite types use "
         "array<T>, map<K,V>, struct<name:type,...>; decimal(p,s) needs an "
-        "explicit precision/scale. For an engine-specific type Aqueduct does "
-        "not validate, use the native namespace: 'spark:<type>' or "
-        "'duckdb:<type>' (e.g. 'duckdb:HUGEINT')."
+        "explicit precision/scale; duration(unit) needs one of s/ms/us/ns. "
+        "For an engine-specific type Aqueduct does not validate, use the "
+        "native namespace: 'spark:<type>' or 'duckdb:<type>' (e.g. "
+        "'duckdb:HUGEINT')."
     )
 
 
@@ -351,6 +387,17 @@ def _parse_one(spelling: str, *, suppress: Iterable[str] | None) -> "HubType | N
                 "(need 1<=precision, 0<=scale<=precision)."
             )
         return Decimal(precision, scale)
+
+    m = _DURATION_RE.match(s)
+    if m:
+        unit = m.group(1).strip().lower()
+        if unit not in _DURATION_UNITS:
+            raise TypeSpellingError(
+                f"duration({m.group(1)}) uses an unrecognized unit {m.group(1)!r} — "
+                f"use one of {sorted(_DURATION_UNITS)} (s/ms/us/ns, Arrow's own "
+                "duration tick granularities)."
+            )
+        return Duration(unit)
 
     m = _NATIVE_RE.match(s)
     if m:
@@ -446,12 +493,12 @@ def constructor_names() -> frozenset[str]:
     ``_CANONICAL_SPELLING`` table ``render()`` uses for scalars, plus the
     composite/parametrized constructors that table does not cover (they take
     an argument so they have no single canonical spelling of their own:
-    ``decimal``, ``array``, ``map``, ``struct``). ``NativeType`` is
-    deliberately excluded — it is not a hub constructor, it is the
+    ``decimal``, ``array``, ``map``, ``struct``, ``duration``). ``NativeType``
+    is deliberately excluded — it is not a hub constructor, it is the
     passthrough escape hatch (see ``type.native.<engine>`` leaves, derived
     separately from the registered engine list).
     """
-    return frozenset(_CANONICAL_SPELLING.values()) | {"decimal", "array", "map", "struct"}
+    return frozenset(_CANONICAL_SPELLING.values()) | {"decimal", "array", "map", "struct", "duration"}
 
 
 def render(t: "HubType | NativeType") -> str:
@@ -463,6 +510,8 @@ def render(t: "HubType | NativeType") -> str:
         return f"{t.engine}:{t.spelling}"
     if isinstance(t, Decimal):
         return f"decimal({t.precision},{t.scale})"
+    if isinstance(t, Duration):
+        return f"duration({t.unit})"
     if isinstance(t, Array):
         return f"array<{render(t.element)}>"
     if isinstance(t, Map):
@@ -484,6 +533,7 @@ __all__ = [
     "DateT",
     "Decimal",
     "DoubleT",
+    "Duration",
     "FloatT",
     "HubType",
     "Int",

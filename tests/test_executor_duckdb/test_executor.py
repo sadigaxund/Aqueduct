@@ -312,6 +312,11 @@ _HUB_VOCABULARY_CAST_CASES = [
     ("type.decimal", "SELECT 1.5 AS a", "decimal(10,2)"),
     ("type.timestamp_tz", "SELECT '2020-01-01' AS a", "timestamp_tz"),
     ("type.timestamp_ntz", "SELECT '2020-01-01' AS a", "timestamp_ntz"),
+    # Phase 81/82 — duration(unit) is integer-backed (typehub.Duration): no
+    # DuckDB-native "duration" DDL exists to put in _HUB_TYPE_CAST_CASES
+    # above, so this hub-vocabulary round-trip is the only real proof this
+    # constructor casts on DuckDB at all.
+    ("type.duration", "SELECT 1 AS a", "duration(us)"),
     ("type.array", "SELECT [1,2,3] AS a", "array<int>"),
     ("type.map", "SELECT MAP([1],[2]) AS a", "map<string,int>"),
     ("type.struct", "SELECT {'x':1} AS a", "struct<x:int>"),
@@ -332,6 +337,7 @@ _HUB_VOCABULARY_EXPECTED_TYPE_STR = {
     "decimal(10,2)": "DECIMAL(10,2)",
     "timestamp_tz": "TIMESTAMP WITH TIME ZONE",
     "timestamp_ntz": "TIMESTAMP",
+    "duration(us)": "BIGINT",
     "array<int>": "INTEGER[]",
     "map<string,int>": "MAP(VARCHAR, INTEGER)",
     "struct<x:int>": "STRUCT(x INTEGER)",
@@ -925,3 +931,32 @@ def test_arcade_compiles_and_runs_on_duckdb(tmp_path):
         con.close()
     assert result.status == ExecutionStatus.SUCCESS
     assert sorted(r[0] for r in duckdb_mod.connect(":memory:").sql(f"SELECT * FROM read_parquet('{out_path}')").fetchall()) == [2, 3]
+
+
+# ── timezone: universal key (Phase 81/82) ────────────────────────────────────
+
+def test_duckdb_make_session_applies_universal_timezone():
+    """``SessionSpec.timezone`` (aqueduct.yml's top-level ``timezone:``) is
+    applied via ``SET TimeZone`` — DuckDB has no ``engine.duckdb.*`` conf knob
+    (see ``aqueduct.config.DuckDBEngineConfig``), so there is no engine-native
+    override to defer to, unlike Spark."""
+    from aqueduct.executor.protocol import SessionSpec
+
+    protocol = get_protocol("duckdb")
+    conn = protocol.make_session(SessionSpec(blueprint_id="tz-test", timezone="America/New_York"))
+    try:
+        assert conn.execute("SELECT current_setting('TimeZone')").fetchone() == ("America/New_York",)
+    finally:
+        protocol.close_session(conn)
+
+
+def test_duckdb_make_session_no_timezone_is_a_no_op():
+    from aqueduct.executor.protocol import SessionSpec
+
+    protocol = get_protocol("duckdb")
+    conn = protocol.make_session(SessionSpec(blueprint_id="tz-unset"))
+    try:
+        # No error, no forced write — whatever DuckDB's own default is stays.
+        assert conn.execute("SELECT current_setting('TimeZone')").fetchone() is not None
+    finally:
+        protocol.close_session(conn)

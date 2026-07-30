@@ -1,8 +1,8 @@
 """Spark engine capability declaration (Phase 78) — loader only.
 
 The declaration itself is DATA: ``capabilities.yml`` next to this file, one
-explicit row per capability leaf (261 today — 160 Blueprint-grammar leaves +
-101 engine-config leaves). This module only loads and registers it. It makes
+explicit row per capability leaf (294 today — 189 Blueprint-grammar leaves +
+105 engine-config leaves). This module only loads and registers it. It makes
 NO changes to any Spark executor module and must stay importable without
 ``pyspark`` installed (it is read by the compile-time capability gate, which
 runs before any Spark session exists, and by the closure test).

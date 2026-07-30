@@ -22,6 +22,7 @@ from aqueduct.typehub import (
     DateT,
     Decimal,
     DoubleT,
+    Duration,
     FloatT,
     Int,
     Map,
@@ -94,6 +95,30 @@ def test_decimal_invalid_precision_scale_rejected():
         parse_type("decimal(0,0)")
     with pytest.raises(TypeSpellingError):
         parse_type("decimal(5,10)")
+
+
+# ── Duration (integer-backed, Phase 81/82) ──────────────────────────────────
+
+@pytest.mark.parametrize(
+    "spelling,unit",
+    [("duration(s)", "s"), ("duration(ms)", "ms"), ("duration(us)", "us"), ("duration(ns)", "ns")],
+)
+def test_duration_units(spelling, unit):
+    assert parse_type(spelling) == Duration(unit)
+
+
+def test_duration_case_and_whitespace_insensitive():
+    assert parse_type("DURATION(US)") == Duration("us")
+    assert parse_type("duration( us )") == Duration("us")
+
+
+def test_duration_unrecognized_unit_rejected():
+    with pytest.raises(TypeSpellingError, match="unrecognized unit"):
+        parse_type("duration(fortnight)")
+
+
+def test_duration_render():
+    assert render(Duration("us")) == "duration(us)"
 
 
 # ── Composite types ─────────────────────────────────────────────────────────
@@ -212,7 +237,7 @@ def test_timestamp_tz_and_ntz_do_not_warn():
     [
         "boolean", "tinyint", "smallint", "int", "bigint", "float", "double",
         "string", "binary", "date", "timestamp_tz", "timestamp_ntz",
-        "decimal(10,2)", "array<int>", "map<string,int>",
+        "decimal(10,2)", "duration(us)", "array<int>", "map<string,int>",
         "struct<a:int,b:string>", "array<map<string,struct<a:int>>>",
         "duckdb:HUGEINT", "spark:interval day to second",
     ],

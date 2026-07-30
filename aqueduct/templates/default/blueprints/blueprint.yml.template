@@ -429,8 +429,9 @@ modules: []
   #     partition_filters: "event_date >= '${ctx.start_date}'"   # manual predicate pushdown hint
   #     options: {}                 # forwarded verbatim to df.read.options()
   #     # Types are Aqueduct's own portable hub vocabulary (boolean/int/bigint/
-  #     # string/decimal(p,s)/timestamp_tz/timestamp_ntz/array<T>/map<K,V>/
-  #     # struct<...>/...), not raw engine DDL — see docs/specs.md §9. Bare
+  #     # string/decimal(p,s)/timestamp_tz/timestamp_ntz/duration(unit)/
+  #     # array<T>/map<K,V>/struct<...>/...), not raw engine DDL — see
+  #     # docs/specs.md §9. Bare
   #     # `timestamp` is REJECTED at compile time (ambiguous instant-vs-naive
   #     # across engines) — write timestamp_tz/timestamp_ntz explicitly. Use
   #     # `<engine>:<spelling>` (e.g. duckdb:HUGEINT) only for an engine-native

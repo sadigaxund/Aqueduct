@@ -15,9 +15,9 @@ only), ``sync`` (append newly-derived leaves as ``undeclared``), ``scaffold``
 **Why it lives in the package and not in ``scripts/``.** ``scripts/`` is not in
 the wheel (``[tool.hatch.build.targets.wheel] packages = ["aqueduct"]``), so a
 third-party engine author who ``pip install``s aqueduct had no way to generate
-the table their engine cannot register without — and the table is 261 rows, so
+the table their engine cannot register without — and the table is 294 rows, so
 the alternatives are hand-writing it or copying Spark's (which hands the new
-engine 261 ``supported`` rows: a silent claim to implement the entire grammar,
+engine 294 ``supported`` rows: a silent claim to implement the entire grammar,
 the exact blindness this framework exists to prevent). The CLI surface is
 ``aqueduct dev capabilities …`` (``aqueduct/cli/dev.py``); ``scripts/capabilities.py``
 is a thin wrapper over this module so there is exactly one implementation.

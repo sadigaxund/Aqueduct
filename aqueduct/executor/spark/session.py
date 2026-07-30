@@ -46,12 +46,17 @@ def _suppress_stderr():
         os.close(devnull_fd)
 
 
+_SESSION_TIMEZONE_KEY = "spark.sql.session.timeZone"
+RULE_ID_ENGINE_TIMEZONE_CONFLICT = "engine_timezone_conflict"
+
+
 def make_spark_session(
     blueprint_id: str,
     spark_config: dict[str, Any],
     master_url: str = _DEFAULT_MASTER,
     quiet: bool = False,
     quiet_startup: bool = False,
+    timezone: str | None = None,
 ) -> SparkSession:
     """Build or reuse a SparkSession for the given blueprint.
 
@@ -75,6 +80,11 @@ def make_spark_session(
                       muting stderr around session creation — but leave the
                       runtime log level at WARN so genuine Spark warnings during
                       execution still print. The clean default for `aqueduct run`.
+        timezone:     ``aqueduct.yml``'s top-level ``timezone:`` value (Phase
+                      81/82), applied as ``spark.sql.session.timeZone`` unless
+                      ``spark_config`` already sets that key explicitly (an
+                      engine-native ``engine.spark.conf`` override always
+                      wins — see the divergence-warning note below).
 
     Returns:
         An active SparkSession.
@@ -116,6 +126,36 @@ def make_spark_session(
     # global session too, not just a freshly created one).
     if "spark.sql.parquet.outputTimestampType" not in spark_config:
         builder = builder.config("spark.sql.parquet.outputTimestampType", "TIMESTAMP_MICROS")
+
+    # ``aqueduct.yml``'s top-level `timezone:` (Phase 81/82) — a universal key
+    # that earns its keep once a Blueprint spans more than one engine (a
+    # divergent per-engine session time zone is a wrong-answer bug there, not
+    # a config annoyance: `to_timestamp` on a naive string resolves to a
+    # different instant per engine). Same "explicit config wins" precedent as
+    # `outputTimestampType` above: apply the universal value only when
+    # `spark_config` doesn't already set the key explicitly — an engine-native
+    # `engine.spark.conf.spark.sql.session.timeZone` override always wins for
+    # Spark, consistent with "explicit beats default" everywhere else in this
+    # project. Unlike `outputTimestampType`, a real divergence here is the
+    # exact silent-drift failure mode `timezone:` exists to surface, so it is
+    # not just deferred to silently — a suppressible warning names it.
+    if timezone:
+        native_tz = spark_config.get(_SESSION_TIMEZONE_KEY)
+        if native_tz is None:
+            builder = builder.config(_SESSION_TIMEZONE_KEY, timezone)
+        elif str(native_tz) != timezone:
+            from aqueduct.warnings import emit as _emit
+
+            _emit(
+                RULE_ID_ENGINE_TIMEZONE_CONFLICT,
+                f"aqueduct.yml's top-level timezone={timezone!r} is overridden for Spark "
+                f"by engine.spark.conf.{_SESSION_TIMEZONE_KEY}={native_tz!r} — the "
+                f"explicit engine-native value wins, so this Spark session uses "
+                f"{native_tz!r}. A Blueprint that also runs on another engine may now "
+                "see a different session time zone there — the divergence this "
+                "warning exists to surface.",
+            )
+        # else: the two already agree — nothing to apply or warn about.
 
     if quiet:
         # Inject log4j suppress flags before JVM init so startup messages are

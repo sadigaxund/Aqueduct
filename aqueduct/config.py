@@ -1198,6 +1198,22 @@ class AqueductConfig(BaseModel):
             "docs/roadmap.md 'Remote-Filesystem Checkpoint Root'."
         ),
     )
+    timezone: str | None = Field(
+        default=None,
+        description=(
+            "IANA/Olson time zone name (e.g. 'UTC', 'America/New_York'), "
+            "applied to EVERY registered engine's session at creation — "
+            "Spark's spark.sql.session.timeZone, DuckDB's SET TimeZone. "
+            "Engine-native tz settings (engine.spark.conf.spark.sql.session."
+            "timeZone) already work standalone; this key only earns its "
+            "keep when a Blueprint spans more than one engine (Phase 81/82 "
+            "cross-engine handoff), where a divergent per-engine session "
+            "time zone silently changes to_timestamp()/cast results between "
+            "islands. An explicit engine-native override always wins for "
+            "that engine, and Aqueduct warns (rule_id "
+            "'engine_timezone_conflict') when the two disagree."
+        ),
+    )
 
     @field_validator("checkpoint_root")
     @classmethod

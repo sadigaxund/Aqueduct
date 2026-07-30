@@ -60,6 +60,11 @@ def render_duckdb_type(t: "hub.HubType | hub.NativeType") -> str:
         return "TIMESTAMP"
     if isinstance(t, hub.Decimal):
         return f"DECIMAL({t.precision},{t.scale})"
+    if isinstance(t, hub.Duration):
+        # Integer-backed by design (see typehub.Duration's docstring) — the
+        # unit is Aqueduct's own metadata, never consulted by DuckDB's cast
+        # machinery, which only ever sees a plain 64-bit integer.
+        return "BIGINT"
     if isinstance(t, hub.Array):
         return f"{render_duckdb_type(t.element)}[]"
     if isinstance(t, hub.Map):

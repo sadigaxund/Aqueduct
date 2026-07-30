@@ -248,6 +248,7 @@ leaves:
   config.stores.depots: supported
   config.stores.observability.backend: supported
   config.stores.observability.path: supported
+  config.timezone: supported
   config.warnings.strict: supported
   config.warnings.suppress: supported
   config.webhooks.on_ci_patch.backoff_seconds: supported
@@ -588,10 +589,10 @@ leaves:
   # EMPIRICALLY against a real DuckDB connection (CAST through DuckDB's own
   # SQL type system), not copied from spark/capabilities.yml — same
   # leaf-by-leaf-against-a-real-test discipline as the rest of this file.
-  # DuckDB natively represents all sixteen hub constructors 1:1 (TINYINT,
-  # BLOB for binary, TIMESTAMPTZ for timestamp_tz, native ARRAY/MAP/STRUCT,
-  # DECIMAL(p,s), ...) so every constructor is honestly `supported`. The raw
-  # Blueprint type string now (work package 3) reaches
+  # DuckDB natively represents sixteen of the seventeen hub constructors 1:1
+  # (TINYINT, BLOB for binary, TIMESTAMPTZ for timestamp_tz, native
+  # ARRAY/MAP/STRUCT, DECIMAL(p,s), ...) so every constructor is honestly
+  # `supported`. The raw Blueprint type string now (work package 3) reaches
   # `duckdb_/type_render.py::normalize_type_spelling` — parsed through the
   # hub and rendered to DuckDB's real native DDL (`array<int>` -> `INTEGER[]`,
   # `timestamp_tz` -> `TIMESTAMPTZ`, ...) before the CAST — so a Blueprint
@@ -599,7 +600,11 @@ leaves:
   # now works too; see `test_channel_cast_hub_vocabulary_spellings` below for
   # the hub-spelling proof (the `tests:` links on each leaf below still point
   # at the native-DDL cases, which prove the ENGINE's own capability
-  # independent of the mapping layer). `type.native.duckdb`
+  # independent of the mapping layer). `duration(unit)` (Phase 81/82) is the
+  # seventeenth and deliberately NOT one of DuckDB's own native types — it
+  # renders to plain `BIGINT` on both engines (see typehub.py's Duration
+  # docstring for why), so its only proof is the hub-vocabulary cast, never a
+  # native-DDL one. `type.native.duckdb`
   # ("duckdb:<spelling>") is DuckDB's own native escape hatch — proven with
   # HUGEINT, a real DuckDB type outside the hub vocabulary — so `supported`;
   # `type.native.spark` names a different engine's native type system
@@ -633,6 +638,10 @@ leaves:
     support: supported
     tests:
       - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.duration:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_vocabulary_spellings
   type.float:
     support: supported
     tests:
