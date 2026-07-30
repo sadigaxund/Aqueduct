@@ -66,10 +66,11 @@ category; it is not a loophole for runtime features (those still follow the axes
 ## Code Organization & Safety
 - **4-layer boundary**: `Parser` → `Compiler` → `Executor` → `Surveyor`. Put logic in the correct layer. Only modify the layer relevant to the task. Topological sort, Probe insertion, and parallel-component detection are sub-steps inside the Executor — not a separate "Planner" layer.
 - **Dual-format contract**: Humans write YAML (`Blueprint`); engine consumes JSON (`Manifest`, `FailureContext`).
-- **Zero-cost observability**: Never insert `count()`, `show()`, or `collect()` Spark actions into the critical execution path (e.g. inside Probes). Use SparkListener metrics or explicit sampling.
+- **Zero-cost observability**: Never insert `count()`, `show()`, or `collect()` Spark actions into the critical execution path (e.g. inside Probes). Use SparkListener metrics or explicit sampling. When an observability feature genuinely cannot be built without an extra action, it ships behind a named flag in the `metrics:` block of `aqueduct.yml`, defaulted to `false` (production stays zero-cost), and `execute()` emits a startup warning naming the flag whenever it is on. Silent performance degradation is the thing being prevented — a user must never pay for an extra scan without being told which setting bought it. This governs *added* actions only: `metrics.use_observe` defaults to `true` because `DataFrame.observe()` attaches to a pass the run already makes and adds no action.
 - **Spillway rules**: Transform channels and UDFs must use `try/except` (or Spark `try_*` functions) to catch row-level errors and populate `_aq_error_*` columns without aborting the Spark stage.
 - **Immutability**: `@dataclass(frozen=True)` on all internal representations (`Module`, `Edge`, `Manifest`). Each compilation step returns a new immutable object.
 - **UDF bodies are out of scope for self-healing.** Aqueduct's PatchSpec grammar cannot modify UDF bodies (Python/Scala/Java code in the `udfs:` block). A pipeline failing because of a bug in UDF logic is a `defer_to_human` situation — the agent diagnoses the UDF as the root cause but cannot rewrite its implementation. This is by design: arbitrary code modification breaks the P5 principle (patch grammar over codegen).
+- **Every extensibility seam is an entry-point group plus an allowlist.** When a new kind of user-supplied code needs to plug in, the pattern is fixed: a setuptools entry-point group named `aqueduct.<family>` for discovery, and — wherever that plugin code executes on the driver — an explicit allowlist in `aqueduct.yml` naming what may load. Discovery alone is not authorization; an installed package must never gain execution simply by being importable. Existing instances: `aqueduct.engines` (`executor/capabilities.py::load_engines`), `aqueduct.probe_signals` (`executor/probe_plugins.py`), the reserved `aqueduct.tools` group (`tools/registry.py`), and the planned `aqueduct.actuators` for Phase 82 domains 3/5. Follow the shape rather than inventing a fifth mechanism. **The patch grammar is not a seam** — `PatchSpec` ops are a closed list, permanently, because the gates' replayability depends on the op set being finite and known.
 - **Trace every consumer before changing a type or output path.** When you change a field's type (e.g. `str` → `str | None`), a function's output destination (e.g. stdout → stderr), or a sentinel value, grep for every call site and every attribute access on that field FIRST — before making the change. A `Path(None)` crash, an `UnboundLocalError` from a scoped import, or a test assertion on the old sentinel each cost multiple fix rounds that a 30-second grep would have avoided.
 
 ## Executor Architecture (Extras Pattern)
@@ -246,6 +247,8 @@ Use this table at coding time, not just at the end of a phase. Whenever you touc
 
 `docs/specs.md` is the **engine reference** for semantics that don't belong elsewhere. Production / CLI / observability / Spark-tuning details now live in their dedicated guides (see Documentation map). Phase / sprint / development artefacts (`Phase 35`, `Sprint 7`, `Task NN`, `pre-30a`, `deferred to Phase NN`, etc.) must stay off **user-facing surfaces**: docs (`docs/**/*.md`), templates (`aqueduct/templates/**` — they get copied into user projects), gallery (`gallery/**`), and scaffolding (`README.md`, `CONTRIBUTING.md`). They are **allowed** in `CHANGELOG.md` / `TODOs.md` (where they belong) and in **source-code comments/docstrings** (`aqueduct/**/*.py`), where `# Phase NN —` is useful provenance — do not strip those. Verify the user-facing surfaces stay clean with `grep -rnE "Phase [0-9]|Sprint [0-9]|Task [0-9]" docs/ gallery/ aqueduct/templates/ README.md CONTRIBUTING.md` (note: **not** `aqueduct/` source) before commits that touched any of them.
 
+**A source field that RENDERS INTO a user-facing surface is itself user-facing**, even though it lives under `aqueduct/`. The live case: `capabilities.yml` `hint:` strings are copied verbatim into the generated matrix in `docs/compatibility.md`, so a hint reading "unsupported until Phase 81 step 2" reaches users through a file the grep above does not scan. The grep only catches it *after* someone regenerates, and the fix always belongs upstream in the YAML. The same reasoning covers any other data file whose text is rendered rather than executed. Write hints as a durable statement of what the engine does or does not do, never as a schedule.
+
 > **specs.md drift is the easy failure mode.** The matrix below routes most work to the *dedicated* guides, so specs.md — the engine reference — is the doc that silently goes stale (it lagged 6 phases once, 1.1 → 1.2). It is **not** a catch-all of last resort: any change to a documented **contract** must update specs.md *in the same commit* — a new/renamed `aqueduct.yml` key or top-level block, a new `stores.*` backend or persistent store/table, an `agent.approval` mode/value or exit-code change, a new patch op or CLI contract (not just a flag). When such a change lands, also **bump the `Version X.Y` header** at the top of specs.md. Phase-end verification: `git log -1 --format=%h -- docs/specs.md` should not be many phases behind `aqueduct/config.py` / `aqueduct/stores/` / `aqueduct/cli/` if any of those changed a contract this phase.
 
 | If you change … | You must update … |
@@ -258,7 +261,7 @@ Use this table at coding time, not just at the end of a phase. Whenever you touc
 | Any change to `agent.approval` modes/values, the patch-grammar op list, or the exit-code contract | `docs/specs.md` §8 (Approval Modes / Patch Grammar) + §10.7 exit-code table |
 | Any production / deployment / danger-setting / cluster-config detail | `docs/production_guide.md` |
 | Any Spark compiler-warning, performance, or tuning behaviour | `docs/spark_guide.md` |
-| Any change to `pyproject.toml` version pins or supported Python/Spark range | `docs/compatibility.md` |
+| Any change to `pyproject.toml` version pins or supported Python/Spark range | `docs/compatibility.md` — **prose sections only.** Two regions of that file are GENERATED and must never be hand-edited: the capability matrix under `<!-- Generated by aqueduct dev capabilities docs — do not edit by hand. -->` (regenerate with that command) and the `<!-- COMPAT_RESULTS_START/END -->` block, which the `version-matrix` workflow auto-pushes into as `[skip ci]` commits. A local edit inside either region is lost on the next sync — one such fix had to be re-applied after being clobbered. If generated content is wrong, fix the generator (`capability_tooling.py`) or the workflow, never the output |
 | Adding or registering a new execution engine (`aqueduct.engines` entry point) | `version-matrix.yml`'s `compat` job (test paths + `-m` marker expression) **and** a PRE-merge lane in `test-suite.yml` (copy the `parser-tests` job shape; add a `changes` path filter for the engine's source + test directories) — `tests/test_meta_ci.py` fails the build if a registered engine isn't covered in either file |
 | Any newly deferred or aspirational item (NOT a current phase) | `docs/roadmap.md` — never inline "this is deferred" prose into `specs.md` |
 | Any new file under `docs/` | `README.md` References list + this Documentation map |
@@ -584,6 +587,46 @@ Three specifics:
 
 When a fix is genuinely out of scope, say so explicitly and name what it would take, rather than leaving a caveat that reads as a decision nobody made.
 
+### User-reachable errors raise an `AqueductError` subclass, never a bare builtin
+
+Any failure a user can trigger — a bad config value, an unreachable store, a malformed
+Blueprint, a broken plugin — must surface as an `AqueductError` subclass from
+`aqueduct/errors.py`. Bare `ValueError`/`KeyError`/`RuntimeError`, or a third-party
+exception escaping unwrapped, gives the user no error class to catch and no vocabulary
+the CLI can render or map to an exit code. It also forces callers to branch on message
+*text*, which is the failure mode `UnknownEngineError` and `CapabilityDeclarationError`
+exist to prevent (callers branch by TYPE — `doctor/checks_io.py` does).
+
+The carve-out is real and load-bearing: **raises that assert an internal invariant stay
+raw.** An `AssertionError` or a bare `RuntimeError` for "this branch is unreachable" is
+addressed to a developer, not a user, and wrapping it in a user-facing class implies a
+user action exists when none does. The test is who receives it: if a user can cause it by
+editing a file or an environment, it is an `AqueductError`.
+
+Known live instance: `psycopg2.OperationalError` propagates raw out of
+`stores/postgres.py` when Postgres is unreachable — a routine ops condition arriving as a
+driver-internal exception.
+
+### Classify by what you EXCLUDE, not by what you INCLUDE
+
+When code partitions a set — ports, edge kinds, config keys, module types, formats — write
+the predicate as an exclusion of the small, stable, closed group (`port not in
+{"signal"}`), not as an inclusion of the large, growing one (`port in {"main",
+"spillway"}`). The two fail in opposite directions and only one of them is visible.
+
+An include-list silently drops every member added after it was written: nothing raises,
+nothing warns, the new member simply falls outside the classification and takes the
+default path. `compiler/islands.py` classified data edges as `{"main", "spillway"}`; a
+Junction's branch edges are neither, so every Junction was read as having no data outputs
+and split into separate engine islands — including single-engine blueprints that must
+never split at all. It shipped, was reviewed, and was only caught later by the fan-shape
+conformance matrix. An exclude-list would have put the new port on the data path by
+default, which is the loud, usually-correct direction.
+
+Where an include-list is genuinely the right shape (a closed grammar, a dispatch table),
+it must be the SAME constant the rest of the system validates against — never a second
+copy hand-written at the use site.
+
 ### No silent no-ops
 When you add a config field, a callback, a flag, or a schema field — trace it to every consumer. Code that executes but produces no effect and no error is worse than a crash because it silently lies to the user. Examples: a pydantic field with a docstring that no code reads (user thinks they're tuning behavior), a field in the schema that's accepted but never consumed at runtime (user sets it, nothing happens), a callback that's wired but silently skipped under a condition the caller doesn't know about.
 
@@ -601,6 +644,19 @@ When you change a pydantic field, its key name, its nesting level, or its allowe
 
 ### A breaking change ships as documentation, not as code that keeps the old shape alive
 When a schema field moves or is renamed, `extra="forbid"` plus a loud `CHANGELOG.md` **BREAKING** entry (and a specs.md update) is the migration path — not a legacy-key validator, an accept-both-shapes reader, a back-compat shim, or a defensive `ALTER`-chain for a schema that was never released. A hand-written "you used the old key, here's the new path" guard duplicates what pydantic's own extra-field rejection already reports (the offending key, named), while adding a second place that can drift from the schema and a second thing to delete later. This is not "no migration guidance ever" — it is "the guidance lives in docs the user reads once, not in a code path every future load pays for." The one exception: an unavoidable shim (a genuinely still-supported old input format) must carry, in a comment at the shim itself, the exact condition under which it gets deleted — never an open-ended "for backward compatibility."
+
+**Same family, wider: measure the hazard before building the guard.** A lint, a ratchet, a
+sweep, or a validator is code with a permanent carrying cost, and its exemption list rots
+into a rubber stamp the moment it outgrows a few entries. Before building one, count the
+surface it actually protects. A specced lint banning absolute dates in tests was built and
+then deleted on exactly this basis: 58 test files carry a date literal, the product has
+exactly two `now()`-relative windows (`cli/observability.py` `report --trend`,
+`surveyor/surveyor.py::count_recent_heal_attempts`), and **zero** of the files needing an
+exemption fed either one. A 226-file sweep with 57 permanent exemptions was guarding a
+two-line surface. What shipped instead was one fixture — `seed_ts` in `tests/conftest.py`,
+which makes the correct thing the easy thing — and one line in this file. Hardcoded dates
+in tests are allowed; do not rebuild the lint. Prefer a fixture or a type that makes the
+bug unrepresentable over a checker that hunts for it after the fact.
 
 ### Import ordering
 `from __future__ import annotations` must be the first import in every file (after the module docstring). An import placed above it raises `SyntaxError` whenever bytecode cache is cold — it passes CI (warm cache) and fails in production. Ruff I002 enforces this; the pre-commit hook catches it locally, CI catches it on push.
@@ -712,6 +768,25 @@ push to `feat/**` or `phase/**`, and PRs into `main`/`feat/**`/`phase/**`.
 
 **New area**: if you add a new top-level directory under `aqueduct/`, add
 its path glob to the `changes` job filter and add a corresponding test job.
+
+### A meta-test that guards CI can be unfalsifiable — prove it can fail
+
+`tests/test_meta_ci.py` asserts things *about* the workflow files (every registered
+engine is covered by a lane, the canary sets no `PIP_CONSTRAINT`, and so on). A guard
+like this is uniquely easy to write in a form that can never go red, and a green run is
+worthless as evidence that it works.
+
+The first version scored engine coverage by searching the workflow text for the engine's
+name. `-m "not spark"` appears in fourteen lanes, so the string `spark` was everywhere and
+"is Spark covered?" was permanently true — deleting every real Spark lane would not have
+failed the build. The fix was to parse pytest selection **positively**: resolve which
+markers a `-m` expression actually selects, and ignore negated terms.
+
+The rule, whenever you touch or add one of these guards: **delete the thing it protects
+and confirm the failure names it.** Comment out a lane, drop a marker, remove the engine
+row — then run the guard and read the message. If it still passes, or it fails without
+naming what you removed, the guard is decorative. Running it against the healthy repo and
+seeing green proves nothing at all.
 
 ### Release (`.github/workflows/release.yml`)
 
