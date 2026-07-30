@@ -8,22 +8,25 @@ Spark check note: SparkSession startup involves JVM initialisation — expect
 5–15 seconds on first run.  Use skip_spark=True to skip in fast CI contexts.
 
 Layer-boundary note: this module is the documented exception to the
-"pyspark is imported only inside aqueduct/executor/spark/" rule. All three
-pyspark imports here (`check_spark`, `check_storage`, `check_cloudpickle_compat`)
-are deferred inside function bodies — top-level `import aqueduct.doctor` does
-NOT pull in pyspark, so the doctor package is safe to import in `--skip-spark`
-contexts and in test environments without the `[spark]` extra installed.
+"pyspark is imported only inside aqueduct/executor/spark/" rule. All four
+pyspark imports here (`check_spark`, `check_storage`, `check_cloudpickle_compat`,
+and the Spark branch of `check_handoff_engine_access`) are deferred inside
+function bodies — top-level `import aqueduct.doctor` does NOT pull in pyspark,
+so the doctor package is safe to import in `--skip-spark` contexts and in
+test environments without the `[spark]` extra installed.
 
 Package layout: the spark / network / blueprint-source cluster + ``run_doctor``
 live here because the test suite monkeypatches several of them
 (``aqueduct.doctor._tcp_ok``, ``check_spark``,
 ``check_blueprint_sources_from_manifest``, ``run_doctor``) and they call each
 other by bare global name — patches only land when caller and callee share this
-namespace. The self-contained leaf checks (config / depot / observability /
-webhook / agent / secrets / store-backend / aqtest / aqscenario) live in
-``checks_io`` and are re-exported below so ``from aqueduct.doctor import
-check_config`` keeps working. ``CheckResult`` / ``_ms`` live in ``base`` to
-avoid a circular import.
+namespace. ``check_handoff_engine_access`` also lives here (rather than
+``checks_io``) purely so every pyspark-lazy-import site stays in one file, per
+the note above. The self-contained leaf checks (config / depot / observability
+/ webhook / agent / secrets / store-backend / aqtest / aqscenario / handoff
+free space) live in ``checks_io`` and are re-exported below so
+``from aqueduct.doctor import check_config`` keeps working. ``CheckResult`` /
+``_ms`` live in ``base`` to avoid a circular import.
 """
 
 from __future__ import annotations
@@ -32,6 +35,7 @@ import os
 import re
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +47,7 @@ from aqueduct.doctor.checks_io import (
     check_capabilities,
     check_config,
     check_depot,
+    check_handoff_free_space,
     check_observability,
     check_remote_target,
     check_secrets,
@@ -61,6 +66,8 @@ __all__ = [
     "check_capabilities",
     "check_cascade_tiers",
     "check_cloudpickle_compat",
+    "check_handoff_engine_access",
+    "check_handoff_free_space",
     "check_java",
     "check_config",
     "check_depot",
@@ -303,6 +310,195 @@ def check_java() -> CheckResult:
         # strictly better than failing a health check over a cosmetic hint.
         pass
     return CheckResult("java", "ok", detail, _ms(t))
+
+
+# ── Cross-engine handoff access (Phase 81/82) ───────────────────────────────
+
+def _probe_duckdb_handoff(root: str, is_remote: bool, name: str, t: float) -> CheckResult:
+    """Round-trip write+read+cleanup a tiny parquet probe via DuckDB.
+
+    A bare ``duckdb.connect(":memory:")`` is near-instant (no JVM, no cluster)
+    so this runs unconditionally — there is no cheaper-vs-honest tradeoff to
+    make the way there is for Spark below.
+    """
+    if is_remote:
+        return CheckResult(
+            name, "skip",
+            f"remote handoff.root ({root!r}) — DuckDB has no httpfs wiring yet, "
+            "so remote handoff roots are Spark-only today (see docs/specs.md §11)",
+            _ms(t), group="stores",
+        )
+    try:
+        import duckdb
+    except ImportError:
+        return CheckResult(name, "skip", "duckdb not installed", _ms(t), group="stores")
+
+    from aqueduct.executor.spill import ensure_parent_exists
+
+    probe_path = f"{root.rstrip('/')}/.aqueduct_doctor_probe_{uuid.uuid4().hex[:8]}.parquet"
+    safe_path = probe_path.replace("'", "''")
+    try:
+        ensure_parent_exists(root)
+        con = duckdb.connect(":memory:")
+        try:
+            con.sql(f"COPY (SELECT 1 AS x) TO '{safe_path}' (FORMAT PARQUET)")
+            row = con.sql(f"SELECT x FROM read_parquet('{safe_path}')").fetchone()
+            if row != (1,):
+                return CheckResult(
+                    name, "fail", f"round-trip mismatch at {probe_path}: got {row!r}", _ms(t), group="stores",
+                )
+        finally:
+            con.close()
+        return CheckResult(name, "ok", f"read+write round-trip verified at {root}", _ms(t), group="stores")
+    except Exception as exc:
+        return CheckResult(name, "fail", f"{root}: {exc}", _ms(t), group="stores")
+    finally:
+        try:
+            Path(probe_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _probe_spark_handoff(
+    root: str, spark_config: dict[str, Any], master_url: str, name: str, t: float,
+) -> CheckResult:
+    """Round-trip write+read+cleanup a tiny parquet probe via a real SparkSession.
+
+    Only reachable under ``--preflight`` (see the caller) — building a
+    SparkSession is the expensive part (5-15s, JVM startup), not the I/O
+    itself, so this follows the same default-cheap / ``--preflight``-honest
+    split every other Spark check in this module already uses.
+    """
+    try:
+        from aqueduct.executor.spark.session import make_spark_session, stop_spark_session
+    except ModuleNotFoundError:
+        return CheckResult(
+            name, "skip", "pyspark not installed — cannot verify Spark handoff access", _ms(t), group="stores",
+        )
+
+    probe_dir = f"{root.rstrip('/')}/.aqueduct_doctor_probe_{uuid.uuid4().hex[:8]}"
+    try:
+        spark = make_spark_session("aqueduct.doctor", spark_config, master_url=master_url, quiet=True)
+    except ModuleNotFoundError:
+        return CheckResult(
+            name, "skip", "pyspark not installed — cannot verify Spark handoff access", _ms(t), group="stores",
+        )
+    except Exception as exc:
+        return CheckResult(name, "fail", f"could not build a Spark session: {exc}", _ms(t), group="stores")
+
+    try:
+        df = spark.createDataFrame([(1,)], ["x"])
+        df.write.mode("overwrite").parquet(probe_dir)
+        read_back = [r["x"] for r in spark.read.parquet(probe_dir).collect()]
+        if read_back != [1]:
+            return CheckResult(
+                name, "fail", f"round-trip mismatch at {probe_dir}: got {read_back!r}", _ms(t), group="stores",
+            )
+        return CheckResult(
+            name, "ok", f"read+write round-trip verified at {root}  [preflight]", _ms(t), group="stores",
+        )
+    except Exception as exc:
+        return CheckResult(name, "fail", f"{root}: {exc}", _ms(t), group="stores")
+    finally:
+        try:
+            jpath = spark._jvm.org.apache.hadoop.fs.Path(probe_dir)
+            fs = jpath.getFileSystem(spark._jsc.hadoopConfiguration())
+            fs.delete(jpath, True)
+        except Exception:
+            pass  # best-effort cleanup — a leftover probe dir is cosmetic
+        stop_spark_session(spark)
+
+
+def check_handoff_engine_access(
+    root: str,
+    project_root: Path,
+    *,
+    preflight: bool = False,
+    spark_config: dict[str, Any] | None = None,
+    master_url: str | None = None,
+) -> list[CheckResult]:
+    """Verify BOTH engines on a polyglot Blueprint can read AND write
+    ``handoff.root``, round-tripping a tiny probe artifact per engine.
+
+    Why this exists: each engine resolves the handoff URI through its OWN
+    filesystem layer and its OWN credentials — Hadoop FS settings under
+    `engine.spark.conf` for Spark, DuckDB's own (local-only; no httpfs wiring
+    yet) for DuckDB. Nothing today cross-checks that both sides can actually
+    reach the same URI; a mismatch (wrong bucket, a missing key, a DuckDB
+    island pointed at a remote root) only surfaces mid-run, after the
+    upstream island has already materialised its output — the worst possible
+    moment. This answers "can BOTH engines round-trip here" before that run
+    starts.
+
+    Engines are resolved via ``aqueduct.executor.capabilities.load_engines()``
+    + ``CAPABILITY_REGISTRY`` — never a hardcoded ``["spark", "duckdb"]`` list
+    — so a third registered engine gets a row here automatically. Only Spark
+    and DuckDB (the two shipped engines) have a native probe implemented
+    below; an engine this function doesn't recognise reports `skip` naming
+    the gap rather than silently vanishing from the report or being waved
+    through as `ok` — the same shape as `check_store_backend`'s
+    ``backend={backend!r} unknown`` fallback in `checks_io.py`.
+
+    Cost/session-honesty judgement call: DuckDB's probe runs unconditionally
+    (a bare ``duckdb.connect(":memory:")`` is near-instant). Spark's probe is
+    gated behind ``--preflight``: proving Spark can reach `root` requires a
+    real SparkSession built with the resolved `engine.spark.conf`, because
+    that is the ONLY thing that actually exercises the Hadoop FS credentials
+    a real run would use. A cheaper substitute (a bare TCP probe, or a
+    plain-Python file write for a local root) would answer a different,
+    weaker question and could report green without proving Spark itself can
+    reach the URI — so the default (no ``--preflight``) is an honest `skip`
+    naming the reason, not a shallow check dressed up as a real one.
+    """
+    from aqueduct.executor.capabilities import CAPABILITY_REGISTRY, load_engines
+    from aqueduct.executor.spill import is_remote_uri
+
+    load_engines()
+    engines = sorted(CAPABILITY_REGISTRY)
+    if not engines:
+        return [CheckResult("handoff-access", "skip", "no execution engines registered", group="stores")]
+
+    is_remote = is_remote_uri(root)
+    resolved_root = root
+    if not is_remote:
+        p = Path(root)
+        if not p.is_absolute():
+            p = project_root / root
+        resolved_root = str(p)
+
+    results: list[CheckResult] = []
+    for engine in engines:
+        t = time.monotonic()
+        name = f"handoff-access:{engine}"
+
+        if engine == "duckdb":
+            results.append(_probe_duckdb_handoff(resolved_root, is_remote, name, t))
+            continue
+
+        if engine == "spark":
+            if not preflight:
+                results.append(CheckResult(
+                    name, "skip",
+                    "requires --preflight — proving Spark can read/write "
+                    f"{root!r} needs a real SparkSession built with the configured "
+                    "engine.spark.conf (Hadoop FS credentials); a cheaper probe "
+                    "would not exercise them",
+                    _ms(t), group="stores",
+                ))
+                continue
+            results.append(_probe_spark_handoff(
+                resolved_root, spark_config or {}, master_url or "local[*]", name, t,
+            ))
+            continue
+
+        results.append(CheckResult(
+            name, "skip",
+            f"no handoff-access probe implemented for engine {engine!r} yet — "
+            "round-trip access not verified",
+            _ms(t), group="stores",
+        ))
+
+    return results
 
 
 def check_spark(
@@ -1305,6 +1501,20 @@ def run_doctor(
             ))
         else:
             results.append(CheckResult("cluster-stores", "skip", "local mode — no cluster store check", group="stores"))
+
+    # Cross-engine handoff (Phase 81/82) — free space at handoff.root, and a
+    # round-trip access probe for every registered engine. `handoff.root` is
+    # not yet wired into `aqueduct run` (docs/specs.md §10.9), so a relative
+    # root is resolved here against the project root the same way
+    # `_secrets_base_dir` below already resolves `secrets.resolver`.
+    _handoff_project_root = config_path.parent if config_path else Path.cwd()
+    results.append(check_handoff_free_space(cfg.handoff.root, _handoff_project_root))
+    results.extend(check_handoff_engine_access(
+        cfg.handoff.root, _handoff_project_root,
+        preflight=preflight,
+        spark_config=cfg.engine.spark.conf,
+        master_url=cfg.engine.spark.master_url,
+    ))
 
     # Cloudpickle compatibility (pure version check — no Spark needed)
     results.append(check_cloudpickle_compat(cfg.engine.spark.master_url))

@@ -1,6 +1,6 @@
 """Leaf connectivity checks: config, depot, observability, webhook, agent,
-secrets, the per-store-backend probe, and the .aqtest / .aqscenario schema
-pre-flights.
+secrets, the per-store-backend probe, handoff free space, and the .aqtest /
+.aqscenario schema pre-flights.
 
 These are self-contained — each returns a CheckResult (or list) and is invoked
 by ``run_doctor`` (and a few are imported directly by tests). None of them is
@@ -13,6 +13,7 @@ the package ``__init__`` cluster. The spark / network / blueprint-source checks
 from __future__ import annotations
 
 import os
+import shutil
 import time
 from pathlib import Path
 from typing import Any
@@ -471,6 +472,90 @@ def check_secrets(
             return CheckResult("secrets", "fail", f"provider=custom resolver {resolver!r} failed: {exc}", _ms(t))
 
     return CheckResult("secrets", "warn", f"provider={provider!r} unknown — will fall back to env", _ms(t))
+
+
+_HANDOFF_SPACE_WARN_GIB = 5.0
+
+
+def check_handoff_free_space(root: str, project_root: Path) -> CheckResult:
+    """Report free disk space at the configured ``handoff.root``.
+
+    A handoff materialises a full intermediate dataset to disk as parquet —
+    running out of space mid-write fails the run late, only after the
+    upstream island has already done its (possibly expensive) work.
+
+    Judgement calls:
+
+    - **Remote root** (``s3://``, ``gs://``, ``abfss://``, ...): there is no
+      local free-space question to answer. Capacity there is the storage
+      provider's concern (bucket/volume quota), not this host's disk, so this
+      is reported ``skip`` rather than a vacuous ``ok``.
+    - **Root does not exist yet**: ``handoff.root`` is created at RUN time
+      (see ``aqueduct.executor.spill.ensure_parent_exists``), so on a fresh
+      checkout it usually does not exist when doctor runs. Rather than skip,
+      this walks up to the nearest EXISTING ancestor directory and reports
+      free space there — in the common case (root nested under the project
+      directory, no separate mount point in between) that is the same
+      filesystem the handoff will actually write to. This is an
+      approximation, not a guarantee, and is worded as such in the detail.
+    - **Warn, never fail**: doctor has no way to know how large a given run's
+      handoff will actually be, so a low-space reading is a heads-up, not
+      proof the next run will run out. Unlike a depot/observability
+      connectivity failure (a hard, provable break), this stays a `warn` at
+      every severity.
+    - **Relative root resolution**: the default (``.aqueduct/handoff``) is
+      relative. ``handoff.root`` is not yet wired into ``aqueduct run`` (see
+      docs/specs.md §10.9), so there is no established runtime resolution
+      basis yet; this resolves it against ``project_root`` (the directory
+      containing ``aqueduct.yml``), the same convention ``run_doctor`` already
+      uses for ``secrets.resolver``'s ``base_dir``.
+    """
+    from aqueduct.executor.spill import is_remote_uri
+
+    t = time.monotonic()
+    if is_remote_uri(root):
+        return CheckResult(
+            "handoff-space", "skip",
+            f"handoff.root={root!r} is a remote URI — free space is a storage-"
+            "provider concern (bucket/volume quota), not a local-disk question",
+            _ms(t), group="stores",
+        )
+
+    p = Path(root)
+    if not p.is_absolute():
+        p = project_root / root
+    p = p.resolve()
+    existed = p.exists()
+
+    probe_dir = p
+    for _ in range(16):
+        if probe_dir.exists():
+            break
+        if probe_dir.parent == probe_dir:
+            break
+        probe_dir = probe_dir.parent
+
+    try:
+        usage = shutil.disk_usage(probe_dir)
+    except OSError as exc:
+        return CheckResult(
+            "handoff-space", "warn", f"could not stat {probe_dir}: {exc}", _ms(t), group="stores",
+        )
+
+    free_gib = usage.free / (1024**3)
+    total_gib = usage.total / (1024**3)
+    where = str(p) if existed else f"{probe_dir}  (nearest existing ancestor — {p} not created yet)"
+    detail = f"{where}: {free_gib:.1f} GiB free / {total_gib:.1f} GiB total"
+
+    if free_gib < _HANDOFF_SPACE_WARN_GIB:
+        return CheckResult(
+            "handoff-space", "warn",
+            f"{detail}  below {_HANDOFF_SPACE_WARN_GIB:.0f} GiB — a handoff materialises a full "
+            "intermediate dataset; low headroom risks a mid-run failure after the "
+            "upstream island has already done its work",
+            _ms(t), group="stores",
+        )
+    return CheckResult("handoff-space", "ok", detail, _ms(t), group="stores")
 
 
 # ── Runner ────────────────────────────────────────────────────────────────────
