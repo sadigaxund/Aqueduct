@@ -109,7 +109,7 @@ Blueprint-grammar leaves and config leaves share one closure test but differ in 
 
 When adding a Spark feature: code in `aqueduct/executor/spark/`. Do not import `pyspark` in `parser`, `compiler`, `surveyor`, `patch`, or `depot`.
 
-**Documented exception (doctor):** the `aqueduct/doctor/` package lazily imports `pyspark` inside three check functions (`check_spark`, `check_storage`, `check_cloudpickle_compat`, all in `doctor/__init__.py`). Top-level `import aqueduct.doctor` must never pull `pyspark` — keep these imports inside function bodies so `--skip-spark` and the `[spark]`-less install path stay viable. The package splits leaf connectivity checks (`doctor/checks_io.py`) from the spark/network/blueprint-source cluster + `run_doctor` (`doctor/__init__.py`); the latter stay together because the test suite monkeypatches several by their `aqueduct.doctor.<name>` path and they call each other by bare global name. `doctor/base.py` holds `CheckResult` + `_ms` to avoid a circular import. Public names re-export from `__init__`, so `from aqueduct.doctor import <check>` is unchanged.
+**Documented exception (doctor):** the `aqueduct/doctor/` package lazily imports `pyspark` inside four check functions (`check_spark`, `check_storage`, `check_cloudpickle_compat`, and the Spark branch of `check_handoff_engine_access` — all in `doctor/__init__.py`). Top-level `import aqueduct.doctor` must never pull `pyspark` — keep these imports inside function bodies so `--skip-spark` and the `[spark]`-less install path stay viable. The package splits leaf connectivity checks (`doctor/checks_io.py`) from the spark/network/blueprint-source cluster + `run_doctor` (`doctor/__init__.py`); the latter stay together because the test suite monkeypatches several by their `aqueduct.doctor.<name>` path and they call each other by bare global name. `doctor/base.py` holds `CheckResult` + `_ms` to avoid a circular import. Public names re-export from `__init__`, so `from aqueduct.doctor import <check>` is unchanged.
 
 **Documented exception (surveyor):** `surveyor/surveyor.py::_extract_structured_error` lazily imports `from pyspark.errors import PySparkException` inside a `try/except` (falling back to `None` when absent). This is required — structured root-cause extraction must recognise Spark's own exception types — but it is **guarded**: the import lives in the function body, so top-level `import aqueduct.surveyor` stays `pyspark`-free and the `[spark]`-less install path is preserved. Do not promote this to a module-level import.
 
@@ -362,9 +362,9 @@ The CLI command lives in `aqueduct/cli/drift.py`.
 
 | Module | What it owns |
 |--------|--------------|
-| `__init__.py` | Spark/network cluster + blueprint-source checks + `run_doctor` |
+| `__init__.py` | Spark/network cluster + blueprint-source checks + `run_doctor`; also `check_handoff_engine_access` (Phase 81/82 — per-registered-engine round-trip probe at `handoff.root`; its Spark branch is the 4th lazy-`pyspark`-import site, kept here for the same reason as the other three) |
 | `base.py` | `CheckResult` dataclass |
-| `checks_io.py` | Leaf connectivity checks: config, depot, observability, webhook, agent, secrets, store-backend, aqtest, aqscenario, capabilities (Phase 78 — version-constrained capability check, see `aqueduct/executor/capabilities.py`) |
+| `checks_io.py` | Leaf connectivity checks: config, depot, observability, webhook, agent, secrets, store-backend, aqtest, aqscenario, capabilities (Phase 78 — version-constrained capability check, see `aqueduct/executor/capabilities.py`), `check_handoff_free_space` (Phase 81/82 — free disk space at `handoff.root`, pure `os`/`shutil`, no engine dependency) |
 
 ### `aqueduct/executor/spark/` — Spark execution
 

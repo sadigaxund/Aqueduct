@@ -206,6 +206,17 @@ def report(
         return
 
     if fmt == "json":
+        # `engines` — the distinct set of engines this run's modules
+        # actually carry (Phase 81/82 §10.9's per-module `engine` field,
+        # persisted by `Surveyor.record()` since — always present, even for
+        # a single-engine run, where every module names the same one
+        # engine). Derived here rather than re-reading the Manifest — the
+        # persisted `module_results` JSON is already the single source this
+        # command reads from.
+        _engines = sorted({
+            mr["engine"] for mr in module_results
+            if isinstance(mr, dict) and mr.get("engine")
+        })
         emit(
             {
                 "run_id": run_id_val,
@@ -213,6 +224,7 @@ def report(
                 "status": status,
                 "started_at": started_at,
                 "finished_at": finished_at,
+                "engines": _engines,
                 "module_results": module_results,
             },
             fmt="json",
@@ -384,15 +396,12 @@ def _report_trend(
 
 
 def _fmt_bytes(n: int | None) -> str:
-    """Human-readable byte size for table output (raw ints kept in json/csv)."""
-    if n is None:
-        return "-"
-    size = float(n)
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if size < 1024 or unit == "TB":
-            return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
-        size /= 1024
-    return f"{size:.1f}TB"
+    """Human-readable byte size for table output (raw ints kept in json/csv).
+    Thin wrapper — the shared implementation lives in ``cli/output.py``
+    (``format_bytes``) so the run transcript's Handoff step lines format a
+    byte count identically."""
+    from aqueduct.cli.output import format_bytes as _format_bytes
+    return _format_bytes(n)
 
 
 _HTML_CSS = """

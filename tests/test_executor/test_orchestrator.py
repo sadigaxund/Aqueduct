@@ -262,3 +262,20 @@ def test_spill_exists_remote_always_false():
     not-resumable so the island always re-runs rather than reading a
     possibly-partial spill (see the function's docstring)."""
     assert _spill_exists("s3://bucket/root/abc123/run1/h") is False
+
+
+def test_spill_exists_empty_uri_never_touches_cwd(tmp_path, monkeypatch):
+    """Regression: `Path("")` normalizes to `Path(".")` — the CWD, which
+    always exists. A caller passing the empty-string default (no resume URI
+    resolved at all) must get False regardless of what happens to be sitting
+    in the current working directory, never a filesystem-dependent answer.
+    This is exactly what a real `aqueduct run` hits: it chdirs to the
+    project root, which very often contains a `*.parquet`-named Ingress/
+    Egress path directly in it (Spark writes a `path` as a directory) —
+    `_spill_exists("")` used to read that as "the spill already exists" and
+    `run_polyglot()`'s resume branch then KeyError'd resolving a resume URI
+    that was never actually computed."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "something.parquet").mkdir()
+    (tmp_path / "something.parquet" / "part-0.parquet").write_bytes(b"x")
+    assert _spill_exists("") is False

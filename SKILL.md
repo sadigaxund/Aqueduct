@@ -150,6 +150,25 @@ against its OWN engine's capability table. Probe/Assert must colocate with
 their target's island (`CompileError` on a mismatched pin); a spillway edge
 may not cross islands (v1). See docs/specs.md §4.3.
 
+**When to pin an `engine:` at all (docs/specs.md §11.4).** A boundary edge
+costs a full materialise-to-parquet plus a re-read on the other side —
+roughly the order of a shuffle, paid on every run whether or not the split
+was worth it. Don't pin for speed: if a stage can run in the engine you're
+already in, same-engine is normally faster. Pin only for one of three
+reasons, none of them performance: (1) **capability** — the other engine has
+a format/function/extension this one lacks and there's no way around it; (2)
+**scale mismatch** — a large reduce on Spark, then a small result finished
+where Spark's per-task overhead stops paying for itself; (3) **incremental
+migration** — moving a pipeline engine-by-engine instead of rewriting it in
+one shot. Every boundary this creates emits a compile-time
+`cross_engine_handoff_io` warning naming it before the run — if you're
+looking at that warning wondering whether your split is justified, this is
+the answer; if you're adding an `engine:` pin, expect that warning to
+appear. Zero `engine:` fields anywhere means a fully portable Blueprint; add
+one and you've declared a dependency on that engine. One hard ceiling if the
+receiving island is DuckDB: it opens a bare `:memory:` connection with no
+persistent-file option, so its capacity is bounded by RAM, not disk.
+
 **`retry:` (2.8)** overrides the blueprint's `retry_policy:` **per field** — any
 field left unset inherits the blueprint value (same shape as `agent.cascade`
 tier inheritance):

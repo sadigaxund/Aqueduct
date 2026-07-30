@@ -106,3 +106,87 @@ def test_discover_location_only_dir(tmp_path, monkeypatch):
     duckdb.connect(str(base / "alpha" / "observability.db")).close()
     handles = q.discover_stores(_cfg(path=str(base)))
     assert "alpha" in [h.label for h in handles]
+
+
+# ── run_detail: multi-row-per-module_id merge (Phase 81/82 §10.9 Handoff) ───
+#
+# A synthetic Handoff module gets TWO `module_metrics` rows under the SAME
+# module_id — the write side (bytes_written, its own duration) and the read
+# side (bytes_read, its own duration), never both fields on one row. Every
+# ordinary module still only ever gets one row. `run_detail` used to build
+# its `by_id` map with a plain dict comprehension keyed by module_id, so the
+# SECOND row silently overwrote the first — a Handoff module's profile
+# reported only whichever side's row happened to come last, dropping the
+# other side's bytes entirely.
+
+
+class _DuckDBStore:
+    """Minimal store matching the ``store.connect() -> RelationalCursor``
+    contract ``run_detail`` needs, built directly to avoid pulling in the
+    full Surveyor (same pattern as ``tests/test_executor/test_spill.py``)."""
+
+    def __init__(self, path):
+        self._path = path
+
+    def connect(self):
+        import contextlib
+
+        from aqueduct.stores.base import RelationalCursor
+
+        @contextlib.contextmanager
+        def _cm():
+            conn = duckdb.connect(str(self._path))
+            try:
+                yield RelationalCursor(conn.cursor(), paramstyle="qmark")
+            finally:
+                conn.close()
+
+        return _cm()
+
+
+def _seed_module_metrics_store(path):
+    from aqueduct.executor.models import MODULE_METRICS_DDL
+
+    c = duckdb.connect(str(path))
+    c.execute(_DDL)
+    c.execute(MODULE_METRICS_DDL)
+    c.execute(
+        "INSERT INTO run_records VALUES (?,?,?,?::timestamptz, now(), ?)",
+        ["r1", "bp", "success", "2026-06-18",
+         '[{"module_id": "a", "status": "success"}, '
+         '{"module_id": "a__handoff__b", "status": "success"}, '
+         '{"module_id": "b", "status": "success"}]'],
+    )
+    # Ordinary module — one row, as always.
+    c.execute(
+        "INSERT INTO module_metrics VALUES ('r1', 'a', NULL, NULL, 5, 100, 50, now())"
+    )
+    # Handoff module — write-side row (bytes_written, duration 30) then
+    # read-side row (bytes_read, duration 5) for the SAME module_id.
+    c.execute(
+        "INSERT INTO module_metrics VALUES ('r1', 'a__handoff__b', NULL, NULL, NULL, 519, 30, now())"
+    )
+    c.execute(
+        "INSERT INTO module_metrics VALUES ('r1', 'a__handoff__b', NULL, 519, NULL, NULL, 5, now())"
+    )
+    c.close()
+
+
+def test_run_detail_merges_a_handoff_modules_two_metrics_rows(tmp_path):
+    path = tmp_path / "observability.db"
+    _seed_module_metrics_store(path)
+    store = _DuckDBStore(path)
+
+    detail = q.run_detail(store, "r1")
+    assert detail is not None
+    profile_by_id = {p.module_id: p for p in detail.profile}
+
+    handoff = profile_by_id["a__handoff__b"]
+    assert handoff.bytes_written == 519
+    assert handoff.bytes_read == 519
+    assert handoff.duration_ms == 35  # 30 (write) + 5 (read), summed
+
+    ordinary = profile_by_id["a"]
+    assert ordinary.bytes_written == 100
+    assert ordinary.records_written == 5
+    assert ordinary.duration_ms == 50

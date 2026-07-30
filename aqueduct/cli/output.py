@@ -17,6 +17,22 @@ import click
 from aqueduct.cli.style import warn as _style_warn
 
 
+def format_bytes(n: int | None) -> str:
+    """Human-readable byte size for text-format output (raw ints kept in
+    json/csv — this is a text-rendering helper only, never applied before
+    ``emit(fmt="json")``). Shared by ``report --profile`` and the run
+    transcript's Handoff step lines so a byte count reads the same way in
+    both places."""
+    if n is None:
+        return "-"
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
+        size /= 1024
+    return f"{size:.1f}TB"
+
+
 def emit(
     data: Any,
     *,

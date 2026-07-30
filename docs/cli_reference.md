@@ -49,7 +49,8 @@ Aqueduct automatically loads `.env` from the directory of the config or blueprin
 | `aqueduct doctor <file>` | Validate a specific blueprint or config file |
 | *(webhook check depth)* | Each configured `webhooks.*` endpoint's `health_probe:` field (`connect`/`options`/`full`, default `options`) controls how `doctor` probes it, see [Production Guide](production_guide.md) |
 | `aqueduct doctor --skip-spark` | Fast check without starting Spark |
-| `aqueduct doctor --preflight` | Full Spark session + storage validation. Also: verifies cloud Ingress/Egress objects (`s3a://`/`gs://`/`abfss://`) exist via Spark's Hadoop FileSystem; warns on a **Spark major.minor** vs client-pyspark mismatch; for `agent.provider: anthropic` proves the API key works (`GET /v1/models`, no tokens); **imports** each Python `udf_registry` entry (catches typos/missing deps); does a store **write+read** round-trip (write perms, not just connect); and for `jdbc:` sources attempts a real connect+auth (postgres via psycopg2). Default `doctor` only checks endpoint reachability. A standalone **Java** runtime check (detected JVM version + a pyspark-4-needs-Java-17 nudge) runs even without `--preflight`. |
+| `aqueduct doctor --preflight` | Full Spark session + storage validation. Also: verifies cloud Ingress/Egress objects (`s3a://`/`gs://`/`abfss://`) exist via Spark's Hadoop FileSystem; warns on a **Spark major.minor** vs client-pyspark mismatch; for `agent.provider: anthropic` proves the API key works (`GET /v1/models`, no tokens); **imports** each Python `udf_registry` entry (catches typos/missing deps); does a store **write+read** round-trip (write perms, not just connect); for `jdbc:` sources attempts a real connect+auth (postgres via psycopg2); and proves Spark can round-trip `handoff.root` via a real SparkSession (see the handoff rows below). Default `doctor` only checks endpoint reachability. A standalone **Java** runtime check (detected JVM version + a pyspark-4-needs-Java-17 nudge) runs even without `--preflight`. |
+| *(handoff checks, always on)* | `handoff-space`: free disk space at `handoff.root` (skips on a remote URI — not a local-disk question; warns, never fails, below a 5 GiB heuristic). `handoff-access:<engine>`: a write+read+cleanup round-trip at `handoff.root` for every registered engine (`aqueduct.executor.capabilities.CAPABILITY_REGISTRY`, never a hardcoded engine list). DuckDB's probe runs unconditionally (a `:memory:` connection is cheap) and skips cleanly on a remote root (no httpfs wiring yet — see [specs.md §11.4](specs.md#114-when-to-split-engines-across-a-blueprint)). Spark's probe needs a real SparkSession to prove the configured `engine.spark.conf` credentials actually work, so it only runs under `--preflight`; the default is a `skip` naming that. |
 | `aqueduct doctor --aqtest <file>` | Schema pre-flight on a `.aqtest.yml` (verifies blueprint ref + module IDs) |
 | `aqueduct doctor --aqscenario <file>` | Schema pre-flight on a `.aqscenario.yml` (verifies blueprint ref + `inject_failure.module`) |
 | `aqueduct doctor -v, --verbose` | Also show skipped checks (not-applicable / not-configured), not just the collapsed summary |
@@ -101,12 +102,12 @@ aqueduct completion fish > ~/.config/fish/completions/aqueduct.fish
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--run-id <uuid>` | auto-generated | User-supplied run id (otherwise UUID4) |
-| `--from <module_id>` | n/a | Start execution at this module |
-| `--to <module_id>` | n/a | Stop execution after this module |
+| `--from <module_id>` | n/a | Start execution at this module. Refused (`CONFIG_ERROR`) for a polyglot Blueprint (2.37) — cross-island module-range selection isn't implemented. |
+| `--to <module_id>` | n/a | Stop execution after this module. Same polyglot refusal as `--from` above. |
 | `--execution-date YYYY-MM-DD` | today (UTC) | Logical date for `@aq.date.*`: enables idempotent backfills |
 | `--resume <run_id>` | n/a | Resume from checkpoints of a previous run |
 | `--parallel` | off | Execute independent DAG branches concurrently (one thread per connected component) |
-| `--sandbox` | off | Dev dry-run: execute against sampled inputs with every Egress skipped (no writes, no self-healing, no observability persistence). Fast feedback loop for iterating on transforms. Requires `engine: spark`. |
+| `--sandbox` | off | Dev dry-run: execute against sampled inputs with every Egress skipped (no writes, no self-healing, no observability persistence). Fast feedback loop for iterating on transforms. Requires `engine: spark`; also refused (`CONFIG_ERROR`) for a polyglot Blueprint (2.37) — a single-session dry-run can't replay a multi-engine Manifest. |
 | `--sample <N>` | `1000` | Row cap per Ingress in `--sandbox` mode (`0` = no limit). Ignored without `--sandbox`. |
 | `-s` / `--set PATH=VALUE` | n/a | Override any config or blueprint value for this run only (repeatable, in-memory, never persisted). See [Config overrides](#config-overrides--s--set) below. |
 | `--ctx KEY=VALUE` | n/a | Override a Tier 0 context variable. Repeatable. Environments that can't pass CLI args (CI, Airflow) can set `AQUEDUCT_CTX_<KEY>` env vars instead, top-level keys only, one priority step below `--ctx` (see specs.md §5.2). |
@@ -197,6 +198,7 @@ aqueduct run bp.yml \
 | `aqueduct runs --heal-coverage` | Zero-token heal coverage (heals resolved by the signature memory cache vs the LLM) |
 | `aqueduct runs --format text\|json` | `text\|json` only: the global `table\|json\|csv` does not apply to `runs` |
 | `aqueduct report <run_id>` | Detailed flow report for a run |
+| `aqueduct report <run_id> --format json` | Since 2.37: also carries a top-level `engines` list (every engine this run's modules actually used — one entry for a single-engine run, more for a polyglot one) and a per-module `engine` field on each `module_results` entry |
 | `aqueduct report --trend <column> --blueprint <id>` | Cross-run quality trend for one column (null-rate + type history) from probe signals; `--since <ISO_DATE>` windows it (default 30 days) |
 | `aqueduct report <run_id> --profile` | Per-module resource profile for one run (duration + I/O over `module_metrics`), heaviest module first, with each module's share of run time/bytes |
 | `aqueduct report --profile --blueprint <id> [--last N]` | Cross-run resource trend per module over the last N runs (default 10): runs count, avg/max/last duration, flags a module whose latest run is >1.5× its window average as a slowdown |

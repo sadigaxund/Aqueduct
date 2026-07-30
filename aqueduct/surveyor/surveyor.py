@@ -302,9 +302,22 @@ class Surveyor:
             raise RuntimeError("Surveyor.start() must be called before record()")
 
         finished_at = _utcnow()
+        # Per-module engine (Phase 81/82 §10.9) — `self._manifest.modules[i]
+        # .engine` is the fully-RESOLVED engine every enabled module carries
+        # post-compile (islands.py's per-module resolution), not just an
+        # explicit override. Included unconditionally (single-engine and
+        # polyglot alike) so `report --json` always carries it — a
+        # single-engine run's every module simply shows the same one value.
+        _module_engine = {
+            m.id: m.engine for m in getattr(self._manifest, "modules", ()) if getattr(m, "engine", None)
+        }
         module_results_json = _redact(json.dumps(
-            [{"module_id": r.module_id, "status": r.status, "error": r.error}
-             for r in result.module_results]
+            [{
+                "module_id": r.module_id,
+                "status": r.status,
+                "error": r.error,
+                "engine": _module_engine.get(r.module_id),
+            } for r in result.module_results]
         ))
 
         effective_status = ExecutionStatus.PATCHED if (patched and result.status == ExecutionStatus.SUCCESS) else result.status

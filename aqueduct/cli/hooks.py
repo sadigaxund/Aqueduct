@@ -24,7 +24,12 @@ Entry types (parser guarantees exactly one per entry):
                       through the PARENT's engine (whatever `session`
                       belongs to) — its own `deployment.engine` is not
                       consulted, matching the parent session is the point of
-                      reuse.
+                      reuse. Also falls back — with a visible
+                      `[hook_in_process_unavailable]` warning line, unlike
+                      the silent Spark-conf fallback above — when the caller
+                      has no single live session at all: a polyglot run's
+                      per-island sessions are already closed by the time
+                      hooks fire, so there is never one session to reuse.
   webhook: <url|map>  Fire-and-forget POST via the same endpoint model as
                       the engine-level `webhooks:` block (payload templating
                       included) — `aqueduct.surveyor.webhook.fire_webhook`.
@@ -240,6 +245,21 @@ def run_hooks(
                     continue
                 # Fell back to subprocess (target had a non-empty
                 # engine.spark.conf) — build the same argv as the default path.
+            elif h.in_process and session is None:
+                # No single live session to reuse — a polyglot run's island
+                # sessions are already closed by the time hooks fire (there
+                # was never one session for the whole run). Same fallback as
+                # above, but this one is silent otherwise: a user who wrote
+                # `in_process: true` gets a DIFFERENT execution model (fresh
+                # subprocess, no session reuse, own healing-disabled run) with
+                # no signal unless we say so here.
+                _warn(
+                    f"[hook_in_process_unavailable] {label} — in_process: true "
+                    "has no effect on this run (no single live engine session "
+                    "to reuse — a polyglot Blueprint's per-island sessions are "
+                    "already closed by the time hooks fire); falling back to "
+                    "the subprocess path"
+                )
 
             argv = [sys.executable, "-c", _RELAUNCH, "run", str(target)]
             env = {**os.environ, _CHAIN_ENV: os.pathsep.join([*chain, str(bp_path)])}

@@ -130,7 +130,15 @@ danger:
         status="error",
         module_results=[
             MagicMock(module_id="m1", status="error", error="Boom", exception=ValueError("Boom"))
-        ]
+        ],
+        # `failed_engine=None` matches a real (single-engine) ExecutionResult
+        # — the CLI now reads this field unconditionally to attribute a
+        # polyglot run's failure to the failing island (see
+        # `aqueduct/cli/run.py`'s `_execute_target`); a bare MagicMock's
+        # auto-generated attribute is truthy and gets passed as
+        # `Surveyor.record(engine=...)`'s override, raising UnknownEngineError
+        # for this test's real (spark) engine.
+        failed_engine=None,
     )
     mock_get_executor.return_value = mock_exec
 

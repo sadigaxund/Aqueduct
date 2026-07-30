@@ -190,10 +190,12 @@ def test_sweep_deletes_a_successful_run_whose_own_cleanup_never_ran(tmp_path, ob
     _make_spill(root, "hash1", "run_success")
     _insert_run(obs_store, "run_success", "success", finished=True)
 
-    deleted = sweep_orphan_spills(str(root), "hash1", current_run_id="run_current", keep_on_failure=True, obs_store=obs_store)
+    deleted = sweep_orphan_spills(str(root), current_run_id="run_current", keep_on_failure=True, obs_store=obs_store)
 
     assert not (root / "hash1" / "run_success").exists()
-    assert len(deleted) == 1
+    # The run dir AND its now-empty parent hash dir are both reclaimed.
+    assert not (root / "hash1").exists()
+    assert len(deleted) == 2
 
 
 def test_sweep_keeps_a_failed_run_when_keep_on_failure_true(tmp_path, obs_store):
@@ -201,9 +203,11 @@ def test_sweep_keeps_a_failed_run_when_keep_on_failure_true(tmp_path, obs_store)
     _make_spill(root, "hash1", "run_failed")
     _insert_run(obs_store, "run_failed", "error", finished=True)
 
-    deleted = sweep_orphan_spills(str(root), "hash1", current_run_id="run_current", keep_on_failure=True, obs_store=obs_store)
+    deleted = sweep_orphan_spills(str(root), current_run_id="run_current", keep_on_failure=True, obs_store=obs_store)
 
     assert (root / "hash1" / "run_failed").exists()
+    # hash1 still holds a kept failure — not empty, so the hash dir survives too.
+    assert (root / "hash1").exists()
     assert deleted == []
 
 
@@ -212,10 +216,11 @@ def test_sweep_deletes_a_failed_run_when_keep_on_failure_false(tmp_path, obs_sto
     _make_spill(root, "hash1", "run_failed")
     _insert_run(obs_store, "run_failed", "error", finished=True)
 
-    deleted = sweep_orphan_spills(str(root), "hash1", current_run_id="run_current", keep_on_failure=False, obs_store=obs_store)
+    deleted = sweep_orphan_spills(str(root), current_run_id="run_current", keep_on_failure=False, obs_store=obs_store)
 
     assert not (root / "hash1" / "run_failed").exists()
-    assert len(deleted) == 1
+    assert not (root / "hash1").exists()
+    assert len(deleted) == 2
 
 
 def test_sweep_never_touches_a_still_running_run(tmp_path, obs_store):
@@ -223,9 +228,10 @@ def test_sweep_never_touches_a_still_running_run(tmp_path, obs_store):
     _make_spill(root, "hash1", "run_live")
     _insert_run(obs_store, "run_live", "success", finished=False)
 
-    deleted = sweep_orphan_spills(str(root), "hash1", current_run_id="run_current", keep_on_failure=True, obs_store=obs_store)
+    deleted = sweep_orphan_spills(str(root), current_run_id="run_current", keep_on_failure=True, obs_store=obs_store)
 
     assert (root / "hash1" / "run_live").exists()
+    assert (root / "hash1").exists()
     assert deleted == []
 
 
@@ -234,10 +240,11 @@ def test_sweep_deletes_a_run_with_no_run_records_row_at_all(tmp_path, obs_store)
     _make_spill(root, "hash1", "run_unknown")
     # No _insert_run call — no row exists for this run_id.
 
-    deleted = sweep_orphan_spills(str(root), "hash1", current_run_id="run_current", keep_on_failure=True, obs_store=obs_store)
+    deleted = sweep_orphan_spills(str(root), current_run_id="run_current", keep_on_failure=True, obs_store=obs_store)
 
     assert not (root / "hash1" / "run_unknown").exists()
-    assert len(deleted) == 1
+    assert not (root / "hash1").exists()
+    assert len(deleted) == 2
 
 
 def test_sweep_skips_current_run_id(tmp_path, obs_store):
@@ -246,7 +253,7 @@ def test_sweep_skips_current_run_id(tmp_path, obs_store):
     # No run_records row for it either — it would otherwise be swept as
     # "unknown"; the explicit current_run_id skip must take priority.
 
-    deleted = sweep_orphan_spills(str(root), "hash1", current_run_id="run_current", keep_on_failure=True, obs_store=obs_store)
+    deleted = sweep_orphan_spills(str(root), current_run_id="run_current", keep_on_failure=True, obs_store=obs_store)
 
     assert (root / "hash1" / "run_current").exists()
     assert deleted == []
@@ -256,13 +263,72 @@ def test_sweep_returns_empty_and_does_nothing_for_remote_root_without_fsspec(tmp
     import aqueduct.executor.spill as spill_mod
 
     monkeypatch.setattr(spill_mod, "_fsspec_available", lambda: False)
-    deleted = sweep_orphan_spills("s3://bucket/handoff", "hash1", current_run_id="run_current", keep_on_failure=True, obs_store=obs_store)
+    deleted = sweep_orphan_spills("s3://bucket/handoff", current_run_id="run_current", keep_on_failure=True, obs_store=obs_store)
     assert deleted == []
 
 
-def test_sweep_leaves_no_manifest_hash_directory_untouched(tmp_path, obs_store):
-    """No spill directory at all under this manifest hash — sweep is a no-op,
-    not an error."""
+def test_sweep_of_empty_root_is_a_noop(tmp_path, obs_store):
+    """No spill directory at all under this root — sweep is a no-op, not an
+    error."""
     root = tmp_path / "handoff"
-    deleted = sweep_orphan_spills(str(root), "hash_never_run", current_run_id="run_current", keep_on_failure=True, obs_store=obs_store)
+    deleted = sweep_orphan_spills(str(root), current_run_id="run_current", keep_on_failure=True, obs_store=obs_store)
     assert deleted == []
+
+
+# ── Root-level sweep across manifest-hash directories ────────────────────────
+#
+# A heal changes the compiled Manifest, which changes `manifest_hash`
+# (executor.models.manifest_hash hashes the WHOLE Manifest) — so a run after
+# a patch writes under a brand-new hash directory. Before this fix, the sweep
+# only ever looked inside the CURRENT run's hash directory, so a prior hash
+# directory's kept-failure spill (handoff.keep_on_failure defaults true) was
+# never revisited by anything and accumulated on disk forever, one heal at a
+# time. These tests guard the root-level rewrite that scans every hash
+# directory under `root` and decides each run_id's fate from `run_records`
+# alone.
+
+
+def test_sweep_reclaims_a_prior_hash_directory_after_a_heal_changed_the_hash(tmp_path, obs_store):
+    root = tmp_path / "handoff"
+    _make_spill(root, "hashA", "run_a")
+    _insert_run(obs_store, "run_a", "success", finished=True)  # own cleanup never ran
+
+    # The run under the NEW (post-patch) hash never mentions "hashA" — the
+    # sweep must still find and reclaim it by scanning the whole root.
+    deleted = sweep_orphan_spills(str(root), current_run_id="run_b", keep_on_failure=True, obs_store=obs_store)
+
+    assert not (root / "hashA" / "run_a").exists()
+    assert not (root / "hashA").exists()
+    assert any("hashA" in d for d in deleted)
+
+
+def test_sweep_respects_keep_on_failure_in_a_prior_hash_directory(tmp_path, obs_store):
+    """The root-level rewrite must not over-reclaim: a kept failure under an
+    OLD hash is exactly as protected as one under the current hash."""
+    root = tmp_path / "handoff"
+    _make_spill(root, "hashA", "run_a_failed")
+    _insert_run(obs_store, "run_a_failed", "error", finished=True)
+
+    deleted = sweep_orphan_spills(str(root), current_run_id="run_b", keep_on_failure=True, obs_store=obs_store)
+
+    assert (root / "hashA" / "run_a_failed").exists()
+    assert (root / "hashA").exists()
+    assert deleted == []
+
+
+def test_sweep_scans_multiple_hash_directories_independently(tmp_path, obs_store):
+    """Two different Blueprints (or two heals of the same one) sharing one
+    handoff.root each get their own hash directory — the sweep must decide
+    each run_id's fate independently rather than scoping to one hash."""
+    root = tmp_path / "handoff"
+    _make_spill(root, "hashA", "run_a_success")
+    _insert_run(obs_store, "run_a_success", "success", finished=True)
+    _make_spill(root, "hashB", "run_b_failed")
+    _insert_run(obs_store, "run_b_failed", "error", finished=True)
+
+    deleted = sweep_orphan_spills(str(root), current_run_id="run_c", keep_on_failure=True, obs_store=obs_store)
+
+    assert not (root / "hashA" / "run_a_success").exists()
+    assert not (root / "hashA").exists()
+    assert (root / "hashB" / "run_b_failed").exists()
+    assert (root / "hashB").exists()

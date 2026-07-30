@@ -465,3 +465,121 @@ def test_disjoint_different_engine_components_run_as_two_pure_flows(spark: Spark
     assert spark.read.parquet(spark_out).count() == 3
     written = duckdb.sql(f"SELECT COUNT(*) FROM read_parquet('{duckdb_out}')").fetchone()[0]
     assert written == 6
+
+
+# ── record_result / failed_engine — the CLI integration seam ────────────────
+#
+# `aqueduct/cli/run.py`'s healing loop needs the returned `FailureContext`
+# itself (it drives the whole heal decision), so it calls `run_polyglot(...,
+# record_result=False)` and does its own `surveyor.record(result, exc=...,
+# engine=result.failed_engine)` afterwards — the same shape the single-engine
+# path already uses. These tests guard that seam directly.
+
+
+def test_record_result_false_skips_the_internal_surveyor_record(spark: SparkSession, tmp_path):
+    from unittest.mock import MagicMock
+
+    in_path = str(tmp_path / "in.parquet")
+    out_path = str(tmp_path / "out")
+    spark.range(3).withColumnRenamed("id", "n").write.parquet(in_path)
+
+    bp = _bp(
+        [
+            {"id": "in", "label": "in", "type": "Ingress", "engine": "spark",
+             "config": {"format": "parquet", "path": in_path}},
+            {"id": "out", "label": "out", "type": "Egress", "engine": "duckdb",
+             "config": {"format": "parquet", "path": out_path, "mode": "overwrite"}},
+        ],
+        edges=[{"from": "in", "to": "out"}],
+    )
+    manifest = ccompile(bp, engine="spark")
+    handoff_root = str(tmp_path / "handoff_root")
+    store_dir = tmp_path / "obs"
+
+    mock_surveyor = MagicMock()
+    result = run_polyglot(
+        manifest, run_id="run-no-record", handoff_root=handoff_root, store_dir=store_dir,
+        surveyor=mock_surveyor, master_url="local[1]", record_result=False,
+    )
+
+    assert result.status == ExecutionStatus.SUCCESS
+    mock_surveyor.record.assert_not_called()
+
+
+def test_record_result_true_default_still_records_internally(spark: SparkSession, tmp_path):
+    """The pre-existing, independently-tested contract (surveyor.record()
+    called internally) must survive unchanged for a caller that doesn't pass
+    record_result at all."""
+    from unittest.mock import MagicMock
+
+    in_path = str(tmp_path / "in.parquet")
+    out_path = str(tmp_path / "out")
+    spark.range(3).withColumnRenamed("id", "n").write.parquet(in_path)
+
+    bp = _bp(
+        [
+            {"id": "in", "label": "in", "type": "Ingress", "engine": "spark",
+             "config": {"format": "parquet", "path": in_path}},
+            {"id": "out", "label": "out", "type": "Egress", "engine": "duckdb",
+             "config": {"format": "parquet", "path": out_path, "mode": "overwrite"}},
+        ],
+        edges=[{"from": "in", "to": "out"}],
+    )
+    manifest = ccompile(bp, engine="spark")
+    handoff_root = str(tmp_path / "handoff_root")
+    store_dir = tmp_path / "obs"
+
+    mock_surveyor = MagicMock()
+    result = run_polyglot(
+        manifest, run_id="run-default-record", handoff_root=handoff_root, store_dir=store_dir,
+        surveyor=mock_surveyor, master_url="local[1]",
+    )
+
+    assert result.status == ExecutionStatus.SUCCESS
+    mock_surveyor.record.assert_called_once_with(result, engine=None)
+
+
+def test_failed_engine_names_the_failing_island_not_the_default(spark: SparkSession, tmp_path, monkeypatch):
+    """A structural failure raised straight out of one island's ``execute()``
+    (not caught as a per-module ModuleResult) must still be attributed to
+    THAT island's engine on the returned ExecutionResult — the gap fixed by
+    wrapping `call_execute()` in `AqueductError` inside `run_polyglot()`."""
+    import aqueduct.executor.duckdb_.executor as duckdb_exec_mod
+    from aqueduct.executor.duckdb_.executor import ExecuteError as DuckDBExecuteError
+
+    in_path = str(tmp_path / "in.parquet")
+    out_path = str(tmp_path / "out")
+    spark.range(3).withColumnRenamed("id", "n").write.parquet(in_path)
+
+    bp = _bp(
+        [
+            {"id": "in", "label": "in", "type": "Ingress", "engine": "spark",
+             "config": {"format": "parquet", "path": in_path}},
+            {"id": "out", "label": "out", "type": "Egress", "engine": "duckdb",
+             "config": {"format": "parquet", "path": out_path, "mode": "overwrite"}},
+        ],
+        edges=[{"from": "in", "to": "out"}],
+    )
+    manifest = ccompile(bp, engine="spark")
+    handoff_root = str(tmp_path / "handoff_root")
+    store_dir = tmp_path / "obs"
+
+    def _boom(*args, **kwargs):
+        raise DuckDBExecuteError("simulated structural failure — never a ModuleResult")
+
+    monkeypatch.setattr(duckdb_exec_mod, "execute", _boom)
+
+    result = run_polyglot(
+        manifest, run_id="run-structural-fail", handoff_root=handoff_root, store_dir=store_dir,
+        master_url="local[1]",
+    )
+
+    assert result.status == ExecutionStatus.ERROR
+    assert result.failed_engine == "duckdb"
+    assert any(
+        r.module_id == "_executor" and "simulated structural failure" in (r.error or "")
+        for r in result.module_results
+    )
+    # The upstream spark island's own module result is still present — the
+    # exception from the duckdb island doesn't erase what already ran.
+    assert any(r.module_id == "in" for r in result.module_results)

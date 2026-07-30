@@ -382,6 +382,32 @@ def run_sandbox_gate(
                 duration_ms=int((time.monotonic() - t0) * 1000),
             )
 
+        # ── Polyglot Blueprints are not sandbox-replayed in v1 ──────────────────
+        # A single-`engine` replay session (this function's whole design —
+        # one `protocol`, one `session`) would validate a multi-engine
+        # Blueprint against only ONE of its engines, which is a worse outcome
+        # than no replay at all: it would look like a real pre-apply
+        # validation while actually checking nothing about the islands on
+        # any other engine. `skip` (not `fail`) — same status a missing
+        # engine dependency already produces above, so a caller's existing
+        # `status in ("pass", "skip")` gate treatment doesn't need a new
+        # branch, and the patch still applies, just without this gate's
+        # cover. Callers surface this loudly (`aqueduct/cli/run.py` prints
+        # the detail at the moment the patch is applied) rather than letting
+        # reduced validation pass unremarked.
+        if len(manifest.islands) > 1:
+            _island_engines = ", ".join(sorted({isl.engine for isl in manifest.islands}))
+            return SandboxGateResult(
+                status="skip",
+                detail=(
+                    f"sandbox replay skipped — polyglot Blueprint "
+                    f"({len(manifest.islands)} islands: {_island_engines}) is not yet "
+                    "supported by the sandbox gate; patch applied without pre-apply "
+                    "validation"
+                ),
+                duration_ms=int((time.monotonic() - t0) * 1000),
+            )
+
         # ── Strip Egress + cap Ingress rows (shared with `run --sandbox`) ───────
         # The Spark ingress executor honours the `sandbox_limit` marker (if
         # present) by calling `.limit(N)` after `.load()` — see `ingress.py`.

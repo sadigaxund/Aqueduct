@@ -30,12 +30,18 @@ carried on ``Manifest.islands`` — this module never re-derives them and
 never imports pyspark/duckdb; it only knows engines by NAME, resolved
 through ``aqueduct.executor.protocol.get_protocol()``.
 
-**Not yet wired into ``aqueduct run``.** ``aqueduct/cli/run.py``'s existing
-single-engine orchestration (healing loop, patch gates, retries, hooks,
-sandbox replay) is a large, separately-evolving surface; routing it through
-this module is follow-up integration work, not part of this step. This
-module is a complete, independently callable, and independently tested
-runtime unit today.
+**Wired into ``aqueduct run`` (2.37).** ``aqueduct/cli/run.py``'s healing
+loop routes a >1-island Manifest through ``run_polyglot(..., record_result=
+False)`` instead of the single-engine ``execute()`` call — a single-engine
+Manifest (``len(manifest.islands) <= 1``) is entirely unaffected, the exact
+same call it has always made. ``record_result=False`` lets the CLI call
+``surveyor.record(result, exc=..., engine=result.failed_engine)`` itself,
+so a failed run is attributed to the ISLAND that failed rather than
+``deployment.engine`` — the same shape the single-engine path already
+uses. This module's own ``AqueductError`` wrap around each island's
+``execute()`` call (below) is what makes ``result.failed_engine`` reliable
+even for a structural failure (a cycle, a bad checkpoint) that raises
+rather than returning a ``ModuleResult``.
 """
 
 from __future__ import annotations
@@ -214,6 +220,22 @@ def _resume_spill_uris_for_island(
 
 
 def _spill_exists(uri: str) -> bool:
+    """True when *uri* is a real, non-empty spill directory. A falsy/empty
+    ``uri`` (the ``resume_uris.get(h.module.id, "")`` default a caller uses
+    when there is no resume candidate at all) means "no resume URI was
+    resolved" and must be False here without ever touching the filesystem —
+    ``Path("")`` normalizes to ``Path(".")``, the CURRENT WORKING DIRECTORY,
+    which always exists, and ``aqueduct run`` chdirs to the project root
+    before this ever runs. A project root that happens to contain ANY
+    ``*.parquet``-named entry directly in it (a totally ordinary layout —
+    Spark writes a Parquet ``path`` as a directory, and a Blueprint's own
+    Ingress/Egress path is very often one) previously made this return a
+    false True, which `run_polyglot()`'s `can_resume` branch then trusted
+    to skip re-execution and read a resume URI that was never actually
+    resolved (`resume_uris[h.module.id]` — no such key), raising `KeyError`
+    on the very first real polyglot `aqueduct run`."""
+    if not uri:
+        return False
     if is_remote_uri(uri):
         # Engine-native remote reads work without fsspec; existence-checking
         # a remote URI generically does not (see spill.py's module
@@ -243,6 +265,7 @@ def run_polyglot(
     keep_on_failure: bool = True,
     resume_run_id: str | None = None,
     store_dir: Path | None = None,
+    checkpoint_root: Path | None = None,
     surveyor: Any = None,
     depot: Any = None,
     observability_store: Any = None,
@@ -251,6 +274,12 @@ def run_polyglot(
     engine_configs: dict[str, dict[str, Any]] | None = None,
     master_url: str = "",
     quiet_startup: bool = True,
+    block_full_actions: bool = False,
+    parallel: bool = False,
+    use_observe: bool = False,
+    sampling: Any = None,
+    explain_capture: dict[str, dict] | None = None,
+    record_result: bool = True,
 ) -> ExecutionResult:
     """Execute a (possibly polyglot) compiled Manifest island by island.
 
@@ -272,22 +301,61 @@ def run_polyglot(
                          modules) and the downstream island reads that
                          prior spill instead — the resume story: a rerun
                          after a heal does not recompute an already-healthy
-                         upstream island.
+                         upstream island. NOT forwarded to a non-skipped
+                         island's own ``execute()`` call — both engines'
+                         executors treat a non-empty ``resume_run_id`` as
+                         "a checkpoint must exist for THIS island's modules
+                         under this run_id" and raise otherwise, which is
+                         the common case for an island that never
+                         checkpointed under the failed prior run. Per-module
+                         ``checkpoint: true`` resume for an arbitrary island
+                         is not wired by this function; only cross-engine
+                         handoff-spill resume is.
+        checkpoint_root, block_full_actions: forwarded to every island's
+                         ``execute()`` unfiltered — part of ``ExecutorProtocol
+                         .execute``'s COMMON kwargs (`aqueduct/executor/
+                         protocol.py`), which every registered engine must
+                         accept.
+        parallel, use_observe, sampling, explain_capture: forwarded to every
+                         island's ``execute()`` THROUGH ``call_execute()``
+                         (`aqueduct/executor/protocol.py`) — these are
+                         ``OPTIONAL_EXECUTE_KWARGS``, so an island whose
+                         engine doesn't declare support gets the kwarg
+                         dropped with a suppressible ``engine_kwarg_ignored``
+                         warning instead of a ``TypeError``, exactly the
+                         single-engine path's existing behavior.
         engine_configs:  ``{engine_name: SessionSpec.engine_config}`` — e.g.
                          ``{"spark": merged_spark_conf}``. An engine not
                          present here gets ``{}``.
         master_url:      Passed to every island's ``SessionSpec`` (engines
                          that ignore it, e.g. DuckDB, simply don't read it).
+        record_result:   When True (the default — preserves this function's
+                         existing standalone/tested contract), this call
+                         records the run's outcome itself via
+                         ``surveyor.record(merged, engine=...)`` before
+                         returning. A caller that needs the returned
+                         ``FailureContext`` to drive its OWN healing
+                         decision (``aqueduct/cli/run.py``) passes False and
+                         calls ``surveyor.record(result, exc=..., engine=
+                         result.failed_engine)`` itself instead — the same
+                         shape the single-engine path already uses, so a
+                         failed run is attributed to the ISLAND that
+                         failed rather than ``deployment.engine``.
 
     Returns:
         One merged ``ExecutionResult`` spanning every island executed
         (fail-fast: an island that errors stops the run; islands after it
-        in topological order are never started). ``surveyor.record()`` is
-        called internally (if ``surveyor`` is given) with the FAILING
-        island's own engine — this is the one piece of per-run bookkeeping
-        the orchestrator must own, since it is the only caller that knows
-        which island actually failed.
+        in topological order are never started), with ``.failed_engine``
+        set to the failing island's engine when ``status == "error"``.
+        When ``record_result`` is True (the default), ``surveyor.record()``
+        is also called internally (if ``surveyor`` is given) with that same
+        engine — this is the one piece of per-run bookkeeping the
+        orchestrator must own by default, since it is the only caller that
+        knows which island actually failed.
     """
+    from aqueduct.errors import AqueductError
+    from aqueduct.executor.protocol import call_execute
+
     manifest_h = _manifest_hash(manifest)
     obs_store = resolve_observability_store(store_dir, observability_store)
 
@@ -308,7 +376,7 @@ def run_polyglot(
         )
     else:
         sweep_orphan_spills(
-            handoff_root, manifest_h, current_run_id=run_id,
+            handoff_root, current_run_id=run_id,
             keep_on_failure=keep_on_failure, obs_store=obs_store,
         )
 
@@ -381,17 +449,70 @@ def run_polyglot(
             )
         )
         try:
-            result = protocol.execute(
-                sub_manifest, session,
-                run_id=run_id,
-                store_dir=store_dir,
-                surveyor=surveyor,
-                depot=depot,
-                observability_store=obs_store,
-                warnings_suppress=warnings_suppress,
-                warnings_silence_all=warnings_silence_all,
-                handoff_spill_uris=exec_uris,
-            )
+            try:
+                # `call_execute()` (not `protocol.execute()` directly) so the
+                # OPTIONAL capability kwargs (parallel/use_observe/sampling/
+                # explain_capture) get the same per-engine filter-and-warn
+                # treatment the single-engine CLI path already applies —
+                # an island whose engine doesn't declare support for one
+                # gets it dropped with a suppressible `engine_kwarg_ignored`
+                # warning instead of a TypeError.
+                result = call_execute(
+                    island.engine,
+                    sub_manifest, session,
+                    run_id=run_id,
+                    store_dir=store_dir,
+                    checkpoint_root=checkpoint_root,
+                    # NOT `resume_run_id=resume_run_id` — that argument is
+                    # reserved above for the cross-engine HANDOFF-spill
+                    # resume decision (skip an island whose outgoing spill
+                    # already exists). Forwarding it into a per-island
+                    # `execute()` call as well was tried and reverted: both
+                    # engines' executors treat a non-empty `resume_run_id`
+                    # as "a checkpoint MUST exist for this run_id, for THIS
+                    # island's modules" and raise `ExecuteError` when it
+                    # doesn't — which is the common case, since most islands
+                    # in a resumed run never checkpointed under the failed
+                    # prior run_id at all. Per-module `checkpoint: true`
+                    # resume for an arbitrary island is real, separate work
+                    # (deciding per-island whether a matching checkpoint
+                    # actually exists before forwarding), not part of this
+                    # change — only cross-engine handoff-spill resume is
+                    # wired here.
+                    block_full_actions=block_full_actions,
+                    surveyor=surveyor,
+                    depot=depot,
+                    observability_store=obs_store,
+                    warnings_suppress=warnings_suppress,
+                    warnings_silence_all=warnings_silence_all,
+                    handoff_spill_uris=exec_uris,
+                    parallel=parallel,
+                    use_observe=use_observe,
+                    sampling=sampling,
+                    explain_capture=explain_capture,
+                    suppress=warnings_suppress,
+                )
+            except AqueductError as exc:
+                # A structural execution failure (cycle detection, a bad
+                # --from/--to selector, a missing resume checkpoint) raises
+                # rather than returning a ModuleResult — both engines' own
+                # `ExecuteError` subclass `AqueductError` (there is no
+                # shared `ExecuteError` base to import here without naming
+                # an engine, so this catches the common ancestor instead).
+                # Without this, the exception would escape `run_polyglot()`
+                # entirely: no island/engine attribution, no spill-lifecycle
+                # bookkeeping below — exactly the gap the single-engine CLI
+                # path already closes for itself with its own try/except
+                # around `execute()`. Mirrored here so a polyglot run gets
+                # the same attribution.
+                result = ExecutionResult(
+                    blueprint_id=manifest.blueprint_id,
+                    run_id=run_id,
+                    status=ExecutionStatus.ERROR,
+                    module_results=(
+                        ModuleResult(module_id="_executor", status=ExecutionStatus.ERROR, error=str(exc)),
+                    ),
+                )
         finally:
             # Deliberate v1 choice: close THIS island's session now, even if
             # `island.engine` recurs later in `order` — see module docstring.
@@ -410,6 +531,7 @@ def run_polyglot(
         status=acc.status,
         module_results=tuple(acc.module_results),
         trigger_agent=acc.trigger_agent,
+        failed_engine=acc.failed_engine if acc.status != ExecutionStatus.SUCCESS else None,
     )
 
     # ── Spill lifecycle: delete on success; keep on failure unless the
@@ -419,7 +541,7 @@ def run_polyglot(
         if merged.status == ExecutionStatus.SUCCESS or not keep_on_failure:
             delete_spill_tree(run_dir)
 
-    if surveyor is not None:
+    if record_result and surveyor is not None:
         surveyor.record(merged, engine=acc.failed_engine)
 
     return merged

@@ -78,6 +78,42 @@ def test_duckdb_sandbox_gate_actually_executes_on_duckdb(_orders_csv, tmp_path):
     assert result.sample_rows == 2
 
 
+def test_sandbox_gate_skips_a_polyglot_blueprint_naming_its_islands(tmp_path):
+    """A Blueprint compiling to more than one island (a spark module handing
+    off to a duckdb module) must not be sandbox-replayed against only ONE of
+    its engines — that would look like real pre-apply validation while
+    covering nothing about the rest. The gate returns `skip` (not `fail` —
+    the patch still applies, same as a missing engine dependency), naming
+    the island count and engines, WITHOUT ever building a session for either
+    engine (this is checked right after compile, before session_factory)."""
+    bp = {
+        "aqueduct": "1.0", "id": "bp.polyglot", "name": "t",
+        "modules": [
+            {"id": "extract", "label": "extract", "type": "Channel", "engine": "spark",
+             "config": {"op": "sql", "query": "SELECT 1 AS x"}},
+            {"id": "agg", "label": "agg", "type": "Channel", "engine": "duckdb",
+             "config": {"op": "sql", "query": "SELECT * FROM extract"}},
+        ],
+        "edges": [{"from": "extract", "to": "agg"}],
+    }
+    with patch("aqueduct.executor.protocol.get_protocol") as mock_get_protocol:
+        result = run_sandbox_gate(
+            bp,
+            blueprint_path=tmp_path / "bp.yml",
+            patch_id="p-polyglot",
+            failed_module=None,
+            engine="spark",
+        )
+    assert result.status == "skip"
+    assert "polyglot" in result.detail
+    assert "2 islands" in result.detail
+    assert "spark" in result.detail and "duckdb" in result.detail
+    # session_factory()/session_closer() are only reachable AFTER this
+    # check — get_protocol() itself is called once (to resolve `engine` up
+    # front) but its session factory must never be invoked here.
+    mock_get_protocol.return_value.session_factory.assert_not_called()
+
+
 def test_missing_engine_skip_names_the_actual_engine(_orders_csv, tmp_path):
     """When the target engine's session factory fails, the skip detail must
     name the REAL target engine (duckdb), not Spark."""
@@ -189,13 +225,28 @@ def test_spark_declares_no_execute_kwargs_allowlist():
     assert get_protocol("spark").execute_kwargs is None
 
 
-def test_duckdb_execute_kwargs_excludes_every_optional_capability():
-    """DuckDB's real declaration names none of OPTIONAL_EXECUTE_KWARGS —
-    every one of them is a genuinely optional Spark-only capability DuckDB
-    Stage A does not implement, so all of them get filtered+warned."""
+def test_duckdb_execute_kwargs_excludes_every_spark_only_capability():
+    """DuckDB's real declaration accepts only the optional capabilities it
+    genuinely implements; every Spark-only one gets filtered+warned.
+
+    Two deliberate exceptions, both of which must stay accepted:
+
+    - `handoff_spill_uris` — a Handoff module runs on BOTH sides of a
+      cross-engine boundary, so an engine that can execute one needs the
+      spill URIs. Filtering it would strip the transport's own addresses on
+      the DuckDB side of every handoff.
+    - `observability_store` — DuckDB writes `module_metrics` rows for a
+      Handoff module (bytes transferred, duration), so it needs the store.
+
+    A new name added to OPTIONAL_EXECUTE_KWARGS belongs on the excluded side
+    of this assertion unless DuckDB actually implements it.
+    """
+    duckdb_implements = {"handoff_spill_uris", "observability_store"}
     accepted = get_protocol("duckdb").execute_kwargs
     assert accepted is not None
-    assert not (OPTIONAL_EXECUTE_KWARGS & accepted)
+    spark_only = OPTIONAL_EXECUTE_KWARGS - duckdb_implements
+    assert not (spark_only & accepted)
+    assert duckdb_implements <= accepted
 
 
 def test_duckdb_sandbox_gate_warns_engine_kwarg_ignored_for_observability_kwargs(

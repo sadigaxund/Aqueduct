@@ -181,6 +181,16 @@ class ExecutionResult:
     status: str                          # "success" | "error"
     module_results: tuple[ModuleResult, ...]
     trigger_agent: bool = False          # LLM loop should fire even if approval=disabled
+    failed_engine: str | None = None
+    """Set only by ``aqueduct.executor.orchestrator.run_polyglot()`` when
+    ``status == "error"`` — the engine name of the ISLAND that actually
+    failed, not the run's nominal ``deployment.engine`` default. A
+    single-engine ``execute()`` call never sets this (stays ``None``), so a
+    caller can pass it straight through as ``Surveyor.record(engine=...)``'s
+    override unconditionally: ``None`` there already means "use my own
+    construction-time engine", which is exactly today's single-engine
+    behavior. Not part of ``to_dict()`` — this is an in-process routing
+    signal for the CLI healing loop, not a persisted/serialized field."""
 
     def to_dict(self) -> dict:
         return {

@@ -9,7 +9,13 @@ where one boundary's spill directory lives, deleting it when the run that
 produced it succeeds, keeping it when the run fails (the resume story — a
 rerun after a heal reads island A's already-materialized spill instead of
 recomputing it), and sweeping directories orphaned by a run that never
-reached its own success/failure cleanup (a driver crash, a killed process).
+reached its own success/failure cleanup (a driver crash, a killed process,
+or — since a heal changes the compiled Manifest and therefore its
+``manifest_hash`` — a PRIOR hash directory a post-patch rerun will never
+recompile its way back into). ``sweep_orphan_spills`` scans the entire
+``handoff.root``, across every ``manifest_hash`` subdirectory, deciding each
+run_id's fate from ``run_records`` alone (never from "is this hash mine") —
+see its docstring.
 
 Directory layout: ``<root>/<manifest_hash>/<run_id>/<edge_id>/`` — see
 ``aqueduct.compiler.handoff`` for where ``edge_id`` comes from and
@@ -193,6 +199,63 @@ def _list_run_dirs(root: str, manifest_hash: str) -> list[str]:
         return []
 
 
+def _list_hash_dirs(root: str) -> list[str]:
+    """Every ``manifest_hash`` subdirectory name directly under ``<root>/``.
+
+    A heal that changes the compiled Manifest changes ``manifest_hash``
+    (``executor.models.manifest_hash`` hashes the WHOLE Manifest), so
+    consecutive runs of the same Blueprint across a patch write under
+    DIFFERENT hash directories. Sweeping this list — every hash directory,
+    not just the current run's — is what lets the orphan sweep below reclaim
+    a hash directory a prior, now-superseded compile will never revisit.
+    """
+    if not is_remote_uri(root):
+        p = Path(root)
+        if not p.exists():
+            return []
+        return [child.name for child in p.iterdir() if child.is_dir()]
+    if not _fsspec_available():
+        logger.info(
+            "[%s] cannot list handoff spill hash directories under remote "
+            "root %r — fsspec is not installed. Orphan sweep skipped for "
+            "this root.",
+            RULE_ID_HANDOFF_CLEANUP_UNAVAILABLE, root,
+        )
+        return []
+    try:
+        import fsspec
+
+        fs, path = fsspec.core.url_to_fs(root)
+        if not fs.exists(path):
+            return []
+        return [os.path.basename(p.rstrip("/")) for p in fs.ls(path, detail=False)]
+    except Exception as exc:
+        logger.debug("_list_hash_dirs: fsspec ls failed for %r: %s", root, exc)
+        return []
+
+
+def _dir_is_empty(uri: str) -> bool:
+    """True when *uri* exists and has no children — used to decide whether a
+    manifest-hash directory can be reclaimed once every run underneath it
+    has been swept. False (not empty / doesn't exist / can't be listed) is
+    always the safe answer — the caller only deletes on True."""
+    if not is_remote_uri(uri):
+        p = _local_path(uri)
+        return p.exists() and p.is_dir() and not any(p.iterdir())
+    if not _fsspec_available():
+        return False
+    try:
+        import fsspec
+
+        fs, path = fsspec.core.url_to_fs(uri)
+        if not fs.exists(path):
+            return False
+        return len(fs.ls(path, detail=False)) == 0
+    except Exception as exc:
+        logger.debug("_dir_is_empty: could not check %r: %s", uri, exc)
+        return False
+
+
 def _run_status(obs_store: Any, run_id: str) -> tuple[str | None, bool]:
     """``(status, is_terminal)`` for *run_id* from ``run_records`` — best
     effort. ``status`` is None when no row exists at all (an unknown run,
@@ -221,7 +284,6 @@ def _run_status(obs_store: Any, run_id: str) -> tuple[str | None, bool]:
 
 def sweep_orphan_spills(
     root: str,
-    manifest_hash: str,
     *,
     current_run_id: str,
     keep_on_failure: bool,
@@ -232,14 +294,30 @@ def sweep_orphan_spills(
     spill exists on disk, so ``current_run_id`` never appears among the
     candidates (nothing to special-case).
 
-    A run_id's ``<root>/<manifest_hash>/<run_id>/`` directory is deleted
-    unless ``run_records`` says it is still non-terminal (possibly still
-    running — never delete out from under a live process) or it is a
-    terminal FAILURE and ``keep_on_failure`` is true (the resume story).
-    Everything else — a successful run whose own cleanup never ran, a
-    failed run when ``keep_on_failure`` is false, or a run_id with no
-    ``run_records`` row at all (unknown — nothing positively says it is
-    still needed) — is reclaimed.
+    Scans the ENTIRE ``root``, across every ``manifest_hash`` subdirectory,
+    not just the hash the current run happens to compile to. A heal changes
+    the compiled Manifest, which changes ``manifest_hash``, so a run after a
+    patch writes under a brand-new hash directory and a sweep scoped to only
+    that hash would never revisit the pre-patch hash directory again —
+    silently abandoning it (and every kept-failure spill under it) forever,
+    since reaching it would require recompiling the exact pre-patch
+    Manifest. `run_records` is keyed by ``run_id`` alone (never by hash), so
+    a run_id's eligibility is decided the same way regardless of which hash
+    directory it happens to sit under — including on a ``root`` shared by
+    several different Blueprints, each with its own hash: the decision is
+    "what does `run_records` say about this run_id", never "is this hash
+    mine".
+
+    A run_id's ``<root>/<hash>/<run_id>/`` directory is deleted unless
+    ``run_records`` says it is still non-terminal (possibly still running —
+    never delete out from under a live process) or it is a terminal FAILURE
+    and ``keep_on_failure`` is true (the resume story). Everything else — a
+    successful run whose own cleanup never ran, a failed run when
+    ``keep_on_failure`` is false, or a run_id with no ``run_records`` row at
+    all (unknown — nothing positively says it is still needed) — is
+    reclaimed. A ``<hash>/`` directory left empty once every run underneath
+    it has been swept is reclaimed too, so a superseded hash directory
+    doesn't linger as an empty shell forever.
 
     Returns the list of deleted directory paths (best-effort; a remote root
     with no fsspec returns ``[]`` and the caller is expected to have already
@@ -249,24 +327,35 @@ def sweep_orphan_spills(
         return []
 
     deleted: list[str] = []
-    for run_id in _list_run_dirs(root, manifest_hash):
-        if run_id == current_run_id:
-            continue
-        status, is_terminal = _run_status(obs_store, run_id)
-        # `status is None` means no `run_records` row exists at all — distinct
-        # from a row that exists but is non-terminal (still running). Only
-        # the latter is protected; a run_id with no row is "unknown" and
-        # reclaimed per this function's own contract (see docstring above) —
-        # conflating the two here previously left every unknown run_id
-        # untouched forever, which is the exact silent-accumulation failure
-        # mode this sweep exists to prevent.
-        if status is not None and not is_terminal:
-            continue  # still running — never touch
-        if status == "error" and keep_on_failure:
-            continue  # kept failure — the resume story
-        path = f"{root.rstrip('/')}/{manifest_hash}/{run_id}"
-        if delete_spill_tree(path):
-            deleted.append(path)
+    for manifest_hash in _list_hash_dirs(root):
+        hash_dir = f"{root.rstrip('/')}/{manifest_hash}"
+        for run_id in _list_run_dirs(root, manifest_hash):
+            if run_id == current_run_id:
+                continue
+            status, is_terminal = _run_status(obs_store, run_id)
+            # `status is None` means no `run_records` row exists at all —
+            # distinct from a row that exists but is non-terminal (still
+            # running). Only the latter is protected; a run_id with no row
+            # is "unknown" and reclaimed per this function's own contract
+            # (see docstring above) — conflating the two here previously
+            # left every unknown run_id untouched forever, which is the
+            # exact silent-accumulation failure mode this sweep exists to
+            # prevent.
+            if status is not None and not is_terminal:
+                continue  # still running — never touch
+            if status == "error" and keep_on_failure:
+                continue  # kept failure — the resume story
+            path = f"{hash_dir}/{run_id}"
+            if delete_spill_tree(path):
+                deleted.append(path)
+        # Every run under this hash directory has now been decided. If none
+        # of them survived (including `current_run_id`'s — impossible here,
+        # since the sweep runs before the current run's own spill exists),
+        # the hash directory itself is a superseded, now-empty shell — the
+        # thing this whole root-level rewrite exists to stop leaking.
+        if _dir_is_empty(hash_dir):
+            if delete_spill_tree(hash_dir):
+                deleted.append(hash_dir)
     return deleted
 
 

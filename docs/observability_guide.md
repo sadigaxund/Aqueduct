@@ -88,7 +88,7 @@ before the migration have `NULL` in those columns.
 | `status`         | VARCHAR NOT NULL    | `running`, `success`, `error`, `patched`. (`skipped` exists only as a per-module status inside `module_results`, never at run level.) |
 | `started_at`     | TIMESTAMPTZ NOT NULL | Iteration start |
 | `finished_at`    | TIMESTAMPTZ          | NULL while running |
-| `module_results` | JSON                | Per-module status/error blobs |
+| `module_results` | JSON                | Per-module status/error blobs. Since 2.37 each entry also carries `engine` — the module's fully-resolved execution engine (`Manifest.modules[i].engine`), populated for every run, single-engine or polyglot alike (a single-engine run's every module simply names the same one engine). `aqueduct report --format json` surfaces this per module plus a run-level `engines` list (the distinct set actually present). |
 | `parent_run_id`  | VARCHAR             | User-visible outer `run_id` for multi-patch iterations. NULL on iteration 0 and on single-patch runs. Join all iterations of one heal call with `WHERE COALESCE(parent_run_id, run_id) = '<outer>'`. |
 
 `Surveyor.record()` writes via `INSERT … ON CONFLICT DO UPDATE`, so each

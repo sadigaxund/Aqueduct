@@ -739,10 +739,21 @@ def _setup_surveyor(
     click.echo(_r)
     _arrow = click.style('\u25b6', fg='cyan', bold=True)
     _bp_label = click.style(manifest.blueprint_id, bold=True)
+    # A polyglot Manifest (>1 island) names every engine actually involved,
+    # not the single `deployment.engine` default \u2014 `master_url` is a
+    # single-session concept (each island's own session may ignore it, e.g.
+    # DuckDB) so it's dropped from this line for a polyglot run rather than
+    # implying it applies uniformly. Single-engine (the common case) is
+    # untouched: same `{engine} {master_url}` this line has always shown.
+    if len(manifest.islands) > 1:
+        _island_engines_hdr = "+".join(sorted({isl.engine for isl in manifest.islands}))
+        _engine_desc = f"{_island_engines_hdr}  ({len(manifest.islands)} islands)"
+    else:
+        _engine_desc = f"{engine} {master_url}"
     click.echo(
         f"{_arrow} "
         f"{_bp_label}  \u00b7  "
-        f"{len(manifest.modules)} modules  \u00b7  run {run_id}  \u00b7  {engine} {master_url}"
+        f"{len(manifest.modules)} modules  \u00b7  run {run_id}  \u00b7  {_engine_desc}"
         f"{selector_note}{exec_date_note}"
     )
     click.echo(_r)
@@ -879,21 +890,35 @@ def _setup_surveyor(
     # dispatches by contract. An engine registered without a session factory
     # raises a clean EnginePluginError (naming the engine) via session_factory(),
     # the AqueductError replacement for the bare NotImplementedError.
-    from aqueduct.executor.protocol import SessionSpec, get_protocol
-    merged_spark_config = {**cfg.engine.spark.conf, **manifest.spark_config}
-    _protocol = get_protocol(engine)
-    session = _protocol.session_factory()(
-        SessionSpec(
-            blueprint_id=manifest.blueprint_id,
-            engine_config=merged_spark_config,
-            master_url=master_url,
-            quiet_startup=not verbose,
+    #
+    # A polyglot Manifest (>1 island) does NOT build this eager session at
+    # all — `run_polyglot()` opens one session PER ISLAND, lazily, in
+    # topological order, and closes each immediately after its island
+    # finishes (see `aqueduct/executor/orchestrator.py`). Building one more
+    # session here for `deployment.engine` (the run's nominal default, not
+    # necessarily any island's actual engine) would be wasted work at best
+    # and a stray, never-closed-until-atexit session at worst. `session`
+    # stays None for the rest of this run — every downstream consumer
+    # (hooks' in-process fallback, the agentic ToolBox's `spark_session`)
+    # already treats a missing session as "no live session to reuse", the
+    # same fallback a single-engine run never exercises.
+    session = None
+    if len(manifest.islands) <= 1:
+        from aqueduct.executor.protocol import SessionSpec, get_protocol
+        merged_spark_config = {**cfg.engine.spark.conf, **manifest.spark_config}
+        _protocol = get_protocol(engine)
+        session = _protocol.session_factory()(
+            SessionSpec(
+                blueprint_id=manifest.blueprint_id,
+                engine_config=merged_spark_config,
+                master_url=master_url,
+                quiet_startup=not verbose,
+            )
         )
-    )
 
-    import atexit
-    _close_session = _protocol.session_closer()
-    atexit.register(lambda: _close_session(session))
+        import atexit
+        _close_session = _protocol.session_closer()
+        atexit.register(lambda: _close_session(session))
 
     return _SurveyorSetupResult(
         resolved_store_dir=resolved_store_dir,
@@ -1096,6 +1121,26 @@ def run(
             Path(cfg.checkpoint_root).resolve() if cfg.checkpoint_root else None
         )
 
+        # `handoff.root` — same anchoring concern as `checkpoint_root`
+        # above, and the same "Path anchoring" bug family (AGENTS.md): a
+        # RELATIVE `handoff.root` (the default, `.aqueduct/handoff`) must
+        # resolve against the project root (CWD, post-chdir), never against
+        # whatever directory the engine session happens to have been
+        # constructed in. Left unresolved, a Spark session created before
+        # this process's chdir (a long-lived/shared session — the exact
+        # shape a real cluster driver or a reused session takes) writes a
+        # relative path against ITS OWN JVM `user.dir`, while a
+        # freshly-`os.chdir()`-aware Python-side reader (DuckDB) resolves
+        # the SAME relative string against the CURRENT cwd — two different
+        # absolute locations for what is supposed to be one shared spill
+        # directory, silently. A remote URI (s3://, gs://, …) is passed
+        # through untouched — there is no "CWD" to anchor a URI against.
+        from aqueduct.executor.spill import is_remote_uri as _is_remote_uri
+        _handoff_root_abs = (
+            cfg.handoff.root if _is_remote_uri(cfg.handoff.root)
+            else str(Path(cfg.handoff.root).resolve())
+        )
+
         # ── Resolution preamble — surface the non-default inputs shaping this run
         # (dim info lines next to the `· env ·` notice). Keys only for --set:
         # values may embed secrets that were never registered for redaction.
@@ -1187,6 +1232,23 @@ def run(
         execution_date = _cr.execution_date
         cli_overrides = _cr.cli_overrides
 
+        # ── --from / --to are not yet island-aware ────────────────────────────
+        # Module-range selection assumes ONE execution graph; which island(s)
+        # a `--from`/`--to` pair spans, and how a sub-manifest gets built per
+        # island for a partial range, is real cross-island work this batch
+        # does not attempt. Refusing loudly (CONFIG_ERROR) beats silently
+        # running the whole polyglot graph while looking like it honoured the
+        # flag — the same "loud, not silent" choice `--sandbox` already makes
+        # for a polyglot Manifest below.
+        if len(manifest.islands) > 1 and (from_module or to_module):
+            click.echo(
+                "✗ --from/--to do not yet support a polyglot Blueprint "
+                f"({len(manifest.islands)} islands) — module-range selection "
+                "across engine islands is not implemented in this release",
+                err=True,
+            )
+            sys.exit(exit_codes.CONFIG_ERROR)
+
         # ── Sandbox dry-run (short-circuit) ──────────────────────────────────────
         # Dev loop: run the compiled pipeline against sampled inputs with every
         # Egress skipped — no writes, no Surveyor, no self-healing, no
@@ -1199,6 +1261,15 @@ def run(
 
             if engine != "spark":
                 click.echo(f"✗ --sandbox requires engine=spark (got {engine!r})", err=True)
+                sys.exit(exit_codes.CONFIG_ERROR)
+            if len(manifest.islands) > 1:
+                _island_engines = ", ".join(sorted({isl.engine for isl in manifest.islands}))
+                click.echo(
+                    f"✗ --sandbox does not support a polyglot Blueprint "
+                    f"({len(manifest.islands)} islands: {_island_engines}) — a single-session "
+                    "dry-run cannot replay a multi-engine Manifest in this release",
+                    err=True,
+                )
                 sys.exit(exit_codes.CONFIG_ERROR)
 
             sandboxed_manifest, egress_targets = build_sandbox_manifest(manifest, sample)
@@ -1317,6 +1388,13 @@ def run(
         # scope conditions (approval mode, cascade) never change mid-run, so
         # repeating the warning every heal iteration would be noise.
         _progressive_scope_warned = False
+        # One-shot flag for the polyglot sandbox-skip notice — the same
+        # patch/candidate can pass through the gate pyramid several times in
+        # one run (heal-cache replay validation, deep_loop's in-context
+        # validate_cb, the final multi-patch commit check); the underlying
+        # reason (this Blueprint has >1 island) never changes mid-run, so
+        # only the first occurrence needs to say so.
+        _polyglot_sandbox_skip_warned = False
 
         def _fire_heal_hook(event: str, *, iter_run_id: str, hook_status: str, ctx) -> None:
             """Fire `hooks.on_patch_pending` / `hooks.on_healed` — mid-run
@@ -1337,6 +1415,25 @@ def run(
                 failure_ctx=ctx, session=session, engine=engine,
             )
 
+        # Per-module resolved engine (islands.py stamps the fully-resolved
+        # engine onto every enabled Module at compile time — see
+        # `compiler.py`'s `dataclasses.replace(m, engine=_resolved_engine[m.id])`).
+        # Only built/shown for a polyglot run — a single-engine run never
+        # gains this column, preserving the compat bar byte-for-byte.
+        _is_polyglot = len(manifest.islands) > 1
+        _module_engine: dict[str, str] = (
+            {m.id: m.engine for m in manifest.modules if m.engine} if _is_polyglot else {}
+        )
+        # Synthetic Handoff modules (§4.3/§10.9) — id -> {from_module,
+        # to_module, from_engine, to_engine}. Rendered as a first-class step
+        # (distinct marker, engine pair, bytes/duration), never folded into
+        # the Arcade tree-nesting below despite a handoff id containing
+        # "__" (`<from_id>__handoff__<to_id>`) the same way an Arcade
+        # child's namespaced id does.
+        _handoff_info: dict[str, dict] = {
+            m.id: m.config for m in manifest.modules if m.type == ModuleType.Handoff
+        }
+
         def _render_module_summary(_result) -> None:
             """Print the per-module ✓/✗ status block for one execution result.
 
@@ -1345,7 +1442,7 @@ def run(
             chronological order (execute → result → heal → next attempt). Metrics
             are a best-effort post-execute read from the obs store (short-lived
             connections, so the store is free by now)."""
-            _metrics: dict[str, tuple] = {}
+            _metrics: dict[str, dict] = {}
             try:
                 from aqueduct.stores.queries import run_detail as _run_detail
                 from aqueduct.stores.read import open_obs_read
@@ -1354,8 +1451,19 @@ def run(
                 if _rs is not None:
                     _det = _run_detail(_rs, _result.run_id)
                     if _det:
+                        # `run_detail` already merges a module_id's multiple
+                        # `module_metrics` rows into one `ProfileRow` (a
+                        # synthetic Handoff module gets a write-side row and
+                        # a read-side row under the SAME module_id — see
+                        # `stores/queries.py::run_detail`) — one entry per
+                        # module_id here, never overwritten.
                         for _p in _det.profile:
-                            _metrics[_p.module_id] = (_p.records_written, _p.duration_ms)
+                            _metrics[_p.module_id] = {
+                                "records_written": _p.records_written,
+                                "duration_ms": _p.duration_ms,
+                                "bytes_written": getattr(_p, "bytes_written", None),
+                                "bytes_read": getattr(_p, "bytes_read", None),
+                            }
             except Exception:
                 pass  # per-module profile read is best-effort; never fail for a missing metric
 
@@ -1380,13 +1488,20 @@ def run(
 
             # Tree view — Arcade-expanded children (`{arcade}__{child}`, the
             # expander's namespacing convention; `__` is rejected in user ids)
-            # nest under a synthetic parent row. Only THIS summary block nests:
-            # runtime logs, observability rows, and the failed_module footer
-            # keep the full flattened id so error correlation stays joinable.
+            # nest under a synthetic parent row. A synthetic Handoff module's
+            # id ALSO contains "__" (`<from_id>__handoff__<to_id>`) but is
+            # checked first and routed to its own row kind instead — folding
+            # it into the Arcade-child branch would misparse it as a child
+            # of whichever module happens to share its `from_id` prefix.
+            # Only THIS summary block nests/specializes: runtime logs,
+            # observability rows, and the failed_module footer keep the
+            # full flattened id so error correlation stays joinable.
             _rows: list[tuple[str, object]] = []
             _arc_children: dict[str, list] = {}
             for mr in _result.module_results:
-                if "__" in mr.module_id:
+                if mr.module_id in _handoff_info:
+                    _rows.append(("handoff", mr))
+                elif "__" in mr.module_id:
                     _arc = mr.module_id.split("__", 1)[0]
                     if _arc not in _arc_children:
                         _arc_children[_arc] = []
@@ -1398,6 +1513,7 @@ def run(
             _CHILD_PAD = 5  # child names start 5 columns deeper than top-level names
             _w = max(
                 [len(mr.module_id) for kind, mr in _rows if kind == "module"]
+                + [len(mr.module_id) for kind, mr in _rows if kind == "handoff"]
                 + [len(a) for kind, a in _rows if kind == "arcade"]
                 + [len(c.module_id.split("__", 1)[1]) + _CHILD_PAD
                    for cs in _arc_children.values() for c in cs],
@@ -1409,7 +1525,8 @@ def run(
                 if mr.status == ExecutionStatus.ERROR and mr.error:
                     line = f"{lead}{_icon(mr)} {name}  {click.style('— ' + concise_error(mr.error), fg='red')}"
                 else:
-                    rows, dur = _metrics.get(mr.module_id, (None, None))
+                    _m = _metrics.get(mr.module_id, {})
+                    rows, dur = _m.get("records_written"), _m.get("duration_ms")
                     meta = []
                     if mr.status == ExecutionStatus.SKIPPED and mr.module_id in _disabled_reason:
                         meta.append(_disabled_reason[mr.module_id])
@@ -1417,6 +1534,8 @@ def run(
                         meta.append(f"{rows:,} rows")
                     if _fmt_dur(dur):
                         meta.append(_fmt_dur(dur))
+                    if mr.module_id in _module_engine:
+                        meta.append(_module_engine[mr.module_id])
                     tail = _dim("  ·  ".join(meta)) if meta else ""
                     line = f"{lead}{_icon(mr)} {name.ljust(pad)}   {tail}".rstrip()
                 click.echo(line)
@@ -1434,9 +1553,44 @@ def run(
                         f"{warn_prefix}· {len(_notes) - _cap} more  ·  -v for full output"
                     ))
 
+            def _handoff_line(mr, pad, lead, warn_prefix):
+                """First-class rendering for a synthetic Handoff module's
+                result — the boundary it bridges (from → to, spark→duckdb),
+                bytes transferred, and duration, distinct from an ordinary
+                module row so a cross-engine transport step reads as what it
+                is rather than an anonymous module id."""
+                from aqueduct.cli.output import format_bytes as _format_bytes
+                from aqueduct.cli.style import dim as _dim
+                _cfg = _handoff_info[mr.module_id]
+                _boundary = (
+                    f"{_cfg.get('from_module')} → {_cfg.get('to_module')}  "
+                    f"({_cfg.get('from_engine')}→{_cfg.get('to_engine')})"
+                )
+                if mr.status == ExecutionStatus.ERROR and mr.error:
+                    line = f"{lead}{_icon(mr)} ⇄ {_boundary}  {click.style('— ' + concise_error(mr.error), fg='red')}"
+                else:
+                    _m = _metrics.get(mr.module_id, {})
+                    meta = []
+                    _bw, _br = _m.get("bytes_written"), _m.get("bytes_read")
+                    if _bw is not None:
+                        meta.append(f"{_format_bytes(_bw)} written")
+                    if _br is not None:
+                        meta.append(f"{_format_bytes(_br)} read")
+                    if _fmt_dur(_m.get("duration_ms")):
+                        meta.append(_fmt_dur(_m.get("duration_ms")))
+                    tail = _dim("  ·  ".join(meta)) if meta else ""
+                    line = f"{lead}{_icon(mr)} ⇄ {_boundary}   {tail}".rstrip()
+                click.echo(line)
+                for rule_id, msg in mr.warnings:
+                    from aqueduct.cli.output import warn as _output_warn
+                    _output_warn(rule_id, msg, prefix=warn_prefix, err=False)
+
             for kind, item in _rows:
                 if kind == "module":
                     _mr_line(item, item.module_id, _w, "  ", "   ↳ ")
+                    continue
+                if kind == "handoff":
+                    _handoff_line(item, _w, "  ", "   ↳ ")
                     continue
                 _kids = _arc_children[item]
                 # Parent row = worst child: any ✗ → ✗, else any ✓ → ✓, else ⏭.
@@ -1452,6 +1606,114 @@ def run(
                     _lead = "    " + click.style(_glyph, fg="bright_black") + " "
                     _mr_line(_kid, _kid.module_id.split("__", 1)[1],
                              _w - _CHILD_PAD, _lead, "       ↳ ")
+
+        def _announce_polyglot_sandbox_skip(_gate_result) -> None:
+            """A patch just applied to a polyglot Blueprint without a sandbox
+            replay (Gate 3 refuses to validate a multi-engine Manifest in
+            v1 — see ``patch/preview.py::run_sandbox_gate``, which returns
+            this `skip` instead of validating against only one of the
+            Blueprint's engines). Printed at the moment the patch is
+            applied, not only recorded to `patch_simulation` — a user who
+            has internalised "patches are sandbox-replayed before they
+            touch my Blueprint" needs to be told when that guarantee does
+            not hold this time. Single-engine runs never reach this (only
+            ever `manifest.islands` == 1), so this is additive, not a
+            change to today's skip handling. One-shot per run — see
+            `_polyglot_sandbox_skip_warned` above.
+            """
+            nonlocal _polyglot_sandbox_skip_warned
+            if (
+                not _polyglot_sandbox_skip_warned
+                and len(manifest.islands) > 1
+                and _gate_result is not None
+                and _gate_result.status == "skip"
+            ):
+                _polyglot_sandbox_skip_warned = True
+                from aqueduct.cli.style import warn as _style_warn
+                _style_warn(_gate_result.detail)
+
+        def _execute_target(target_manifest, *, run_id: str, resume_run_id: str | None = None, **kw):
+            """Execute *target_manifest* — the single-engine ``execute()``
+            call for a Manifest with exactly one island (byte-for-byte the
+            same call this code made before polyglot routing existed: same
+            kwargs dict, same ``filter_execute_kwargs`` call, same
+            ``ExecuteError`` handling), or ``run_polyglot()`` for one with
+            more than one.
+
+            ``kw`` carries whatever the specific call site already builds
+            for ``execute()`` (``store_dir``, ``checkpoint_root``,
+            ``surveyor``, ``depot``, ``from_module``, ``to_module``,
+            ``block_full_actions``, ``parallel``, ``use_observe``,
+            ``observability_store``, ``sampling``) — the three call sites in
+            this function pass different subsets (the main heal loop passes
+            the full set; the retry-execute calls after a patch pass a
+            narrower one), preserved exactly as each already did.
+
+            Returns ``(result, execute_exc)``. ``execute_exc`` is the raw
+            ``ExecuteError`` on the single-engine path only (kept so callers
+            can still feed it to ``surveyor.record(exc=...)`` for
+            stack_trace enrichment, exactly as today) — a polyglot
+            structural failure is already converted to a synthetic
+            ``ModuleResult`` inside ``run_polyglot()`` itself (see its
+            ``AqueductError`` wrap), so ``execute_exc`` is always ``None``
+            on that path.
+            """
+            if len(target_manifest.islands) <= 1:
+                from aqueduct.executor.protocol import filter_execute_kwargs
+                try:
+                    _filtered = filter_execute_kwargs(
+                        engine,
+                        dict(kw, run_id=run_id, resume_run_id=resume_run_id),
+                        suppress=cfg.warnings.suppress,
+                    )
+                    return execute(target_manifest, session, **_filtered), None
+                except ExecuteError as exc:
+                    return ExecutionResult(
+                        blueprint_id=target_manifest.blueprint_id,
+                        run_id=run_id,
+                        status=ExecutionStatus.ERROR,
+                        module_results=(
+                            ModuleResult(module_id="_executor", status=ExecutionStatus.ERROR, error=str(exc)),
+                        ),
+                    ), exc
+
+            # ── Polyglot ──────────────────────────────────────────────────
+            from aqueduct.executor.orchestrator import run_polyglot
+
+            _engine_configs: dict[str, dict] = {}
+            for _isl in target_manifest.islands:
+                _isl_cfg = getattr(cfg.engine, _isl.engine, None)
+                _conf = dict(getattr(_isl_cfg, "conf", None) or {})
+                if _isl.engine == "spark":
+                    # Same merge order the single-engine session build uses
+                    # (`{**cfg.engine.spark.conf, **manifest.spark_config}`)
+                    # — a per-module `engine.spark.conf` override in the
+                    # Blueprint wins over the engine-level default.
+                    _conf = {**_conf, **target_manifest.spark_config}
+                _engine_configs[_isl.engine] = _conf
+
+            polyglot_result = run_polyglot(
+                target_manifest,
+                run_id=run_id,
+                handoff_root=_handoff_root_abs,
+                keep_on_failure=cfg.handoff.keep_on_failure,
+                resume_run_id=resume_run_id,
+                store_dir=kw.get("store_dir", resolved_store_dir),
+                checkpoint_root=kw.get("checkpoint_root", checkpoint_root_abs),
+                surveyor=kw.get("surveyor", surveyor),
+                depot=kw.get("depot", depot),
+                observability_store=kw.get("observability_store", bundle.observability),
+                warnings_suppress=cfg.warnings.suppress,
+                engine_configs=_engine_configs,
+                master_url=master_url,
+                quiet_startup=not verbose,
+                block_full_actions=kw.get("block_full_actions", False),
+                parallel=kw.get("parallel", False),
+                use_observe=kw.get("use_observe", False),
+                sampling=kw.get("sampling"),
+                record_result=False,
+            )
+            return polyglot_result, None
 
         while True:
             # `iteration_run_id` is the per-iteration uuid used as `run_id`
@@ -1471,47 +1733,29 @@ def run(
                     )
                 except Exception:
                     pass  # iteration registration is best-effort; never let persistence block execution
-            execute_exc: ExecuteError | None = None
-            try:
-                # Filter Spark-flavoured optional capability kwargs the target
-                # engine can't honour (warns under engine_kwarg_ignored instead
-                # of a TypeError/silent drop — Phase 79) while still calling
-                # THIS process's already-resolved `execute` (get_executor(engine)
-                # from _load_engine_config), not a freshly re-resolved one.
-                from aqueduct.executor.protocol import filter_execute_kwargs
+            # `_execute_target` is the single-engine `execute()` call
+            # (byte-for-byte the same kwargs dict + filter_execute_kwargs +
+            # ExecuteError handling this code has always used) when
+            # `manifest.islands` is exactly one, or `run_polyglot()` for a
+            # >1-island Manifest — see its docstring above the loop.
+            result, execute_exc = _execute_target(
+                manifest,
+                run_id=iteration_run_id,
+                resume_run_id=resume_run_id if patch_count == 0 else None,
+                store_dir=resolved_store_dir,
+                checkpoint_root=checkpoint_root_abs,
+                surveyor=surveyor,
+                depot=depot,
+                from_module=from_module,
+                to_module=to_module,
+                block_full_actions=not cfg.danger.allow_full_probe_actions,
+                parallel=parallel,
+                use_observe=cfg.metrics.use_observe,
+                observability_store=bundle.observability,
+                sampling=probe_sampling,
+            )
 
-                _exec_kwargs = filter_execute_kwargs(
-                    engine,
-                    dict(
-                        run_id=iteration_run_id,
-                        store_dir=resolved_store_dir,
-                        checkpoint_root=checkpoint_root_abs,
-                        surveyor=surveyor,
-                        depot=depot,
-                        resume_run_id=resume_run_id if patch_count == 0 else None,
-                        from_module=from_module,
-                        to_module=to_module,
-                        block_full_actions=not cfg.danger.allow_full_probe_actions,
-                        parallel=parallel,
-                        use_observe=cfg.metrics.use_observe,
-                        observability_store=bundle.observability,
-                        sampling=probe_sampling,
-                    ),
-                    suppress=cfg.warnings.suppress,
-                )
-                result = execute(manifest, session, **_exec_kwargs)
-            except ExecuteError as exc:
-                execute_exc = exc
-                result = ExecutionResult(
-                    blueprint_id=manifest.blueprint_id,
-                    run_id=iteration_run_id,
-                    status=ExecutionStatus.ERROR,
-                    module_results=(
-                        ModuleResult(module_id="_executor", status=ExecutionStatus.ERROR, error=str(exc)),
-                    ),
-                )
-
-            failure_ctx = surveyor.record(result, exc=execute_exc)
+            failure_ctx = surveyor.record(result, exc=execute_exc, engine=result.failed_engine)
 
             # Chronological output: render THIS iteration's module outcomes now,
             # before any agent/heal block below. Replaces the old single post-loop
@@ -1652,11 +1896,17 @@ def run(
                                 failed_module=failure_ctx.failed_module,
                                 iteration_run_id=iteration_run_id,
                                 blueprint_id=manifest.blueprint_id,
-                                engine=engine,
+                                # The failing island's engine — matters only
+                                # if a patch happens to reduce a polyglot
+                                # Manifest to a single island (the gate then
+                                # stops skipping and actually builds a
+                                # session); a no-op otherwise.
+                                engine=(failure_ctx.engine or engine),
                                 sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
                                 sandbox_master_url=resolved_sandbox_master_url,
                                 warnings_suppress=cfg.warnings.suppress,
                             )
+                            _announce_polyglot_sandbox_skip(_rg3)
                             if _rg3 is not None and not _rg3_passed:
                                 _replay_ok = False
                                 click.echo(
@@ -1908,11 +2158,12 @@ def run(
                             failed_module=_vc_failed_module,
                             iteration_run_id=_vc_rid,
                             blueprint_id=_vc_bid,
-                            engine=engine,
+                            engine=(failure_ctx.engine or engine),
                             sandbox_mode=_vc_sandbox_mode,
                             sandbox_master_url=resolved_sandbox_master_url,
                             warnings_suppress=cfg.warnings.suppress,
                         )
+                        _announce_polyglot_sandbox_skip(_g3)
                         failures: list[str] = []
                         if _g2 is not None and _g2.status == "fail":
                             failures.append(
@@ -1947,7 +2198,7 @@ def run(
                     patch_store=_patch_store,
                     base_dir=manifest.base_dir,
                     spark_session=session,
-                    engine=engine,
+                    engine=(failure_ctx.engine or engine),
                     config_path=config_path,
                     store_dir=store_dir,
                 )
@@ -2032,7 +2283,7 @@ def run(
                             obs_store=_obs_store, patch_store=_patch_store,
                             base_dir=manifest.base_dir,
                             spark_session=session,
-                            engine=engine,
+                            engine=(link_failure_ctx.engine or engine),
                             config_path=config_path, store_dir=store_dir,
                         )
                     return _prog_generate_patch(
@@ -2040,7 +2291,10 @@ def run(
                             failure_ctx=link_failure_ctx,
                             model=resolved_agent_model,
                             patches_dir=patches_dir,
-                            engine=engine,
+                            # This chain LINK's own failing island, not the
+                            # run's nominal default — same reasoning as the
+                            # single-model/cascade call sites above.
+                            engine=(link_failure_ctx.engine or engine),
                             provider=resolved_agent_provider,
                             base_url=resolved_agent_base_url,
                             api_key=resolved_agent_api_key,
@@ -2080,20 +2334,19 @@ def run(
                         )
                     if _nm is None:
                         return None, None, None
-                    try:
-                        _r2 = execute(
-                            _nm, session, run_id=str(uuid.uuid4()),
-                            store_dir=resolved_store_dir, checkpoint_root=checkpoint_root_abs,
-                            surveyor=surveyor, depot=depot,
-                        )
-                    except ExecuteError as exc:
-                        _r2 = ExecutionResult(
-                            blueprint_id=manifest.blueprint_id, run_id=str(uuid.uuid4()),
-                            status=ExecutionStatus.ERROR,
-                            module_results=(ModuleResult(module_id="_executor", status=ExecutionStatus.ERROR, error=str(exc)),),
-                        )
+                    _r2, _exc2 = _execute_target(
+                        _nm, run_id=str(uuid.uuid4()),
+                        store_dir=resolved_store_dir, checkpoint_root=checkpoint_root_abs,
+                        surveyor=surveyor, depot=depot,
+                    )
                     _patch_ok = _r2.status == ExecutionStatus.SUCCESS
-                    _fctx2 = surveyor.record(_r2, patched=_patch_ok)
+                    # `exc=` is deliberately NOT forwarded here — this call
+                    # site never has, even on the single-engine path (see
+                    # `_execute_target`'s docstring: `_exc2` is only ever
+                    # non-None on that path). Preserving that exactly is the
+                    # single-engine compat bar; only `engine=` is new, and
+                    # it is a no-op there (`_r2.failed_engine` stays None).
+                    _fctx2 = surveyor.record(_r2, patched=_patch_ok, engine=_r2.failed_engine)
                     return _nm, _r2, _fctx2
 
                 _resolved_max_chain = resolved_agent_max_chain or 3
@@ -2191,7 +2444,12 @@ def run(
                     tiers=list(_cascade_tiers),
                     failure_ctx=failure_ctx,
                     patches_dir=patches_dir,
-                    engine=engine,
+                    # The FAILING island's engine (Surveyor.record()'s
+                    # per-island override, §10.9) drives the healing
+                    # prompt's persona/rules — never the run's nominal
+                    # default. Identical to `engine` for a single-engine run
+                    # (`failure_ctx.engine` is always that same value there).
+                    engine=(failure_ctx.engine or engine),
                     provider=resolved_agent_provider,
                     base_url=resolved_agent_base_url,
                     api_key=resolved_agent_api_key,
@@ -2225,7 +2483,9 @@ def run(
                         failure_ctx=failure_ctx,
                         model=resolved_agent_model,
                         patches_dir=patches_dir,
-                        engine=engine,
+                        # Same reasoning as generate_cascade_patch above —
+                        # the failing island's engine, not the run default.
+                        engine=(failure_ctx.engine or engine),
                         provider=resolved_agent_provider,
                         base_url=resolved_agent_base_url,
                         api_key=resolved_agent_api_key,
@@ -2491,11 +2751,12 @@ def run(
                         failed_module=failure_ctx.failed_module,
                         iteration_run_id=iteration_run_id,
                         blueprint_id=manifest.blueprint_id,
-                        engine=engine,
+                        engine=(failure_ctx.engine or engine),
                         sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
                         sandbox_master_url=resolved_sandbox_master_url,
                         warnings_suppress=cfg.warnings.suppress,
                     )
+                    _announce_polyglot_sandbox_skip(_g3)
                 _block_on_g4 = (
                     manifest.agent.block_on_explain_regression
                     if manifest.agent.block_on_explain_regression is not None
@@ -2582,24 +2843,19 @@ def run(
                         model_cascade_position=_cascade_pos,
                     )
                     break
-                try:
-                    result2 = execute(
-                        new_manifest, session,
-                        run_id=str(uuid.uuid4()),
-                        store_dir=resolved_store_dir,
-                        checkpoint_root=checkpoint_root_abs,
-                        surveyor=surveyor,
-                        depot=depot,
-                    )
-                except ExecuteError as exc:
-                    result2 = ExecutionResult(
-                        blueprint_id=manifest.blueprint_id,
-                        run_id=str(uuid.uuid4()),
-                        status=ExecutionStatus.ERROR,
-                        module_results=(ModuleResult(module_id="_executor", status=ExecutionStatus.ERROR, error=str(exc)),),
-                    )
+                result2, _exc2 = _execute_target(
+                    new_manifest,
+                    run_id=str(uuid.uuid4()),
+                    store_dir=resolved_store_dir,
+                    checkpoint_root=checkpoint_root_abs,
+                    surveyor=surveyor,
+                    depot=depot,
+                )
                 patch_success = result2.status == ExecutionStatus.SUCCESS
-                failure_ctx2 = surveyor.record(result2, patched=patch_success)
+                # `exc=` deliberately not forwarded — this call site never has
+                # (see the analogous note at `_prog_apply_and_execute` above);
+                # only `engine=` is new, a no-op for single-engine.
+                failure_ctx2 = surveyor.record(result2, patched=patch_success, engine=result2.failed_engine)
                 surveyor.record_healing_outcome(
                     run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
                     parent_run_id=run_id,

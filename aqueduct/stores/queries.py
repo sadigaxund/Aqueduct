@@ -282,17 +282,38 @@ def run_detail(store: Any, run_id: str) -> RunDetail | None:
         for m in mr
     ]
     # Order the profile to match execution order (the module_results order).
-    by_id = {
-        p["module_id"]: ProfileRow(
-            module_id=p["module_id"],
-            records_written=p.get("records_written"),
-            bytes_written=p.get("bytes_written"),
-            duration_ms=p.get("duration_ms"),
-            records_read=p.get("records_read"),
-            bytes_read=p.get("bytes_read"),
+    #
+    # A module_id can own MORE than one module_metrics row — a synthetic
+    # Handoff module (§10.9) gets exactly two: the WRITE side (bytes_written,
+    # its own duration) and the READ side (bytes_read, its own duration),
+    # never both fields on one row. Every ordinary module still gets exactly
+    # one row, so this merge is a no-op there. MERGE by module_id rather
+    # than a last-row-wins dict comprehension — the latter silently dropped
+    # whichever fields the LATER row didn't carry (a Handoff module would
+    # report only its read-side bytes, never its write-side ones, or vice
+    # versa depending on row order).
+    by_id: dict[str, ProfileRow] = {}
+    for p in prof_rows:
+        mid = p["module_id"]
+        existing = by_id.get(mid)
+        if existing is None:
+            by_id[mid] = ProfileRow(
+                module_id=mid,
+                records_written=p.get("records_written"),
+                bytes_written=p.get("bytes_written"),
+                duration_ms=p.get("duration_ms"),
+                records_read=p.get("records_read"),
+                bytes_read=p.get("bytes_read"),
+            )
+            continue
+        by_id[mid] = ProfileRow(
+            module_id=mid,
+            records_written=existing.records_written if p.get("records_written") is None else p.get("records_written"),
+            bytes_written=existing.bytes_written if p.get("bytes_written") is None else p.get("bytes_written"),
+            duration_ms=(existing.duration_ms or 0) + (p.get("duration_ms") or 0) if p.get("duration_ms") is not None or existing.duration_ms is not None else None,
+            records_read=existing.records_read if p.get("records_read") is None else p.get("records_read"),
+            bytes_read=existing.bytes_read if p.get("bytes_read") is None else p.get("bytes_read"),
         )
-        for p in prof_rows
-    }
     order = {m.module_id: i for i, m in enumerate(modules)}
     profile = sorted(by_id.values(), key=lambda p: order.get(p.module_id, len(order)))
     return RunDetail(run, modules, profile)
