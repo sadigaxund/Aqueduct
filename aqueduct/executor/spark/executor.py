@@ -423,6 +423,35 @@ def _frame_key(from_id: str, port: str) -> str:
     return from_id if port == "main" else f"{from_id}.{port}"
 
 
+def _effective_frame_key(edge: Edge, modules_by_id: dict[str, Module]) -> str:
+    """The key a BY-NAME downstream reference (Channel `op: sql`/`op: join`'s
+    query text, a Funnel's `inputs:` list) should resolve to for *edge* —
+    same as `_frame_key(edge.from_id, edge.port)` unless `edge.from_id`
+    names a synthetic Handoff module.
+
+    A Blueprint author writes `FROM extract` or `inputs: [extract]` before
+    compilation ever knows a boundary will land on that exact edge — the
+    crossing must stay transparent to a reference that names its upstream
+    by id. When it IS a Handoff, resolve through to the handoff's ORIGINAL
+    upstream name (`config["from_module"]` / `config["port"]`) instead of
+    the handoff module's own generated id.
+
+    This is a NAMING concern only — the VALUE is still fetched from
+    `frame_store` under the real `_frame_key(edge.from_id, edge.port)` (the
+    handoff's own bare id on the read side); only the key exposed to
+    `execute_channel`/`execute_funnel` changes. Purely edge-STRUCTURE
+    consumers (Egress, Junction, Assert's single upstream — none of which
+    look their upstream up by name) don't need this and keep using
+    `_frame_key` directly.
+    """
+    src = modules_by_id.get(edge.from_id)
+    if src is not None and src.type == ModuleType.Handoff:
+        from_module = src.config.get("from_module", edge.from_id)
+        from_port = src.config.get("port", "main")
+        return _frame_key(from_module, from_port)
+    return _frame_key(edge.from_id, edge.port)
+
+
 def _apply_spillway_filter(val: Any, edge: Edge) -> Any:
     """Typed catch: on a spillway edge with ``error_types``, keep only rows
     whose ``_aq_error_type`` label matches. Lazy transformation — zero Spark
@@ -869,6 +898,9 @@ def execute(
     frame_store: dict[str, Any] = {}
     module_results: list[ModuleResult] = []
     _ingress_obs: dict[str, Any] = {}
+    # For `_effective_frame_key` — resolving a BY-NAME upstream reference
+    # (Channel SQL, Funnel `inputs:`) transparently across a Handoff.
+    modules_by_id: dict[str, Module] = {m.id: m for m in manifest.modules}
 
     # Cancellation state — set by the first failing component; sibling threads
     # skip their remaining modules when they see it.
@@ -1013,7 +1045,7 @@ def execute(
                         )
                         _signal_fail()
                         return
-                    upstream_dfs[edge.from_id] = val
+                    upstream_dfs[_effective_frame_key(edge, modules_by_id)] = val
                 else:
                     mod_policy = _module_retry_policy(module, manifest.retry_policy)
                     _t0 = time.monotonic()
@@ -1194,6 +1226,11 @@ def execute(
                 funnel_upstream: dict[str, Any] = {}
                 skipped = False
                 for edge in data_edges:
+                    # Fetch by the REAL frame_store key (a Handoff module's
+                    # read side always writes its own bare id); expose to
+                    # `execute_funnel` (matched against the Blueprint's
+                    # authored `inputs:` list) under the EFFECTIVE name —
+                    # see `_effective_frame_key`.
                     store_key = _frame_key(edge.from_id, edge.port)
                     val = frame_store.get(store_key)
                     if _is_gate_closed(val):
@@ -1208,7 +1245,9 @@ def execute(
                         )
                         _signal_fail()
                         return
-                    funnel_upstream[store_key] = _apply_spillway_filter(val, edge)
+                    funnel_upstream[_effective_frame_key(edge, modules_by_id)] = (
+                        _apply_spillway_filter(val, edge)
+                    )
 
                 if skipped:
                     frame_store[module.id] = _GATE_CLOSED
@@ -1514,7 +1553,17 @@ def execute(
             # no fsspec here; Spark's own `dir_bytes` already understands local
             # and Hadoop-FS-native remote paths.
             elif module.type == ModuleType.Handoff:
-                main_edges = _incoming_main(module.id, manifest.edges)
+                # `_incoming_data` (any non-signal port), NOT `_incoming_main`:
+                # a boundary edge preserves its ORIGINAL port onto both edges
+                # `insert_handoff_modules` splices in (aqueduct/compiler/
+                # handoff.py) — a Junction branch edge crossing an engine
+                # boundary directly carries the branch id as its port (e.g.
+                # `port: big`), not `"main"`. Using `_incoming_main` here
+                # made a branch-fed Handoff's WRITE side look like it had NO
+                # incoming edge, so it was misdispatched as the READ side and
+                # attempted `spark.read.parquet()` on a spill directory that
+                # was never written — a `FileNotFoundException`.
+                main_edges = _incoming_data(module.id, manifest.edges)
                 spill_uri = (handoff_spill_uris or {}).get(module.id)
                 if not spill_uri:
                     err = f"[{module.id}] no spill URI resolved for this handoff module"

@@ -47,11 +47,26 @@ from aqueduct.parser.models import Edge, Module, ModuleType
 # inheritance-parent lookup and island connectivity. Excludes "signal"
 # (Probe -> Regulator control signal, not a data dependency; Regulators are
 # themselves engine-agnostic gates, not islands-worth of behaviour).
-_DATA_PORTS: frozenset[str] = frozenset({"main", "spillway"})
+#
+# This must be an EXCLUDE-list, not an include-list: a Junction branch edge's
+# `port` is the branch id (an arbitrary string — e.g. `port: active`, see
+# `aqueduct/executor/spark/junction.py`'s config docstring), not `"main"`. An
+# earlier version of this module used an include-list of `{"main",
+# "spillway"}`, which silently dropped every Junction branch edge from both
+# engine inheritance (`_parents`) and island connectivity (`derive_islands`) —
+# a Junction and its branch targets landed in SEPARATE islands even on the
+# SAME engine (verified against `gallery/aqtests/03_junction_branch`: 3
+# islands instead of 1), which then misroutes an ordinary single-engine
+# Junction blueprint through `run_polyglot()` (`len(manifest.islands) > 1`)
+# and drops the branch edges entirely in `_sub_manifest`'s both-endpoints
+# filter. Mirrors the real executor's own `_is_data_edge`
+# (`aqueduct/executor/spark/executor.py`, `edge.port not in _SIGNAL_PORTS`),
+# which already gets this right.
+_SIGNAL_PORTS: frozenset[str] = frozenset({"signal"})
 
 
 def _is_data_edge(edge: Edge) -> bool:
-    return edge.port in _DATA_PORTS
+    return edge.port not in _SIGNAL_PORTS
 
 
 def _parents(module_id: str, modules_by_id: dict[str, Module], edges: list[Edge]) -> list[str]:

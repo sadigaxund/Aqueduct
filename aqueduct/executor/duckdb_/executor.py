@@ -189,6 +189,21 @@ def _frame_key(from_id: str, port: str) -> str:
     return from_id if port == "main" else f"{from_id}.{port}"
 
 
+def _effective_frame_key(edge: Edge, modules_by_id: dict[str, Module]) -> str:
+    """Same as `executor/spark/executor.py::_effective_frame_key` — see its
+    docstring. A Channel's SQL text or a Funnel's `inputs:` names its
+    upstream by the ORIGINAL Blueprint id, authored before compilation ever
+    knows a boundary will land there; when `edge.from_id` is a synthetic
+    Handoff module, resolve through to its `config["from_module"]`/
+    `config["port"]` instead of the handoff's own generated id."""
+    src = modules_by_id.get(edge.from_id)
+    if src is not None and src.type == ModuleType.Handoff:
+        from_module = src.config.get("from_module", edge.from_id)
+        from_port = src.config.get("port", "main")
+        return _frame_key(from_module, from_port)
+    return _frame_key(edge.from_id, edge.port)
+
+
 def _is_gate_closed(value: Any) -> bool:
     return value is _GATE_CLOSED
 
@@ -395,6 +410,9 @@ def execute(
     frame_store: dict[str, Any] = {}
     module_results: list[ModuleResult] = []
     _pending: dict[str, Any] = {}
+    # For `_effective_frame_key` — resolving a BY-NAME upstream reference
+    # (Channel SQL, Funnel `inputs:`) transparently across a Handoff.
+    modules_by_id: dict[str, Module] = {m.id: m for m in manifest.modules}
 
     for module in order:
         _collect_module_warnings()
@@ -465,7 +483,7 @@ def execute(
                 if val is None:
                     module_results.append(_mr(module_id=module.id, status=ExecutionStatus.ERROR, error=f"[{module.id}] upstream {edge.from_id!r} produced no relation."))
                     return _fail(manifest.blueprint_id, run_id, module_results)
-                upstream[edge.from_id] = val
+                upstream[_effective_frame_key(edge, modules_by_id)] = val
             if gate_closed_upstream:
                 continue
 
@@ -549,7 +567,7 @@ def execute(
                     val = val.filter(
                         "_aq_error_type IN (" + ",".join(f"'{t}'" for t in edge.error_types) + ")"
                     )
-                funnel_upstream[store_key] = val
+                funnel_upstream[_effective_frame_key(edge, modules_by_id)] = val
             if skipped:
                 frame_store[module.id] = _GATE_CLOSED
                 module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
@@ -650,7 +668,13 @@ def execute(
         # multi-part `df.write.parquet(dir)` are cross-readable because both
         # sides glob/scan every `*.parquet` file under the directory.
         elif module.type == ModuleType.Handoff:
-            main_edges = _incoming_main(module.id, manifest.edges)
+            # `_incoming_data` (any non-signal port), NOT `_incoming_main` —
+            # see the matching fix + comment in `executor/spark/executor.py`'s
+            # Handoff branch: a Junction branch edge crossing the boundary
+            # directly preserves its branch-id port onto the handoff's
+            # incoming edge, not `"main"`, and `_incoming_main` silently
+            # misdispatched that WRITE side as a READ side.
+            main_edges = _incoming_data(module.id, manifest.edges)
             spill_uri = (handoff_spill_uris or {}).get(module.id)
             if not spill_uri:
                 module_results.append(_mr(

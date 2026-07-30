@@ -1,7 +1,9 @@
 """Phase 81 Step 2 — synthetic cross-engine handoff module insertion.
 
 Covers: insertion at a boundary edge (id, type, config contract), edge
-rewiring (`A -> B` becomes `A -> handoff -> B`, port preserved), zero
+rewiring (`A -> B` becomes `A -> handoff -> B`: the write-side edge keeps
+the original port, the read-side edge is always normalized to `main` — see
+`test_non_main_port_boundary_edge_normalizes_read_side_to_main`), zero
 insertions for disjoint different-engine components and for a
 single-engine Blueprint (byte-identical to Step 1), a user-declared
 `type: Handoff` module rejected at parse time, lineage passthrough across
@@ -104,6 +106,32 @@ def test_edge_rewiring_preserves_port_and_leaves_other_edges_untouched():
     assert Edge(from_id="a", to_id=handoff_id, port="main") in new_edges
     assert Edge(from_id=handoff_id, to_id="b", port="main") in new_edges
     assert len(new_edges) == 3  # untouched + 2 rewired
+
+
+def test_non_main_port_boundary_edge_normalizes_read_side_to_main():
+    """A Junction branch edge that crosses the boundary DIRECTLY (port is
+    the branch id, e.g. `port="big"`) must keep that port on the WRITE-side
+    edge (`a -> handoff`) — that's what lets the executor's write-side
+    lookup find `frame_store[_frame_key("a", "big")]` — but the READ-side
+    edge (`handoff -> b`) must be `port="main"`, never the original branch
+    port: both engines' Handoff runtime write the read side's value to
+    `frame_store[handoff_id]` (a bare key, never port-suffixed), so `b`'s
+    own incoming-edge lookup must resolve to that same bare key
+    (`_frame_key(handoff_id, "main") == handoff_id`). Preserving the branch
+    port on this edge instead made `b` look for a key that was never
+    written — the regression this test guards."""
+    modules = [_m("a", type_=ModuleType.Junction), _m("b")]
+    boundary_edge = Edge(from_id="a", to_id="b", port="big")
+    edges = [boundary_edge]
+    boundaries = [BoundaryEdge(edge=boundary_edge, from_engine="spark", to_engine="duckdb")]
+
+    new_modules, new_edges, insertions = insert_handoff_modules(modules, edges, boundaries)
+
+    handoff_id = insertions[0].module.id
+    assert Edge(from_id="a", to_id=handoff_id, port="big") in new_edges
+    assert Edge(from_id=handoff_id, to_id="b", port="main") in new_edges
+    # The module's own config still records the ORIGINAL port (informational).
+    assert insertions[0].module.config["port"] == "big"
 
 
 def test_zero_boundaries_returns_inputs_unchanged():

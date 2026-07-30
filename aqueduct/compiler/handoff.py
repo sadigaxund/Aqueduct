@@ -34,9 +34,11 @@ A handoff module's `config` dict:
         "to_module": "<downstream module id>",
         "from_engine": "<engine name>",
         "to_engine": "<engine name>",
-        "port": "<original boundary edge's port — always 'main' in v1,
-                  since a cross-island spillway edge is already a
-                  CompileError before this module ever runs>",
+        "port": "<original boundary edge's port, preserved verbatim — 'main'
+                  for an ordinary edge, or a Junction branch id for a branch
+                  edge that crosses the boundary directly ('spillway' is
+                  already a CompileError before this module ever runs, see
+                  islands.py::validate_spillway_islands>",
     }
 
 **Not user-writable.** `ModuleType.Handoff` is excluded from
@@ -119,10 +121,34 @@ def insert_handoff_modules(
 ) -> tuple[list[Module], list[Edge], list[HandoffInsertion]]:
     """Insert one synthetic Handoff module per boundary edge.
 
-    `A -> B` (a boundary edge) becomes `A -> handoff -> B`: the original
-    edge is replaced by two edges carrying the SAME port, preserving edge
-    semantics exactly (no port/error_types loss). Every non-boundary edge
-    is returned unchanged, in its original position.
+    `A -> B` (a boundary edge) becomes `A -> handoff -> B`, as TWO edges
+    that are NOT simply the original edge duplicated:
+
+    - `A -> handoff` keeps the ORIGINAL edge's port. This is what makes the
+      write side resolve the right upstream frame — e.g. a Junction branch
+      edge crossing the boundary directly has `port` equal to the branch
+      id, and the executor's write-side lookup is `frame_store[_frame_key
+      (from_id, port)]` (aqueduct/executor/spark/executor.py, mirrored in
+      duckdb_/executor.py).
+    - `handoff -> B` is always `port="main"`, regardless of the original
+      edge's port. A Handoff module has exactly one output, and both
+      engines' runtime Handoff dispatch write it to the READ side's
+      frame_store under the handoff module's OWN bare id
+      (`frame_store[module.id] = ...`, never port-suffixed) — so the edge
+      that hands it to `B` must resolve to that same bare key
+      (`_frame_key(handoff_id, "main") == handoff_id`). Preserving the
+      original branch port on THIS edge instead (an earlier version of this
+      function did) made a downstream module look up
+      `f"{handoff_id}.{branch_id}"`, which was never written — "upstream
+      produced no DataFrame" for any boundary edge whose original port
+      wasn't already `"main"`.
+
+    The handoff module's own `config["port"]` still records the ORIGINAL
+    edge's port verbatim (informational only — nothing at runtime reads it
+    off the module config; see the two edges above for what execution
+    actually keys on).
+
+    Every non-boundary edge is returned unchanged, in its original position.
 
     Zero boundaries (disjoint components on different engines produce
     none — no edge connects them at all; a single-engine Blueprint has
@@ -163,7 +189,7 @@ def insert_handoff_modules(
         )
         new_modules.append(handoff_module)
         new_edges.append(Edge(from_id=e.from_id, to_id=handoff_id, port=e.port))
-        new_edges.append(Edge(from_id=handoff_id, to_id=e.to_id, port=e.port))
+        new_edges.append(Edge(from_id=handoff_id, to_id=e.to_id, port="main"))
         insertions.append(HandoffInsertion(module=handoff_module, boundary=boundary))
 
     return new_modules, new_edges, insertions
