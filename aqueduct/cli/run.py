@@ -3,6 +3,7 @@
 No behaviour change. The click group + shared helpers come from the package;
 commands register onto `cli` when imported at the bottom of __init__.
 """
+
 from __future__ import annotations
 
 import json
@@ -77,6 +78,7 @@ def compile(
     from aqueduct.compiler.compiler import compile as compiler_compile
     from aqueduct.config import ConfigError
     from aqueduct.parser.parser import ParseError, parse
+
     try:
         # Auto-discover aqueduct.yml (CWD walk-up) like every other command.
         _cfg = _load_config_with_env(None, quiet=True)
@@ -95,10 +97,13 @@ def compile(
     execution_date = None
     if execution_date_str:
         from datetime import date as _date
+
         try:
             execution_date = _date.fromisoformat(execution_date_str)
         except ValueError:
-            click.echo(f"✗ --execution-date must be YYYY-MM-DD, got: {execution_date_str!r}", err=True)
+            click.echo(
+                f"✗ --execution-date must be YYYY-MM-DD, got: {execution_date_str!r}", err=True
+            )
             sys.exit(exit_codes.USAGE_ERROR)
 
     try:
@@ -110,7 +115,10 @@ def compile(
     try:
         _dep = getattr(_cfg, "deployment", None) if _cfg is not None else None
         manifest = _compile_with_warnings(
-            compiler_compile, bp, blueprint_path=Path(blueprint), execution_date=execution_date,
+            compiler_compile,
+            bp,
+            blueprint_path=Path(blueprint),
+            execution_date=execution_date,
             deployment_env=getattr(_dep, "env", None),
             deployment_target=getattr(_dep, "target", None),
             engine=getattr(_dep, "engine", None) or "spark",
@@ -142,15 +150,17 @@ def _render_compile_show(manifest: Any, show: str) -> str:
         return _format_provenance_table(manifest_dict.get("provenance_map") or {})
 
     # "all" — full manifest + readable tables appended
-    return "\n".join([
-        json.dumps(manifest_dict, indent=2),
-        "",
-        "── Provenance ────────────────────────────────────────────────────────",
-        _format_provenance_table(manifest_dict.get("provenance_map") or {}),
-        "",
-        "── Inputs fingerprint ────────────────────────────────────────────────",
-        _format_inputs_fingerprint(manifest_dict.get("inputs_fingerprint") or {}),
-    ])
+    return "\n".join(
+        [
+            json.dumps(manifest_dict, indent=2),
+            "",
+            "── Provenance ────────────────────────────────────────────────────────",
+            _format_provenance_table(manifest_dict.get("provenance_map") or {}),
+            "",
+            "── Inputs fingerprint ────────────────────────────────────────────────",
+            _format_inputs_fingerprint(manifest_dict.get("inputs_fingerprint") or {}),
+        ]
+    )
 
 
 def _format_inputs_fingerprint(fingerprint: dict) -> str:
@@ -164,18 +174,27 @@ def _format_inputs_fingerprint(fingerprint: dict) -> str:
         mtime = entry.get("last_modified") or "—"
         size = f"{size_b:,} B" if isinstance(size_b, int) else "—"
         rows.append((module_id, path, size, str(mtime)))
-    widths = [max(len(r[c]) for r in rows + [("module_id", "path", "size", "last_modified")]) for c in range(4)]
+    widths = [
+        max(len(r[c]) for r in rows + [("module_id", "path", "size", "last_modified")])
+        for c in range(4)
+    ]
     header = (
-        "module_id".ljust(widths[0]) + "  "
-        + "path".ljust(widths[1]) + "  "
-        + "size".ljust(widths[2]) + "  "
+        "module_id".ljust(widths[0])
+        + "  "
+        + "path".ljust(widths[1])
+        + "  "
+        + "size".ljust(widths[2])
+        + "  "
         + "last_modified"
     )
     sep = "  ".join("-" * w for w in widths)
     body = "\n".join(
-        r[0].ljust(widths[0]) + "  "
-        + r[1].ljust(widths[1]) + "  "
-        + r[2].ljust(widths[2]) + "  "
+        r[0].ljust(widths[0])
+        + "  "
+        + r[1].ljust(widths[1])
+        + "  "
+        + r[2].ljust(widths[2])
+        + "  "
         + r[3]
         for r in rows
     )
@@ -189,9 +208,7 @@ def _format_provenance_table(provenance_map: dict) -> str:
     context_section = provenance_map.get("context") or {}
     if context_section:
         out.append("# Context")
-        out.append(_format_provenance_rows(
-            (key, prov) for key, prov in context_section.items()
-        ))
+        out.append(_format_provenance_rows((key, prov) for key, prov in context_section.items()))
         out.append("")
 
     modules_section = provenance_map.get("modules") or {}
@@ -202,9 +219,7 @@ def _format_provenance_table(provenance_map: dict) -> str:
             out.append("  (no config entries — module had empty config block)")
             out.append("")
             continue
-        out.append(_format_provenance_rows(
-            (key, prov) for key, prov in cfg_prov.items()
-        ))
+        out.append(_format_provenance_rows((key, prov) for key, prov in cfg_prov.items()))
         out.append("")
     if not out:
         return "(provenance_map is empty — compile from source first)"
@@ -225,10 +240,7 @@ def _format_provenance_rows(pairs) -> str:
     widths = [max(len(r[c]) for r in [headers] + rows) for c in range(4)]
     header = "  " + "  ".join(h.ljust(widths[i]) for i, h in enumerate(headers))
     sep = "  " + "  ".join("-" * w for w in widths)
-    body = "\n".join(
-        "  " + "  ".join(r[i].ljust(widths[i]) for i in range(4))
-        for r in rows
-    )
+    body = "\n".join("  " + "  ".join(r[i].ljust(widths[i]) for i in range(4)) for r in rows)
     return "\n".join([header, sep, body])
 
 
@@ -239,9 +251,16 @@ def _zero_token_attempt(sig_exact):
     produces the record rather than two duplicated inline constructors.
     """
     from types import SimpleNamespace
-    return SimpleNamespace(attempt_num=0, signature=sig_exact,
-                           tokens_in=0, tokens_out=0, latency_ms=0,
-                           gate_that_rejected=None, escalated=False)
+
+    return SimpleNamespace(
+        attempt_num=0,
+        signature=sig_exact,
+        tokens_in=0,
+        tokens_out=0,
+        latency_ms=0,
+        gate_that_rejected=None,
+        escalated=False,
+    )
 
 
 from dataclasses import dataclass as _dc_frozen  # noqa: E402  (intentional mid-file import)
@@ -256,6 +275,7 @@ if _t:
 class _LoadConfigResult:
     """Return-type bundle for ``_load_engine_config`` — all values derived from
     config/env/CLI resolution, before parse/compile/execute."""
+
     cfg: AqueductConfig
     resolved_store_dir: str | None
     resolved_webhook: WebhookEndpointConfig | None
@@ -299,8 +319,10 @@ def _load_engine_config(
     try:
         from aqueduct.config import ConfigError, WebhookEndpointConfig
         from aqueduct.config import load_config as _load_cfg
+
         cfg = _load_cfg(config_path_abs)
         from aqueduct.cli import _apply_warnings_from_cfg
+
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
         _err(f"config error: {exc}")
@@ -310,6 +332,7 @@ def _load_engine_config(
     blueprint_set_nested: dict = {}
     if set_items:
         from aqueduct.overrides import OverrideError, apply_to_model, route_overrides
+
         try:
             _config_set_nested, blueprint_set_nested = route_overrides(
                 set_items, allow_blueprint=True
@@ -349,30 +372,40 @@ def _load_engine_config(
     # ── Danger settings startup warning ──────────────────────────────────────
     danger_pairs = []
     if cfg.danger.allow_full_probe_actions:
-        danger_pairs.append((
-            "danger-full-probe-actions",
-            "allow_full_probe_actions=true — full Spark actions in Probes enabled",
-        ))
+        danger_pairs.append(
+            (
+                "danger-full-probe-actions",
+                "allow_full_probe_actions=true — full Spark actions in Probes enabled",
+            )
+        )
     if cfg.danger.allow_multi_patch:
-        danger_pairs.append((
-            "danger-multi-patch",
-            "allow_multi_patch=true — successive LLM patches without human review",
-        ))
+        danger_pairs.append(
+            (
+                "danger-multi-patch",
+                "allow_multi_patch=true — successive LLM patches without human review",
+            )
+        )
     if cfg.danger.allow_full_preflight:
-        danger_pairs.append((
-            "danger-full-preflight",
-            "allow_full_preflight=true — full-dataset sandbox replay (no Egress writes)",
-        ))
+        danger_pairs.append(
+            (
+                "danger-full-preflight",
+                "allow_full_preflight=true — full-dataset sandbox replay (no Egress writes)",
+            )
+        )
     if cfg.danger.allow_skip_sandbox:
-        danger_pairs.append((
-            "danger-skip-sandbox",
-            "allow_skip_sandbox=true — patches go straight to production, no sandbox",
-        ))
+        danger_pairs.append(
+            (
+                "danger-skip-sandbox",
+                "allow_skip_sandbox=true — patches go straight to production, no sandbox",
+            )
+        )
     if cfg.danger.allow_command_hooks:
-        danger_pairs.append((
-            "danger-command-hooks",
-            "allow_command_hooks=true — blueprint `command:` hooks run arbitrary subprocesses",
-        ))
+        danger_pairs.append(
+            (
+                "danger-command-hooks",
+                "allow_command_hooks=true — blueprint `command:` hooks run arbitrary subprocesses",
+            )
+        )
     # Emission deferred to the caller (after the info-line preamble) so the
     # `⚠ danger` block doesn't interleave the dim `· env/overrides/secrets ·` lines.
 
@@ -386,6 +419,7 @@ def _load_engine_config(
     try:
         from aqueduct.errors import AqueductError
         from aqueduct.executor import get_executor
+
         execute = get_executor(engine)
     except (NotImplementedError, ValueError, AqueductError) as exc:
         _err(f"engine error: {exc}")
@@ -393,6 +427,7 @@ def _load_engine_config(
 
     # ── Probe sampling ────────────────────────────────────────────────────────
     from aqueduct.executor.spark.probe import ProbeSampling
+
     probes_cfg = cfg.probes
     probe_sampling = ProbeSampling(
         max_sample_rows=probes_cfg.max_sample_rows,
@@ -418,9 +453,10 @@ def _load_engine_config(
 @_dc_frozen(frozen=True)
 class _CompileResult:
     """Return-type bundle for ``_do_compile`` — parse + compile → manifest + store wiring."""
+
     manifest: object  # Manifest
-    bundle: object     # StoreBundle
-    depot: object      # DepotStore
+    bundle: object  # StoreBundle
+    depot: object  # DepotStore
     depots_wrapped: dict
     execution_date: object
     cli_overrides: dict
@@ -437,6 +473,7 @@ def _emit_explain_regressions(g4) -> None:
     if g4 is None or getattr(g4, "status", None) != "warn":
         return
     from aqueduct.cli.output import warn as _warn
+
     for _r in getattr(g4, "regressions", ()) or ():
         _warn("explain_regression", _r.detail)
 
@@ -478,10 +515,13 @@ def _do_compile(
     execution_date = None
     if execution_date_str:
         from datetime import date as _date
+
         try:
             execution_date = _date.fromisoformat(execution_date_str)
         except ValueError:
-            click.echo(f"\u2717 --execution-date must be YYYY-MM-DD, got: {execution_date_str!r}", err=True)
+            click.echo(
+                f"\u2717 --execution-date must be YYYY-MM-DD, got: {execution_date_str!r}", err=True
+            )
             _sys.exit(exit_codes.USAGE_ERROR)
 
     # ── Parse ──────────────────────────────────────────────────────────────────
@@ -491,11 +531,14 @@ def _do_compile(
 
             from aqueduct.overrides import deep_merge as _deep_merge
             from aqueduct.parser.parser import parse_dict
+
             _raw_bp = _yaml.safe_load(_P(blueprint).read_text(encoding="utf-8")) or {}
             _raw_bp = _deep_merge(_raw_bp, blueprint_set_nested)
             bp = parse_dict(
-                _raw_bp, base_dir=_P(blueprint).parent,
-                profile=profile, cli_overrides=cli_overrides or None,
+                _raw_bp,
+                base_dir=_P(blueprint).parent,
+                profile=profile,
+                cli_overrides=cli_overrides or None,
             )
         else:
             bp = _parse(blueprint, profile=profile, cli_overrides=cli_overrides or None)
@@ -505,6 +548,7 @@ def _do_compile(
 
     # ── Build per-run store bundle ─────────────────────────────────────────────
     from aqueduct.stores import get_stores
+
     bundle = get_stores(cfg, store_dir_override=store_dir_abs, blueprint_id=bp.id)
     depot = _DS(backend=bundle.depot)
     depots_wrapped = {n: _DS(backend=s) for n, s in bundle.depots.items()}
@@ -545,6 +589,7 @@ def _do_compile(
 @_dc_frozen(frozen=True)
 class _SurveyorSetupResult:
     """Return-type bundle for ``_setup_surveyor`` — surveyor, session, agent config, etc."""
+
     resolved_store_dir: object
     patches_dir: object
     run_id: str
@@ -576,54 +621,13 @@ class _SurveyorSetupResult:
     _r: object  # click.style rule for banner
 
 
-def _resolve_session_engine_config(cfg: "AqueductConfig", engine: str, manifest: Any) -> dict[str, Any]:
-    """Build one engine's ``SessionSpec.engine_config`` dict.
-
-    Spark keeps its existing precedence (``engine.spark.conf`` merged with
-    the Blueprint's own ``spark_config`` override, Blueprint wins) — that is
-    Spark's own documented session-config merge, not a generic shape every
-    engine shares. Every OTHER registered engine (``duckdb``, ...) gets its
-    own ``engine.<name>`` sub-model dumped to a flat dict via
-    ``model_dump()`` — whatever fields THAT engine declares
-    (``memory_limit``/``threads``/``database_path``/``s3_*``/... for
-    DuckDB) flow through to ``_make_session`` automatically; a new engine
-    needs no change here.
-
-    Fixes a latent no-op this helper replaces: every call site used to build
-    ``SessionSpec.engine_config`` unconditionally from Spark's merged conf
-    dict regardless of the ACTUAL target engine — harmless only because
-    DuckDB's ``_make_session`` ignored ``engine_config`` entirely. Now that
-    DuckDB reads real fields from it (``engine.duckdb.*`` — Q4/httpfs work),
-    that would have silently discarded every DuckDB engine-config field.
-    """
-    if engine == "spark":
-        return {**cfg.engine.spark.conf, **manifest.spark_config}
-    engine_cfg = getattr(cfg.engine, engine, None)
-    if engine_cfg is None:
-        return {}
-    return engine_cfg.model_dump()
-
-
-def _session_secrets_options(cfg: "AqueductConfig", manifest: Any) -> dict[str, Any]:
-    """Build the ``secrets`` entry of ``SessionSpec.engine_options``.
-
-    The resolved ``secrets:`` block (provider/region/resolver/base_dir),
-    passed through so an engine that needs to resolve a secret KEY NAME into
-    a VALUE (DuckDB's ``engine.duckdb.s3_key_id_secret`` -> DuckDB's own
-    ``CREATE SECRET``) calls the SAME ``aqueduct.secrets.resolve_secret``
-    ``@aq.secret()`` uses — never a parallel credential path. An engine that
-    has no use for it (Spark) simply ignores the key, per
-    ``SessionSpec.engine_options``'s documented "opaque bag, read what you
-    understand" contract.
-    """
-    return {
-        "secrets": {
-            "provider": cfg.secrets.provider,
-            "region": cfg.secrets.region,
-            "resolver": cfg.secrets.resolver,
-            "base_dir": manifest.base_dir,
-        },
-    }
+# `resolve_session_engine_config`/`session_secrets_options` moved to
+# `aqueduct/executor/session_config.py` (Phase 82 remediation) so the patch
+# preview sandbox gate (`aqueduct/patch/preview.py::run_sandbox_gate`) can
+# build a ``SessionSpec`` through the SAME resolver this module uses, instead
+# of a second engine-config resolution path that only ever saw Spark's
+# merged conf. Imported at each use site below (`_setup_surveyor`,
+# `_execute_target`) per this file's existing lazy-import convention.
 
 
 def _setup_surveyor(
@@ -653,7 +657,6 @@ def _setup_surveyor(
     import warnings as _w
     from pathlib import Path as _P
 
-
     with _w.catch_warnings(record=True) as _setup_caught:
         _w.simplefilter("always")
 
@@ -669,6 +672,7 @@ def _setup_surveyor(
             and not resolved_store_dir.is_absolute()
         ):
             from aqueduct.warnings import emit as _emit_warning
+
             _emit_warning(
                 "cluster_store_path_relative",
                 f"relative store dir {str(resolved_store_dir)!r} on env="
@@ -679,10 +683,7 @@ def _setup_surveyor(
         # ── Multi-patch danger gate ───────────────────────────────────────────────
         _max_patches = manifest.agent.max_patches if manifest.agent else 1
         _mode = manifest.agent.approval_mode if manifest.agent else "disabled"
-        _is_multi_patch = (
-            _mode == "auto"
-            and _max_patches > 1
-        )
+        _is_multi_patch = _mode == "auto" and _max_patches > 1
         if _is_multi_patch and not allow_multi_patch_flag:
             if not cfg.danger.allow_multi_patch:
                 click.echo(
@@ -756,6 +757,7 @@ def _setup_surveyor(
 
         # ── Uncommitted applied patch warning ──────────────────────────────────────
         from aqueduct.cli import _uncommitted_applied_patches
+
         uncommitted_applied = _uncommitted_applied_patches(
             _P(blueprint_str), patches_dir, blueprint_id=manifest.blueprint_id
         )
@@ -765,7 +767,8 @@ def _setup_surveyor(
             click.echo(
                 click.style(f"\u26a0 {n_uc} applied {_noun} uncommitted", fg="yellow", bold=True)
                 + click.style(
-                    f"  \u00b7  aqueduct patch commit --blueprint {_P(blueprint_str).name}", dim=True
+                    f"  \u00b7  aqueduct patch commit --blueprint {_P(blueprint_str).name}",
+                    dim=True,
                 ),
                 err=True,
             )
@@ -782,12 +785,13 @@ def _setup_surveyor(
         exec_date_note = f"  exec_date={execution_date}" if execution_date else ""
         from aqueduct.cli import _rule
         from aqueduct.cli.style import dim as _dim
+
         _r = _dim(_rule())
     from aqueduct.cli.style import emit_warnings as _emit_warnings
 
     # \u2500\u2500 Header \u2014 the divider between engine/setup context (above) and this run \u2500\u2500
     click.echo(_r)
-    _arrow = click.style('\u25b6', fg='cyan', bold=True)
+    _arrow = click.style("\u25b6", fg="cyan", bold=True)
     _bp_label = click.style(manifest.blueprint_id, bold=True)
     # A polyglot Manifest (>1 island) names every engine actually involved,
     # not the single `deployment.engine` default \u2014 `master_url` is a
@@ -825,10 +829,12 @@ def _setup_surveyor(
     import warnings as _wmod
 
     from aqueduct.warnings import AqueductWarning as _AqWarning
+
     _wmod.simplefilter("ignore", _AqWarning)
 
     # ── Resolve agent connection (engine defaults \u2190 blueprint overrides) ────
     from aqueduct.cli import resolve_agent_connection
+
     _rac = resolve_agent_connection(cfg.agent, manifest.agent)
     resolved_agent_provider = _rac.provider
     resolved_agent_base_url = _rac.base_url
@@ -855,6 +861,7 @@ def _setup_surveyor(
     if resolved_agent_progressive:
         from aqueduct.agent.progressive import require_sandbox_for_progressive
         from aqueduct.errors import ConfigError as _ConfigError
+
         _prog_sandbox_mode = manifest.agent.sandbox_mode if manifest.agent else "sample"
         try:
             require_sandbox_for_progressive(resolved_agent_progressive, _prog_sandbox_mode)
@@ -871,17 +878,21 @@ def _setup_surveyor(
     # always has a default value, so it is NOT a signal of intent.
     _heal_mode = manifest.agent.approval_mode if manifest.agent else "disabled"
     import aqueduct.cli as _aqcli
+
     # Cascade connectivity counts: a cascade tier carries its own base_url/api_key
     # (falling back to the flat agent.* defaults). If ANY tier is reachable, healing
     # works even when the flat agent.base_url/api_key are unset (ISSUE-045).
     _agent_reachable = _aqcli._agent_usable(
         resolved_agent_provider, resolved_agent_base_url, resolved_agent_api_key
     ) or _aqcli._agent_usable_with_cascade(
-        resolved_agent_provider, resolved_agent_base_url, resolved_agent_api_key,
+        resolved_agent_provider,
+        resolved_agent_base_url,
+        resolved_agent_api_key,
         resolved_agent_cascade,
     )
     if _heal_mode != "disabled" and not _agent_reachable:
         from aqueduct.cli.style import warn as _style_warn
+
         _style_warn(
             f"self-healing is enabled (agent.approval={_heal_mode}) but the agent is not "
             f"reachable (provider={resolved_agent_provider}, no API key / base_url, and no "
@@ -892,6 +903,7 @@ def _setup_surveyor(
     # ── Register agent API key for redaction ─────────────────────────────────────
     if resolved_agent_api_key:
         from aqueduct.redaction import register as _register_secret
+
         _register_secret(resolved_agent_api_key, key_hint="agent.api_key")
 
     # ── Multi-patch disclaimer ────────────────────────────────────────────────────
@@ -908,9 +920,11 @@ def _setup_surveyor(
     # ── Surveyor \u2014 start ───────────────────────────────────────────────────────
     from aqueduct.depot.depot import DepotStore as _DS
     from aqueduct.surveyor.surveyor import Surveyor as _Surveyor
+
     if _using_default_obs_path and cfg.stores.observability.backend == "duckdb":
         from aqueduct.stores import StoreBundle
         from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+
         bundle = StoreBundle(
             observability=DuckDBObservabilityStore(resolved_store_dir / "observability.db"),
             depot=bundle.depot,
@@ -925,8 +939,11 @@ def _setup_surveyor(
         patches_dir=patches_dir,
         stores=bundle,
         blob_config=(cfg.stores.blob.backend, cfg.stores.blob.path),
-        lineage_config=(cfg.lineage.openlineage_url, cfg.lineage.openlineage_namespace)
-        if cfg.lineage.openlineage_url else None,
+        lineage_config=(
+            (cfg.lineage.openlineage_url, cfg.lineage.openlineage_namespace)
+            if cfg.lineage.openlineage_url
+            else None
+        ),
     )
     surveyor.start(run_id)
     _obs_store = surveyor.observability
@@ -955,19 +972,25 @@ def _setup_surveyor(
     session = None
     if len(manifest.islands) <= 1:
         from aqueduct.executor.protocol import SessionSpec, get_protocol
+        from aqueduct.executor.session_config import (
+            resolve_session_engine_config,
+            session_secrets_options,
+        )
+
         _protocol = get_protocol(engine)
         session = _protocol.session_factory()(
             SessionSpec(
                 blueprint_id=manifest.blueprint_id,
-                engine_config=_resolve_session_engine_config(cfg, engine, manifest),
+                engine_config=resolve_session_engine_config(cfg, engine, manifest),
                 master_url=master_url,
                 quiet_startup=not verbose,
                 timezone=cfg.timezone,
-                engine_options=_session_secrets_options(cfg, manifest),
+                engine_options=session_secrets_options(cfg, manifest),
             )
         )
 
         import atexit
+
         _close_session = _protocol.session_closer()
         atexit.register(lambda: _close_session(session))
 
@@ -1026,12 +1049,26 @@ def _setup_surveyor(
     default=None,
     help="Store directory (overrides aqueduct.yml; default: .aqueduct",
 )
-@click.option("--webhook", default=None, help="Webhook URL for failure notifications (overrides aqueduct.yml)")
-@click.option("--resume", "resume_run_id", default=None, help="Resume from checkpoints of a previous run_id")
-
-
-@click.option("--from", "from_module", default=None, metavar="MODULE_ID", help="Start execution at this module (skip all preceding modules)")
-@click.option("--to", "to_module", default=None, metavar="MODULE_ID", help="Stop execution after this module (skip all subsequent modules)")
+@click.option(
+    "--webhook", default=None, help="Webhook URL for failure notifications (overrides aqueduct.yml)"
+)
+@click.option(
+    "--resume", "resume_run_id", default=None, help="Resume from checkpoints of a previous run_id"
+)
+@click.option(
+    "--from",
+    "from_module",
+    default=None,
+    metavar="MODULE_ID",
+    help="Start execution at this module (skip all preceding modules)",
+)
+@click.option(
+    "--to",
+    "to_module",
+    default=None,
+    metavar="MODULE_ID",
+    help="Stop execution after this module (skip all subsequent modules)",
+)
 @click.option(
     "--execution-date",
     "execution_date_str",
@@ -1052,23 +1089,24 @@ def _setup_surveyor(
     is_flag=True,
     default=False,
     help="Execute independent DAG branches concurrently (one thread per connected component). "
-         "Only beneficial when the Blueprint has multiple fully-independent source trees.",
+    "Only beneficial when the Blueprint has multiple fully-independent source trees.",
 )
 @click.option(
-    "-v", "--verbose",
+    "-v",
+    "--verbose",
     is_flag=True,
     default=False,
     help="Show the full Spark/JVM startup banner (incubator notice, log4j init, "
-         "NativeCodeLoader). Suppressed by default for cleaner output; runtime Spark "
-         "warnings always print.",
+    "NativeCodeLoader). Suppressed by default for cleaner output; runtime Spark "
+    "warnings always print.",
 )
 @click.option(
     "--sandbox",
     is_flag=True,
     default=False,
     help="Dev dry-run: compile + execute against sampled inputs with every Egress "
-         "skipped (no writes). No self-healing, no observability persistence. Fast "
-         "feedback loop for iterating on transforms.",
+    "skipped (no writes). No self-healing, no observability persistence. Fast "
+    "feedback loop for iterating on transforms.",
 )
 @click.option(
     "--sample",
@@ -1078,14 +1116,16 @@ def _setup_surveyor(
     help="Row cap per Ingress in --sandbox mode (0 = no limit). Ignored without --sandbox.",
 )
 @click.option(
-    "-s", "--set", "set_items",
+    "-s",
+    "--set",
+    "set_items",
     multiple=True,
     metavar="PATH=VALUE",
     help="Override a config or blueprint value for this run only (repeatable, "
-         "in-memory, never persisted). Dotted path — e.g. "
-         "--set agent.approval_mode=auto --set engine.spark.master_url=spark://h:7077. "
-         "Values coerce to bool/int/float/null else string; use PATH:=JSON for "
-         "structured values. Highest precedence (beats blueprint + aqueduct.yml).",
+    "in-memory, never persisted). Dotted path — e.g. "
+    "--set agent.approval_mode=auto --set engine.spark.master_url=spark://h:7077. "
+    "Values coerce to bool/int/float/null else string; use PATH:=JSON for "
+    "structured values. Highest precedence (beats blueprint + aqueduct.yml).",
 )
 def run(
     blueprint: str,
@@ -1136,6 +1176,7 @@ def run(
         _project_root = config_path_abs.parent
     else:
         from aqueduct.cli import _resolve_project_root
+
         _project_root = _resolve_project_root(blueprint_path=blueprint_abs)
 
     _original_cwd = os.getcwd()
@@ -1168,9 +1209,7 @@ def run(
         # remote URI schemes; resolve a relative local path against the
         # project root (CWD, post-chdir above) for consistency with other
         # config-file path handling.
-        checkpoint_root_abs = (
-            Path(cfg.checkpoint_root).resolve() if cfg.checkpoint_root else None
-        )
+        checkpoint_root_abs = Path(cfg.checkpoint_root).resolve() if cfg.checkpoint_root else None
 
         # `handoff.root` — same anchoring concern as `checkpoint_root`
         # above, and the same "Path anchoring" bug family (AGENTS.md): a
@@ -1187,8 +1226,10 @@ def run(
         # directory, silently. A remote URI (s3://, gs://, …) is passed
         # through untouched — there is no "CWD" to anchor a URI against.
         from aqueduct.executor.spill import is_remote_uri as _is_remote_uri
+
         _handoff_root_abs = (
-            cfg.handoff.root if _is_remote_uri(cfg.handoff.root)
+            cfg.handoff.root
+            if _is_remote_uri(cfg.handoff.root)
             else str(Path(cfg.handoff.root).resolve())
         )
 
@@ -1196,6 +1237,7 @@ def run(
         # (dim info lines next to the `· env ·` notice). Keys only for --set:
         # values may embed secrets that were never registered for redaction.
         from aqueduct.cli.style import info as _preamble_info
+
         _over_parts = []
         if set_items:
             _set_keys = ", ".join(i.partition("=")[0].strip() for i in set_items)
@@ -1210,12 +1252,14 @@ def run(
             _preamble_info(f"· secrets  ·  provider: {cfg.secrets.provider}", err=True)
         if _lcr.danger_pairs:
             from aqueduct.cli.style import emit_warning_pairs
+
             emit_warning_pairs(list(_lcr.danger_pairs), label="danger:", err=True)
 
         # ── Phase 63 / 64 — remote-submit targets branch ──────────────────────────
         _REMOTE_TARGETS = frozenset({"databricks", "emr", "dataproc"})
         if cfg.deployment.target in _REMOTE_TARGETS:
             from aqueduct.deploy import get_submitter
+
             _submitter = get_submitter(cfg.deployment.target, cfg)
             click.echo(
                 "⚠ self-healing is disabled for remote targets — "
@@ -1248,7 +1292,11 @@ def run(
                 sys.exit(exit_codes.DATA_OR_RUNTIME)
 
             _remote_result = _submitter.poll(_job_id, cfg)
-            _logs = _submitter.fetch_logs(_job_id, cfg) if _remote_result.status == ExecutionStatus.ERROR else ""
+            _logs = (
+                _submitter.fetch_logs(_job_id, cfg)
+                if _remote_result.status == ExecutionStatus.ERROR
+                else ""
+            )
 
             if _remote_result.status == ExecutionStatus.SUCCESS:
                 for mr in _remote_result.module_results:
@@ -1258,6 +1306,7 @@ def run(
                         line += f"  — {concise_error(mr.error)}"
                     click.echo(line)
                 from aqueduct.cli.style import dim as _dim
+
                 click.echo(_dim(_rule()))
                 click.echo(f"{click.style('✓', fg='green', bold=True)} blueprint complete")
                 sys.exit(exit_codes.SUCCESS)
@@ -1325,7 +1374,9 @@ def run(
 
             sandboxed_manifest, egress_targets = build_sandbox_manifest(manifest, sample)
             merged_spark_config = {**cfg.engine.spark.conf, **manifest.spark_config}
-            sandbox_run_id = f"sandbox-{run_id or uuid.uuid4().hex}"  # full uuid — queryable, no collisions
+            sandbox_run_id = (
+                f"sandbox-{run_id or uuid.uuid4().hex}"  # full uuid — queryable, no collisions
+            )
 
             _limit_desc = f"≤{sample} row(s)/Ingress" if sample and sample > 0 else "no row limit"
             click.echo(
@@ -1335,12 +1386,19 @@ def run(
             )
 
             from aqueduct.executor.spark.session import make_spark_session
-            session = make_spark_session(manifest.blueprint_id, merged_spark_config, master_url=master_url, quiet_startup=not verbose)
+
+            session = make_spark_session(
+                manifest.blueprint_id,
+                merged_spark_config,
+                master_url=master_url,
+                quiet_startup=not verbose,
+            )
             atexit.register(session.stop)
 
             try:
                 result = execute(
-                    sandboxed_manifest, session,
+                    sandboxed_manifest,
+                    session,
                     run_id=sandbox_run_id,
                     store_dir=None,
                     surveyor=None,
@@ -1356,14 +1414,20 @@ def run(
                 sys.exit(exit_codes.DATA_OR_RUNTIME)
 
             if result.status != ExecutionStatus.SUCCESS:
-                failing = next((r for r in result.module_results if r.status == ExecutionStatus.ERROR), None)
-                detail = f" — first error in {failing.module_id!r}: {failing.error}" if failing else ""
+                failing = next(
+                    (r for r in result.module_results if r.status == ExecutionStatus.ERROR), None
+                )
+                detail = (
+                    f" — first error in {failing.module_id!r}: {failing.error}" if failing else ""
+                )
                 from aqueduct.cli.style import error as _style_error
+
                 _style_error(f"sandbox run status={result.status}{detail}")
                 sys.exit(exit_codes.DATA_OR_RUNTIME)
 
             _ran = sum(1 for r in result.module_results if r.status == ExecutionStatus.SUCCESS)
             from aqueduct.cli.style import success as _style_success
+
             _style_success(
                 f"sandbox run succeeded — {_ran} module(s) executed, "
                 f"{len(egress_targets)} Egress skipped"
@@ -1434,7 +1498,9 @@ def run(
         patch_rejected_by_gate = False  # set when a validation gate rejects a patch in auto (non-interactive) mode → VALIDATION_GATE(4)
         last_apply_error: str | None = None  # fed back to LLM on next multi-patch iteration
 
-        _replay_tried: set[str] = set()  # patch_ids already replayed this run — multi-patch loop guard
+        _replay_tried: set[str] = (
+            set()
+        )  # patch_ids already replayed this run — multi-patch loop guard
         # One-shot flag for the [agent_progressive_scope] warning — the static
         # scope conditions (approval mode, cascade) never change mid-run, so
         # repeating the warning every heal iteration would be noise.
@@ -1454,16 +1520,26 @@ def run(
             Best-effort, never blocks the heal loop; never changes the exit
             code (same contract as the terminal on_success/on_failure hooks).
             """
-            entries = manifest.hooks.on_patch_pending if event == "on_patch_pending" else manifest.hooks.on_healed
+            entries = (
+                manifest.hooks.on_patch_pending
+                if event == "on_patch_pending"
+                else manifest.hooks.on_healed
+            )
             if not entries:
                 return
             from aqueduct.cli.hooks import run_hooks as _run_heal_hooks
+
             _run_heal_hooks(
-                entries, event,
-                run_id=iter_run_id, status=hook_status,
-                blueprint_id=manifest.blueprint_id, blueprint_path=blueprint,
+                entries,
+                event,
+                run_id=iter_run_id,
+                status=hook_status,
+                blueprint_id=manifest.blueprint_id,
+                blueprint_path=blueprint,
                 allow_command_hooks=cfg.danger.allow_command_hooks,
-                failure_ctx=ctx, session=session, engine=engine,
+                failure_ctx=ctx,
+                session=session,
+                engine=engine,
             )
 
         # Per-module resolved engine (islands.py stamps the fully-resolved
@@ -1497,8 +1573,13 @@ def run(
             try:
                 from aqueduct.stores.queries import run_detail as _run_detail
                 from aqueduct.stores.read import open_obs_read
-                _rs = open_obs_read(cfg, store_dir=store_dir, run_id=_result.run_id,
-                                    blueprint_id=manifest.blueprint_id)
+
+                _rs = open_obs_read(
+                    cfg,
+                    store_dir=store_dir,
+                    run_id=_result.run_id,
+                    blueprint_id=manifest.blueprint_id,
+                )
                 if _rs is not None:
                     _det = _run_detail(_rs, _result.run_id)
                     if _det:
@@ -1566,13 +1647,17 @@ def run(
                 [len(mr.module_id) for kind, mr in _rows if kind == "module"]
                 + [len(mr.module_id) for kind, mr in _rows if kind == "handoff"]
                 + [len(a) for kind, a in _rows if kind == "arcade"]
-                + [len(c.module_id.split("__", 1)[1]) + _CHILD_PAD
-                   for cs in _arc_children.values() for c in cs],
+                + [
+                    len(c.module_id.split("__", 1)[1]) + _CHILD_PAD
+                    for cs in _arc_children.values()
+                    for c in cs
+                ],
                 default=0,
             )
 
             def _mr_line(mr, name, pad, lead, warn_prefix):
                 from aqueduct.cli.style import dim as _dim
+
                 if mr.status == ExecutionStatus.ERROR and mr.error:
                     line = f"{lead}{_icon(mr)} {name}  {click.style('— ' + concise_error(mr.error), fg='red')}"
                 else:
@@ -1592,6 +1677,7 @@ def run(
                 click.echo(line)
                 for rule_id, msg in mr.warnings:
                     from aqueduct.cli.output import warn as _output_warn
+
                     _output_warn(rule_id, msg, prefix=warn_prefix, err=False)
                 # Probe `report: stdout` lines — informational, dim, never in
                 # the warning roll-up. Capped unless -v.
@@ -1600,9 +1686,9 @@ def run(
                 for note in _notes[:_cap]:
                     click.echo(_dim(f"{warn_prefix}{note}"))
                 if len(_notes) > _cap:
-                    click.echo(_dim(
-                        f"{warn_prefix}· {len(_notes) - _cap} more  ·  -v for full output"
-                    ))
+                    click.echo(
+                        _dim(f"{warn_prefix}· {len(_notes) - _cap} more  ·  -v for full output")
+                    )
 
             def _handoff_line(mr, pad, lead, warn_prefix):
                 """First-class rendering for a synthetic Handoff module's
@@ -1612,6 +1698,7 @@ def run(
                 is rather than an anonymous module id."""
                 from aqueduct.cli.output import format_bytes as _format_bytes
                 from aqueduct.cli.style import dim as _dim
+
                 _cfg = _handoff_info[mr.module_id]
                 _boundary = (
                     f"{_cfg.get('from_module')} → {_cfg.get('to_module')}  "
@@ -1634,6 +1721,7 @@ def run(
                 click.echo(line)
                 for rule_id, msg in mr.warnings:
                     from aqueduct.cli.output import warn as _output_warn
+
                     _output_warn(rule_id, msg, prefix=warn_prefix, err=False)
 
             for kind, item in _rows:
@@ -1655,8 +1743,9 @@ def run(
                 for _i, _kid in enumerate(_kids):
                     _glyph = "└─" if _i == len(_kids) - 1 else "├─"
                     _lead = "    " + click.style(_glyph, fg="bright_black") + " "
-                    _mr_line(_kid, _kid.module_id.split("__", 1)[1],
-                             _w - _CHILD_PAD, _lead, "       ↳ ")
+                    _mr_line(
+                        _kid, _kid.module_id.split("__", 1)[1], _w - _CHILD_PAD, _lead, "       ↳ "
+                    )
 
         def _announce_polyglot_sandbox_skip(_gate_result) -> None:
             """A patch just applied to a polyglot Blueprint without a sandbox
@@ -1681,9 +1770,12 @@ def run(
             ):
                 _polyglot_sandbox_skip_warned = True
                 from aqueduct.cli.style import warn as _style_warn
+
                 _style_warn(_gate_result.detail)
 
-        def _execute_target(target_manifest, *, run_id: str, resume_run_id: str | None = None, **kw):
+        def _execute_target(
+            target_manifest, *, run_id: str, resume_run_id: str | None = None, **kw
+        ):
             """Execute *target_manifest* — the single-engine ``execute()``
             call for a Manifest with exactly one island (byte-for-byte the
             same call this code made before polyglot routing existed: same
@@ -1711,6 +1803,7 @@ def run(
             """
             if len(target_manifest.islands) <= 1:
                 from aqueduct.executor.protocol import filter_execute_kwargs
+
                 try:
                     _filtered = filter_execute_kwargs(
                         engine,
@@ -1719,20 +1812,31 @@ def run(
                     )
                     return execute(target_manifest, session, **_filtered), None
                 except ExecuteError as exc:
-                    return ExecutionResult(
-                        blueprint_id=target_manifest.blueprint_id,
-                        run_id=run_id,
-                        status=ExecutionStatus.ERROR,
-                        module_results=(
-                            ModuleResult(module_id="_executor", status=ExecutionStatus.ERROR, error=str(exc)),
+                    return (
+                        ExecutionResult(
+                            blueprint_id=target_manifest.blueprint_id,
+                            run_id=run_id,
+                            status=ExecutionStatus.ERROR,
+                            module_results=(
+                                ModuleResult(
+                                    module_id="_executor",
+                                    status=ExecutionStatus.ERROR,
+                                    error=str(exc),
+                                ),
+                            ),
                         ),
-                    ), exc
+                        exc,
+                    )
 
             # ── Polyglot ──────────────────────────────────────────────────
             from aqueduct.executor.orchestrator import run_polyglot
+            from aqueduct.executor.session_config import (
+                resolve_session_engine_config,
+                session_secrets_options,
+            )
 
             _engine_configs: dict[str, dict] = {
-                _isl.engine: _resolve_session_engine_config(cfg, _isl.engine, target_manifest)
+                _isl.engine: resolve_session_engine_config(cfg, _isl.engine, target_manifest)
                 for _isl in target_manifest.islands
             }
 
@@ -1752,7 +1856,7 @@ def run(
                 master_url=master_url,
                 quiet_startup=not verbose,
                 timezone=cfg.timezone,
-                secrets_config=_session_secrets_options(cfg, target_manifest)["secrets"],
+                secrets_config=session_secrets_options(cfg, target_manifest)["secrets"],
                 block_full_actions=kw.get("block_full_actions", False),
                 parallel=kw.get("parallel", False),
                 use_observe=kw.get("use_observe", False),
@@ -1768,14 +1872,17 @@ def run(
             # `healing_outcomes` so cross-iteration aggregations remain
             # joinable to the original heal call.
             iteration_run_id = run_id if patch_count == 0 else str(uuid.uuid4())
-            patch_rejected_by_gate = False  # reset per iteration — only the terminal reason drives the exit code
+            patch_rejected_by_gate = (
+                False  # reset per iteration — only the terminal reason drives the exit code
+            )
             if iteration_run_id != run_id:
                 # 1.1.0 fix — register parent linkage so record() stamps the
                 # outer run_id into run_records.parent_run_id for this
                 # iteration's row (INSERT-or-UPDATE in surveyor.record()).
                 try:
                     surveyor.register_iteration(
-                        run_id=iteration_run_id, parent_run_id=run_id,
+                        run_id=iteration_run_id,
+                        parent_run_id=run_id,
                     )
                 except Exception:
                     pass  # iteration registration is best-effort; never let persistence block execution
@@ -1815,7 +1922,9 @@ def run(
             effective_mode = approval_mode
             if result.trigger_agent and effective_mode == "disabled":
                 effective_mode = "human"
-                if _aqcli._agent_usable(resolved_agent_provider, resolved_agent_base_url, resolved_agent_api_key):
+                if _aqcli._agent_usable(
+                    resolved_agent_provider, resolved_agent_base_url, resolved_agent_api_key
+                ):
                     click.echo(
                         "  ↻ Agent triggered by module rule (overriding approval_mode=disabled → staging patch for review)",
                         err=True,
@@ -1825,7 +1934,9 @@ def run(
                 break
 
             if not _aqcli._agent_usable_with_cascade(
-                resolved_agent_provider, resolved_agent_base_url, resolved_agent_api_key,
+                resolved_agent_provider,
+                resolved_agent_base_url,
+                resolved_agent_api_key,
                 resolved_agent_cascade,
             ):
                 break  # already warned at startup (line 730)
@@ -1867,9 +1978,12 @@ def run(
             # The failure signature hash is computed every iteration (it also
             # stamps healing_outcomes.failure_signature for LLM resolutions).
             from aqueduct.agent.signature import from_failure_context as _from_failure_ctx
+
             _sig_exact, _sig_coarse = _from_failure_ctx(failure_ctx)
-            _patch_source = "llm"     # → stage_patch_for_human(source=...) + healing_outcomes.resolution
-            _replay_result = None     # synthetic AgentPatchResult substituting the LLM call
+            _patch_source = (
+                "llm"  # → stage_patch_for_human(source=...) + healing_outcomes.resolution
+            )
+            _replay_result = None  # synthetic AgentPatchResult substituting the LLM call
             _replay_gates_done = False  # gates already ran on the replay candidate pre-substitution
 
             _memory_cfg = getattr(cfg.agent, "memory", None)
@@ -1897,12 +2011,18 @@ def run(
                             stop_reason="cached",
                         )
                         surveyor.record_healing_outcome(
-                            run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
+                            run_id=iteration_run_id,
+                            failed_module=failure_ctx.failed_module,
                             parent_run_id=run_id,
-                            failure_category=failure_ctx.error_class, model=None,
-                            patch_id=_pending_hit.patch_id, confidence=None,
-                            patch_applied=False, run_success_after_patch=False,
-                            failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution="cached",
+                            failure_category=failure_ctx.error_class,
+                            model=None,
+                            patch_id=_pending_hit.patch_id,
+                            confidence=None,
+                            patch_applied=False,
+                            run_success_after_patch=False,
+                            failure_signature=_sig_exact.hash,
+                            failure_signature_coarse=_sig_coarse.hash,
+                            resolution="cached",
                         )
                     except Exception:
                         pass  # persistence must never block the cache hit
@@ -1913,14 +2033,20 @@ def run(
                 #    through the normal pipeline with zero LLM tokens; any
                 #    failure falls through to the LLM in this same iteration.
                 _candidate = _heal_memory.find_replay_candidate(
-                    _obs_store, _patch_store, _sig_exact.hash, surveyor.successful_patch_ids(),
+                    _obs_store,
+                    _patch_store,
+                    _sig_exact.hash,
+                    surveyor.successful_patch_ids(),
                 )
                 if _candidate is not None and _candidate.patch_id not in _replay_tried:
                     _replay_tried.add(_candidate.patch_id)
                     try:
                         from aqueduct.patch.grammar import PATCH_META_KEY
                         from aqueduct.patch.grammar import PatchSpec as _PatchSpec
-                        _payload = {k: v for k, v in _candidate.payload.items() if k != PATCH_META_KEY}
+
+                        _payload = {
+                            k: v for k, v in _candidate.payload.items() if k != PATCH_META_KEY
+                        }
                         _replay_patch = _PatchSpec.model_validate(_payload)
                     except Exception as _re_exc:
                         _replay_patch = None
@@ -1948,7 +2074,10 @@ def run(
                                 # stops skipping and actually builds a
                                 # session); a no-op otherwise.
                                 engine=(failure_ctx.engine or engine),
-                                sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
+                                cfg=cfg,
+                                sandbox_mode=(
+                                    manifest.agent.sandbox_mode if manifest.agent else "sample"
+                                ),
                                 sandbox_master_url=resolved_sandbox_master_url,
                                 warnings_suppress=cfg.warnings.suppress,
                                 timezone=cfg.timezone,
@@ -1968,8 +2097,11 @@ def run(
                                 _emit_explain_regressions(_rg4)
                         if _replay_ok:
                             from aqueduct.agent import AgentPatchResult as _AgentPatchResult
+
                             _replay_result = _AgentPatchResult(
-                                patch=_replay_patch, attempts=0, stop_reason="replayed",
+                                patch=_replay_patch,
+                                attempts=0,
+                                stop_reason="replayed",
                             )
                             _patch_source = "replay"
                             click.echo(
@@ -1991,17 +2123,18 @@ def run(
             # ── Generate patch ────────────────────────────────────────────────────
             from aqueduct.agent import AgentRunConfig, generate_agent_patch, stage_patch_for_human
             from aqueduct.agent.transcript import TranscriptWriter
+
             _attempt_display = (
-                f"{patch_count + 1}/{max_patches}"
-                if max_patches > 1
-                else f"{patch_count + 1}"
+                f"{patch_count + 1}/{max_patches}" if max_patches > 1 else f"{patch_count + 1}"
             )
             from aqueduct.cli.style import colorize_line as _style_heal_line
+
             # Live SSE streaming is interactive-TTY-only (piped/CI keep the
             # non-streaming POST path).
             _use_stream = sys.stdout.isatty()
             _transcript = TranscriptWriter(
-                verbose=verbose, write=lambda s: emit(_style_heal_line(s)),
+                verbose=verbose,
+                write=lambda s: emit(_style_heal_line(s)),
                 streamed=_use_stream,
             )
 
@@ -2041,8 +2174,8 @@ def run(
                 # a while first, so without this the open branch looks hung.
                 _cue = (
                     "│   · waiting for first token… (reasoning models digest the prompt before replying)"
-                    if _use_stream else
-                    "│   · contacting agent… (first response can be slow — big prompt / local cold-start)"
+                    if _use_stream
+                    else "│   · contacting agent… (first response can be slow — big prompt / local cold-start)"
                 )
                 emit(_style_heal_line(_cue))
 
@@ -2052,10 +2185,12 @@ def run(
                 from dataclasses import replace as _dc_replace
 
                 from aqueduct.doctor import check_blueprint_sources_from_manifest
-                _dr = check_blueprint_sources_from_manifest(manifest, deployment_env=cfg.deployment.env)
+
+                _dr = check_blueprint_sources_from_manifest(
+                    manifest, deployment_env=cfg.deployment.env
+                )
                 _hints = tuple(
-                    f"{r.name} — {r.detail}"
-                    for r in _dr if r.status in ("warn", "fail")
+                    f"{r.name} — {r.detail}" for r in _dr if r.status in ("warn", "fail")
                 )
                 if _hints:
                     failure_ctx = _dc_replace(failure_ctx, doctor_hints=_hints)
@@ -2067,6 +2202,7 @@ def run(
             # after the loop returns (each row carries it for joinability).
             _heal_run_id = run_id
             from aqueduct.agent import resolve_budget as _resolve_budget
+
             _budget = _resolve_budget(
                 getattr(cfg.agent, "budget", None),
                 max_reprompts=resolved_agent_max_reprompts,
@@ -2126,6 +2262,7 @@ def run(
             # gates (lineage / sandbox / explain) stay OUTSIDE the loop — they
             # run once per patch in multi-patch mode.
             _bp_path_for_cb = Path(blueprint)
+
             def _apply_cb(patch_spec: Any, _bp=_bp_path_for_cb) -> tuple:
                 try:
                     from aqueduct.patch.apply import (
@@ -2134,6 +2271,7 @@ def run(
                         _yaml_load,
                         apply_patch_to_dict,
                     )
+
                     bp_raw = _yaml_load(_bp)
                     # 1.1.0 — compile-sanity check. Catches patches that drop
                     # discriminator fields (e.g. `replace_module_config` on a
@@ -2142,29 +2280,44 @@ def run(
                     # the LLM as concrete reprompt context.
                     try:
                         bp_after = apply_patch_to_dict(bp_raw, patch_spec)
-                        for _m in (bp_after.get("modules") or []):
+                        for _m in bp_after.get("modules") or []:
                             if not isinstance(_m, dict):
                                 continue
                             _mt = _m.get("type")
                             _cfg = _m.get("config") or {}
                             if _mt == ModuleType.Channel and "op" not in _cfg:
-                                return False, "schema_drift", (
-                                    f"Patch leaves Channel module {_m.get('id')!r} without "
-                                    f"required 'op' key in config. Use set_module_config_key "
-                                    f"to update one key instead of replace_module_config."
-                                ), None
-                            if _mt in (ModuleType.Ingress, ModuleType.Egress) and "format" not in _cfg:
-                                return False, "schema_drift", (
-                                    f"Patch leaves {_mt} module {_m.get('id')!r} without "
-                                    f"required 'format' key in config."
-                                ), None
+                                return (
+                                    False,
+                                    "schema_drift",
+                                    (
+                                        f"Patch leaves Channel module {_m.get('id')!r} without "
+                                        f"required 'op' key in config. Use set_module_config_key "
+                                        f"to update one key instead of replace_module_config."
+                                    ),
+                                    None,
+                                )
+                            if (
+                                _mt in (ModuleType.Ingress, ModuleType.Egress)
+                                and "format" not in _cfg
+                            ):
+                                return (
+                                    False,
+                                    "schema_drift",
+                                    (
+                                        f"Patch leaves {_mt} module {_m.get('id')!r} without "
+                                        f"required 'format' key in config."
+                                    ),
+                                    None,
+                                )
                     except Exception as exc:
-                        return False, "apply_error", (
-                            f"Patch failed to apply cleanly: {exc}"
-                        ), None
+                        return False, "apply_error", (f"Patch failed to apply cleanly: {exc}"), None
                     gb = (bp_raw.get("agent") or {}).get("guardrails") or {}
-                    if not (gb.get("forbidden_ops") or gb.get("allowed_paths")
-                            or gb.get("heal_on_errors") or gb.get("never_heal_errors")):
+                    if not (
+                        gb.get("forbidden_ops")
+                        or gb.get("allowed_paths")
+                        or gb.get("heal_on_errors")
+                        or gb.get("never_heal_errors")
+                    ):
                         return True, None, None, None
                     try:
                         _check_guardrails(patch_spec, bp_raw, provenance_map=None)
@@ -2182,9 +2335,7 @@ def run(
             # callback must exist whenever ANY tier (or the top level) wants it.
             _deep_loop = manifest.agent.deep_loop if manifest.agent else False
             _cascade_tiers = resolved_agent_cascade
-            _any_deep_loop = _deep_loop or any(
-                bool(t.deep_loop) for t in (_cascade_tiers or [])
-            )
+            _any_deep_loop = _deep_loop or any(bool(t.deep_loop) for t in (_cascade_tiers or []))
             _validate_cb = None
             if _any_deep_loop:
                 _bp_path_for_vc = Path(blueprint)
@@ -2206,6 +2357,7 @@ def run(
                             iteration_run_id=_vc_rid,
                             blueprint_id=_vc_bid,
                             engine=(failure_ctx.engine or engine),
+                            cfg=cfg,
                             sandbox_mode=_vc_sandbox_mode,
                             sandbox_master_url=resolved_sandbox_master_url,
                             warnings_suppress=cfg.warnings.suppress,
@@ -2218,9 +2370,7 @@ def run(
                                 f"Lineage gate: {_g2.detail or 'column impact detected'}"
                             )
                         if _g3 is not None and _g3.status == "fail":
-                            failures.append(
-                                f"Sandbox gate: {_g3.detail}"
-                            )
+                            failures.append(f"Sandbox gate: {_g3.detail}")
                         if _g4 is not None and _g4.status == "fail":
                             failures.append(
                                 f"Explain gate: {_g4.detail or 'plan regression detected'}"
@@ -2239,6 +2389,7 @@ def run(
             _toolbox = None
             if resolved_agent_mode == "agentic":
                 from aqueduct.agent.toolbox import ToolBox
+
                 _toolbox = ToolBox(
                     manifest=manifest,
                     failure_ctx=failure_ctx,
@@ -2271,12 +2422,11 @@ def run(
             # the cached patch served this failure for zero tokens, the chain
             # simply had no work to do).
             if resolved_agent_progressive and not (
-                effective_mode == "auto"
-                and not _cascade_tiers
-                and _replay_result is None
+                effective_mode == "auto" and not _cascade_tiers and _replay_result is None
             ):
                 if _replay_result is not None:
                     from aqueduct.cli.style import info as _prog_info
+
                     _prog_info(
                         "progressive chain not started — replay-cache hit served "
                         "this failure (0 tokens); nothing to chain",
@@ -2285,6 +2435,7 @@ def run(
                 elif not _progressive_scope_warned:
                     _progressive_scope_warned = True
                     from aqueduct.cli.output import warn as _output_warn
+
                     if effective_mode != "auto":
                         _scope_reason = (
                             f"requires agent.approval: auto (effective mode is "
@@ -2326,13 +2477,17 @@ def run(
                     _link_toolbox = None
                     if resolved_agent_mode == "agentic":
                         from aqueduct.agent.toolbox import ToolBox
+
                         _link_toolbox = ToolBox(
-                            manifest=manifest, failure_ctx=link_failure_ctx,
-                            obs_store=_obs_store, patch_store=_patch_store,
+                            manifest=manifest,
+                            failure_ctx=link_failure_ctx,
+                            obs_store=_obs_store,
+                            patch_store=_patch_store,
                             base_dir=manifest.base_dir,
                             spark_session=session,
                             engine=(link_failure_ctx.engine or engine),
-                            config_path=config_path, store_dir=store_dir,
+                            config_path=config_path,
+                            store_dir=store_dir,
                         )
                     return _prog_generate_patch(
                         agent_cfg=_ProgAgentRunConfig(
@@ -2360,7 +2515,9 @@ def run(
                             on_attempt=_prog_on_attempt,
                             on_token=_on_token if _use_stream else None,
                             apply_callback=_apply_cb,
-                            memory_coaching=_memory_cfg.coaching if _memory_cfg is not None else True,
+                            memory_coaching=(
+                                _memory_cfg.coaching if _memory_cfg is not None else True
+                            ),
                             retry_max_retries=cfg.agent.retry.max_retries,
                             retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
                             obs_store=_obs_store,
@@ -2375,17 +2532,25 @@ def run(
                     import warnings as _prog_wsup
 
                     from aqueduct.warnings import AqueductWarning as _ProgAqWarn
+
                     with _prog_wsup.catch_warnings():
                         _prog_wsup.simplefilter("ignore", _ProgAqWarn)
                         _nm = _aqcli._apply_patch_in_memory(
-                            combined_patch, Path(blueprint), depot, profile, cli_overrides or {},
+                            combined_patch,
+                            Path(blueprint),
+                            depot,
+                            profile,
+                            cli_overrides or {},
                         )
                     if _nm is None:
                         return None, None, None
                     _r2, _exc2 = _execute_target(
-                        _nm, run_id=str(uuid.uuid4()),
-                        store_dir=resolved_store_dir, checkpoint_root=checkpoint_root_abs,
-                        surveyor=surveyor, depot=depot,
+                        _nm,
+                        run_id=str(uuid.uuid4()),
+                        store_dir=resolved_store_dir,
+                        checkpoint_root=checkpoint_root_abs,
+                        surveyor=surveyor,
+                        depot=depot,
                     )
                     _patch_ok = _r2.status == ExecutionStatus.SUCCESS
                     # `exc=` is deliberately NOT forwarded here — this call
@@ -2413,10 +2578,7 @@ def run(
                     max_chain=_resolved_max_chain,
                 )
                 for _link in _chain.links:
-                    _adv_note = (
-                        "advanced" if _link.advanced
-                        else f"stuck ({_link.stuck_reason})"
-                    )
+                    _adv_note = "advanced" if _link.advanced else f"stuck ({_link.stuck_reason})"
                     click.echo(
                         f"  · link {_link.link_index}: {_link.failure_module} → "
                         f"{'patch candidate' if _link.patch else 'no patch'} → {_adv_note}",
@@ -2425,25 +2587,41 @@ def run(
                 patch_count += 1
                 if _chain.status == "solved" and _chain.combined_patch is not None:
                     _aqcli._write_patch_to_blueprint(
-                        _chain.combined_patch, Path(blueprint), patches_dir, failure_ctx, mode="auto",
-                        obs_store=_obs_store, patch_store=_patch_store,
+                        _chain.combined_patch,
+                        Path(blueprint),
+                        patches_dir,
+                        failure_ctx,
+                        mode="auto",
+                        obs_store=_obs_store,
+                        patch_store=_patch_store,
                     )
                     click.echo(
                         click.style(
                             f"  ✓ progressive chain solved ({_chain.link_count} link(s), "
                             f"{patch_count}/{max_patches}) → {blueprint}",
-                            fg="green", bold=True,
+                            fg="green",
+                            bold=True,
                         ),
                         err=True,
                     )
-                    _fire_heal_hook("on_healed", iter_run_id=iteration_run_id, hook_status="healed", ctx=failure_ctx)
+                    _fire_heal_hook(
+                        "on_healed",
+                        iter_run_id=iteration_run_id,
+                        hook_status="healed",
+                        ctx=failure_ctx,
+                    )
                     surveyor.record_healing_outcome(
-                        run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
+                        run_id=iteration_run_id,
+                        failed_module=failure_ctx.failed_module,
                         parent_run_id=run_id,
-                        failure_category=_chain.combined_patch.category, model=resolved_agent_model,
-                        patch_id=_chain.combined_patch.patch_id, confidence=_chain.combined_patch.confidence,
-                        patch_applied=True, run_success_after_patch=True,
-                        failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash,
+                        failure_category=_chain.combined_patch.category,
+                        model=resolved_agent_model,
+                        patch_id=_chain.combined_patch.patch_id,
+                        confidence=_chain.combined_patch.confidence,
+                        patch_applied=True,
+                        run_success_after_patch=True,
+                        failure_signature=_sig_exact.hash,
+                        failure_signature_coarse=_sig_coarse.hash,
                         resolution="llm",
                     )
                     result = _chain.final_result
@@ -2458,22 +2636,34 @@ def run(
                         click.style(
                             f"  ✗ progressive chain did not solve the pipeline "
                             f"(status={_chain.status}, {patch_count}/{max_patches})",
-                            fg="red", bold=True,
+                            fg="red",
+                            bold=True,
                         ),
                         err=True,
                     )
                     if _chain.combined_patch is not None:
                         _aqcli._stage_failed_patch(
-                            manifest.agent.on_heal_failure, _chain.combined_patch, patches_dir, failure_ctx, cfg,
-                            click, obs_store=_obs_store, patch_store=_patch_store,
+                            manifest.agent.on_heal_failure,
+                            _chain.combined_patch,
+                            patches_dir,
+                            failure_ctx,
+                            cfg,
+                            click,
+                            obs_store=_obs_store,
+                            patch_store=_patch_store,
                         )
                         surveyor.record_healing_outcome(
-                            run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
+                            run_id=iteration_run_id,
+                            failed_module=failure_ctx.failed_module,
                             parent_run_id=run_id,
-                            failure_category=_chain.combined_patch.category, model=resolved_agent_model,
-                            patch_id=_chain.combined_patch.patch_id, confidence=_chain.combined_patch.confidence,
-                            patch_applied=False, run_success_after_patch=False,
-                            failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash,
+                            failure_category=_chain.combined_patch.category,
+                            model=resolved_agent_model,
+                            patch_id=_chain.combined_patch.patch_id,
+                            confidence=_chain.combined_patch.confidence,
+                            patch_applied=False,
+                            run_success_after_patch=False,
+                            failure_signature=_sig_exact.hash,
+                            failure_signature_coarse=_sig_coarse.hash,
                             resolution="llm",
                         )
                     if manifest.agent.on_heal_failure == "abort":
@@ -2488,6 +2678,7 @@ def run(
             # Phase 44: multi-model cascade takes priority over single-model loop.
             elif _cascade_tiers:
                 from aqueduct.agent.cascade import generate_cascade_patch
+
                 agent_result = generate_cascade_patch(
                     tiers=list(_cascade_tiers),
                     failure_ctx=failure_ctx,
@@ -2580,7 +2771,7 @@ def run(
                     )
                 except Exception:
                     pass  # updating stop_reason is best-effort; never let persistence block the loop
-            _summary_model = (agent_result.model or agent_result.__dict__.get("model"))
+            _summary_model = agent_result.model or agent_result.__dict__.get("model")
             if not _is_replay:
                 # Replay prints no tree, so it gets no └─ close node — its cache
                 # announcement + the apply result line below tell the whole story.
@@ -2610,7 +2801,7 @@ def run(
                 # heals leave healing_outcomes empty even though heal_attempts
                 # logged the per-attempt detail.
                 try:
-                    for _rec in (agent_result.attempt_records or ()):
+                    for _rec in agent_result.attempt_records or ():
                         _fail_cat = (
                             _rec.signature.error_class
                             if getattr(_rec, "signature", None) is not None
@@ -2626,7 +2817,9 @@ def run(
                             confidence=None,
                             patch_applied=False,
                             run_success_after_patch=False,
-                            failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution="llm",
+                            failure_signature=_sig_exact.hash,
+                            failure_signature_coarse=_sig_coarse.hash,
+                            resolution="llm",
                             model_cascade_position=getattr(_rec, "model_cascade_position", None),
                         )
                 except Exception:
@@ -2635,7 +2828,11 @@ def run(
 
             # ── Confidence escalation — low-confidence patches go to human ─────────
             _conf_threshold = manifest.agent.confidence_threshold
-            if patch.confidence is not None and patch.confidence < _conf_threshold and effective_mode not in ("human", "disabled"):
+            if (
+                patch.confidence is not None
+                and patch.confidence < _conf_threshold
+                and effective_mode not in ("human", "disabled")
+            ):
                 click.echo(
                     f"  ↑ Agent patch confidence {patch.confidence:.0%} < {_conf_threshold:.0%} — escalating to human review",
                     err=True,
@@ -2653,8 +2850,10 @@ def run(
             # (json_repair, comment stripping, wrapper unwrap) still downgrade
             # auto → human — the trust boundary stays at the human.
             _BENIGN_RECOVERIES = {
-                "stripped_code_fence", "stripped_think_block",
-                "stripped_orphan_think_close", "stripped_leading_prose",
+                "stripped_code_fence",
+                "stripped_think_block",
+                "stripped_orphan_think_close",
+                "stripped_leading_prose",
             }
             _risky_recovery = [
                 r for r in agent_result.recovery_applied if r not in _BENIGN_RECOVERIES
@@ -2674,6 +2873,7 @@ def run(
 
                 from aqueduct.patch.apply import PatchError as _PatchError
                 from aqueduct.patch.apply import _check_guardrails as _apply_check_guardrails
+
                 _bp_raw = _yaml.safe_load(blueprint_abs.read_text(encoding="utf-8")) or {}
                 _apply_check_guardrails(patch, _bp_raw, provenance_map=manifest.provenance_map)
                 guardrail_err = None
@@ -2682,13 +2882,25 @@ def run(
             except Exception as _gx:
                 guardrail_err = f"Unexpected guardrail error: {_gx}"
             if guardrail_err:
-                last_apply_error = f"Patch {patch.patch_id!r} was blocked by agent guardrail: {guardrail_err}"
+                last_apply_error = (
+                    f"Patch {patch.patch_id!r} was blocked by agent guardrail: {guardrail_err}"
+                )
                 click.echo(f"  ✗ Agent patch blocked by guardrail: {guardrail_err}", err=True)
-                stage_patch_for_human(patch, patches_dir, failure_ctx,
-                                      on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
-                                      source=_patch_source,
-                                      patch_store=_patch_store, obs_store=_obs_store)
-                _fire_heal_hook("on_patch_pending", iter_run_id=iteration_run_id, hook_status="pending", ctx=failure_ctx)
+                stage_patch_for_human(
+                    patch,
+                    patches_dir,
+                    failure_ctx,
+                    on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
+                    source=_patch_source,
+                    patch_store=_patch_store,
+                    obs_store=_obs_store,
+                )
+                _fire_heal_hook(
+                    "on_patch_pending",
+                    iter_run_id=iteration_run_id,
+                    hook_status="pending",
+                    ctx=failure_ctx,
+                )
                 click.echo(
                     f"  ▸ Patch staged for human review → "
                     f"{_patch_store.location_label if _patch_store is not None else patches_dir}/pending/  "
@@ -2696,12 +2908,18 @@ def run(
                     err=True,
                 )
                 surveyor.record_healing_outcome(
-                    run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
+                    run_id=iteration_run_id,
+                    failed_module=failure_ctx.failed_module,
                     parent_run_id=run_id,
-                    failure_category=patch.category, model=_outcome_model,
-                    patch_id=patch.patch_id, confidence=patch.confidence,
-                    patch_applied=False, run_success_after_patch=False,
-                    failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
+                    failure_category=patch.category,
+                    model=_outcome_model,
+                    patch_id=patch.patch_id,
+                    confidence=patch.confidence,
+                    patch_applied=False,
+                    run_success_after_patch=False,
+                    failure_signature=_sig_exact.hash,
+                    failure_signature_coarse=_sig_coarse.hash,
+                    resolution=_resolution,
                     model_cascade_position=_cascade_pos,
                 )
                 break
@@ -2709,13 +2927,27 @@ def run(
             patch_count += 1
 
             if effective_mode == "human":
-                stage_patch_for_human(patch, patches_dir, failure_ctx,
-                                      on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
-                                      source=_patch_source,
-                                      patch_store=_patch_store, obs_store=_obs_store)
-                _fire_heal_hook("on_patch_pending", iter_run_id=iteration_run_id, hook_status="pending", ctx=failure_ctx)
+                stage_patch_for_human(
+                    patch,
+                    patches_dir,
+                    failure_ctx,
+                    on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
+                    source=_patch_source,
+                    patch_store=_patch_store,
+                    obs_store=_obs_store,
+                )
+                _fire_heal_hook(
+                    "on_patch_pending",
+                    iter_run_id=iteration_run_id,
+                    hook_status="pending",
+                    ctx=failure_ctx,
+                )
                 patch_staged_for_review = True
-                rel_bp = Path(blueprint).relative_to(_project_root) if Path(blueprint).is_relative_to(_project_root) else Path(blueprint)
+                rel_bp = (
+                    Path(blueprint).relative_to(_project_root)
+                    if Path(blueprint).is_relative_to(_project_root)
+                    else Path(blueprint)
+                )
                 click.echo(
                     f"  ▸ Agent patch staged → "
                     f"{_patch_store.location_label if _patch_store is not None else patches_dir}/pending/  "
@@ -2724,12 +2956,18 @@ def run(
                     err=True,
                 )
                 surveyor.record_healing_outcome(
-                    run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
+                    run_id=iteration_run_id,
+                    failed_module=failure_ctx.failed_module,
                     parent_run_id=run_id,
-                    failure_category=patch.category, model=_outcome_model,
-                    patch_id=patch.patch_id, confidence=patch.confidence,
-                    patch_applied=False, run_success_after_patch=False,
-                    failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
+                    failure_category=patch.category,
+                    model=_outcome_model,
+                    patch_id=patch.patch_id,
+                    confidence=patch.confidence,
+                    patch_applied=False,
+                    run_success_after_patch=False,
+                    failure_signature=_sig_exact.hash,
+                    failure_signature_coarse=_sig_coarse.hash,
+                    resolution=_resolution,
                     model_cascade_position=_cascade_pos,
                 )
                 break
@@ -2744,26 +2982,42 @@ def run(
                     # secret embedded in the patch config.)
                     from aqueduct.infra.http import deliver_with_retry, fire_and_forget
                     from aqueduct.redaction import redact as _redact
-                    _ci_body = _redact({
-                        "patch": patch.model_dump(),
-                        "run_id": iteration_run_id,
-                        "blueprint_id": manifest.blueprint_id,
-                        "failed_module": failure_ctx.failed_module,
-                    })
+
+                    _ci_body = _redact(
+                        {
+                            "patch": patch.model_dump(),
+                            "run_id": iteration_run_id,
+                            "blueprint_id": manifest.blueprint_id,
+                            "failed_module": failure_ctx.failed_module,
+                        }
+                    )
                     fire_and_forget(
                         lambda url=_ci_url, body=_ci_body: deliver_with_retry(
-                            "POST", url, json=body,
+                            "POST",
+                            url,
+                            json=body,
                             headers={"Content-Type": "application/json"},
-                            timeout=10, label="ci-webhook",
+                            timeout=10,
+                            label="ci-webhook",
                         ),
                         name="ci-webhook",
                     )
-                stage_patch_for_human(patch, patches_dir, failure_ctx,
-                                      on_patch_pending_webhook=cfg.webhooks.on_ci_patch,
-                                      source=_patch_source,
-                                      webhook_event="on_ci_patch",
-                                      patch_store=_patch_store, obs_store=_obs_store)
-                _fire_heal_hook("on_patch_pending", iter_run_id=iteration_run_id, hook_status="pending", ctx=failure_ctx)
+                stage_patch_for_human(
+                    patch,
+                    patches_dir,
+                    failure_ctx,
+                    on_patch_pending_webhook=cfg.webhooks.on_ci_patch,
+                    source=_patch_source,
+                    webhook_event="on_ci_patch",
+                    patch_store=_patch_store,
+                    obs_store=_obs_store,
+                )
+                _fire_heal_hook(
+                    "on_patch_pending",
+                    iter_run_id=iteration_run_id,
+                    hook_status="pending",
+                    ctx=failure_ctx,
+                )
                 patch_staged_for_review = True
                 click.echo(
                     f"  ▸ CI patch staged → "
@@ -2772,12 +3026,18 @@ def run(
                     err=True,
                 )
                 surveyor.record_healing_outcome(
-                    run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
+                    run_id=iteration_run_id,
+                    failed_module=failure_ctx.failed_module,
                     parent_run_id=run_id,
-                    failure_category=patch.category, model=_outcome_model,
-                    patch_id=patch.patch_id, confidence=patch.confidence,
-                    patch_applied=False, run_success_after_patch=False,
-                    failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
+                    failure_category=patch.category,
+                    model=_outcome_model,
+                    patch_id=patch.patch_id,
+                    confidence=patch.confidence,
+                    patch_applied=False,
+                    run_success_after_patch=False,
+                    failure_signature=_sig_exact.hash,
+                    failure_signature_coarse=_sig_coarse.hash,
+                    resolution=_resolution,
                     model_cascade_position=_cascade_pos,
                 )
                 break
@@ -2800,6 +3060,7 @@ def run(
                         iteration_run_id=iteration_run_id,
                         blueprint_id=manifest.blueprint_id,
                         engine=(failure_ctx.engine or engine),
+                        cfg=cfg,
                         sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
                         sandbox_master_url=resolved_sandbox_master_url,
                         warnings_suppress=cfg.warnings.suppress,
@@ -2817,14 +3078,22 @@ def run(
                         f"Patch {patch.patch_id!r} rejected by the explain gate: "
                         + "; ".join(r.detail for r in _g4.regressions)
                     )
-                    click.echo(f"  ✗ multi-patch: explain gate blocked — {last_apply_error}", err=True)
+                    click.echo(
+                        f"  ✗ multi-patch: explain gate blocked — {last_apply_error}", err=True
+                    )
                     surveyor.record_healing_outcome(
-                        run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
+                        run_id=iteration_run_id,
+                        failed_module=failure_ctx.failed_module,
                         parent_run_id=run_id,
-                        failure_category=patch.category, model=_outcome_model,
-                        patch_id=patch.patch_id, confidence=patch.confidence,
-                        patch_applied=False, run_success_after_patch=False,
-                        failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
+                        failure_category=patch.category,
+                        model=_outcome_model,
+                        patch_id=patch.patch_id,
+                        confidence=patch.confidence,
+                        patch_applied=False,
+                        run_success_after_patch=False,
+                        failure_signature=_sig_exact.hash,
+                        failure_signature_coarse=_sig_coarse.hash,
+                        resolution=_resolution,
                         model_cascade_position=_cascade_pos,
                     )
                     # A validation gate rejected this patch — if the multi-patch loop
@@ -2838,33 +3107,54 @@ def run(
                     )
                     last_apply_error = f"Patch {patch.patch_id!r} rejected by sandbox: {_g3.detail}"
                     surveyor.record_healing_outcome(
-                        run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
+                        run_id=iteration_run_id,
+                        failed_module=failure_ctx.failed_module,
                         parent_run_id=run_id,
-                        failure_category=patch.category, model=_outcome_model,
-                        patch_id=patch.patch_id, confidence=patch.confidence,
-                        patch_applied=False, run_success_after_patch=False,
-                        failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
+                        failure_category=patch.category,
+                        model=_outcome_model,
+                        patch_id=patch.patch_id,
+                        confidence=patch.confidence,
+                        patch_applied=False,
+                        run_success_after_patch=False,
+                        failure_signature=_sig_exact.hash,
+                        failure_signature_coarse=_sig_coarse.hash,
+                        resolution=_resolution,
                         model_cascade_position=_cascade_pos,
                     )
-                    patch_rejected_by_gate = True  # sandbox gate → VALIDATION_GATE(4) if loop exhausts
+                    patch_rejected_by_gate = (
+                        True  # sandbox gate → VALIDATION_GATE(4) if loop exhausts
+                    )
                     continue  # try next patch iteration
 
                 _patch_validation = manifest.agent.patch_validation or cfg.agent.patch_validation
 
                 if _patch_validation == "sandbox" and _g3 is not None and _g3.status == "pass":
-                    _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto",
-                                              obs_store=_obs_store, patch_store=_patch_store)
+                    _aqcli._write_patch_to_blueprint(
+                        patch,
+                        Path(blueprint),
+                        patches_dir,
+                        failure_ctx,
+                        mode="auto",
+                        obs_store=_obs_store,
+                        patch_store=_patch_store,
+                    )
                     click.echo(
                         f"  ✓ multi-patch: sandbox-only validated ({_g3.sample_rows or '∞'} rows) → {blueprint}",
                         err=True,
                     )
                     surveyor.record_healing_outcome(
-                        run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
+                        run_id=iteration_run_id,
+                        failed_module=failure_ctx.failed_module,
                         parent_run_id=run_id,
-                        failure_category=patch.category, model=_outcome_model,
-                        patch_id=patch.patch_id, confidence=patch.confidence,
-                        patch_applied=True, run_success_after_patch=True,
-                        failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
+                        failure_category=patch.category,
+                        model=_outcome_model,
+                        patch_id=patch.patch_id,
+                        confidence=patch.confidence,
+                        patch_applied=True,
+                        run_success_after_patch=True,
+                        failure_signature=_sig_exact.hash,
+                        failure_signature_coarse=_sig_coarse.hash,
+                        resolution=_resolution,
                         model_cascade_position=_cascade_pos,
                     )
                     break
@@ -2876,19 +3166,28 @@ def run(
                 import warnings as _wsup
 
                 from aqueduct.warnings import AqueductWarning as _AqWarn
+
                 with _wsup.catch_warnings():
                     _wsup.simplefilter("ignore", _AqWarn)
-                    new_manifest = _aqcli._apply_patch_in_memory(patch, Path(blueprint), depot, profile, cli_overrides or {})
+                    new_manifest = _aqcli._apply_patch_in_memory(
+                        patch, Path(blueprint), depot, profile, cli_overrides or {}
+                    )
                 if new_manifest is None:
                     click.echo("  ✗ Agent patch produces invalid Blueprint, discarding", err=True)
                     last_apply_error = f"Patch {patch.patch_id!r} produced invalid Blueprint"
                     surveyor.record_healing_outcome(
-                        run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
+                        run_id=iteration_run_id,
+                        failed_module=failure_ctx.failed_module,
                         parent_run_id=run_id,
-                        failure_category=patch.category, model=_outcome_model,
-                        patch_id=patch.patch_id, confidence=patch.confidence,
-                        patch_applied=False, run_success_after_patch=False,
-                        failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
+                        failure_category=patch.category,
+                        model=_outcome_model,
+                        patch_id=patch.patch_id,
+                        confidence=patch.confidence,
+                        patch_applied=False,
+                        run_success_after_patch=False,
+                        failure_signature=_sig_exact.hash,
+                        failure_signature_coarse=_sig_coarse.hash,
+                        resolution=_resolution,
                         model_cascade_position=_cascade_pos,
                     )
                     break
@@ -2904,19 +3203,34 @@ def run(
                 # `exc=` deliberately not forwarded — this call site never has
                 # (see the analogous note at `_prog_apply_and_execute` above);
                 # only `engine=` is new, a no-op for single-engine.
-                failure_ctx2 = surveyor.record(result2, patched=patch_success, engine=result2.failed_engine)
+                failure_ctx2 = surveyor.record(
+                    result2, patched=patch_success, engine=result2.failed_engine
+                )
                 surveyor.record_healing_outcome(
-                    run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
+                    run_id=iteration_run_id,
+                    failed_module=failure_ctx.failed_module,
                     parent_run_id=run_id,
-                    failure_category=patch.category, model=_outcome_model,
-                    patch_id=patch.patch_id, confidence=patch.confidence,
-                    patch_applied=True, run_success_after_patch=patch_success,
-                    failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
+                    failure_category=patch.category,
+                    model=_outcome_model,
+                    patch_id=patch.patch_id,
+                    confidence=patch.confidence,
+                    patch_applied=True,
+                    run_success_after_patch=patch_success,
+                    failure_signature=_sig_exact.hash,
+                    failure_signature_coarse=_sig_coarse.hash,
+                    resolution=_resolution,
                     model_cascade_position=_cascade_pos,
                 )
                 if patch_success:
-                    _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto",
-                                              obs_store=_obs_store, patch_store=_patch_store)
+                    _aqcli._write_patch_to_blueprint(
+                        patch,
+                        Path(blueprint),
+                        patches_dir,
+                        failure_ctx,
+                        mode="auto",
+                        obs_store=_obs_store,
+                        patch_store=_patch_store,
+                    )
                     click.echo(
                         f"  {click.style('✓', fg='green', bold=True)} Agent patch validated and applied ({patch_count}/{max_patches}) → {blueprint}",
                         err=True,
@@ -2924,7 +3238,12 @@ def run(
                     # on_healed hooks — patch applied AND the re-run succeeded.
                     # Fires here (mid-loop) so it always runs before the outer
                     # run's terminal on_success hooks below.
-                    _fire_heal_hook("on_healed", iter_run_id=iteration_run_id, hook_status="healed", ctx=failure_ctx)
+                    _fire_heal_hook(
+                        "on_healed",
+                        iter_run_id=iteration_run_id,
+                        hook_status="healed",
+                        ctx=failure_ctx,
+                    )
                     # Opt-in (agent.regression_artifact): a SUCCESSFUL heal — patch
                     # applied AND the re-run just succeeded — may emit an .aqtest.yml
                     # CI regression guard for the patched module. Different job from
@@ -2942,15 +3261,21 @@ def run(
                         )
                         from aqueduct.cli.style import info as _ra_info
                         from aqueduct.cli.style import success as _ra_success
+
                         try:
-                            _ra_result = _gen_regression_artifact(new_manifest, patch, failure_ctx, Path(blueprint))
+                            _ra_result = _gen_regression_artifact(
+                                new_manifest, patch, failure_ctx, Path(blueprint)
+                            )
                             # style.* status functions print directly and return
                             # None — never wrap them in click.echo (stray blank
                             # line + message on the wrong stream).
                             if _ra_result.written:
                                 _ra_success(f"regression test written → {_ra_result.path}")
                             else:
-                                _ra_info(f"regression artifact skipped: {_ra_result.skip_reason}", err=True)
+                                _ra_info(
+                                    f"regression artifact skipped: {_ra_result.skip_reason}",
+                                    err=True,
+                                )
                         except Exception as _ra_exc:
                             # Best-effort: never let artifact generation break a
                             # successful heal.
@@ -2961,14 +3286,25 @@ def run(
                 else:
                     last_apply_error = (
                         f"Patch {patch.patch_id!r} applied in-memory but re-run still failed: "
-                        + (result2.module_results[-1].error or "unknown" if result2.module_results else "unknown")
+                        + (
+                            result2.module_results[-1].error or "unknown"
+                            if result2.module_results
+                            else "unknown"
+                        )
                     )
                     click.echo(
-                        f"  {click.style('✗', fg='red', bold=True)} Agent patch did not fix the issue ({patch_count}/{max_patches})", err=True,
+                        f"  {click.style('✗', fg='red', bold=True)} Agent patch did not fix the issue ({patch_count}/{max_patches})",
+                        err=True,
                     )
                     _aqcli._stage_failed_patch(
-                        manifest.agent.on_heal_failure, patch, patches_dir, failure_ctx, cfg, click,
-                        obs_store=_obs_store, patch_store=_patch_store,
+                        manifest.agent.on_heal_failure,
+                        patch,
+                        patches_dir,
+                        failure_ctx,
+                        cfg,
+                        click,
+                        obs_store=_obs_store,
+                        patch_store=_patch_store,
                     )
                     result = result2
                     failure_ctx = failure_ctx2
@@ -3003,6 +3339,7 @@ def run(
         ]
         if _runtime_pairs:
             from aqueduct.cli.style import emit_warning_pairs
+
             emit_warning_pairs(_runtime_pairs, label="runtime:", verbose=verbose)
 
         if result.status not in (ExecutionStatus.SUCCESS, ExecutionStatus.PATCHED):
@@ -3012,6 +3349,7 @@ def run(
             # uuid, which can't be used to retrieve the full heal history.
             from aqueduct.cli.style import dim as _dim
             from aqueduct.cli.style import error as _style_error
+
             click.echo(_dim(_rule()), err=True)
             if failure_ctx:
                 _style_error(
@@ -3023,12 +3361,18 @@ def run(
             # on_failure hooks — after the verdict line, before the exit code.
             # Hook outcomes never alter the exit code below.
             from aqueduct.cli.hooks import run_hooks as _run_hooks
+
             _run_hooks(
-                manifest.hooks.on_failure, "on_failure",
-                run_id=run_id, status="failure",
-                blueprint_id=manifest.blueprint_id, blueprint_path=blueprint,
+                manifest.hooks.on_failure,
+                "on_failure",
+                run_id=run_id,
+                status="failure",
+                blueprint_id=manifest.blueprint_id,
+                blueprint_path=blueprint,
                 allow_command_hooks=cfg.danger.allow_command_hooks,
-                failure_ctx=failure_ctx, session=session, engine=engine,
+                failure_ctx=failure_ctx,
+                session=session,
+                engine=engine,
             )
             # Distinguish the three non-success terminal states for downstream
             # orchestrators (Airflow operator, CI runners):
@@ -3047,6 +3391,7 @@ def run(
         # code. No-op when the Blueprint carries no `healed_by:` block at all.
         try:
             from aqueduct.patch.apply import stamp_validated_engine
+
             stamp_validated_engine(Path(blueprint), engine)
         except Exception:
             pass  # provenance stamping must never affect a successful run
@@ -3054,6 +3399,7 @@ def run(
         # ── on_success webhook ────────────────────────────────────────────────────
         if cfg.webhooks.on_success:
             from aqueduct.surveyor.webhook import fire_webhook
+
             success_payload = {
                 "run_id": run_id,
                 "blueprint_id": manifest.blueprint_id,
@@ -3070,20 +3416,25 @@ def run(
         status_label = "patched" if result.status == ExecutionStatus.PATCHED else "complete"
         from aqueduct.cli.style import dim as _dim
         from aqueduct.cli.style import success as _style_success
+
         click.echo(_dim(_rule()))
         _style_success(f"blueprint {status_label}")
 
         # on_success hooks — chained blueprints / webhooks / gated commands.
         # A hooks section closes with its own `run complete` footer.
         from aqueduct.cli.hooks import run_hooks as _run_hooks
+
         if _run_hooks(
-            manifest.hooks.on_success, "on_success",
-            run_id=run_id, status=result.status,
-            blueprint_id=manifest.blueprint_id, blueprint_path=blueprint,
+            manifest.hooks.on_success,
+            "on_success",
+            run_id=run_id,
+            status=result.status,
+            blueprint_id=manifest.blueprint_id,
+            blueprint_path=blueprint,
             allow_command_hooks=cfg.danger.allow_command_hooks,
-            session=session, engine=engine,
+            session=session,
+            engine=engine,
         ):
             _style_success("run complete")
     finally:
         os.chdir(_original_cwd)
-

@@ -3,6 +3,7 @@
 No behaviour change. The click group + shared helpers come from the package;
 commands register onto `cli` when imported at the bottom of __init__.
 """
+
 from __future__ import annotations
 
 import json
@@ -41,6 +42,7 @@ def _patch_index_obs_store(blueprint_path: Path | None = None):
         bp_id = None
         if blueprint_path is not None:
             from aqueduct.parser.parser import parse as _parse
+
             bp_id = _parse(str(blueprint_path)).id
         # Backend-aware (Phase 69): postgres → shared store; duckdb → per-blueprint
         # file when known, else the configured/flat default.
@@ -56,21 +58,24 @@ def _list_from_store(ps, filter_status: str, out_format: str) -> None:
     works for local and object backends. ``blueprint_id``/``rationale`` come from
     each body's metadata."""
     from aqueduct.patch.grammar import PATCH_META_KEY
+
     statuses = ("pending", "applied", "rejected") if filter_status == "all" else (filter_status,)
     rows: list[dict] = []
     for st in statuses:
         for _key, _mtime, payload in ps.iter_payloads(st):
             meta = payload.get(PATCH_META_KEY) or {}
-            rows.append({
-                "status": st,
-                "file": _key.rsplit("/", 1)[-1],  # unique surrogate key (timestamped)
-                "patch_id": payload.get("patch_id", ""),
-                "rationale": payload.get("rationale"),
-                "confidence": payload.get("confidence"),
-                "blueprint_id": meta.get("blueprint_id"),
-                "run_id": meta.get("run_id"),
-                "failed_module": meta.get("failed_module"),
-            })
+            rows.append(
+                {
+                    "status": st,
+                    "file": _key.rsplit("/", 1)[-1],  # unique surrogate key (timestamped)
+                    "patch_id": payload.get("patch_id", ""),
+                    "rationale": payload.get("rationale"),
+                    "confidence": payload.get("confidence"),
+                    "blueprint_id": meta.get("blueprint_id"),
+                    "run_id": meta.get("run_id"),
+                    "failed_module": meta.get("failed_module"),
+                }
+            )
     if out_format.lower() == "json":
         emit(rows, fmt="json")
         return
@@ -98,6 +103,7 @@ def _list_from_store(ps, filter_status: str, out_format: str) -> None:
 
 
 # ── patch command group ───────────────────────────────────────────────────────
+
 
 @cli.group()
 def patch() -> None:
@@ -192,6 +198,7 @@ def patch_preview(
         _check_guardrails(spec, bp_raw, provenance_map=None)
     except PatchError as exc:
         from aqueduct.cli.style import error as _style_error
+
         _style_error(f"guardrails gate blocked: {exc}")
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
@@ -220,6 +227,7 @@ def patch_preview(
             click.echo(f"✗ config error (needed for sandbox): {exc}", err=True)
             sys.exit(exit_codes.CONFIG_ERROR)
         from aqueduct.stores import get_stores
+
         bundle = get_stores(cfg)
         failed_module = None
         explain_after: dict[str, dict] = {}
@@ -230,6 +238,7 @@ def patch_preview(
             patch_id=spec.patch_id,
             failed_module=failed_module,
             engine=cfg.deployment.engine,
+            cfg=cfg,
             sample_rows=int(sample_rows),
             observability_store=bundle.observability,
             explain_capture=explain_after,
@@ -241,19 +250,25 @@ def patch_preview(
         try:
             from aqueduct.stores import get_stores as _gs  # noqa
             from aqueduct.surveyor.surveyor import Surveyor
+
             # Compile to retrieve blueprint_id without full run.
             from aqueduct.parser.parser import parse as _parse
             from aqueduct.compiler.compiler import compile as _compile
+
             _bp = _parse(blueprint_path)
             _mf = _compile(_bp, blueprint_path=_Path(blueprint_path))
             _surv = Surveyor(
-                manifest=_mf, store_dir=cfg.store_dir, stores=bundle,
+                manifest=_mf,
+                store_dir=cfg.store_dir,
+                stores=bundle,
                 engine=cfg.deployment.engine,
             )
             _baseline = _surv.latest_explain_snapshots(blueprint_id=_mf.blueprint_id)
         except Exception:
             _baseline = {}
-        explain_res = run_explain_gate(_baseline, explain_after, touched_modules=lineage_res.touched_modules)
+        explain_res = run_explain_gate(
+            _baseline, explain_after, touched_modules=lineage_res.touched_modules
+        )
 
     if out_format.lower() == "json":
         report = {
@@ -284,7 +299,14 @@ def patch_preview(
                 "regressions": [r.__dict__ for r in explain_res.regressions],
             }
         emit(report, fmt="json")
-        sys.exit(exit_codes.SUCCESS if lineage_res.status != "fail" and (sandbox_res is None or sandbox_res.status == "pass" or sandbox_res.status == "skip") else exit_codes.DATA_OR_RUNTIME)
+        sys.exit(
+            exit_codes.SUCCESS
+            if lineage_res.status != "fail"
+            and (
+                sandbox_res is None or sandbox_res.status == "pass" or sandbox_res.status == "skip"
+            )
+            else exit_codes.DATA_OR_RUNTIME
+        )
 
     # Text report — headers dim (structural), gate status lines use the
     # shared ✓/✗/⚠/· vocabulary (style.py) so `patch preview`'s gate pyramid
@@ -296,6 +318,7 @@ def patch_preview(
         from aqueduct.cli.style import info as _i
         from aqueduct.cli.style import success as _s
         from aqueduct.cli.style import warn as _w
+
         label = f"status: {status}"
         if status == "pass":
             _s(f"  {label}")
@@ -367,12 +390,15 @@ def _patch_store_from(patches_root, config_path, env_file, cli_env):
     Resolves aqueduct.yml (CWD walk-up / --config) + .env, so the body lifecycle
     (apply/reject move) acts on the same store `patch list` shows."""
     from pathlib import Path
+
     try:
         from aqueduct.cli import _load_config_with_env
         from aqueduct.stores.object_store import make_patch_store
+
         cfg = _load_config_with_env(
             Path(config_path) if config_path else None,
-            env_file=env_file, cli_env=cli_env or (),
+            env_file=env_file,
+            cli_env=cli_env or (),
         )
         return make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, Path(patches_root))
     except Exception:
@@ -388,6 +414,7 @@ def _resolve_pending_key(ps, ref: str):
     the caller must use the full filename. Returns ``(key, [])`` on success,
     ``(None, [ambiguous keys])`` for >1 match, ``(None, [])`` for none."""
     from pathlib import Path
+
     by_id: list[str] = []
     for key, _mt, payload in ps.iter_payloads("pending"):
         name = key.rsplit("/", 1)[-1]
@@ -405,8 +432,10 @@ def _fetch_pending_to_temp(ps, key: str):
     `apply_patch_file` reads; the store still owns the canonical body)."""
     import tempfile
     from pathlib import Path
+
     fd, tmp = tempfile.mkstemp(suffix="_" + key.rsplit("/", 1)[-1])
     import os as _os
+
     _os.close(fd)
     Path(tmp).write_text(ps.get_text(key), encoding="utf-8")
     return Path(tmp)
@@ -420,6 +449,7 @@ def _resolve_patch_source(ref, patches_root, config_path, env_file, cli_env, *, 
     store → ``(temp body | None, store, key)``. Exits with a clear message on
     ambiguous / not-found."""
     from pathlib import Path
+
     ps = _patch_store_from(patches_root, config_path, env_file, cli_env)
     p = Path(ref)
     if p.exists() and p.parent.name != "pending":
@@ -429,7 +459,8 @@ def _resolve_patch_source(ref, patches_root, config_path, env_file, cli_env, *, 
     if ps is None:
         click.echo(
             f"✗ {ref!r} is not a local file and no patch store could be resolved "
-            f"(need aqueduct.yml / --config + env)", err=True,
+            f"(need aqueduct.yml / --config + env)",
+            err=True,
         )
         sys.exit(exit_codes.USAGE_ERROR)
     key = _require_pending_key(ps, ref)
@@ -445,12 +476,15 @@ def _require_pending_key(ps, ref: str) -> str:
         if ambiguous:
             click.echo(
                 f"✗ {len(ambiguous)} pending patches share id {ref!r} — re-run with the "
-                f"full filename:", err=True,
+                f"full filename:",
+                err=True,
             )
             for k in ambiguous:
                 click.echo(f"    {k.rsplit('/', 1)[-1]}", err=True)
         else:
-            click.echo(f"✗ no pending patch matching {ref!r} in the store ({ps.location_label})", err=True)
+            click.echo(
+                f"✗ no pending patch matching {ref!r} in the store ({ps.location_label})", err=True
+            )
         sys.exit(exit_codes.USAGE_ERROR)
     return key
 
@@ -469,13 +503,19 @@ def _require_pending_key(ps, ref: str) -> str:
     help="Root directory for patch lifecycle subdirs (default: <blueprint-dir>/patches)",
 )
 @click.option(
-    "--config", "config_path", default=None,
+    "--config",
+    "config_path",
+    default=None,
     help="Path to aqueduct.yml — resolves the patch store when PATCH_REF is a patch_id.",
 )
 @_env_options
 def patch_apply(
-    patch_ref: str, blueprint: str, patches_dir: str | None,
-    config_path: str | None, env_file: str | None, cli_env: tuple[str, ...],
+    patch_ref: str,
+    blueprint: str,
+    patches_dir: str | None,
+    config_path: str | None,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
 ) -> None:
     """Validate and apply a patch to a Blueprint YAML.
 
@@ -490,10 +530,17 @@ def patch_apply(
     from aqueduct.patch.apply import PatchError, apply_patch_file
 
     blueprint_path = Path(blueprint)
-    patches_root = Path(patches_dir) if patches_dir else _patches_root_from_blueprint(blueprint_path)
+    patches_root = (
+        Path(patches_dir) if patches_dir else _patches_root_from_blueprint(blueprint_path)
+    )
 
     ops_path, ps, pending_key = _resolve_patch_source(
-        patch_ref, patches_root, config_path, env_file, cli_env, need_local=True,
+        patch_ref,
+        patches_root,
+        config_path,
+        env_file,
+        cli_env,
+        need_local=True,
     )
     try:
         result = apply_patch_file(
@@ -535,13 +582,20 @@ def patch_apply(
     help="Apply only, skip the git commit (leave the change staged for review).",
 )
 @click.option(
-    "--config", "config_path", default=None,
+    "--config",
+    "config_path",
+    default=None,
     help="Path to aqueduct.yml — resolves the patch store when PATCH_REF is a remote patch_id.",
 )
 @_env_options
 def patch_import(
-    patch_ref: str, blueprint: str, patches_dir: str | None, no_commit: bool,
-    config_path: str | None, env_file: str | None, cli_env: tuple[str, ...],
+    patch_ref: str,
+    blueprint: str,
+    patches_dir: str | None,
+    no_commit: bool,
+    config_path: str | None,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
 ) -> None:
     """Apply a received patch and commit it — the CI entry point (Phase 54).
 
@@ -561,13 +615,20 @@ def patch_import(
     from aqueduct.patch.ci import build_commit_message, validate_ci_payload
 
     blueprint_path = Path(blueprint)
-    patches_root = Path(patches_dir) if patches_dir else _patches_root_from_blueprint(blueprint_path)
+    patches_root = (
+        Path(patches_dir) if patches_dir else _patches_root_from_blueprint(blueprint_path)
+    )
 
     # PATCH_REF may be a local file (CI download) or a pending patch_id/filename
     # in the configured store. Resolve to an operations source + the store/key so
     # the body lifecycle (move pending → applied) runs in the store.
     _ops_path, _ps, _pending_key = _resolve_patch_source(
-        patch_ref, patches_root, config_path, env_file, cli_env, need_local=True,
+        patch_ref,
+        patches_root,
+        config_path,
+        env_file,
+        cli_env,
+        need_local=True,
     )
     patch_file = str(_ops_path)
 
@@ -577,7 +638,9 @@ def patch_import(
     if not no_commit:
         _check = subprocess.run(
             ["git", "rev-parse", "--is-inside-work-tree"],
-            capture_output=True, text=True, cwd=blueprint_path.parent or None,
+            capture_output=True,
+            text=True,
+            cwd=blueprint_path.parent or None,
         )
         if _check.returncode != 0 or _check.stdout.strip() != "true":
             click.echo(
@@ -603,6 +666,7 @@ def patch_import(
             sys.exit(exit_codes.DATA_OR_RUNTIME)
         fd, _tmp = tempfile.mkstemp(suffix=".json", prefix="aq_ci_patch_")
         import os as _os
+
         with _os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(_raw["patch"], fh)
         _tmp_unwrapped = Path(_tmp)
@@ -629,13 +693,16 @@ def patch_import(
     click.echo(f"  operations   {result.operations_applied} applied")
 
     if no_commit:
-        click.echo("  (--no-commit) staged only — commit with: "
-                   f"aqueduct patch commit --blueprint {blueprint}")
+        click.echo(
+            "  (--no-commit) staged only — commit with: "
+            f"aqueduct patch commit --blueprint {blueprint}"
+        )
         return
 
     # Resolve blueprint_id for the structured commit message.
     try:
         from aqueduct.parser.parser import parse as _parse
+
         blueprint_id = _parse(blueprint).id
     except Exception:
         blueprint_id = blueprint_path.stem
@@ -650,7 +717,9 @@ def patch_import(
 
     add = subprocess.run(
         ["git", "add", blueprint_path.name],
-        capture_output=True, text=True, cwd=blueprint_path.parent or None,
+        capture_output=True,
+        text=True,
+        cwd=blueprint_path.parent or None,
     )
     if add.returncode != 0:
         click.echo(f"✗ git add failed: {add.stderr.strip()}", err=True)
@@ -658,7 +727,9 @@ def patch_import(
 
     commit = subprocess.run(
         ["git", "commit", "-m", commit_msg],
-        capture_output=True, text=True, cwd=blueprint_path.parent or None,
+        capture_output=True,
+        text=True,
+        cwd=blueprint_path.parent or None,
     )
     if commit.returncode != 0:
         click.echo(f"✗ git commit failed: {commit.stderr.strip()}", err=True)
@@ -666,7 +737,9 @@ def patch_import(
 
     short_hash = subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"],
-        capture_output=True, text=True, cwd=blueprint_path.parent or None,
+        capture_output=True,
+        text=True,
+        cwd=blueprint_path.parent or None,
     ).stdout.strip()
     click.echo(f"  committed  [{short_hash}]  {blueprint_id}")
 
@@ -680,13 +753,19 @@ def patch_import(
     help="Root directory for patch lifecycle subdirs (default: derived from patch file path or CWD/patches)",
 )
 @click.option(
-    "--config", "config_path", default=None,
+    "--config",
+    "config_path",
+    default=None,
     help="Path to aqueduct.yml — resolves the patch store when PATCH_REF is a remote patch_id.",
 )
 @_env_options
 def patch_reject(
-    patch_ref: str, reason: str, patches_dir: str | None,
-    config_path: str | None, env_file: str | None, cli_env: tuple[str, ...],
+    patch_ref: str,
+    reason: str,
+    patches_dir: str | None,
+    config_path: str | None,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
 ) -> None:
     """Reject a pending patch and record the reason.
 
@@ -713,7 +792,8 @@ def patch_reject(
     if ambiguous:
         click.echo(
             f"✗ {len(ambiguous)} pending patches share id {patch_ref!r} — re-run with the "
-            f"full filename:", err=True,
+            f"full filename:",
+            err=True,
         )
         for k in ambiguous:
             click.echo(f"    {k.rsplit('/', 1)[-1]}", err=True)
@@ -721,7 +801,9 @@ def patch_reject(
 
     if pending_key:
         try:
-            patch_id = json.loads(ps.get_text(pending_key)).get("patch_id") or Path(pending_key).stem
+            patch_id = (
+                json.loads(ps.get_text(pending_key)).get("patch_id") or Path(pending_key).stem
+            )
         except Exception:
             patch_id = Path(pending_key).stem
     else:
@@ -789,7 +871,10 @@ def patch_pull(patch_id: str, blueprint: str, out: str | None) -> None:
         click.echo(f"✗ index query failed: {exc}", err=True)
         sys.exit(exit_codes.DATA_OR_RUNTIME)
     if row is None:
-        click.echo(f"✗ patch {patch_id!r} not found in the index — `aqueduct patch list --blueprint <bp>` shows known patches", err=True)
+        click.echo(
+            f"✗ patch {patch_id!r} not found in the index — `aqueduct patch list --blueprint <bp>` shows known patches",
+            err=True,
+        )
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     ps = make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, patches_root)
@@ -806,7 +891,9 @@ def patch_pull(patch_id: str, blueprint: str, out: str | None) -> None:
 
     click.echo(f"✓ patch pulled  id={patch_id}  status={row['status']}")
     click.echo(f"  → {out_path}")
-    click.echo(f"  review: git diff  •  apply: aqueduct patch apply {out_path} --blueprint {blueprint}")
+    click.echo(
+        f"  review: git diff  •  apply: aqueduct patch apply {out_path} --blueprint {blueprint}"
+    )
 
 
 @patch.command("commit")
@@ -831,7 +918,9 @@ def patch_commit(blueprint: str, patches_dir: str | None) -> None:
     from pathlib import Path
 
     blueprint_path = Path(blueprint)
-    patches_root = Path(patches_dir) if patches_dir else _patches_root_from_blueprint(blueprint_path)
+    patches_root = (
+        Path(patches_dir) if patches_dir else _patches_root_from_blueprint(blueprint_path)
+    )
 
     uncommitted = _uncommitted_applied_patches(blueprint_path, patches_root)
     if not uncommitted:
@@ -841,6 +930,7 @@ def patch_commit(blueprint: str, patches_dir: str | None) -> None:
     # Parse blueprint_id
     try:
         from aqueduct.parser.parser import parse as _parse
+
         bp = _parse(blueprint)
         blueprint_id = bp.id
     except Exception:
@@ -861,14 +951,18 @@ def patch_commit(blueprint: str, patches_dir: str | None) -> None:
 
     commit_msg = build_commit_message(blueprint_id, patch_bodies)
 
-    add = subprocess.run(["git", "add", blueprint_path.name], capture_output=True, cwd=blueprint_path.parent or None)
+    add = subprocess.run(
+        ["git", "add", blueprint_path.name], capture_output=True, cwd=blueprint_path.parent or None
+    )
     if add.returncode != 0:
         click.echo(f"✗ git add failed: {add.stderr.decode().strip()}", err=True)
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     commit = subprocess.run(
         ["git", "commit", "-m", commit_msg],
-        capture_output=True, text=True, cwd=blueprint_path.parent or None,
+        capture_output=True,
+        text=True,
+        cwd=blueprint_path.parent or None,
     )
     if commit.returncode != 0:
         click.echo(f"✗ git commit failed: {commit.stderr.strip()}", err=True)
@@ -876,7 +970,9 @@ def patch_commit(blueprint: str, patches_dir: str | None) -> None:
 
     short_hash = subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"],
-        capture_output=True, text=True, cwd=blueprint_path.parent or None,
+        capture_output=True,
+        text=True,
+        cwd=blueprint_path.parent or None,
     ).stdout.strip()
 
     click.echo(f"✓ committed {n} patch(es)  [{short_hash}]  {blueprint_id}")
@@ -906,13 +1002,17 @@ def patch_discard(blueprint: str, patches_dir: str | None) -> None:
     from pathlib import Path
 
     blueprint_path = Path(blueprint)
-    patches_root = Path(patches_dir) if patches_dir else _patches_root_from_blueprint(blueprint_path)
+    patches_root = (
+        Path(patches_dir) if patches_dir else _patches_root_from_blueprint(blueprint_path)
+    )
 
     uncommitted = _uncommitted_applied_patches(blueprint_path, patches_root)
 
     restore = subprocess.run(
         ["git", "checkout", "HEAD", "--", blueprint_path.name],
-        capture_output=True, text=True, cwd=blueprint_path.parent or None,
+        capture_output=True,
+        text=True,
+        cwd=blueprint_path.parent or None,
     )
     if restore.returncode != 0:
         click.echo(f"✗ git checkout failed: {restore.stderr.strip()}", err=True)
@@ -933,7 +1033,9 @@ def patch_discard(blueprint: str, patches_dir: str | None) -> None:
 
     if moved:
         click.echo(f"  moved {moved} applied patch(es) back to patches/pending/")
-        click.echo(f"  re-apply with: aqueduct patch apply patches/pending/<file> --blueprint {blueprint}")
+        click.echo(
+            f"  re-apply with: aqueduct patch apply patches/pending/<file> --blueprint {blueprint}"
+        )
 
 
 @patch.command("list")
@@ -957,19 +1059,28 @@ def patch_discard(blueprint: str, patches_dir: str | None) -> None:
     help="Which lifecycle directory to list",
 )
 @click.option(
-    "--format", "out_format",
+    "--format",
+    "out_format",
     type=click.Choice(["text", "json"], case_sensitive=False),
-    default="text", show_default=True,
+    default="text",
+    show_default=True,
     help="Output format. `json` for machine-readable consumption (Phase 30b).",
 )
 @click.option(
-    "--config", "config_path", default=None,
+    "--config",
+    "config_path",
+    default=None,
     help="Path to aqueduct.yml — resolves the configured patch store backend (local / s3 / …).",
 )
 @_env_options
 def patch_list(
-    blueprint: str | None, patches_dir: str | None, filter_status: str, out_format: str,
-    config_path: str | None, env_file: str | None, cli_env: tuple[str, ...],
+    blueprint: str | None,
+    patches_dir: str | None,
+    filter_status: str,
+    out_format: str,
+    config_path: str | None,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
 ) -> None:
     """List patches from the configured patch store (backend-blind).
 
@@ -988,10 +1099,12 @@ def patch_list(
         try:
             from aqueduct.cli import _load_config_with_env
             from aqueduct.stores.object_store import make_patch_store
+
             # Auto-discovers aqueduct.yml (CWD walk-up) when no --config + loads .env.
             cfg = _load_config_with_env(
                 Path(config_path) if config_path else None,
-                env_file=env_file, cli_env=cli_env,
+                env_file=env_file,
+                cli_env=cli_env,
             )
             _bp_path = Path(blueprint) if blueprint else None
             # No blueprint → walk up from CWD to the project root (where
@@ -1034,17 +1147,19 @@ def patch_list(
                 except Exception:
                     data = {}
                 meta = data.get(PATCH_META_KEY) or {}
-                payload.append({
-                    "status": status_label,
-                    "file": str(f),
-                    "patch_id": data.get("patch_id", f.stem),
-                    "rationale": data.get("rationale"),
-                    "confidence": data.get("confidence"),
-                    "category": data.get("category"),
-                    "run_id": meta.get("run_id"),
-                    "blueprint_id": meta.get("blueprint_id"),
-                    "failed_module": meta.get("failed_module"),
-                })
+                payload.append(
+                    {
+                        "status": status_label,
+                        "file": str(f),
+                        "patch_id": data.get("patch_id", f.stem),
+                        "rationale": data.get("rationale"),
+                        "confidence": data.get("confidence"),
+                        "category": data.get("category"),
+                        "run_id": meta.get("run_id"),
+                        "blueprint_id": meta.get("blueprint_id"),
+                        "failed_module": meta.get("failed_module"),
+                    }
+                )
         emit(payload, fmt="json")
         return
 
@@ -1073,12 +1188,14 @@ def patch_list(
         return
 
     if filter_status == "pending":
-        click.echo("\n  Apply: aqueduct patch apply patches/pending/<file> --blueprint <blueprint.yml>")
+        click.echo(
+            "\n  Apply: aqueduct patch apply patches/pending/<file> --blueprint <blueprint.yml>"
+        )
         click.echo("  Reject: aqueduct patch reject patches/pending/<file> --reason '<reason>'")
 
 
-
 # ── aqueduct log ─────────────────────────────────────────────────────────────
+
 
 @patch.command("log")
 @click.argument("blueprint", type=click.Path(exists=True, dir_okay=False))
@@ -1101,8 +1218,16 @@ def log_cmd(blueprint: str, fmt: str) -> None:
     blueprint_path = Path(blueprint)
 
     result = subprocess.run(
-        ["git", "log", "--follow", "--format=%H\x1f%ci\x1f%s\x1f%B\x1eENDCOMMIT", "--", str(blueprint_path)],
-        capture_output=True, text=True,
+        [
+            "git",
+            "log",
+            "--follow",
+            "--format=%H\x1f%ci\x1f%s\x1f%B\x1eENDCOMMIT",
+            "--",
+            str(blueprint_path),
+        ],
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
         click.echo(f"✗ git log failed: {result.stderr.strip()}", err=True)
@@ -1143,14 +1268,16 @@ def log_cmd(blueprint: str, fmt: str) -> None:
             ops = ""
             run_id = ""
 
-        entries.append({
-            "hash": commit_hash[:8],
-            "date": commit_date[:19],
-            "subject": subject,
-            "patches": ", ".join(patch_ids) if patch_ids else "(manual change)",
-            "ops": ops,
-            "run_id": run_id,
-        })
+        entries.append(
+            {
+                "hash": commit_hash[:8],
+                "date": commit_date[:19],
+                "subject": subject,
+                "patches": ", ".join(patch_ids) if patch_ids else "(manual change)",
+                "ops": ops,
+                "run_id": run_id,
+            }
+        )
 
     if fmt == "json":
         emit(entries, fmt="json")
@@ -1169,9 +1296,12 @@ def log_cmd(blueprint: str, fmt: str) -> None:
 
 # ── aqueduct rollback ─────────────────────────────────────────────────────────
 
+
 @patch.command("rollback")
 @click.argument("blueprint", type=click.Path(exists=True, dir_okay=False))
-@click.option("--to", "patch_id", required=True, help="Revert the git commit containing this patch_id")
+@click.option(
+    "--to", "patch_id", required=True, help="Revert the git commit containing this patch_id"
+)
 def rollback_cmd(blueprint: str, patch_id: str) -> None:
     """Revert a Blueprint file to its state before a specific patch was applied.
 
@@ -1188,7 +1318,9 @@ def rollback_cmd(blueprint: str, patch_id: str) -> None:
     # Walk git log scoped to this blueprint file to find the target commit
     result = subprocess.run(
         ["git", "log", "--follow", "--format=%H\x1f%B\x1eENDCOMMIT", "--", str(blueprint_path)],
-        capture_output=True, text=True, cwd=cwd,
+        capture_output=True,
+        text=True,
+        cwd=cwd,
     )
     if result.returncode != 0:
         click.echo(f"✗ git log failed: {result.stderr.strip()}", err=True)
@@ -1216,7 +1348,9 @@ def rollback_cmd(blueprint: str, patch_id: str) -> None:
     # Resolve the commit immediately before the patch
     parent = subprocess.run(
         ["git", "rev-parse", f"{target_hash}~1"],
-        capture_output=True, text=True, cwd=cwd,
+        capture_output=True,
+        text=True,
+        cwd=cwd,
     )
     if parent.returncode != 0:
         click.echo(f"✗ could not resolve parent commit: {parent.stderr.strip()}", err=True)
@@ -1226,7 +1360,9 @@ def rollback_cmd(blueprint: str, patch_id: str) -> None:
     # Discover all blueprint files touched by the patch commit (handles arcades)
     diff_files = subprocess.run(
         ["git", "diff-tree", "--no-commit-id", "-r", "--name-only", target_hash],
-        capture_output=True, text=True, cwd=cwd,
+        capture_output=True,
+        text=True,
+        cwd=cwd,
     )
     if diff_files.returncode != 0:
         click.echo(f"✗ could not list files in commit: {diff_files.stderr.strip()}", err=True)
@@ -1241,7 +1377,9 @@ def rollback_cmd(blueprint: str, patch_id: str) -> None:
     for rel_path in touched_files:
         restore = subprocess.run(
             ["git", "checkout", parent_hash, "--", rel_path],
-            capture_output=True, text=True, cwd=cwd,
+            capture_output=True,
+            text=True,
+            cwd=cwd,
         )
         if restore.returncode != 0:
             click.echo(f"✗ git checkout {rel_path} failed: {restore.stderr.strip()}", err=True)
@@ -1250,7 +1388,9 @@ def rollback_cmd(blueprint: str, patch_id: str) -> None:
     # Stage restored files and create a forward revert commit
     add = subprocess.run(
         ["git", "add", "--"] + touched_files,
-        capture_output=True, text=True, cwd=cwd,
+        capture_output=True,
+        text=True,
+        cwd=cwd,
     )
     if add.returncode != 0:
         click.echo(f"✗ git add failed: {add.stderr.strip()}", err=True)
@@ -1262,7 +1402,9 @@ def rollback_cmd(blueprint: str, patch_id: str) -> None:
     )
     commit = subprocess.run(
         ["git", "commit", "-m", commit_msg],
-        capture_output=True, text=True, cwd=cwd,
+        capture_output=True,
+        text=True,
+        cwd=cwd,
     )
     if commit.returncode != 0:
         click.echo(f"✗ git commit failed: {commit.stderr.strip()}", err=True)
@@ -1270,11 +1412,11 @@ def rollback_cmd(blueprint: str, patch_id: str) -> None:
 
     short = subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"],
-        capture_output=True, text=True, cwd=cwd,
+        capture_output=True,
+        text=True,
+        cwd=cwd,
     ).stdout.strip()
 
     click.echo(f"✓ rolled back patch {patch_id!r}  [{short}]")
     for f in touched_files:
         click.echo(f"  restored  {f}  (from {parent_hash[:8]})")
-
-

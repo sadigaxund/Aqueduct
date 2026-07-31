@@ -29,13 +29,15 @@ def _apply_warnings_from_cfg(cfg) -> None:
     any `--suppress-warning` flags the user passed. Use `*` to silence all.
     """
     from aqueduct.warnings import _DEFAULT_SUPPRESS, set_default_strict, set_default_suppress
+
     merged = set(_DEFAULT_SUPPRESS) | set(getattr(cfg.warnings, "suppress", []) or [])
     set_default_suppress(suppress=merged)
     set_default_strict(getattr(cfg.warnings, "strict", []) or [])
 
 
-
-def _compile_with_warnings(compile_fn, *args, _verbose: bool = False, _defer: bool = False, **kwargs):
+def _compile_with_warnings(
+    compile_fn, *args, _verbose: bool = False, _defer: bool = False, **kwargs
+):
     """Call compile_fn, intercept warnings, reprint as clean CLI output.
 
     Aqueduct's own diagnostics (AqueductWarning category, prefix
@@ -49,12 +51,14 @@ def _compile_with_warnings(compile_fn, *args, _verbose: bool = False, _defer: bo
     where the blueprint these warnings are about is named).
     """
     import warnings as _w
+
     with _w.catch_warnings(record=True) as caught:
         _w.simplefilter("always")
         result = compile_fn(*args, **kwargs)
     if _defer:
         return result, list(caught)
     from aqueduct.cli.style import emit_warnings
+
     emit_warnings(caught, verbose=_verbose, label="compile:")
     return result
 
@@ -62,12 +66,14 @@ def _compile_with_warnings(compile_fn, *args, _verbose: bool = False, _defer: bo
 def _rule(char: str = "─") -> str:
     """A horizontal rule spanning the terminal width (fallback 64)."""
     import shutil
+
     return char * shutil.get_terminal_size(fallback=(64, 20)).columns
 
 
 # ── Self-healing helpers ──────────────────────────────────────────────────────
 # Deterministic guardrail enforcement lives in aqueduct.patch.apply._check_guardrails.
 # That is the single authoritative implementation; do not reintroduce a CLI-side copy.
+
 
 def _extract_stack_class(stack_trace: str | None) -> str | None:
     """Extract the exception class name from the last line of a stack trace.
@@ -111,11 +117,17 @@ def _check_heal_guardrails(failure_ctx: Any, guardrails: Any) -> tuple[bool, str
         for candidate in candidates:
             try:
                 if re.search(pattern, candidate):
-                    return False, f"error {candidate!r} matched never_heal_errors pattern {pattern!r}"
+                    return (
+                        False,
+                        f"error {candidate!r} matched never_heal_errors pattern {pattern!r}",
+                    )
             except re.error:
                 # Degrade gracefully on malformed regex: fall back to exact match
                 if pattern == candidate:
-                    return False, f"error {candidate!r} matched never_heal_errors pattern {pattern!r}"
+                    return (
+                        False,
+                        f"error {candidate!r} matched never_heal_errors pattern {pattern!r}",
+                    )
 
     if heal_on:
         for et in heal_on:
@@ -137,12 +149,25 @@ def resolve_agent_connection(engine_agent, blueprint_agent=None):
     prompt_context is NOT OR‑merged — the engine and blueprint versions
     are kept separate so the agent loop can concatenate them.
     """
+
     class _Resolved:
-        __slots__ = ("provider", "base_url", "model", "api_key", "cascade",
-                      "provider_options",
-                      "timeout", "max_reprompts", "engine_prompt_context",
-                      "blueprint_prompt_context", "mode", "max_tool_calls",
-                      "supports_tools", "progressive", "max_chain")
+        __slots__ = (
+            "provider",
+            "base_url",
+            "model",
+            "api_key",
+            "cascade",
+            "provider_options",
+            "timeout",
+            "max_reprompts",
+            "engine_prompt_context",
+            "blueprint_prompt_context",
+            "mode",
+            "max_tool_calls",
+            "supports_tools",
+            "progressive",
+            "max_chain",
+        )
 
     bp = blueprint_agent
     eng = engine_agent
@@ -151,11 +176,14 @@ def resolve_agent_connection(engine_agent, blueprint_agent=None):
     r.base_url = (bp.base_url or eng.base_url) if bp else eng.base_url
     r.api_key = (bp.api_key or eng.api_key) if bp else eng.api_key
     r.model = (bp.model or eng.model) if bp else eng.model
-    r.provider_options = (bp.provider_options or eng.provider_options) if bp else eng.provider_options
+    r.provider_options = (
+        (bp.provider_options or eng.provider_options) if bp else eng.provider_options
+    )
     r.timeout = (bp.timeout or eng.timeout) if bp else eng.timeout
     r.max_reprompts = (bp.max_reprompts or eng.max_reprompts) if bp else eng.max_reprompts
     # Cascade: blueprint wins when present; fall back to engine cascade default
     from aqueduct.parser.parser import _build_cascade
+
     _bp_cascade = bp.cascade if bp else None
     _eng_cascade = _build_cascade(eng.cascade) if eng.cascade else None
     r.cascade = _bp_cascade if _bp_cascade else _eng_cascade
@@ -173,12 +201,8 @@ def resolve_agent_connection(engine_agent, blueprint_agent=None):
     )
     # Progressive (chained) multi-patch healing — same `is not None`
     # inheritance shape as mode/supports_tools above.
-    r.progressive = (
-        bp.progressive if bp and bp.progressive is not None else eng.progressive
-    )
-    r.max_chain = (
-        bp.max_chain if bp and bp.max_chain is not None else eng.max_chain
-    )
+    r.progressive = bp.progressive if bp and bp.progressive is not None else eng.progressive
+    r.max_chain = bp.max_chain if bp and bp.max_chain is not None else eng.max_chain
     return r
 
 
@@ -194,6 +218,7 @@ def _resolve_project_root(
     is the project root.
     """
     from pathlib import Path as _Path
+
     if config_path is not None:
         return config_path.parent
     if blueprint_path is not None:
@@ -227,13 +252,12 @@ def _load_config_with_env(
     processes (dashboard) that re-load config on every refresh.
     """
     from pathlib import Path as _Path2
+
     _cfg = _Path2(config_path) if config_path is not None else None
-    _anchor = (
-        _cfg if _cfg is not None
-        else _resolve_project_root() / _DEFAULT_CONFIG_FILENAME
-    )
+    _anchor = _cfg if _cfg is not None else _resolve_project_root() / _DEFAULT_CONFIG_FILENAME
     if quiet:
         import click as _click
+
         _real_echo = _click.echo
         _click.echo = lambda *a, **kw: None
         try:
@@ -243,6 +267,7 @@ def _load_config_with_env(
     else:
         _resolve_and_load_env(env_file, _anchor, cli_env=cli_env)
     from aqueduct.config import load_config as _load_config
+
     return _load_config(_cfg)
 
 
@@ -279,6 +304,7 @@ def _agent_usable(provider: str, base_url: str | None, api_key: str | None = Non
     openai_compat: requires base_url (Ollama/vLLM) OR OPENAI_API_KEY (or api_key param)
     """
     import os as _os
+
     if provider == "anthropic":
         return bool(api_key or _os.environ.get("ANTHROPIC_API_KEY"))
     if provider == "openai_compat":
@@ -311,7 +337,9 @@ def _agent_usable_with_cascade(
     return False
 
 
-def _apply_patch_in_memory(patch, blueprint_path: Path, depot, profile, cli_overrides: dict) -> Any:  # noqa: F811
+def _apply_patch_in_memory(
+    patch, blueprint_path: Path, depot, profile, cli_overrides: dict
+) -> Any:  # noqa: F811
     """Apply patch operations to Blueprint without touching disk. Returns new Manifest or None."""
     try:
         from aqueduct.compiler.compiler import CompileError
@@ -342,8 +370,15 @@ def _apply_patch_in_memory(patch, blueprint_path: Path, depot, profile, cli_over
         return None
 
 
-def _write_patch_to_blueprint(patch, blueprint_path: Path, patches_dir: Path, failure_ctx, mode: str,  # noqa: F811
-                              obs_store=None, patch_store=None) -> Any:
+def _write_patch_to_blueprint(
+    patch,
+    blueprint_path: Path,
+    patches_dir: Path,
+    failure_ctx,
+    mode: str,  # noqa: F811
+    obs_store=None,
+    patch_store=None,
+) -> Any:
     """Write patch permanently to Blueprint, re-parse, re-compile. Returns new Manifest or None."""
     try:
         import os as _os
@@ -353,7 +388,12 @@ def _write_patch_to_blueprint(patch, blueprint_path: Path, patches_dir: Path, fa
         from aqueduct.compiler.compiler import CompileError
         from aqueduct.compiler.compiler import compile as compiler_compile
         from aqueduct.parser.parser import ParseError, parse
-        from aqueduct.patch.apply import _append_healed_by, _yaml_dump, _yaml_load, apply_patch_to_dict
+        from aqueduct.patch.apply import (
+            _append_healed_by,
+            _yaml_dump,
+            _yaml_load,
+            apply_patch_to_dict,
+        )
         from aqueduct.patch.provenance import build_healed_by_record, detect_engine_version
 
         bp_raw = _yaml_load(blueprint_path)
@@ -371,8 +411,11 @@ def _write_patch_to_blueprint(patch, blueprint_path: Path, patches_dir: Path, fa
             "run_id": getattr(failure_ctx, "run_id", None),
         }
         _healed_by_record = build_healed_by_record(
-            patch_id=patch.patch_id, operations=patch.operations,
-            meta=_meta, applied_at=_applied_at, fallback_run_id=patch.run_id,
+            patch_id=patch.patch_id,
+            operations=patch.operations,
+            meta=_meta,
+            applied_at=_applied_at,
+            fallback_run_id=patch.run_id,
         )
         patched = _append_healed_by(patched, _healed_by_record)
 
@@ -381,6 +424,7 @@ def _write_patch_to_blueprint(patch, blueprint_path: Path, patches_dir: Path, fa
         backup_dir.mkdir(parents=True, exist_ok=True)
         import shutil
         from datetime import datetime
+
         ts = datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
         shutil.copy2(blueprint_path, backup_dir / f"{patch.patch_id}_{ts}_{blueprint_path.name}")
 
@@ -389,8 +433,9 @@ def _write_patch_to_blueprint(patch, blueprint_path: Path, patches_dir: Path, fa
         _yaml_dump(patched, tmp_out)
         _os.replace(tmp_out, blueprint_path)
 
-        archive_patch(patch, patches_dir, failure_ctx, mode=mode,
-                      patch_store=patch_store, obs_store=obs_store)
+        archive_patch(
+            patch, patches_dir, failure_ctx, mode=mode, patch_store=patch_store, obs_store=obs_store
+        )
 
         # Re-parse + re-compile from updated file
         bp = parse(str(blueprint_path))
@@ -411,6 +456,7 @@ def _run_patch_gates_inline(  # noqa: F811
     iteration_run_id: str,
     blueprint_id: str,
     engine: str,
+    cfg,
     sample_rows: int = 1000,
     sandbox_mode: str = "sample",
     sandbox_master_url: str | None = None,
@@ -430,6 +476,13 @@ def _run_patch_gates_inline(  # noqa: F811
     against the SAME engine the patch's own pipeline targets, never a
     hardcoded Spark session. Every caller already has ``engine`` resolved
     (``aqueduct/cli/run.py``'s ``engine = cfg.deployment.engine``).
+
+    ``cfg`` (``AqueductConfig``) is REQUIRED — forwarded to
+    ``run_sandbox_gate(cfg=...)`` (Phase 82 remediation) so the sandbox
+    replay's owned session resolves the SAME ``engine.<name>.*`` config a
+    real run would use, instead of the sandbox gate seeing no engine config
+    at all. Every caller already has ``cfg`` resolved by the time it reaches
+    here — none of the three call sites in ``aqueduct/cli/run.py`` lack one.
     """
     from aqueduct.patch.apply import _yaml_load, apply_patch_to_dict
     from aqueduct.patch.explain_gate import run_explain_gate
@@ -462,6 +515,7 @@ def _run_patch_gates_inline(  # noqa: F811
     #   off       → skip the gate entirely (synthetic pass)
     if sandbox_mode == "off":
         from aqueduct.patch.preview import SandboxGateResult as _SBR
+
         sandbox_res = _SBR(
             status="skip",
             detail="sandbox_mode=off (danger.allow_skip_sandbox=true)",
@@ -476,6 +530,7 @@ def _run_patch_gates_inline(  # noqa: F811
             patch_id=patch.patch_id,
             failed_module=failed_module,
             engine=engine,
+            cfg=cfg,
             sample_rows=_sample_for_call,
             observability_store=bundle.observability,
             explain_capture=explain_after,
@@ -502,12 +557,16 @@ def _run_patch_gates_inline(  # noqa: F811
     explain_res = None
     try:
         baseline = surveyor.latest_explain_snapshots(blueprint_id=blueprint_id) if surveyor else {}
-        explain_res = run_explain_gate(baseline, explain_after, touched_modules=lineage_res.touched_modules)
+        explain_res = run_explain_gate(
+            baseline, explain_after, touched_modules=lineage_res.touched_modules
+        )
         surveyor.record_patch_simulation(
             patch_id=patch.patch_id,
             gate="explain",
             status=explain_res.status,
-            detail=explain_res.detail or "; ".join(r.detail for r in explain_res.regressions) or None,
+            detail=explain_res.detail
+            or "; ".join(r.detail for r in explain_res.regressions)
+            or None,
             duration_ms=explain_res.duration_ms,
             run_id=iteration_run_id,
             blueprint_id=blueprint_id,
@@ -519,14 +578,28 @@ def _run_patch_gates_inline(  # noqa: F811
     return lineage_res, sandbox_res, explain_res, gates_passed
 
 
-def _stage_failed_patch(on_heal_failure: str, patch, patches_dir, failure_ctx, cfg, click_mod,  # noqa: F811
-                        obs_store=None, patch_store=None) -> None:
+def _stage_failed_patch(
+    on_heal_failure: str,
+    patch,
+    patches_dir,
+    failure_ctx,
+    cfg,
+    click_mod,  # noqa: F811
+    obs_store=None,
+    patch_store=None,
+) -> None:
     """Handle on_heal_failure policy for a patch that failed to fix the pipeline."""
     if on_heal_failure == "stage":
         from aqueduct.agent import stage_patch_for_human
-        stage_patch_for_human(patch, patches_dir, failure_ctx,
-                              on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
-                              patch_store=patch_store, obs_store=obs_store)
+
+        stage_patch_for_human(
+            patch,
+            patches_dir,
+            failure_ctx,
+            on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
+            patch_store=patch_store,
+            obs_store=obs_store,
+        )
         _label = patch_store.location_label if patch_store is not None else patches_dir
         click_mod.echo(
             f"  ✎ Failed patch staged for review → {_label}/pending/  (id={patch.patch_id})",
@@ -543,6 +616,7 @@ def _load_env_file(env_path: Path) -> int:
     Returns number of variables loaded.
     """
     import os
+
     loaded = 0
     for raw_line in env_path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
@@ -580,13 +654,15 @@ def _apply_cli_env(cli_env: tuple[str, ...] | list[str]) -> int:
     loader skips keys already present). Docker `-e` semantics.
     """
     import os
+
     n = 0
     for item in cli_env or ():
         key, sep, val = item.partition("=")
         key = key.strip()
         if not sep or not key:
             raise click.BadParameter(
-                f"-e/--env expects KEY=VALUE, got {item!r}", param_hint="-e",
+                f"-e/--env expects KEY=VALUE, got {item!r}",
+                param_hint="-e",
             )
         os.environ[key] = val.strip()
         n += 1
@@ -608,6 +684,7 @@ def _resolve_and_load_env(
 
     from aqueduct.cli.style import ICON
     from aqueduct.cli.style import info as _info
+
     n_over = _apply_cli_env(cli_env or ())
     over = f"; {n_over} from -e" if n_over else ""
     _env = f"{ICON['info']} env  ·  "
@@ -644,11 +721,18 @@ def _env_options(f):
     (command-independent, CI/prod-settable).
     """
     f = click.option(
-        "--env-file", "env_file", default=None, type=click.Path(dir_okay=False),
+        "--env-file",
+        "env_file",
+        default=None,
+        type=click.Path(dir_okay=False),
         help="Fallback .env if no project .env beside the config/blueprint.",
     )(f)
     f = click.option(
-        "-e", "--env", "cli_env", multiple=True, metavar="KEY=VAL",
+        "-e",
+        "--env",
+        "cli_env",
+        multiple=True,
+        metavar="KEY=VAL",
         help="Set an env var (repeatable, docker-style). Highest precedence.",
     )(f)
     return f
@@ -667,6 +751,7 @@ def _sniff_file_kind(path: Path) -> str | None:
       aqueduct_scenario:  → .aqscenario.yml
     """
     import re as _re
+
     try:
         head = "\n".join(path.read_text(encoding="utf-8").splitlines()[:40])
     except Exception:
@@ -680,7 +765,6 @@ def _sniff_file_kind(path: Path) -> str | None:
         if _re.search(key, head, _re.MULTILINE):
             return kind
     return None
-
 
 
 from aqueduct import __version__ as _aqueduct_version  # noqa: E402  (intentional mid-file import)
@@ -697,6 +781,7 @@ def _install_styled_echo() -> None:
     if getattr(click.echo, "_aq_styled_wrapped", False):
         return
     from aqueduct.cli.style import colorize_line
+
     _inner_echo = click.echo
 
     def _styled_echo(message=None, file=None, nl=True, err=False, color=None):
@@ -763,12 +848,33 @@ class _AqueductJsonLogFormatter:
     # Stdlib LogRecord attributes — anything NOT in this set is treated as a
     # caller-supplied `extra=` field and merged into the JSON payload. Keeps
     # the schema open-ended without manually enumerating every domain key.
-    _STANDARD_LOGRECORD_ATTRS = frozenset({
-        "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
-        "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
-        "created", "msecs", "relativeCreated", "thread", "threadName",
-        "processName", "process", "message", "asctime", "taskName",
-    })
+    _STANDARD_LOGRECORD_ATTRS = frozenset(
+        {
+            "name",
+            "msg",
+            "args",
+            "levelname",
+            "levelno",
+            "pathname",
+            "filename",
+            "module",
+            "exc_info",
+            "exc_text",
+            "stack_info",
+            "lineno",
+            "funcName",
+            "created",
+            "msecs",
+            "relativeCreated",
+            "thread",
+            "threadName",
+            "processName",
+            "process",
+            "message",
+            "asctime",
+            "taskName",
+        }
+    )
 
     def format(self, record) -> str:  # noqa: D401
         import json as _json
@@ -837,6 +943,7 @@ def cli(
     import logging
 
     from aqueduct.warnings import install_cli_formatter, set_default_suppress
+
     level = logging.DEBUG if verbose else logging.WARNING
 
     if log_format.lower() == "json":
@@ -849,6 +956,7 @@ def cli(
         root.setLevel(level)
     else:
         from aqueduct.cli.style import StyledLogFormatter
+
         handler = logging.StreamHandler()
         handler.setFormatter(StyledLogFormatter(verbose=verbose))
 
@@ -894,17 +1002,15 @@ def cli(
 def _render_banner() -> str:
     """Small branded wordmark for the bare `aqueduct` command (not per-run)."""
     aq = click.style("aq", fg="red", bold=True)
-    ueduct = click.style("ueduct", fg="yellow", bold=True)   # sand
+    ueduct = click.style("ueduct", fg="yellow", bold=True)  # sand
     arches = click.style("∩∩∩", fg="cyan")
     tag = click.style("declarative · self-healing · Apache Spark", dim=True)
     ver = click.style(f"v{_aqueduct_version}", dim=True)
     return f"\n  {arches}  {aq}{ueduct}  {ver}\n  {tag}\n"
 
 
-
-
-
 # ── patch helpers ────────────────────────────────────────────────────────────
+
 
 def _uncommitted_applied_patches(
     blueprint_path: Path, patches_root: Path, blueprint_id: str | None = None
@@ -931,6 +1037,7 @@ def _uncommitted_applied_patches(
     # Patches without a recorded blueprint_id are kept (conservative).
     if blueprint_id is not None:
         from aqueduct.patch.grammar import PATCH_META_KEY as _PMK
+
         owned = []
         for _p in all_applied:
             try:
@@ -951,7 +1058,8 @@ def _uncommitted_applied_patches(
     try:
         result = subprocess.run(
             ["git", "log", "-1", "--format=%cI", "--", str(blueprint_path)],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         last_commit_ts: str | None = result.stdout.strip() if result.returncode == 0 else None
     except (FileNotFoundError, PermissionError, OSError):
@@ -965,13 +1073,16 @@ def _uncommitted_applied_patches(
     from datetime import datetime
 
     from aqueduct.patch.grammar import PATCH_META_KEY
+
     for p in all_applied:
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
         except Exception:
             continue
         # applied_at may be top-level or inside _aq_meta
-        applied_at_str = data.get("applied_at") or (data.get(PATCH_META_KEY) or {}).get("applied_at")
+        applied_at_str = data.get("applied_at") or (data.get(PATCH_META_KEY) or {}).get(
+            "applied_at"
+        )
         if not applied_at_str:
             continue
 
@@ -993,6 +1104,7 @@ def _uncommitted_applied_patches(
 
 # ── patch helpers ────────────────────────────────────────────────────────────
 
+
 def _patches_root_from_blueprint(blueprint_path: Path) -> Path:
     """Return <project_root>/patches by walking up from blueprint to find aqueduct.yml."""
     _search = blueprint_path.parent
@@ -1005,14 +1117,6 @@ def _patches_root_from_blueprint(blueprint_path: Path) -> Path:
             break
         _search = _search.parent
     return project_root / "patches"
-
-
-
-
-
-
-
-
 
 
 if __name__ == "__main__":

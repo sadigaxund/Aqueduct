@@ -1,19 +1,21 @@
-import pytest
-from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 from click.testing import CliRunner
 
 from aqueduct.agent.budget import StopReason
-from aqueduct.cli import cli, _run_patch_gates_inline
+from aqueduct.cli import _run_patch_gates_inline, cli
+from aqueduct.config import AqueductConfig
 from aqueduct.patch.grammar import PatchSpec, SetModuleConfigKeyOp
-from aqueduct.surveyor.models import FailureContext
 
 pytestmark = pytest.mark.integration
+
 
 def test_run_patch_gates_inline_accepts_iteration_run_id(tmp_path):
     """Verify that _run_patch_gates_inline accepts iteration_run_id keyword argument and runs without TypeError."""
     bp_file = tmp_path / "blueprint.yml"
-    bp_file.write_text("""
+    bp_file.write_text(
+        """
 aqueduct: "1.0"
 id: test_bp
 name: Test BP
@@ -25,26 +27,21 @@ modules:
       format: csv
       path: data.csv
 edges: []
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     # Use correct operation instances
     op = SetModuleConfigKeyOp(
-        op="set_module_config_key",
-        module_id="m1",
-        key="path",
-        value="new_data.csv"
+        op="set_module_config_key", module_id="m1", key="path", value="new_data.csv"
     )
 
-    patch_spec = PatchSpec(
-        patch_id="p1",
-        rationale="test",
-        operations=[op]
-    )
+    patch_spec = PatchSpec(patch_id="p1", rationale="test", operations=[op])
 
     mock_surveyor = MagicMock()
     mock_bundle = MagicMock()
     mock_bundle.observability = None
-    
+
     # Call with iteration_run_id
     res = _run_patch_gates_inline(
         patch=patch_spec,
@@ -55,17 +52,18 @@ edges: []
         iteration_run_id="iter-run-123",
         blueprint_id="test_bp",
         engine="spark",
+        cfg=AqueductConfig(),
         sandbox_mode="off",
     )
 
     # Should not raise TypeError and return a tuple
     assert isinstance(res, tuple)
     assert len(res) == 4
-    
+
     # Print calls if it fails
     print("CALLS:", mock_surveyor.record_patch_simulation.call_args_list)
     assert mock_surveyor.record_patch_simulation.call_count == 3
-    
+
     # Verify the first call is gate="lineage" and run_id="iter-run-123"
     first_call = mock_surveyor.record_patch_simulation.call_args_list[0]
     assert first_call[1]["gate"] == "lineage"
@@ -84,6 +82,7 @@ edges: []
     assert third_call[1]["run_id"] == "iter-run-123"
     assert third_call[1]["blueprint_id"] == "test_bp"
 
+
 @patch("aqueduct.agent.generate_agent_patch")
 @patch("aqueduct.executor.get_executor")
 @patch("aqueduct.cli._resolve_obs_db")
@@ -93,7 +92,8 @@ def test_cli_run_self_heal_wires_apply_callback(
 ):
     """Verify that `aqueduct run` self-healing wires the apply_callback correctly and calls it within the loop."""
     bp_file = tmp_path / "blueprint.yml"
-    bp_file.write_text("""
+    bp_file.write_text(
+        """
 aqueduct: "1.0"
 id: test_bp
 name: Test BP
@@ -111,10 +111,13 @@ modules:
       format: csv
       path: data.csv
 edges: []
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     cfg_file = tmp_path / "aqueduct.yml"
-    cfg_file.write_text("""
+    cfg_file.write_text(
+        """
 aqueduct_config: "1.0"
 agent:
   provider: openai_compat
@@ -122,7 +125,9 @@ agent:
 danger:
   allow_multi_patch: true
   allow_skip_sandbox: true
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     # Mock the executor to fail on first run (triggering self-healing)
     mock_exec = MagicMock()
@@ -144,17 +149,15 @@ danger:
 
     # Mock generate_agent_patch to return a dummy result
     from aqueduct.agent import AgentPatchResult
+
     patch_spec = PatchSpec(
         patch_id="p1",
         rationale="test",
         operations=[
             SetModuleConfigKeyOp(
-                op="set_module_config_key",
-                module_id="m1",
-                key="path",
-                value="new_data.csv"
+                op="set_module_config_key", module_id="m1", key="path", value="new_data.csv"
             )
-        ]
+        ],
     )
     mock_generate_patch.return_value = AgentPatchResult(
         patch=patch_spec,
@@ -166,9 +169,13 @@ danger:
     )
 
     runner = CliRunner()
-    with patch("aqueduct.agent.memory.find_pending", return_value=None), \
-         patch("aqueduct.agent.memory.find_replay_candidate", return_value=None):
-        result = runner.invoke(cli, ["run", str(bp_file), "--config", str(cfg_file), "--store-dir", str(tmp_path)])
+    with (
+        patch("aqueduct.agent.memory.find_pending", return_value=None),
+        patch("aqueduct.agent.memory.find_replay_candidate", return_value=None),
+    ):
+        result = runner.invoke(
+            cli, ["run", str(bp_file), "--config", str(cfg_file), "--store-dir", str(tmp_path)]
+        )
 
     print("OUTPUT:", result.output)
     print("EXCEPTION:", result.exception)
@@ -185,25 +192,20 @@ danger:
 
     # Test the apply_callback with an invalid patch violating guardrails
     from aqueduct.patch.grammar import RemoveModuleOp
+
     invalid_patch = PatchSpec(
         patch_id="p2",
         rationale="test delete",
-        operations=[
-            RemoveModuleOp(
-                op="remove_module",
-                module_id="m1"
-            )
-        ]
+        operations=[RemoveModuleOp(op="remove_module", module_id="m1")],
     )
     success, err_class, msg, _ = apply_cb(invalid_patch)
     assert success is False
     assert err_class == "guardrail_violation"
 
+
 @patch("aqueduct.agent.generate_agent_patch")
 @patch("aqueduct.stores.read.open_obs_read")
-def test_cli_heal_wires_apply_callback(
-    mock_open, mock_generate_patch, tmp_path
-):
+def test_cli_heal_wires_apply_callback(mock_open, mock_generate_patch, tmp_path):
     """Verify that `aqueduct heal` wires the apply_callback correctly and validates guardrails from store metadata."""
     # 1. Setup db failure context row (backend-aware store read)
     mock_cur = MagicMock()
@@ -230,17 +232,15 @@ def test_cli_heal_wires_apply_callback(
 
     # Mock generate_agent_patch
     from aqueduct.agent import AgentPatchResult
+
     patch_spec = PatchSpec(
         patch_id="p1",
         rationale="test",
         operations=[
             SetModuleConfigKeyOp(
-                op="set_module_config_key",
-                module_id="m1",
-                key="path",
-                value="new_data.csv"
+                op="set_module_config_key", module_id="m1", key="path", value="new_data.csv"
             )
-        ]
+        ],
     )
     mock_generate_patch.return_value = AgentPatchResult(
         patch=patch_spec,
@@ -252,8 +252,10 @@ def test_cli_heal_wires_apply_callback(
     )
 
     runner = CliRunner()
-    with patch("aqueduct.agent.memory.find_pending", return_value=None), \
-         patch("aqueduct.agent.memory.find_replay_candidate", return_value=None):
+    with (
+        patch("aqueduct.agent.memory.find_pending", return_value=None),
+        patch("aqueduct.agent.memory.find_replay_candidate", return_value=None),
+    ):
         result = runner.invoke(cli, ["heal", "run-123", "--store-dir", str(tmp_path)])
 
     assert mock_generate_patch.called
@@ -267,15 +269,11 @@ def test_cli_heal_wires_apply_callback(
 
     # Test the apply_callback with a forbidden op (remove_module)
     from aqueduct.patch.grammar import RemoveModuleOp
+
     invalid_patch = PatchSpec(
         patch_id="p2",
         rationale="test delete",
-        operations=[
-            RemoveModuleOp(
-                op="remove_module",
-                module_id="m1"
-            )
-        ]
+        operations=[RemoveModuleOp(op="remove_module", module_id="m1")],
     )
     success, err_class, msg, _ = apply_cb(invalid_patch)
     assert success is False
@@ -286,7 +284,7 @@ def test_cli_heal_wires_apply_callback(
 def test_apply_patch_to_dict_channel_missing_op_detected(tmp_path):
     """replace_module_config on a Channel that omits 'op' → patched dict has Channel without op (schema_drift)."""
     from aqueduct.patch.apply import apply_patch_to_dict
-    from aqueduct.patch.grammar import ReplaceModuleConfigOp, PatchSpec
+    from aqueduct.patch.grammar import PatchSpec, ReplaceModuleConfigOp
 
     bp_raw = {
         "aqueduct": "1.0",
@@ -297,13 +295,20 @@ def test_apply_patch_to_dict_channel_missing_op_detected(tmp_path):
         "edges": [],
     }
     patch_spec = PatchSpec(
-        patch_id="p1", rationale="replace without op",
-        operations=[ReplaceModuleConfigOp(op="replace_module_config", module_id="ch1", config={"query": "SELECT 1"})],
+        patch_id="p1",
+        rationale="replace without op",
+        operations=[
+            ReplaceModuleConfigOp(
+                op="replace_module_config", module_id="ch1", config={"query": "SELECT 1"}
+            )
+        ],
     )
     bp_after = apply_patch_to_dict(bp_raw, patch_spec)
-    for _m in (bp_after.get("modules") or []):
+    for _m in bp_after.get("modules") or []:
         if _m.get("type") == "Channel":
-            assert "op" not in (_m.get("config") or {}), "Channel should have no 'op' after replace_module_config"
+            assert "op" not in (
+                _m.get("config") or {}
+            ), "Channel should have no 'op' after replace_module_config"
             return
     pytest.fail("No Channel module found")
 
@@ -312,7 +317,7 @@ def test_apply_patch_to_dict_channel_missing_op_detected(tmp_path):
 def test_apply_patch_to_dict_ingress_missing_format_detected(tmp_path):
     """replace_module_config on an Ingress that omits 'format' → patched dict has Ingress without format (schema_drift)."""
     from aqueduct.patch.apply import apply_patch_to_dict
-    from aqueduct.patch.grammar import ReplaceModuleConfigOp, PatchSpec
+    from aqueduct.patch.grammar import PatchSpec, ReplaceModuleConfigOp
 
     bp_raw = {
         "aqueduct": "1.0",
@@ -323,13 +328,20 @@ def test_apply_patch_to_dict_ingress_missing_format_detected(tmp_path):
         "edges": [],
     }
     patch_spec = PatchSpec(
-        patch_id="p1", rationale="replace without format",
-        operations=[ReplaceModuleConfigOp(op="replace_module_config", module_id="m1", config={"path": "data.csv"})],
+        patch_id="p1",
+        rationale="replace without format",
+        operations=[
+            ReplaceModuleConfigOp(
+                op="replace_module_config", module_id="m1", config={"path": "data.csv"}
+            )
+        ],
     )
     bp_after = apply_patch_to_dict(bp_raw, patch_spec)
-    for _m in (bp_after.get("modules") or []):
+    for _m in bp_after.get("modules") or []:
         if _m.get("type") == "Ingress":
-            assert "format" not in (_m.get("config") or {}), "Ingress should have no 'format' after replace_module_config"
+            assert "format" not in (
+                _m.get("config") or {}
+            ), "Ingress should have no 'format' after replace_module_config"
             return
     pytest.fail("No Ingress module found")
 
@@ -337,8 +349,8 @@ def test_apply_patch_to_dict_ingress_missing_format_detected(tmp_path):
 @pytest.mark.unit
 def test_apply_patch_to_dict_skips_guardrail_after_schema_drift(tmp_path):
     """ReplaceModuleConfigOp on a Channel without 'op' is a schema issue, not a guardrails issue."""
-    from aqueduct.patch.apply import apply_patch_to_dict, _check_guardrails, PatchError
-    from aqueduct.patch.grammar import ReplaceModuleConfigOp, PatchSpec
+    from aqueduct.patch.apply import PatchError, _check_guardrails, apply_patch_to_dict
+    from aqueduct.patch.grammar import PatchSpec, ReplaceModuleConfigOp
 
     bp_raw = {
         "aqueduct": "1.0",
@@ -350,13 +362,18 @@ def test_apply_patch_to_dict_skips_guardrail_after_schema_drift(tmp_path):
         "agent": {"guardrails": {"forbidden_ops": ["replace_module_config"]}},
     }
     patch_spec = PatchSpec(
-        patch_id="p1", rationale="replace without op",
-        operations=[ReplaceModuleConfigOp(op="replace_module_config", module_id="ch1", config={"query": "SELECT 1"})],
+        patch_id="p1",
+        rationale="replace without op",
+        operations=[
+            ReplaceModuleConfigOp(
+                op="replace_module_config", module_id="ch1", config={"query": "SELECT 1"}
+            )
+        ],
     )
     bp_after = apply_patch_to_dict(bp_raw, patch_spec)
 
     # Confirm schema_drift condition in patched blueprint
-    for _m in (bp_after.get("modules") or []):
+    for _m in bp_after.get("modules") or []:
         if _m.get("type") == "Channel":
             assert "op" not in (_m.get("config") or {})
     # Guardrail check would raise PatchError independently — confirm it catches

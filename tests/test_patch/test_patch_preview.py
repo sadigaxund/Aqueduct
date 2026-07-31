@@ -1,27 +1,30 @@
 """Tests for Phase 29a — Patch preview + validation pyramid (Gates 2 and 3)."""
 
 from __future__ import annotations
-import pytest
-from pathlib import Path
+
 from unittest.mock import MagicMock
+
+import pytest
 
 pytestmark = pytest.mark.unit
 
-from aqueduct.patch.preview import (
-    touched_module_ids,
-    _live_lineage_rows,
-    run_lineage_gate,
-    render_unified_diff,
-)
 from aqueduct.patch.grammar import PatchSpec
+from aqueduct.patch.preview import (
+    _live_lineage_rows,
+    render_unified_diff,
+    run_lineage_gate,
+    touched_module_ids,
+)
 
 
 def _patch(*ops):
-    return PatchSpec.model_validate({
-        "patch_id": "test-patch",
-        "rationale": "test",
-        "operations": list(ops),
-    })
+    return PatchSpec.model_validate(
+        {
+            "patch_id": "test-patch",
+            "rationale": "test",
+            "operations": list(ops),
+        }
+    )
 
 
 class TestTouchedModuleIds:
@@ -32,8 +35,16 @@ class TestTouchedModuleIds:
     def test_multi_ops_preserve_order_and_dedup(self):
         spec = _patch(
             {"op": "replace_module_config", "module_id": "m1", "config": {}},
-            {"op": "insert_module", "module": {"id": "m2", "type": "Ingress", "config": {}}, "edges_to_add": []},
-            {"op": "add_probe", "module": {"id": "p1", "type": "Probe", "attach_to": "m1", "config": {}}, "edges_to_add": []},
+            {
+                "op": "insert_module",
+                "module": {"id": "m2", "type": "Ingress", "config": {}},
+                "edges_to_add": [],
+            },
+            {
+                "op": "add_probe",
+                "module": {"id": "p1", "type": "Probe", "attach_to": "m1", "config": {}},
+                "edges_to_add": [],
+            },
             {"op": "set_module_config_key", "module_id": "m1", "key": "k", "value": "v"},
         )
         assert touched_module_ids(spec) == ["m1", "m2", "p1"]
@@ -58,10 +69,10 @@ class TestLiveLineageRows:
                 {
                     "id": "ch1",
                     "type": "Channel",
-                    "config": {"op": "sql", "query": "SELECT a, b FROM upstream"}
+                    "config": {"op": "sql", "query": "SELECT a, b FROM upstream"},
                 }
             ],
-            "edges": [{"from": "m1", "to": "ch1"}]
+            "edges": [{"from": "m1", "to": "ch1"}],
         }
         # m1 is the upstream for ch1. sqlglot should resolve 'upstream' to 'm1' if unique
         rows = _live_lineage_rows(bp)
@@ -74,15 +85,14 @@ class TestLiveLineageRows:
                 {
                     "id": "ch1",
                     "type": "Channel",
-                    "config": {"op": "sql", "query": "SELECT * FROM __input__"}
+                    "config": {"op": "sql", "query": "SELECT * FROM __input__"},
                 }
             ],
-            "edges": [{"from": "m1", "to": "ch1"}]
+            "edges": [{"from": "m1", "to": "ch1"}],
         }
         rows = _live_lineage_rows(bp)
         assert len(rows) == 1
         assert rows[0]["output_column"] == "*"
-
 
     def test_multi_input_channel_resolves_upstream(self):
         bp = {
@@ -92,10 +102,13 @@ class TestLiveLineageRows:
                 {
                     "id": "ch1",
                     "type": "Channel",
-                    "config": {"op": "sql", "query": "SELECT m1.a, m2.b FROM m1 JOIN m2 ON m1.id = m2.id"}
-                }
+                    "config": {
+                        "op": "sql",
+                        "query": "SELECT m1.a, m2.b FROM m1 JOIN m2 ON m1.id = m2.id",
+                    },
+                },
             ],
-            "edges": [{"from": "m1", "to": "ch1"}, {"from": "m2", "to": "ch1"}]
+            "edges": [{"from": "m1", "to": "ch1"}, {"from": "m2", "to": "ch1"}],
         }
         rows = _live_lineage_rows(bp)
         assert len(rows) == 2
@@ -111,10 +124,18 @@ class TestLiveLineageRows:
 class TestGate2Lineage:
     def test_no_change_passes(self):
         bp = {
-            "modules": [{"id": "ch1", "type": "Channel", "config": {"op": "sql", "query": "SELECT a FROM m1"}}],
-            "edges": [{"from": "m1", "to": "ch1"}]
+            "modules": [
+                {
+                    "id": "ch1",
+                    "type": "Channel",
+                    "config": {"op": "sql", "query": "SELECT a FROM m1"},
+                }
+            ],
+            "edges": [{"from": "m1", "to": "ch1"}],
         }
-        spec = _patch({"op": "set_module_config_key", "module_id": "ch1", "key": "label", "value": "New"})
+        spec = _patch(
+            {"op": "set_module_config_key", "module_id": "ch1", "key": "label", "value": "New"}
+        )
         result = run_lineage_gate(bp, bp, spec)
         assert result.status == "pass"
         assert not result.warnings
@@ -123,27 +144,43 @@ class TestGate2Lineage:
         bp_before = {
             "modules": [
                 {"id": "m1", "type": "Ingress", "config": {"format": "parquet", "path": "p"}},
-                {"id": "ch1", "type": "Channel", "config": {"op": "sql", "query": "SELECT a FROM m1"}},
-                {"id": "ch2", "type": "Channel", "config": {"op": "sql", "query": "SELECT a FROM ch1"}}
+                {
+                    "id": "ch1",
+                    "type": "Channel",
+                    "config": {"op": "sql", "query": "SELECT a FROM m1"},
+                },
+                {
+                    "id": "ch2",
+                    "type": "Channel",
+                    "config": {"op": "sql", "query": "SELECT a FROM ch1"},
+                },
             ],
-            "edges": [
-                {"from": "m1", "to": "ch1"},
-                {"from": "ch1", "to": "ch2"}
-            ]
+            "edges": [{"from": "m1", "to": "ch1"}, {"from": "ch1", "to": "ch2"}],
         }
         # Patch ch1 to return 'b' instead of 'a'
         bp_after = {
             "modules": [
                 {"id": "m1", "type": "Ingress", "config": {"format": "parquet", "path": "p"}},
-                {"id": "ch1", "type": "Channel", "config": {"op": "sql", "query": "SELECT a AS b FROM m1"}},
-                {"id": "ch2", "type": "Channel", "config": {"op": "sql", "query": "SELECT a FROM ch1"}}
+                {
+                    "id": "ch1",
+                    "type": "Channel",
+                    "config": {"op": "sql", "query": "SELECT a AS b FROM m1"},
+                },
+                {
+                    "id": "ch2",
+                    "type": "Channel",
+                    "config": {"op": "sql", "query": "SELECT a FROM ch1"},
+                },
             ],
-            "edges": [
-                {"from": "m1", "to": "ch1"},
-                {"from": "ch1", "to": "ch2"}
-            ]
+            "edges": [{"from": "m1", "to": "ch1"}, {"from": "ch1", "to": "ch2"}],
         }
-        spec = _patch({"op": "replace_module_config", "module_id": "ch1", "config": {"op": "sql", "query": "SELECT a AS b FROM m1"}})
+        spec = _patch(
+            {
+                "op": "replace_module_config",
+                "module_id": "ch1",
+                "config": {"op": "sql", "query": "SELECT a AS b FROM m1"},
+            }
+        )
         result = run_lineage_gate(bp_before, bp_after, spec)
         assert result.status == "warn"
         assert len(result.warnings) == 1
@@ -153,26 +190,50 @@ class TestGate2Lineage:
     def test_select_all_suppresses_false_positives(self):
         bp_before = {
             "modules": [
-                {"id": "ch1", "type": "Channel", "config": {"op": "sql", "query": "SELECT a FROM m1"}},
-                {"id": "ch2", "type": "Channel", "config": {"op": "sql", "query": "SELECT a FROM ch1"}}
+                {
+                    "id": "ch1",
+                    "type": "Channel",
+                    "config": {"op": "sql", "query": "SELECT a FROM m1"},
+                },
+                {
+                    "id": "ch2",
+                    "type": "Channel",
+                    "config": {"op": "sql", "query": "SELECT a FROM ch1"},
+                },
             ],
-            "edges": [{"from": "m1", "to": "ch1"}, {"from": "ch1", "to": "ch2"}]
+            "edges": [{"from": "m1", "to": "ch1"}, {"from": "ch1", "to": "ch2"}],
         }
         # Patch ch1 to SELECT *
         bp_after = {
             "modules": [
-                {"id": "ch1", "type": "Channel", "config": {"op": "sql", "query": "SELECT * FROM m1"}},
-                {"id": "ch2", "type": "Channel", "config": {"op": "sql", "query": "SELECT a FROM ch1"}}
+                {
+                    "id": "ch1",
+                    "type": "Channel",
+                    "config": {"op": "sql", "query": "SELECT * FROM m1"},
+                },
+                {
+                    "id": "ch2",
+                    "type": "Channel",
+                    "config": {"op": "sql", "query": "SELECT a FROM ch1"},
+                },
             ],
-            "edges": [{"from": "m1", "to": "ch1"}, {"from": "ch1", "to": "ch2"}]
+            "edges": [{"from": "m1", "to": "ch1"}, {"from": "ch1", "to": "ch2"}],
         }
-        spec = _patch({"op": "replace_module_config", "module_id": "ch1", "config": {"op": "sql", "query": "SELECT * FROM m1"}})
+        spec = _patch(
+            {
+                "op": "replace_module_config",
+                "module_id": "ch1",
+                "config": {"op": "sql", "query": "SELECT * FROM m1"},
+            }
+        )
         result = run_lineage_gate(bp_before, bp_after, spec)
-        assert result.status == "pass" # Wildcard in NEW outputs suppresses check
+        assert result.status == "pass"  # Wildcard in NEW outputs suppresses check
 
+
+from pydantic import ValidationError
 
 from aqueduct.config import AgentConnectionConfig
-from pydantic import ValidationError
+
 
 class TestAgentConfigValidation:
     def test_patch_validation_modes(self):
@@ -197,22 +258,23 @@ class TestUnifiedDiff:
         assert "-name: A" in diff
         assert "+name: B" in diff
 
+
 def test_patch_validation_override_logic():
     from aqueduct.config import AqueductConfig
     from aqueduct.parser.models import AgentConfig
-    
+
     # Engine default is full_run
     cfg = AqueductConfig()
     assert cfg.agent.patch_validation == "full_run"
-    
+
     # AgentConfig (from Blueprint) with no override
     ac = AgentConfig()
     assert ac.patch_validation is None
-    
+
     # Logic in cli.py: override if not None
     effective = ac.patch_validation or cfg.agent.patch_validation
     assert effective == "full_run"
-    
+
     # AgentConfig WITH override
     ac_over = AgentConfig(patch_validation="sandbox")
     assert ac_over.patch_validation == "sandbox"
@@ -221,6 +283,7 @@ def test_patch_validation_override_logic():
 
 
 # ── Sandbox gate ───────────────────────────────────────────────────────────────
+
 
 class TestSandboxGateBaseDir:
     """Phase 29a — run_sandbox_gate uses blueprint_path.parent as base_dir (not /tmp/)."""
@@ -245,33 +308,44 @@ edges: []
         }
 
         from types import SimpleNamespace
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import patch
 
         # run_sandbox_gate (Phase 79) resolves the target engine's
         # ExecutorProtocol via get_protocol() and calls THROUGH it — no
         # lazy pyspark-importing `aqueduct.executor` __getattr__ path is
         # touched, so no ExecuteError-seeding workaround is needed anymore.
         mock_compile = None
-        with patch("aqueduct.executor.protocol.get_protocol") as mock_get_protocol, \
-             patch("aqueduct.parser.parser.parse_dict") as mock_parse, \
-             patch("aqueduct.compiler.compiler.compile") as mock_compile:
+        with (
+            patch("aqueduct.executor.protocol.get_protocol") as mock_get_protocol,
+            patch("aqueduct.parser.parser.parse_dict") as mock_parse,
+            patch("aqueduct.compiler.compiler.compile") as mock_compile,
+        ):
             from aqueduct.compiler.models import Manifest
+
             real_manifest = Manifest(
-                blueprint_id="test.bp", context={}, modules=(), edges=(), spark_config={},
+                blueprint_id="test.bp",
+                context={},
+                modules=(),
+                edges=(),
+                spark_config={},
             )
             mock_compile.return_value = real_manifest
             mock_exec_fn = MagicMock(return_value=MagicMock(status="success", module_results=()))
             mock_get_protocol.return_value = SimpleNamespace(
-                execute=mock_exec_fn, execute_kwargs=None,
+                execute=mock_exec_fn,
+                execute_kwargs=None,
             )
 
+            from aqueduct.config import AqueductConfig
             from aqueduct.patch.preview import run_sandbox_gate
+
             result = run_sandbox_gate(
                 bp_after,
                 blueprint_path=bp_file,
                 patch_id="p1",
                 failed_module=None,
                 engine="spark",
+                cfg=AqueductConfig(),
                 spark_session=MagicMock(),
                 sample_rows=0,
             )
@@ -303,38 +377,57 @@ edges:
             "id": "test.bp",
             "name": "Test",
             "modules": [
-                {"id": "src", "type": "Ingress", "config": {"format": "parquet", "path": "data/in.parquet"}},
-                {"id": "ch1", "type": "Channel", "config": {"op": "sql", "query": "SELECT * FROM src"}},
+                {
+                    "id": "src",
+                    "type": "Ingress",
+                    "config": {"format": "parquet", "path": "data/in.parquet"},
+                },
+                {
+                    "id": "ch1",
+                    "type": "Channel",
+                    "config": {"op": "sql", "query": "SELECT * FROM src"},
+                },
             ],
             "edges": [{"from": "src", "to": "ch1"}],
         }
 
         from types import SimpleNamespace
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import patch
 
         # run_sandbox_gate (Phase 79) resolves the target engine's
         # ExecutorProtocol via get_protocol() and calls THROUGH it — see
         # test_sandbox_gate_uses_blueprint_parent_as_base_dir.
-        with patch("aqueduct.executor.protocol.get_protocol") as mock_get_protocol, \
-             patch("aqueduct.parser.parser.parse_dict") as mock_parse, \
-             patch("aqueduct.compiler.compiler.compile") as mock_compile:
+        with (
+            patch("aqueduct.executor.protocol.get_protocol") as mock_get_protocol,
+            patch("aqueduct.parser.parser.parse_dict") as mock_parse,
+            patch("aqueduct.compiler.compiler.compile") as mock_compile,
+        ):
             from aqueduct.compiler.models import Manifest
+
             real_manifest = Manifest(
-                blueprint_id="test.bp", context={}, modules=(), edges=(), spark_config={},
+                blueprint_id="test.bp",
+                context={},
+                modules=(),
+                edges=(),
+                spark_config={},
             )
             mock_compile.return_value = real_manifest
             mock_exec_fn = MagicMock(return_value=MagicMock(status="success", module_results=()))
             mock_get_protocol.return_value = SimpleNamespace(
-                execute=mock_exec_fn, execute_kwargs=None,
+                execute=mock_exec_fn,
+                execute_kwargs=None,
             )
 
+            from aqueduct.config import AqueductConfig
             from aqueduct.patch.preview import run_sandbox_gate
+
             result = run_sandbox_gate(
                 bp_after,
                 blueprint_path=bp_file,
                 patch_id="p1",
                 failed_module="ch1",
                 engine="spark",
+                cfg=AqueductConfig(),
                 spark_session=MagicMock(),
                 sample_rows=0,
             )
@@ -342,5 +435,6 @@ edges:
         assert result.status == "pass"
         # Verify execute() was called without from_module
         _, call_kwargs = mock_exec_fn.call_args
-        assert "from_module" not in call_kwargs,\
-            "sandbox must run the WHOLE DAG, not from failed_module"
+        assert (
+            "from_module" not in call_kwargs
+        ), "sandbox must run the WHOLE DAG, not from failed_module"

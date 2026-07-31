@@ -1,8 +1,10 @@
-import pytest
 from unittest.mock import MagicMock, patch
-from pathlib import Path
+
+import pytest
 from click.testing import CliRunner
-from aqueduct.cli import cli, _run_patch_gates_inline
+
+from aqueduct.cli import _run_patch_gates_inline, cli
+from aqueduct.config import AqueductConfig
 
 pytestmark = [pytest.mark.integration]
 
@@ -29,70 +31,93 @@ danger:
   allow_multi_patch: {allow_aggressive}
 """
 
-def _write_project(tmp_path, approval, sandbox, allow_preflight=False, allow_skip=False, allow_aggressive=False):
+
+def _write_project(
+    tmp_path, approval, sandbox, allow_preflight=False, allow_skip=False, allow_aggressive=False
+):
     bp = tmp_path / "bp.yml"
     bp.write_text(_BP_TEMPLATE.format(approval=approval, sandbox=sandbox), encoding="utf-8")
     cfg = tmp_path / "aqueduct.yml"
-    cfg.write_text(_CFG_TEMPLATE.format(
-        allow_preflight=str(allow_preflight).lower(),
-        allow_skip=str(allow_skip).lower(),
-        allow_aggressive=str(allow_aggressive).lower()
-    ), encoding="utf-8")
+    cfg.write_text(
+        _CFG_TEMPLATE.format(
+            allow_preflight=str(allow_preflight).lower(),
+            allow_skip=str(allow_skip).lower(),
+            allow_aggressive=str(allow_aggressive).lower(),
+        ),
+        encoding="utf-8",
+    )
     return bp, cfg
+
 
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 @patch("aqueduct.executor.get_executor")
-def test_sandbox_mode_preflight_blocks_without_danger_gate(mock_get_exec, mock_surveyor_cls, tmp_path):
+def test_sandbox_mode_preflight_blocks_without_danger_gate(
+    mock_get_exec, mock_surveyor_cls, tmp_path
+):
     """agent.sandbox_mode: preflight without danger.allow_full_preflight -> exits 1 with helpful message"""
     bp, cfg = _write_project(tmp_path, "human", "preflight", allow_preflight=False)
-    
+
     runner = CliRunner()
     result = runner.invoke(cli, ["run", str(bp), "--config", str(cfg)])
     assert result.exit_code == 1
-    assert "agent.sandbox_mode: preflight requires danger.allow_full_preflight: true" in result.output
+    assert (
+        "agent.sandbox_mode: preflight requires danger.allow_full_preflight: true" in result.output
+    )
+
 
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 @patch("aqueduct.executor.get_executor")
-def test_sandbox_mode_preflight_allowed_with_danger_gate(mock_get_exec, mock_surveyor_cls, tmp_path):
+def test_sandbox_mode_preflight_allowed_with_danger_gate(
+    mock_get_exec, mock_surveyor_cls, tmp_path
+):
     """agent.sandbox_mode: preflight WITH danger.allow_full_preflight -> succeeds/proceeds and prints startup warning"""
     bp, cfg = _write_project(tmp_path, "human", "preflight", allow_preflight=True)
-    
+
     # Mock executor to return success to terminate early
     mock_executor = MagicMock()
     mock_executor.return_value = MagicMock(status="success")
     mock_get_exec.return_value = mock_executor
-    
+
     runner = CliRunner()
     result = runner.invoke(cli, ["run", str(bp), "--config", str(cfg)])
     # Since it is human mode and execution succeeded, it exits 0
     assert result.exit_code == 0
-    assert "⚠ sandbox mode: preflight (full-dataset replay, no Egress) — slow but conclusive" in result.output
+    assert (
+        "⚠ sandbox mode: preflight (full-dataset replay, no Egress) — slow but conclusive"
+        in result.output
+    )
+
 
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 @patch("aqueduct.executor.get_executor")
 def test_sandbox_mode_off_blocks_without_danger_gate(mock_get_exec, mock_surveyor_cls, tmp_path):
     """agent.sandbox_mode: off without danger.allow_skip_sandbox -> exits 1"""
     bp, cfg = _write_project(tmp_path, "human", "off", allow_skip=False)
-    
+
     runner = CliRunner()
     result = runner.invoke(cli, ["run", str(bp), "--config", str(cfg)])
     assert result.exit_code == 1
     assert "agent.sandbox_mode: off requires danger.allow_skip_sandbox: true" in result.output
+
 
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 @patch("aqueduct.executor.get_executor")
 def test_sandbox_mode_off_allowed_with_danger_gate(mock_get_exec, mock_surveyor_cls, tmp_path):
     """agent.sandbox_mode: off WITH danger.allow_skip_sandbox -> succeeds/proceeds and prints warning"""
     bp, cfg = _write_project(tmp_path, "human", "off", allow_skip=True)
-    
+
     mock_executor = MagicMock()
     mock_executor.return_value = MagicMock(status="success")
     mock_get_exec.return_value = mock_executor
-    
+
     runner = CliRunner()
     result = runner.invoke(cli, ["run", str(bp), "--config", str(cfg)])
     assert result.exit_code == 0
-    assert "⚠ DANGER: sandbox mode = off (skipping pre-apply replay; patches apply to real data)" in result.output
+    assert (
+        "⚠ DANGER: sandbox mode = off (skipping pre-apply replay; patches apply to real data)"
+        in result.output
+    )
+
 
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 @patch("aqueduct.executor.get_executor")
@@ -122,11 +147,14 @@ def test_danger_combo_warning(mock_get_exec, mock_surveyor_cls, tmp_path):
         encoding="utf-8",
     )
     cfg = tmp_path / "aqueduct.yml"
-    cfg.write_text(_CFG_TEMPLATE.format(
-        allow_preflight="false",
-        allow_skip="true",
-        allow_aggressive="true",
-    ), encoding="utf-8")
+    cfg.write_text(
+        _CFG_TEMPLATE.format(
+            allow_preflight="false",
+            allow_skip="true",
+            allow_aggressive="true",
+        ),
+        encoding="utf-8",
+    )
 
     mock_executor = MagicMock()
     mock_executor.return_value = MagicMock(status="success")
@@ -137,19 +165,27 @@ def test_danger_combo_warning(mock_get_exec, mock_surveyor_cls, tmp_path):
     assert result.exit_code == 0
     assert "⚠ DANGER COMBO: sandbox_mode=off + max_patches > 1" in result.output
 
+
 def test_run_patch_gates_inline_off(tmp_path):
     """_run_patch_gates_inline skips the sandbox gate when sandbox_mode is off"""
     blueprint_path = tmp_path / "blueprint.yml"
     blueprint_path.write_text("aqueduct: '1.0'\nid: test\nname: test\nmodules: []\nedges: []")
-    
+
     mock_patch = MagicMock()
     mock_surveyor = MagicMock()
     mock_surveyor.latest_explain_snapshots.return_value = {}
-    
-    with patch("aqueduct.patch.apply.apply_patch_to_dict", return_value={}), \
-         patch("aqueduct.patch.preview.run_lineage_gate", return_value=MagicMock(status="pass", touched_modules=[])), \
-         patch("aqueduct.patch.explain_gate.run_explain_gate", return_value=MagicMock(status="pass")):
-        
+
+    with (
+        patch("aqueduct.patch.apply.apply_patch_to_dict", return_value={}),
+        patch(
+            "aqueduct.patch.preview.run_lineage_gate",
+            return_value=MagicMock(status="pass", touched_modules=[]),
+        ),
+        patch(
+            "aqueduct.patch.explain_gate.run_explain_gate", return_value=MagicMock(status="pass")
+        ),
+    ):
+
         g2, g3, g4, passed = _run_patch_gates_inline(
             patch=mock_patch,
             blueprint_path=blueprint_path,
@@ -159,32 +195,44 @@ def test_run_patch_gates_inline_off(tmp_path):
             iteration_run_id="r1",
             blueprint_id="b1",
             engine="spark",
-            sandbox_mode="off"
+            cfg=AqueductConfig(),
+            sandbox_mode="off",
         )
 
     assert g3.status == "skip"
     assert "sandbox_mode=off" in g3.detail
     assert passed is True
 
+
 @patch("aqueduct.patch.preview.run_sandbox_gate")
 def test_run_patch_gates_inline_preflight_and_sample(mock_run_sandbox, tmp_path):
     """_run_patch_gates_inline forwards 0 to run_sandbox_gate on preflight, and positive number on sample"""
     blueprint_path = tmp_path / "blueprint.yml"
     blueprint_path.write_text("aqueduct: '1.0'\nid: test\nname: test\nmodules: []\nedges: []")
-    
+
     mock_patch = MagicMock()
     mock_patch.patch_id = "p-test"
     mock_surveyor = MagicMock()
     mock_surveyor.latest_explain_snapshots.return_value = {}
-    
-    mock_run_sandbox.return_value = MagicMock(status="pass", sample_rows=0, duration_ms=0, detail="OK")
-    
+
+    mock_run_sandbox.return_value = MagicMock(
+        status="pass", sample_rows=0, duration_ms=0, detail="OK"
+    )
+
     mock_bundle = MagicMock()
-    
-    with patch("aqueduct.patch.apply.apply_patch_to_dict", return_value={"modules": []}), \
-         patch("aqueduct.patch.preview.run_lineage_gate", return_value=MagicMock(status="pass", touched_modules=[])), \
-         patch("aqueduct.patch.explain_gate.run_explain_gate", return_value=MagicMock(status="pass")):
-        
+    mock_cfg = AqueductConfig()
+
+    with (
+        patch("aqueduct.patch.apply.apply_patch_to_dict", return_value={"modules": []}),
+        patch(
+            "aqueduct.patch.preview.run_lineage_gate",
+            return_value=MagicMock(status="pass", touched_modules=[]),
+        ),
+        patch(
+            "aqueduct.patch.explain_gate.run_explain_gate", return_value=MagicMock(status="pass")
+        ),
+    ):
+
         # Test preflight -> forwards 0
         _run_patch_gates_inline(
             patch=mock_patch,
@@ -195,8 +243,9 @@ def test_run_patch_gates_inline_preflight_and_sample(mock_run_sandbox, tmp_path)
             iteration_run_id="r1",
             blueprint_id="b1",
             engine="spark",
+            cfg=mock_cfg,
             sandbox_mode="preflight",
-            sample_rows=100
+            sample_rows=100,
         )
         mock_run_sandbox.assert_called_with(
             {"modules": []},
@@ -204,6 +253,7 @@ def test_run_patch_gates_inline_preflight_and_sample(mock_run_sandbox, tmp_path)
             patch_id="p-test",
             failed_module="m1",
             engine="spark",
+            cfg=mock_cfg,
             sample_rows=0,
             observability_store=mock_bundle.observability,
             explain_capture={},
@@ -223,8 +273,9 @@ def test_run_patch_gates_inline_preflight_and_sample(mock_run_sandbox, tmp_path)
             iteration_run_id="r1",
             blueprint_id="b1",
             engine="spark",
+            cfg=mock_cfg,
             sandbox_mode="sample",
-            sample_rows=100
+            sample_rows=100,
         )
         mock_run_sandbox.assert_called_with(
             {"modules": []},
@@ -232,6 +283,7 @@ def test_run_patch_gates_inline_preflight_and_sample(mock_run_sandbox, tmp_path)
             patch_id="p-test",
             failed_module="m1",
             engine="spark",
+            cfg=mock_cfg,
             sample_rows=100,
             observability_store=mock_bundle.observability,
             explain_capture={},
@@ -263,7 +315,7 @@ def test_multi_patch_blocks_without_danger_gate(mock_get_exec, mock_surveyor_cls
     )
     cfg = tmp_path / "aqueduct.yml"
     cfg.write_text(
-        "aqueduct_config: \"1.0\"\n"
+        'aqueduct_config: "1.0"\n'
         "danger:\n"
         "  allow_multi_patch: false\n"
         "  allow_full_preflight: false\n"
@@ -299,7 +351,7 @@ def test_multi_patch_allowed_with_danger_gate(mock_get_exec, mock_surveyor_cls, 
     )
     cfg = tmp_path / "aqueduct.yml"
     cfg.write_text(
-        "aqueduct_config: \"1.0\"\n"
+        'aqueduct_config: "1.0"\n'
         "danger:\n"
         "  allow_multi_patch: true\n"
         "  allow_full_preflight: false\n"
@@ -339,9 +391,7 @@ def test_multi_patch_cli_flag_overrides_danger_gate(mock_get_exec, mock_surveyor
     )
     cfg = tmp_path / "aqueduct.yml"
     cfg.write_text(
-        "aqueduct_config: \"1.0\"\n"
-        "danger:\n"
-        "  allow_multi_patch: false\n",
+        'aqueduct_config: "1.0"\n' "danger:\n" "  allow_multi_patch: false\n",
         encoding="utf-8",
     )
 
@@ -350,7 +400,5 @@ def test_multi_patch_cli_flag_overrides_danger_gate(mock_get_exec, mock_surveyor
     mock_get_exec.return_value = mock_exec
 
     runner = CliRunner()
-    result = runner.invoke(
-        cli, ["run", str(bp), "--config", str(cfg), "--allow-multi-patch"]
-    )
+    result = runner.invoke(cli, ["run", str(bp), "--config", str(cfg), "--allow-multi-patch"])
     assert result.exit_code == 0

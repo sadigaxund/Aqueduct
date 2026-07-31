@@ -7,6 +7,7 @@ Covers TEST_MANIFEST.md ⏳ items not already covered by
   * Startup-time `⚠ sandbox mode: preflight` / `⚠ DANGER: sandbox mode = off`
     banners emit exactly once per run.
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -15,6 +16,7 @@ import pytest
 from click.testing import CliRunner
 
 from aqueduct.cli import _run_patch_gates_inline, cli
+from aqueduct.config import AqueductConfig
 
 pytestmark = pytest.mark.integration
 
@@ -60,14 +62,16 @@ def test_sandbox_mode_sample_forwards_default_1000_rows(mock_run_sandbox, tmp_pa
     )
     mock_bundle = MagicMock()
 
-    with patch(
-        "aqueduct.patch.apply.apply_patch_to_dict", return_value={"modules": []}
-    ), patch(
-        "aqueduct.patch.preview.run_lineage_gate",
-        return_value=MagicMock(status="pass", touched_modules=[]),
-    ), patch(
-        "aqueduct.patch.explain_gate.run_explain_gate",
-        return_value=MagicMock(status="pass"),
+    with (
+        patch("aqueduct.patch.apply.apply_patch_to_dict", return_value={"modules": []}),
+        patch(
+            "aqueduct.patch.preview.run_lineage_gate",
+            return_value=MagicMock(status="pass", touched_modules=[]),
+        ),
+        patch(
+            "aqueduct.patch.explain_gate.run_explain_gate",
+            return_value=MagicMock(status="pass"),
+        ),
     ):
         _run_patch_gates_inline(
             patch=mock_patch,
@@ -78,6 +82,7 @@ def test_sandbox_mode_sample_forwards_default_1000_rows(mock_run_sandbox, tmp_pa
             iteration_run_id="r1",
             blueprint_id="b1",
             engine="spark",
+            cfg=AqueductConfig(),
             # both defaults — sandbox_mode=sample, sample_rows=1000
         )
 
@@ -107,9 +112,7 @@ def test_preflight_banner_emits_exactly_once(mock_get_exec, _mock_surveyor, tmp_
     )
     cfg = tmp_path / "aqueduct.yml"
     cfg.write_text(
-        "aqueduct_config: '1.0'\n"
-        "danger:\n"
-        "  allow_full_preflight: true\n",
+        "aqueduct_config: '1.0'\n" "danger:\n" "  allow_full_preflight: true\n",
         encoding="utf-8",
     )
 
@@ -147,9 +150,7 @@ def test_off_banner_emits_exactly_once(mock_get_exec, _mock_surveyor, tmp_path):
     )
     cfg = tmp_path / "aqueduct.yml"
     cfg.write_text(
-        "aqueduct_config: '1.0'\n"
-        "danger:\n"
-        "  allow_skip_sandbox: true\n",
+        "aqueduct_config: '1.0'\n" "danger:\n" "  allow_skip_sandbox: true\n",
         encoding="utf-8",
     )
 

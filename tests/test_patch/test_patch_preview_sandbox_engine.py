@@ -24,10 +24,12 @@ own rule id ``engine_kwarg_ignored`` — proven here directly against
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch
 
 import pytest
 
+from aqueduct.config import AqueductConfig, DuckDBEngineConfig, EngineConfig
 from aqueduct.executor.protocol import (
     OPTIONAL_EXECUTE_KWARGS,
     call_execute,
@@ -45,7 +47,12 @@ def _csv_blueprint(path: str) -> dict:
         "id": "test.gate3.duckdb",
         "name": "Test Gate 3 DuckDB",
         "modules": [
-            {"id": "in", "type": "Ingress", "label": "In", "config": {"format": "csv", "path": path}},
+            {
+                "id": "in",
+                "type": "Ingress",
+                "label": "In",
+                "config": {"format": "csv", "path": path},
+            },
         ],
         "edges": [],
     }
@@ -72,6 +79,7 @@ def test_duckdb_sandbox_gate_actually_executes_on_duckdb(_orders_csv, tmp_path):
         patch_id="p-duckdb",
         failed_module=None,
         engine="duckdb",
+        cfg=AqueductConfig(),
         sample_rows=2,
     )
     assert result.status == "pass"
@@ -87,12 +95,24 @@ def test_sandbox_gate_skips_a_polyglot_blueprint_naming_its_islands(tmp_path):
     the island count and engines, WITHOUT ever building a session for either
     engine (this is checked right after compile, before session_factory)."""
     bp = {
-        "aqueduct": "1.0", "id": "bp.polyglot", "name": "t",
+        "aqueduct": "1.0",
+        "id": "bp.polyglot",
+        "name": "t",
         "modules": [
-            {"id": "extract", "label": "extract", "type": "Channel", "engine": "spark",
-             "config": {"op": "sql", "query": "SELECT 1 AS x"}},
-            {"id": "agg", "label": "agg", "type": "Channel", "engine": "duckdb",
-             "config": {"op": "sql", "query": "SELECT * FROM extract"}},
+            {
+                "id": "extract",
+                "label": "extract",
+                "type": "Channel",
+                "engine": "spark",
+                "config": {"op": "sql", "query": "SELECT 1 AS x"},
+            },
+            {
+                "id": "agg",
+                "label": "agg",
+                "type": "Channel",
+                "engine": "duckdb",
+                "config": {"op": "sql", "query": "SELECT * FROM extract"},
+            },
         ],
         "edges": [{"from": "extract", "to": "agg"}],
     }
@@ -103,6 +123,7 @@ def test_sandbox_gate_skips_a_polyglot_blueprint_naming_its_islands(tmp_path):
             patch_id="p-polyglot",
             failed_module=None,
             engine="spark",
+            cfg=AqueductConfig(),
         )
     assert result.status == "skip"
     assert "polyglot" in result.detail
@@ -126,6 +147,7 @@ def test_missing_engine_skip_names_the_actual_engine(_orders_csv, tmp_path):
             patch_id="p-duckdb-skip",
             failed_module=None,
             engine="duckdb",
+            cfg=AqueductConfig(),
         )
     assert result.status == "skip"
     assert "duckdb" in result.detail
@@ -141,6 +163,7 @@ def test_sandbox_gate_unknown_engine_skips_naming_it():
         patch_id="p-bogus",
         failed_module=None,
         engine="bogus-engine",
+        cfg=AqueductConfig(),
     )
     assert result.status == "skip"
     assert "bogus-engine" in result.detail
@@ -162,13 +185,18 @@ def test_call_execute_warns_and_drops_unsupported_optional_kwarg(monkeypatch):
 
     narrow = SimpleNamespace(execute=_fake_execute, execute_kwargs=frozenset({"run_id"}))
     monkeypatch.setattr(
-        "aqueduct.executor.protocol.get_protocol", lambda engine: narrow,
+        "aqueduct.executor.protocol.get_protocol",
+        lambda engine: narrow,
     )
 
     with pytest.warns(AqueductWarning, match="engine_kwarg_ignored"):
         result = call_execute(
-            "fake-narrow", "manifest", "session",
-            run_id="r1", observability_store=object(), explain_capture={},
+            "fake-narrow",
+            "manifest",
+            "session",
+            run_id="r1",
+            observability_store=object(),
+            explain_capture={},
         )
 
     assert result == "ok"
@@ -188,13 +216,17 @@ def test_call_execute_no_warning_when_engine_declares_no_allowlist(monkeypatch):
 
     wide = SimpleNamespace(execute=_fake_execute, execute_kwargs=None)
     monkeypatch.setattr(
-        "aqueduct.executor.protocol.get_protocol", lambda engine: wide,
+        "aqueduct.executor.protocol.get_protocol",
+        lambda engine: wide,
     )
 
     with warnings_must_not_fire():
         result = call_execute(
-            "fake-wide", "manifest", "session",
-            observability_store=object(), explain_capture={},
+            "fake-wide",
+            "manifest",
+            "session",
+            observability_store=object(),
+            explain_capture={},
         )
 
     assert result == "ok"
@@ -207,13 +239,17 @@ def test_call_execute_suppress_silences_the_warning(monkeypatch):
 
     narrow = SimpleNamespace(execute=_fake_execute, execute_kwargs=frozenset())
     monkeypatch.setattr(
-        "aqueduct.executor.protocol.get_protocol", lambda engine: narrow,
+        "aqueduct.executor.protocol.get_protocol",
+        lambda engine: narrow,
     )
 
     with warnings_must_not_fire():
         result = call_execute(
-            "fake-narrow", "manifest", "session",
-            observability_store=object(), suppress={"engine_kwarg_ignored"},
+            "fake-narrow",
+            "manifest",
+            "session",
+            observability_store=object(),
+            suppress={"engine_kwarg_ignored"},
         )
     assert result == "ok"
 
@@ -250,7 +286,8 @@ def test_duckdb_execute_kwargs_excludes_every_spark_only_capability():
 
 
 def test_duckdb_sandbox_gate_warns_engine_kwarg_ignored_for_observability_kwargs(
-    _orders_csv, tmp_path,
+    _orders_csv,
+    tmp_path,
 ):
     """End-to-end: a real DuckDB sandbox run forwarding Spark-flavoured
     observability_store/explain_capture must warn under `engine_kwarg_ignored`
@@ -263,6 +300,7 @@ def test_duckdb_sandbox_gate_warns_engine_kwarg_ignored_for_observability_kwargs
             patch_id="p-duckdb-kwarg",
             failed_module=None,
             engine="duckdb",
+            cfg=AqueductConfig(),
             observability_store=object(),
             explain_capture={},
         )
@@ -278,11 +316,85 @@ def test_duckdb_sandbox_gate_kwarg_warning_suppressible(_orders_csv, tmp_path):
             patch_id="p-duckdb-kwarg-suppressed",
             failed_module=None,
             engine="duckdb",
+            cfg=AqueductConfig(),
             observability_store=object(),
             explain_capture={},
             warnings_suppress={"engine_kwarg_ignored"},
         )
     assert result.status == "pass"
+
+
+# ── Task 1 proof: the sandbox gate now sees real engine.duckdb.* config ─────
+
+
+def test_duckdb_sandbox_gate_applies_real_engine_duckdb_config(_orders_csv, tmp_path):
+    """A DuckDB sandbox replay's OWNED session must be built with a genuine
+    non-default `engine.duckdb.*` value threaded all the way from `cfg`
+    through `run_sandbox_gate` -> `SessionSpec.engine_config` -> the REAL
+    `_make_session` -> the live DuckDB connection's own settings — not
+    merely an argument that would have been forwarded.
+
+    Before this fix, `run_sandbox_gate` built its owned session's
+    `engine_config` from `sandboxed_manifest.spark_config` (a Spark-only
+    field, always `{}` for a non-Spark target), so `engine.duckdb.
+    memory_limit`/`threads` never reached the connection at all — a DuckDB
+    sandbox replay ran under a completely different session shape than a
+    real `aqueduct run` on the same `aqueduct.yml` would use.
+
+    The proof intercepts the REGISTERED `DUCKDB.make_session` (bypassing
+    `ExecutorProtocol`'s frozen-dataclass `__setattr__` via
+    `object.__setattr__`, restored in `finally`) with a spy that calls
+    through to the real `_make_session`, then queries the resulting
+    connection's OWN reported settings — proving the session was actually
+    built with the configured values, not just that an argument was passed.
+    """
+    from aqueduct.executor.duckdb_.engine import DUCKDB
+    from aqueduct.executor.duckdb_.engine import _make_session as real_make_session
+
+    observed: dict[str, Any] = {}
+
+    def _spying_make_session(spec):
+        # The value must already be present in the resolved engine_config
+        # BEFORE _make_session ever runs.
+        assert spec.engine_config.get("memory_limit") == "111MB"
+        assert spec.engine_config.get("threads") == 3
+        conn = real_make_session(spec)
+        # And the LIVE DuckDB connection must reflect it — the strong half
+        # of the proof: the session was actually BUILT with it.
+        observed["memory_limit"] = conn.execute(
+            "SELECT current_setting('memory_limit')"
+        ).fetchone()[0]
+        observed["threads"] = conn.execute("SELECT current_setting('threads')").fetchone()[0]
+        return conn
+
+    original_make_session = DUCKDB.make_session
+    object.__setattr__(DUCKDB, "make_session", _spying_make_session)
+    try:
+        cfg = AqueductConfig(
+            engine=EngineConfig(
+                duckdb=DuckDBEngineConfig(memory_limit="111MB", threads=3),
+            ),
+        )
+        bp = _csv_blueprint(_orders_csv)
+        result = run_sandbox_gate(
+            bp,
+            blueprint_path=tmp_path / "bp.yml",
+            patch_id="p-duckdb-real-config",
+            failed_module=None,
+            engine="duckdb",
+            cfg=cfg,
+            sample_rows=2,
+        )
+    finally:
+        object.__setattr__(DUCKDB, "make_session", original_make_session)
+
+    assert result.status == "pass"
+    # 111MB (SI) DuckDB reports back as ~105.8 MiB (binary) — assert the
+    # UNIT/magnitude changed from the multi-GiB system default rather than
+    # pin an exact string that would drift with DuckDB's own formatting.
+    assert "MiB" in observed["memory_limit"]
+    assert "GiB" not in observed["memory_limit"]
+    assert observed["threads"] == 3
 
 
 # ── helper ────────────────────────────────────────────────────────────────

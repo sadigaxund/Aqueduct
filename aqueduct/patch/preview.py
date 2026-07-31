@@ -33,20 +33,21 @@ logger = logging.getLogger(__name__)
 
 # ── Result dataclasses ────────────────────────────────────────────────────────
 
+
 @dataclass(frozen=True)
 class LineageWarning:
     """A single lineage-gate finding."""
 
-    severity: str               # "warn" | "fail"
-    channel_id: str             # module that was patched
-    consumer_module: str        # downstream module that breaks
-    missing_column: str         # column the consumer reads but the patch removes
+    severity: str  # "warn" | "fail"
+    channel_id: str  # module that was patched
+    consumer_module: str  # downstream module that breaks
+    missing_column: str  # column the consumer reads but the patch removes
     detail: str
 
 
 @dataclass
 class LineageGateResult:
-    status: str = "pass"        # "pass" | "warn" | "fail"
+    status: str = "pass"  # "pass" | "warn" | "fail"
     warnings: list[LineageWarning] = field(default_factory=list)
     touched_modules: list[str] = field(default_factory=list)
     duration_ms: int = 0
@@ -54,7 +55,7 @@ class LineageGateResult:
 
 @dataclass
 class SandboxGateResult:
-    status: str                 # "pass" | "fail" | "skip"
+    status: str  # "pass" | "fail" | "skip"
     detail: str
     sample_rows: int | None = None
     duration_ms: int = 0
@@ -62,6 +63,7 @@ class SandboxGateResult:
 
 
 # ── Touched-module detection from PatchSpec operations ────────────────────────
+
 
 def touched_module_ids(patch_spec: Any) -> list[str]:
     """Return module IDs the patch ops mutate (config, label, structure)."""
@@ -85,6 +87,7 @@ def touched_module_ids(patch_spec: Any) -> list[str]:
 
 
 # ── Live lineage from a raw Blueprint dict (no Manifest required) ─────────────
+
 
 def _channel_modules(bp: dict) -> list[dict]:
     """Return raw module dicts whose type is a SQL-flavoured Channel."""
@@ -153,6 +156,7 @@ def _consumers_of(rows: Iterable[dict[str, str]], source_table: str) -> list[tup
 
 # ── lineage gate ────────────────────────────────────────────────────────────────────
 
+
 def run_lineage_gate(
     blueprint_before: dict,
     blueprint_after: dict,
@@ -199,17 +203,19 @@ def run_lineage_gate(
             if src_col == "*" or not src_col:
                 continue
             if src_col not in new_cols:
-                result.warnings.append(LineageWarning(
-                    severity="warn",
-                    channel_id=mid,
-                    consumer_module=consumer_id,
-                    missing_column=src_col,
-                    detail=(
-                        f"downstream module {consumer_id!r} consumes "
-                        f"{src_col!r} from {mid!r} but the patch no longer "
-                        "emits that column."
-                    ),
-                ))
+                result.warnings.append(
+                    LineageWarning(
+                        severity="warn",
+                        channel_id=mid,
+                        consumer_module=consumer_id,
+                        missing_column=src_col,
+                        detail=(
+                            f"downstream module {consumer_id!r} consumes "
+                            f"{src_col!r} from {mid!r} but the patch no longer "
+                            "emits that column."
+                        ),
+                    )
+                )
 
     if result.warnings:
         result.status = "warn"
@@ -218,6 +224,7 @@ def run_lineage_gate(
 
 
 # ── Sandbox manifest transform (shared: gate + `run --sandbox`) ───────────────
+
 
 def build_sandbox_manifest(manifest: Any, sample_rows: int) -> tuple[Any, list[dict[str, Any]]]:
     """Transform a compiled Manifest into a sandbox-safe one.
@@ -237,28 +244,29 @@ def build_sandbox_manifest(manifest: Any, sample_rows: int) -> tuple[Any, list[d
     sandboxed_modules = []
     for m in manifest.modules:
         if m.type == ModuleType.Egress:
-            egress_targets.append({
-                "id": m.id,
-                "format": (m.config or {}).get("format"),
-                "path":   (m.config or {}).get("path"),
-                "mode":   (m.config or {}).get("mode"),
-            })
+            egress_targets.append(
+                {
+                    "id": m.id,
+                    "format": (m.config or {}).get("format"),
+                    "path": (m.config or {}).get("path"),
+                    "mode": (m.config or {}).get("mode"),
+                }
+            )
             continue
         sandboxed_modules.append(m)
 
     if sample_rows and sample_rows > 0:
         sandboxed_modules = [
-            _dc.replace(m, config={**m.config, "sandbox_limit": sample_rows})
-            if m.type == ModuleType.Ingress
-            else m
+            (
+                _dc.replace(m, config={**m.config, "sandbox_limit": sample_rows})
+                if m.type == ModuleType.Ingress
+                else m
+            )
             for m in sandboxed_modules
         ]
 
     keep_ids = {m.id for m in sandboxed_modules}
-    sandboxed_edges = [
-        e for e in manifest.edges
-        if e.from_id in keep_ids and e.to_id in keep_ids
-    ]
+    sandboxed_edges = [e for e in manifest.edges if e.from_id in keep_ids and e.to_id in keep_ids]
     sandboxed_manifest = _dc.replace(
         manifest,
         modules=tuple(sandboxed_modules),
@@ -269,6 +277,7 @@ def build_sandbox_manifest(manifest: Any, sample_rows: int) -> tuple[Any, list[d
 
 # ── sandbox gate sandbox replay ─────────────────────────────────────────────────────
 
+
 def run_sandbox_gate(
     blueprint_after: dict,
     *,
@@ -276,6 +285,7 @@ def run_sandbox_gate(
     patch_id: str,
     failed_module: str | None,
     engine: str,
+    cfg: Any,
     sample_rows: int = 1000,
     cli_overrides: dict[str, str] | None = None,
     profile: str | None = None,
@@ -306,6 +316,22 @@ def run_sandbox_gate(
     Spark, which is exactly the bug this signature closes (Phase 79). Callers
     resolve it the same way ``Surveyor``/``FailureContext`` do —
     ``cfg.deployment.engine`` / ``manifest.spark_config.get("deployment_engine")``.
+
+    ``cfg`` (an ``AqueductConfig``) is REQUIRED (no default) — every
+    production caller (``aqueduct/cli/patch.py``'s ``patch preview
+    --sandbox``, ``aqueduct/cli/__init__.py``'s ``_run_patch_gates_inline``)
+    already loads one before reaching this gate. It is used, when this gate
+    builds its OWN sandbox session (``spark_session`` omitted), to resolve
+    that session's ``SessionSpec.engine_config``/``engine_options`` through
+    the SAME ``aqueduct.executor.session_config.resolve_session_engine_config``
+    / ``session_secrets_options`` helpers ``aqueduct run`` uses — closing the
+    gap where a DuckDB sandbox replay used to see ``sandboxed_manifest.
+    spark_config`` (a Spark-only field, always ``{}`` for a non-Spark target)
+    regardless of ``engine.duckdb.*`` (memory_limit/threads/database_path/
+    extension_repository/s3_*) or any httpfs/secrets wiring a real
+    ``engine=="duckdb"`` run would have applied. Ignored when
+    ``spark_session`` is given — that session was already built (with
+    whatever config its own builder resolved) by the caller.
 
     ``spark_session``, if given, is used as-is regardless of engine (the
     caller already built it — e.g. the live session a heal loop is running
@@ -338,6 +364,10 @@ def run_sandbox_gate(
         from aqueduct.compiler.compiler import compile as compiler_compile
         from aqueduct.errors import AqueductError
         from aqueduct.executor.protocol import SessionSpec, call_execute, get_protocol
+        from aqueduct.executor.session_config import (
+            resolve_session_engine_config,
+            session_secrets_options,
+        )
         from aqueduct.parser.parser import ParseError, parse_dict
     except Exception as exc:  # pragma: no cover
         return SandboxGateResult(
@@ -361,9 +391,7 @@ def run_sandbox_gate(
     # broke 1.1.0 path anchoring whenever the tempfile landed in ``/tmp``
     # and relative module paths resolved against ``/tmp``.
     _bp_orig = _Path(blueprint_path) if blueprint_path else None
-    base_dir = (
-        _bp_orig.parent if _bp_orig and _bp_orig.exists() else _Path.cwd()
-    )
+    base_dir = _bp_orig.parent if _bp_orig and _bp_orig.exists() else _Path.cwd()
     try:
         try:
             bp = parse_dict(
@@ -431,16 +459,26 @@ def run_sandbox_gate(
             _owns_session = True
             master = sandbox_master_url or "local[*]"
             if sandbox_master_url:
-                logger.debug("Sandbox gate: connecting engine %r to master %r", engine, sandbox_master_url)
+                logger.debug(
+                    "Sandbox gate: connecting engine %r to master %r", engine, sandbox_master_url
+                )
             try:
                 session = protocol.session_factory()(
                     SessionSpec(
                         blueprint_id=f"aqueduct.sandbox.{patch_id}",
-                        engine_config=sandboxed_manifest.spark_config,
+                        # Resolved through the SAME per-engine helper
+                        # `aqueduct run` uses — NOT
+                        # `sandboxed_manifest.spark_config` (a Spark-only
+                        # field that is always `{}` for any other engine),
+                        # which used to make a DuckDB sandbox replay see
+                        # NONE of `engine.duckdb.*` regardless of what a
+                        # real run would apply.
+                        engine_config=resolve_session_engine_config(cfg, engine, manifest),
                         master_url=master,
                         quiet=True,
                         quiet_startup=True,
                         timezone=timezone,
+                        engine_options=session_secrets_options(cfg, manifest),
                     )
                 )
             except Exception as exc:
@@ -496,7 +534,11 @@ def run_sandbox_gate(
                     status="fail",
                     detail=(
                         f"sandbox run ended with status={result.status!r}"
-                        + (f"; first error in {failing.module_id!r}: {failing.error}" if failing else "")
+                        + (
+                            f"; first error in {failing.module_id!r}: {failing.error}"
+                            if failing
+                            else ""
+                        )
                     ),
                     sample_rows=sample_rows if sample_rows > 0 else None,
                     egress_targets=egress_targets,
@@ -527,6 +569,7 @@ def run_sandbox_gate(
 
 
 # ── Unified diff helper ───────────────────────────────────────────────────────
+
 
 def render_unified_diff(blueprint_before: dict, blueprint_after: dict) -> str:
     """Return a unified-diff string of the Blueprint YAML representations."""
