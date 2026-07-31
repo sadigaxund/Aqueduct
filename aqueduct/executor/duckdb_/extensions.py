@@ -65,7 +65,10 @@ class DuckDBExtensionError(AqueductError):
 
 
 def ensure_extension(
-    conn: "duckdb.DuckDBPyConnection", name: str, *, extension_repository: str | None = None,
+    conn: "duckdb.DuckDBPyConnection",
+    name: str,
+    *,
+    extension_repository: str | None = None,
 ) -> None:
     """``INSTALL``/``LOAD`` a DuckDB extension, wrapping any failure.
 
@@ -105,6 +108,9 @@ def configure_s3_secret(
     key_id: str,
     secret: str,
     region: str | None = None,
+    endpoint: str | None = None,
+    url_style: str | None = None,
+    use_ssl: bool | None = None,
 ) -> None:
     """``CREATE OR REPLACE SECRET`` for S3/GCS access, via parameter binding.
 
@@ -117,27 +123,42 @@ def configure_s3_secret(
     ``CREATE SECRET`` succeeds with ``httpfs`` unloaded (the secret manager
     is core DuckDB) — this function never installs or loads an extension.
 
+    ``endpoint``/``url_style``/``use_ssl`` (``engine.duckdb.s3_endpoint``/
+    ``s3_url_style``/``s3_use_ssl``) are the non-AWS-S3-compatible escape
+    hatch — measured against a real MinIO instance: AWS's default virtual-
+    hosted addressing and TLS assumptions don't hold for MinIO (or any other
+    S3-compatible store), so without an endpoint override DuckDB tries to
+    resolve the bucket against AWS itself. Each is omitted from the
+    statement (leaving DuckDB's own default untouched) when not given.
+
     Session-scoped (``CREATE OR REPLACE SECRET``, not ``CREATE PERSISTENT
     SECRET``): the credential lives only in this connection's in-memory
     secret manager and is never written into a persistent ``database_path``
     file.
     """
-    if region:
-        conn.execute(
-            f"CREATE OR REPLACE SECRET {_S3_SECRET_NAME} "
-            "(TYPE S3, KEY_ID ?, SECRET ?, REGION ?)",
-            [key_id, secret, region],
-        )
-    else:
-        conn.execute(
-            f"CREATE OR REPLACE SECRET {_S3_SECRET_NAME} (TYPE S3, KEY_ID ?, SECRET ?)",
-            [key_id, secret],
-        )
+    clauses = ["TYPE S3", "KEY_ID ?", "SECRET ?"]
+    params: list[Any] = [key_id, secret]
+    for clause, value in (
+        ("REGION ?", region),
+        ("ENDPOINT ?", endpoint),
+        ("URL_STYLE ?", url_style),
+    ):
+        if value:
+            clauses.append(clause)
+            params.append(value)
+    if use_ssl is not None:
+        clauses.append("USE_SSL ?")
+        params.append(use_ssl)
+    conn.execute(
+        f"CREATE OR REPLACE SECRET {_S3_SECRET_NAME} ({', '.join(clauses)})",
+        params,
+    )
 
 
 def resolve_s3_secret_from_config(
-    engine_config: dict[str, Any], secrets_options: dict[str, Any],
-) -> tuple[str, str, str | None] | None:
+    engine_config: dict[str, Any],
+    secrets_options: dict[str, Any],
+) -> dict[str, Any] | None:
     """Resolve ``engine.duckdb.s3_*`` secret KEY NAMES to VALUES, or ``None``.
 
     ``engine_config`` is ``SessionSpec.engine_config`` (this engine's own
@@ -149,6 +170,13 @@ def resolve_s3_secret_from_config(
     ``None`` when no S3 credentials are configured (the common case) —
     ``_make_session`` skips ``configure_s3_secret``/``ensure_httpfs``
     entirely rather than touching either.
+
+    Returns a dict shaped as ``configure_s3_secret``'s keyword arguments
+    (``key_id``/``secret``/``region``/``endpoint``/``url_style``/
+    ``use_ssl``) — callers do ``configure_s3_secret(conn, **result)``. The
+    non-credential fields (``s3_endpoint``/``s3_url_style``/``s3_use_ssl``)
+    are read straight from ``engine_config`` (they are not secrets — a
+    literal endpoint/style/SSL flag is fine in ``aqueduct.yml``).
 
     Raises whatever ``aqueduct.secrets.resolve_secret`` raises
     (``SecretsError``, an ``AqueductError`` subclass) if the configured
@@ -177,7 +205,14 @@ def resolve_s3_secret_from_config(
         resolver=secrets_options.get("resolver"),
         base_dir=secrets_options.get("base_dir"),
     )
-    return key_id, secret_value, engine_config.get("s3_region")
+    return {
+        "key_id": key_id,
+        "secret": secret_value,
+        "region": engine_config.get("s3_region"),
+        "endpoint": engine_config.get("s3_endpoint"),
+        "url_style": engine_config.get("s3_url_style"),
+        "use_ssl": engine_config.get("s3_use_ssl"),
+    }
 
 
 __all__ = [

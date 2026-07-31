@@ -44,6 +44,7 @@ os.environ.setdefault("AQ_TESTING", "1")
 # Opt-in: only runs when AQ_LAKEHOUSE is truthy (CI sets it on the executor /
 # compat jobs). Keeps ordinary local spark runs free of the Ivy download.
 
+
 def _truthy(v: "str | None") -> bool:
     return bool(v) and v.strip().lower() not in ("0", "false", "no", "off")
 
@@ -51,6 +52,7 @@ def _truthy(v: "str | None") -> bool:
 def _spark_line() -> "str | None":
     try:
         import pyspark
+
         p = pyspark.__version__.split(".")
         return f"{p[0]}.{p[1]}"
     except Exception:
@@ -79,10 +81,9 @@ def _coord_resolvable(coord: str) -> bool:
         return False
     url = f"https://repo1.maven.org/maven2/{g.replace('.', '/')}/{a}/{v}/{a}-{v}.pom"
     import urllib.request
+
     try:
-        with urllib.request.urlopen(
-            urllib.request.Request(url, method="HEAD"), timeout=6
-        ) as r:
+        with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=6) as r:
             return 200 <= r.status < 300
     except Exception:
         return False
@@ -114,9 +115,7 @@ _ICEBERG_ON = any("iceberg" in c for c in _LAKEHOUSE_COORDS)
 _LAKEHOUSE_WAREHOUSE = tempfile.mkdtemp(prefix="aq_iceberg_wh_") if _ICEBERG_ON else None
 
 if _LAKEHOUSE_COORDS and "PYSPARK_SUBMIT_ARGS" not in os.environ:
-    os.environ["PYSPARK_SUBMIT_ARGS"] = (
-        f"--packages {','.join(_LAKEHOUSE_COORDS)} pyspark-shell"
-    )
+    os.environ["PYSPARK_SUBMIT_ARGS"] = f"--packages {','.join(_LAKEHOUSE_COORDS)} pyspark-shell"
 
 
 def _lakehouse_session_conf() -> dict:
@@ -137,13 +136,14 @@ def _lakehouse_session_conf() -> dict:
     # Required by Hudi; harmless for Iceberg — safe whenever anything resolved.
     conf["spark.serializer"] = "org.apache.spark.serializer.KryoSerializer"
     if _ICEBERG_ON and _LAKEHOUSE_WAREHOUSE:
-        conf.update({
-            "spark.sql.extensions":
-                "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
-            "spark.sql.catalog.local": "org.apache.iceberg.spark.SparkCatalog",
-            "spark.sql.catalog.local.type": "hadoop",
-            "spark.sql.catalog.local.warehouse": _LAKEHOUSE_WAREHOUSE,
-        })
+        conf.update(
+            {
+                "spark.sql.extensions": "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
+                "spark.sql.catalog.local": "org.apache.iceberg.spark.SparkCatalog",
+                "spark.sql.catalog.local.type": "hadoop",
+                "spark.sql.catalog.local.warehouse": _LAKEHOUSE_WAREHOUSE,
+            }
+        )
     return conf
 
 
@@ -196,6 +196,7 @@ def pytest_collection_modifyitems(config, items):
 # ── Anthropic ─────────────────────────────────────────────────────────────────
 # Set ANTHROPIC_API_KEY in your environment to run live Claude tests.
 
+
 def _anthropic_is_available() -> bool:
     return bool(os.environ.get("ANTHROPIC_API_KEY"))
 
@@ -209,6 +210,7 @@ requires_anthropic = pytest.mark.skipif(
 # ── Postgres ──────────────────────────────────────────────────────────────────
 # Set AQ_PG_DSN in your environment. Example: postgresql://user:pass@localhost:5432/db
 
+
 def _pg_dsn() -> str | None:
     return os.environ.get("AQ_PG_DSN")
 
@@ -219,6 +221,7 @@ def _pg_is_reachable() -> bool:
         return False
     try:
         import psycopg2
+
         conn = psycopg2.connect(dsn, connect_timeout=3)
         conn.close()
         return True
@@ -235,6 +238,7 @@ requires_postgres = pytest.mark.skipif(
 # ── Redis ─────────────────────────────────────────────────────────────────────
 # Set AQ_REDIS_URL in your environment. Defaults to redis://localhost:6379/15
 
+
 def _redis_url() -> str:
     return os.environ.get("AQ_REDIS_URL", "redis://localhost:6379/15")
 
@@ -243,6 +247,7 @@ def _redis_is_reachable() -> bool:
     url = _redis_url()
     try:
         import redis
+
         client = redis.Redis.from_url(url, socket_timeout=3)
         client.ping()
         return True
@@ -256,12 +261,116 @@ requires_redis = pytest.mark.skipif(
 )
 
 
+# ── S3-compatible object storage (MinIO) ───────────────────────────────────────
+# Set AQ_S3_ENDPOINT/AQ_S3_ACCESS_KEY/AQ_S3_SECRET_KEY in your environment.
+# Defaults match the repo owner's local docker-compose MinIO
+# (tmp/04-dashboard-showcase/docker-compose.yml): http://localhost:9000,
+# minioadmin/minioadmin. CI has no MinIO, so this must skip cleanly there.
+
+
+def _minio_endpoint() -> str:
+    return os.environ.get("AQ_S3_ENDPOINT", "http://localhost:9000")
+
+
+def _minio_access_key() -> str:
+    return os.environ.get("AQ_S3_ACCESS_KEY", "minioadmin")
+
+
+def _minio_secret_key() -> str:
+    return os.environ.get("AQ_S3_SECRET_KEY", "minioadmin")
+
+
+def _minio_is_reachable() -> bool:
+    import urllib.request
+
+    try:
+        url = _minio_endpoint().rstrip("/") + "/minio/health/live"
+        with urllib.request.urlopen(url, timeout=3) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+requires_minio = pytest.mark.skipif(
+    not _minio_is_reachable(),
+    reason="MinIO not reachable at AQ_S3_ENDPOINT (default http://localhost:9000)",
+)
+
+
+def ensure_minio_bucket(bucket: str, *, endpoint: str | None = None) -> None:
+    """Create *bucket* on the local MinIO instance if it doesn't already
+    exist — test-fixture setup only, never imported by ``aqueduct`` itself.
+
+    No ``boto3``/``awscli`` in this environment (and no docker socket access
+    to shell out to the ``mc`` client), so this hand-signs a plain
+    ``PUT /<bucket>`` AWS SigV4 request with stdlib only
+    (``hmac``/``hashlib``/``urllib``) — MinIO requires a signed request even
+    for its default root credentials, there is no anonymous admin path.
+    """
+    import datetime
+    import hashlib
+    import hmac
+    import urllib.request
+
+    ep = (endpoint or _minio_endpoint()).rstrip("/")
+    access_key, secret_key, region = _minio_access_key(), _minio_secret_key(), "us-east-1"
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+    date_stamp = now.strftime("%Y%m%d")
+    host = ep.split("://", 1)[-1]
+    payload_hash = hashlib.sha256(b"").hexdigest()
+    canonical_headers = f"host:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{amz_date}\n"
+    signed_headers = "host;x-amz-content-sha256;x-amz-date"
+    canonical_request = "\n".join(
+        ["PUT", f"/{bucket}", "", canonical_headers, signed_headers, payload_hash]
+    )
+    credential_scope = f"{date_stamp}/{region}/s3/aws4_request"
+    string_to_sign = "\n".join(
+        [
+            "AWS4-HMAC-SHA256",
+            amz_date,
+            credential_scope,
+            hashlib.sha256(canonical_request.encode()).hexdigest(),
+        ]
+    )
+
+    def _sign(key: bytes, msg: str) -> bytes:
+        return hmac.new(key, msg.encode(), hashlib.sha256).digest()
+
+    k_date = _sign(("AWS4" + secret_key).encode(), date_stamp)
+    k_region = _sign(k_date, region)
+    k_service = _sign(k_region, "s3")
+    signing_key = _sign(k_service, "aws4_request")
+    signature = hmac.new(signing_key, string_to_sign.encode(), hashlib.sha256).hexdigest()
+
+    authorization = (
+        f"AWS4-HMAC-SHA256 Credential={access_key}/{credential_scope}, "
+        f"SignedHeaders={signed_headers}, Signature={signature}"
+    )
+    req = urllib.request.Request(
+        f"{ep}/{bucket}",
+        method="PUT",
+        headers={
+            "x-amz-date": amz_date,
+            "x-amz-content-sha256": payload_hash,
+            "Authorization": authorization,
+            "Content-Length": "0",
+        },
+    )
+    try:
+        urllib.request.urlopen(req, timeout=10)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 409:  # BucketAlreadyOwnedByYou — fine, idempotent
+            return
+        raise
 
 
 # ── Spark ─────────────────────────────────────────────────────────────────────
 # Set AQ_SPARK_MASTER in your environment to run tests against a remote cluster.
 # Example: export AQ_SPARK_MASTER=spark://spark-master.internal:7077
 # Defaults to local[1] when unset.
+
 
 def _spark_master() -> str:
     return os.environ.get("AQ_SPARK_MASTER", "local[1]")
@@ -271,9 +380,8 @@ def _spark_is_healthy():
     if SparkSession is None:
         return False
     try:
-        builder = (
-            SparkSession.builder.master(_spark_master())
-            .config("spark.sql.warehouse.dir", _SPARK_WAREHOUSE)
+        builder = SparkSession.builder.master(_spark_master()).config(
+            "spark.sql.warehouse.dir", _SPARK_WAREHOUSE
         )
         # Lakehouse confs (Kryo for Hudi, Iceberg catalog/extensions) are
         # STATIC — bind them on this first session (no-op on later getOrCreate).
@@ -299,8 +407,10 @@ def seed_ts():
     """Seed timestamps for store fixtures. Relative by construction — a literal
     date silently ages out of any now()-windowed query (report --trend's 30-day
     default, count_recent_heal_attempts)."""
-    def _ts(**delta):          # seed_ts(hours=-1), seed_ts(days=-2)
+
+    def _ts(**delta):  # seed_ts(hours=-1), seed_ts(days=-2)
         return (datetime.now(timezone.utc) + timedelta(**delta)).isoformat()
+
     return _ts
 
 
@@ -404,7 +514,7 @@ def spark(tmp_path_factory) -> SparkSession:
             **_lakehouse_session_conf(),  # Kryo + Iceberg catalog (empty unless provisioned)
         },
         master_url=_spark_master(),
-        quiet=True
+        quiet=True,
     )
     yield session
     session.stop()
@@ -412,8 +522,7 @@ def spark(tmp_path_factory) -> SparkSession:
 
 # Mark all tests that require a working SparkSession
 requires_healthy_spark = pytest.mark.skipif(
-    not _spark_is_healthy(),
-    reason="Spark Java gateway is unstable in this environment"
+    not _spark_is_healthy(), reason="Spark Java gateway is unstable in this environment"
 )
 
 
@@ -436,8 +545,9 @@ def sample_data(spark: SparkSession, tmp_path_factory):
         .withColumn("region", F.when(F.col("id") < 5, "US").otherwise("EU"))
         .withColumn(
             "amount",
-            F.when(F.col("id") == 3, F.lit(None).cast(DoubleType()))
-             .otherwise((F.col("id") * 10).cast(DoubleType()))
+            F.when(F.col("id") == 3, F.lit(None).cast(DoubleType())).otherwise(
+                (F.col("id") * 10).cast(DoubleType())
+            ),
         )
         .withColumn("status", F.lit("completed"))
         .drop("id")
@@ -446,7 +556,9 @@ def sample_data(spark: SparkSession, tmp_path_factory):
 
     customers = (
         spark.range(5)
-        .withColumn("customer_id", F.concat(F.lit("C-"), F.lpad(F.col("id").cast("string"), 4, "0")))
+        .withColumn(
+            "customer_id", F.concat(F.lit("C-"), F.lpad(F.col("id").cast("string"), 4, "0"))
+        )
         .withColumn("name", F.concat(F.lit("Customer "), F.col("id").cast("string")))
         .withColumn("email", F.concat(F.col("id").cast("string"), F.lit("@test.com")))
         .drop("id")

@@ -97,6 +97,14 @@ engine:
   #   s3_key_id_secret: "AWS_ACCESS_KEY_ID"
   #   s3_secret_access_key_secret: "AWS_SECRET_ACCESS_KEY"
   #   s3_region: "us-east-1"
+  #
+  #   # s3_endpoint / s3_url_style / s3_use_ssl: the non-AWS-S3-compatible
+  #   # escape hatch (MinIO, on-prem object storage) — NOT secrets, literal
+  #   # values are fine. Without s3_endpoint, DuckDB resolves the bucket
+  #   # against AWS's real S3 regardless of which credentials are configured.
+  #   s3_endpoint: "minio:9000"
+  #   s3_url_style: "path"
+  #   s3_use_ssl: false
 
   # ── Object storage — AWS S3 (IAM role or key-pair) ──────────────────────────
   # spark.hadoop.fs.s3a.aws.credentials.provider: "com.amazonaws.auth.InstanceProfileCredentialsProvider"

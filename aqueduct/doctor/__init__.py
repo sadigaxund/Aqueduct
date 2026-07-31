@@ -359,8 +359,7 @@ def _probe_duckdb_handoff(
             extension_repository = engine_cfg.get("extension_repository")
             s3_creds = resolve_s3_secret_from_config(engine_cfg, secrets_config or {})
             if s3_creds is not None:
-                key_id, secret_value, region = s3_creds
-                configure_s3_secret(con, key_id=key_id, secret=secret_value, region=region)
+                configure_s3_secret(con, **s3_creds)
                 ensure_extension(con, "httpfs", extension_repository=extension_repository)
             elif extension_repository:
                 ensure_extension(con, "httpfs", extension_repository=extension_repository)

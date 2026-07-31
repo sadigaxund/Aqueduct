@@ -113,7 +113,38 @@ class TestS3SecretResolution:
             },
             {"provider": "env"},
         )
-        assert result == ("AKIAFAKE", "fakesecretvalue", "us-east-1")
+        assert result == {
+            "key_id": "AKIAFAKE",
+            "secret": "fakesecretvalue",
+            "region": "us-east-1",
+            "endpoint": None,
+            "url_style": None,
+            "use_ssl": None,
+        }
+
+    def test_resolve_s3_secret_from_config_includes_minio_overrides(self, monkeypatch):
+        """The non-AWS-S3-compatible escape hatch (endpoint/url_style/use_ssl)
+        flows through unchanged — these are literal config, not secrets."""
+        monkeypatch.setenv("AQ_TEST_KEY_ID3", "minioadmin")
+        monkeypatch.setenv("AQ_TEST_SECRET3", "minioadmin")
+        result = resolve_s3_secret_from_config(
+            {
+                "s3_key_id_secret": "AQ_TEST_KEY_ID3",
+                "s3_secret_access_key_secret": "AQ_TEST_SECRET3",
+                "s3_endpoint": "localhost:9000",
+                "s3_url_style": "path",
+                "s3_use_ssl": False,
+            },
+            {"provider": "env"},
+        )
+        assert result == {
+            "key_id": "minioadmin",
+            "secret": "minioadmin",
+            "region": None,
+            "endpoint": "localhost:9000",
+            "url_style": "path",
+            "use_ssl": False,
+        }
 
     def test_configure_s3_secret_creates_duckdb_secret_no_network(self, duckdb_con):
         """`CREATE SECRET` succeeds with httpfs unloaded — the secret
@@ -130,6 +161,23 @@ class TestS3SecretResolution:
             "SELECT name FROM duckdb_secrets() WHERE name = 'aqueduct_s3'"
         ).fetchall()
         assert rows == [("aqueduct_s3",)]
+
+    def test_configure_s3_secret_with_minio_overrides_no_network(self, duckdb_con):
+        """endpoint/url_style/use_ssl reach `CREATE SECRET` — the non-AWS
+        escape hatch — with no network touched (secret creation is core
+        DuckDB, same as the plain-AWS-shape secret above)."""
+        configure_s3_secret(
+            duckdb_con,
+            key_id="minioadmin",
+            secret="minioadmin",
+            endpoint="localhost:9000",
+            url_style="path",
+            use_ssl=False,
+        )
+        rows = duckdb_con.sql(
+            "SELECT name, type FROM duckdb_secrets() WHERE name = 'aqueduct_s3'"
+        ).fetchall()
+        assert rows == [("aqueduct_s3", "s3")]
 
     def test_make_session_wires_s3_secret_via_engine_options(self, monkeypatch):
         """End-to-end through `_make_session`: engine_config names secret
@@ -175,8 +223,11 @@ class TestEnsureExtension:
         wrapped failure names that URL."""
         with pytest.raises(DuckDBExtensionError) as exc_info:
             ensure_extension(
-                duckdb_con, "totally_not_a_real_extension_xyz",
+                duckdb_con,
+                "totally_not_a_real_extension_xyz",
                 extension_repository="http://aqueduct-test-unreachable.invalid/repo",
             )
-        current = duckdb_con.sql("SELECT current_setting('custom_extension_repository')").fetchone()[0]
+        current = duckdb_con.sql(
+            "SELECT current_setting('custom_extension_repository')"
+        ).fetchone()[0]
         assert current == "http://aqueduct-test-unreachable.invalid/repo"

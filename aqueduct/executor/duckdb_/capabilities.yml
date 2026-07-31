@@ -665,3 +665,24 @@ leaves:
     tests:
       - tests/test_executor_duckdb/test_incremental.py::test_incremental_watermark_with_prior
       - tests/test_executor_duckdb/test_incremental.py::test_incremental_two_runs_real_incremental_behavior
+  config.engine.duckdb.s3_endpoint:
+    support: supported
+    hint: "S3-compatible endpoint override for CREATE SECRET (TYPE S3, ..., ENDPOINT ...) — the non-AWS escape hatch (MinIO, on-prem object storage). Verified end-to-end against a real MinIO instance."
+    tests:
+      - tests/test_executor_duckdb/test_engine_config.py::TestS3SecretResolution::test_resolve_s3_secret_from_config_includes_minio_overrides
+      - tests/test_executor_duckdb/test_engine_config.py::TestS3SecretResolution::test_configure_s3_secret_with_minio_overrides_no_network
+      - tests/test_executor_duckdb/test_s3_minio.py::TestDuckDBS3RoundTrip::test_duckdb_ingress_egress_round_trip_against_minio
+  config.engine.duckdb.s3_url_style:
+    support: supported
+    hint: "URL_STYLE for CREATE SECRET (TYPE S3, ...) — MinIO and most non-AWS S3-compatible stores need 'path' rather than AWS's default virtual-hosted 'vhost' style. Verified end-to-end against a real MinIO instance."
+    tests:
+      - tests/test_executor_duckdb/test_engine_config.py::TestS3SecretResolution::test_resolve_s3_secret_from_config_includes_minio_overrides
+      - tests/test_executor_duckdb/test_engine_config.py::TestS3SecretResolution::test_configure_s3_secret_with_minio_overrides_no_network
+      - tests/test_executor_duckdb/test_s3_minio.py::TestDuckDBS3RoundTrip::test_duckdb_ingress_egress_round_trip_against_minio
+  config.engine.duckdb.s3_use_ssl:
+    support: supported
+    hint: "USE_SSL for CREATE SECRET (TYPE S3, ...) — a local/dev MinIO instance typically serves plain HTTP. Verified end-to-end against a real MinIO instance."
+    tests:
+      - tests/test_executor_duckdb/test_engine_config.py::TestS3SecretResolution::test_resolve_s3_secret_from_config_includes_minio_overrides
+      - tests/test_executor_duckdb/test_engine_config.py::TestS3SecretResolution::test_configure_s3_secret_with_minio_overrides_no_network
+      - tests/test_executor_duckdb/test_s3_minio.py::TestDuckDBS3RoundTrip::test_duckdb_ingress_egress_round_trip_against_minio

@@ -1193,6 +1193,17 @@ class DuckDBEngineConfig(BaseModel):
     so a credential value can never end up embedded in generated SQL text.
     ``httpfs`` itself is a DuckDB EXTENSION, not a Python package — no new
     dependency, no new extra.
+
+    ``s3_endpoint``/``s3_url_style``/``s3_use_ssl`` are the non-AWS-S3-
+    compatible escape hatch — verified end-to-end against a real MinIO
+    instance (Phase 82 remediation). Unlike the credential fields above,
+    these are NOT secrets — a literal endpoint/style/SSL flag is fine here.
+    AWS's default virtual-hosted addressing (``bucket.s3.amazonaws.com``)
+    and TLS-everywhere assumption don't hold for MinIO or any other
+    S3-compatible store: without ``s3_endpoint``, DuckDB resolves the
+    bucket against AWS's real S3 regardless of which credentials are
+    configured (measured: the SAME credentials against the SAME bucket
+    name fail when only ``s3_endpoint`` is omitted).
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -1274,6 +1285,40 @@ class DuckDBEngineConfig(BaseModel):
             "(e.g. 'us-east-1'). Not sensitive — given literally, unlike "
             "the key_id/secret_access_key fields above. Optional: DuckDB's "
             "S3 secret does not require a region."
+        ),
+        json_schema_extra={"engine_scoped": True},
+    )
+    s3_endpoint: str | None = Field(
+        default=None,
+        description=(
+            "S3-compatible endpoint override for `CREATE SECRET (TYPE S3, "
+            "..., ENDPOINT ...)` — `host:port`, no scheme (e.g. "
+            "'localhost:9000' or 'minio.internal:9000'). Required for any "
+            "non-AWS S3-compatible store (MinIO, on-prem object storage); "
+            "unset (default) leaves DuckDB's own AWS endpoint resolution "
+            "untouched."
+        ),
+        json_schema_extra={"engine_scoped": True},
+    )
+    s3_url_style: Literal["vhost", "path"] | None = Field(
+        default=None,
+        description=(
+            "URL addressing style for `CREATE SECRET (TYPE S3, ..., "
+            "URL_STYLE ...)`. MinIO and most non-AWS S3-compatible stores "
+            "need `path` (bucket in the URL path, e.g. "
+            "`http://host:9000/bucket/key`) rather than AWS's default "
+            "virtual-hosted `vhost` style (`bucket.s3.amazonaws.com/key`). "
+            "Unset (default) leaves DuckDB's own default untouched."
+        ),
+        json_schema_extra={"engine_scoped": True},
+    )
+    s3_use_ssl: bool | None = Field(
+        default=None,
+        description=(
+            "Whether to use HTTPS for `CREATE SECRET (TYPE S3, ..., "
+            "USE_SSL ...)`. A local/dev MinIO instance typically serves "
+            "plain HTTP — set `false` for those. Unset (default, `None`) "
+            "leaves DuckDB's own default (`true`) untouched."
         ),
         json_schema_extra={"engine_scoped": True},
     )

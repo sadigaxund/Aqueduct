@@ -49,16 +49,27 @@ if TYPE_CHECKING:
 # still reaches the protocol's `execute` directly instead of through
 # `call_execute()`; it stays silent there deliberately — `call_execute()` is
 # the seam responsible for user-facing signal, not this fallback.
-_DUCKDB_EXECUTE_KWARGS: frozenset[str] = frozenset({
-    "run_id", "store_dir", "checkpoint_root", "surveyor", "depot",
-    "resume_run_id", "from_module", "to_module", "block_full_actions",
-    "warnings_suppress", "warnings_silence_all",
-    # Phase 81 step 3 — `observability_store` backs the Handoff module's OWN
-    # (limited, handoff-only) module_metrics write; `handoff_spill_uris` is
-    # the {handoff_module_id: spill_uri} map the orchestrator resolves. Both
-    # are no-ops for a Manifest with no Handoff module (the common case).
-    "observability_store", "handoff_spill_uris",
-})
+_DUCKDB_EXECUTE_KWARGS: frozenset[str] = frozenset(
+    {
+        "run_id",
+        "store_dir",
+        "checkpoint_root",
+        "surveyor",
+        "depot",
+        "resume_run_id",
+        "from_module",
+        "to_module",
+        "block_full_actions",
+        "warnings_suppress",
+        "warnings_silence_all",
+        # Phase 81 step 3 — `observability_store` backs the Handoff module's OWN
+        # (limited, handoff-only) module_metrics write; `handoff_spill_uris` is
+        # the {handoff_module_id: spill_uri} map the orchestrator resolves. Both
+        # are no-ops for a Manifest with no Handoff module (the common case).
+        "observability_store",
+        "handoff_spill_uris",
+    }
+)
 
 
 def load_executor() -> Callable:
@@ -110,16 +121,21 @@ def _make_session(spec: SessionSpec) -> Any:
       - ``extension_repository``: ``SET custom_extension_repository=...``
         BEFORE any extension install attempt — the airgapped-mirror escape
         hatch (see ``duckdb_/extensions.py``).
-      - ``s3_key_id_secret``/``s3_secret_access_key_secret``/``s3_region``:
-        secret KEY NAMES resolved through the ``secrets:`` block resolver
-        (via ``spec.engine_options["secrets"]`` — the caller-populated
-        provider/region/resolver/base_dir bag) and fed into DuckDB's own
-        ``CREATE SECRET (TYPE S3, ...)``. When configured, this also
-        proactively ``INSTALL``/``LOAD``s ``httpfs`` (``ensure_httpfs``) so
-        an airgapped-install failure surfaces LOUDLY at session creation
-        as a ``DuckDBExtensionError``, not as a bare HTTP error buried
-        inside some later query. When NOT configured, ``httpfs`` is left
-        entirely alone — DuckDB's own ``autoinstall_known_extensions``/
+      - ``s3_key_id_secret``/``s3_secret_access_key_secret``/``s3_region``/
+        ``s3_endpoint``/``s3_url_style``/``s3_use_ssl``: secret KEY NAMES
+        (for the credential pair) resolved through the ``secrets:`` block
+        resolver (via ``spec.engine_options["secrets"]`` — the
+        caller-populated provider/region/resolver/base_dir bag) plus literal
+        endpoint/style/SSL overrides, all fed into DuckDB's own ``CREATE
+        SECRET (TYPE S3, ...)``. The endpoint/style/SSL fields are the
+        non-AWS-S3-compatible escape hatch (MinIO, on-prem object storage —
+        AWS's virtual-hosted addressing and TLS assumptions don't hold for
+        those). When credentials are configured, this also proactively
+        ``INSTALL``/``LOAD``s ``httpfs`` (``ensure_httpfs``) so an
+        airgapped-install failure surfaces LOUDLY at session creation as a
+        ``DuckDBExtensionError``, not as a bare HTTP error buried inside
+        some later query. When NOT configured, ``httpfs`` is left entirely
+        alone — DuckDB's own ``autoinstall_known_extensions``/
         ``autoload_known_extensions`` (both default ``True``) still load it
         lazily on the first ``s3://``/``gs://`` touch, same as always; a
         user who never touches remote storage sees zero new behaviour.
@@ -163,8 +179,7 @@ def _make_session(spec: SessionSpec) -> Any:
     secrets_options = (spec.engine_options or {}).get("secrets", {})
     s3_creds = resolve_s3_secret_from_config(engine_config, secrets_options)
     if s3_creds is not None:
-        key_id, secret_value, region = s3_creds
-        configure_s3_secret(conn, key_id=key_id, secret=secret_value, region=region)
+        configure_s3_secret(conn, **s3_creds)
         # S3 credentials configured — remote storage is clearly intended, so
         # surface an airgapped-install failure LOUDLY here rather than
         # letting it hit as a bare HTTP error inside a later query.
@@ -197,7 +212,10 @@ def _read_source_schema(module: Any, session: Any) -> dict[str, str]:
 
 
 def _sample_source_rows(
-    module: Any, session: Any, n: int = 10, base_dir: str | None = None,
+    module: Any,
+    session: Any,
+    n: int = 10,
+    base_dir: str | None = None,
 ) -> list[dict[str, Any]]:
     """``ExecutorProtocol.sample_source_rows`` for DuckDB.
 

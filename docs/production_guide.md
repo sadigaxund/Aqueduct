@@ -213,6 +213,82 @@ the blueprint's `engine.spark.conf`.
 
 ---
 
+## Object storage: MinIO / other non-AWS S3-compatible stores
+
+Verified end-to-end against a real MinIO instance: DuckDB Ingress/Egress,
+Spark Ingress/Egress, and a cross-engine `handoff.root` spilling to and
+reading back from MinIO in both directions (Spark island → DuckDB island
+and the reverse). AWS's default virtual-hosted addressing
+(`bucket.s3.amazonaws.com`) and TLS-everywhere assumption don't hold for
+MinIO or any other S3-compatible store — both engines need an explicit
+non-AWS override, or they resolve the bucket against AWS's real S3
+regardless of which credentials are configured.
+
+**DuckDB** — `engine.duckdb.s3_endpoint`/`s3_url_style`/`s3_use_ssl` (added
+alongside this verification; NOT secrets, literal values are fine here),
+on top of the existing `s3_key_id_secret`/`s3_secret_access_key_secret`
+(secret KEY NAMES, resolved through `secrets:`):
+
+```yaml
+engine:
+  duckdb:
+    s3_key_id_secret: "MINIO_ACCESS_KEY"
+    s3_secret_access_key_secret: "MINIO_SECRET_KEY"
+    s3_endpoint: "minio:9000"      # host:port, no scheme
+    s3_url_style: "path"           # MinIO needs path-style, not vhost
+    s3_use_ssl: false               # local/dev MinIO typically serves plain HTTP
+```
+
+**Spark** — the S3A Hadoop FS driver, via `engine.spark.conf` (needs the
+`hadoop-aws` jar; `spark.jars.packages` resolves it — and its transitive AWS
+SDK dependency — via Ivy on first use, so the FIRST run on a fresh machine
+downloads it):
+
+```yaml
+engine:
+  spark:
+    conf:
+      spark.jars.packages: "org.apache.hadoop:hadoop-aws:3.4.2"
+      spark.hadoop.fs.s3a.impl: "org.apache.hadoop.fs.s3a.S3AFileSystem"
+      spark.hadoop.fs.s3a.endpoint: "http://minio:9000"
+      spark.hadoop.fs.s3a.path.style.access: "true"
+      spark.hadoop.fs.s3a.connection.ssl.enabled: "false"
+      spark.hadoop.fs.s3a.access.key: "@aq.secret('MINIO_ACCESS_KEY')"
+      spark.hadoop.fs.s3a.secret.key: "@aq.secret('MINIO_SECRET_KEY')"
+```
+
+**Pin `hadoop-aws` to match the installed PySpark's bundled Hadoop client
+jar, not just its major version.** Measured: PySpark 4.1.1 ships
+`hadoop-client-api`/`hadoop-client-runtime` 3.4.2; resolving `hadoop-aws`
+3.4.0 against that classpath raises `NoSuchMethodError` on READ (not on
+write — a write-only smoke test will not catch this). Check
+`pyspark/jars/hadoop-client-api-*.jar` in your PySpark install and pin
+`hadoop-aws` to the identical version.
+
+**Bucket URI scheme.** Use `s3a://` (not `s3://`) for any path Spark
+touches — Spark's bundled Hadoop FS registers `s3a://` via `hadoop-aws`,
+not the legacy `s3://` scheme, and raises
+`UnsupportedFileSystemException: No FileSystem for scheme "s3"` otherwise.
+DuckDB's httpfs accepts both `s3a://` and `s3://` identically, so `s3a://`
+is the one scheme that works for a path either engine — or a cross-engine
+`handoff.root` — might touch:
+
+```yaml
+handoff:
+  root: "s3a://my-bucket/aqueduct-handoff"
+```
+
+**Cleanup needs `fsspec`.** The ENGINES write/read a handoff spill natively
+(no `fsspec` involved) — the round trip above works with no object-store
+extra installed. Aqueduct's OWN bookkeeping (deleting a successful run's
+spill, the orphan sweep) uses `fsspec` for a remote root, because unlike an
+engine's own writer it has no native way to list/delete an arbitrary URI
+scheme. Without the `[object-store]` extra, spill accumulates under
+`handoff.root` behind a suppressible `handoff_cleanup_unavailable` warning
+— install `aqueduct-core[object-store]` to enable cleanup on a remote root.
+
+---
+
 ## Path conventions
 
 **Rule: all I/O paths in production Blueprints must be cloud/HDFS URIs, never local filesystem paths.**
