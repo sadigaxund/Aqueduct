@@ -81,21 +81,40 @@ aqueduct dev capabilities scaffold --engine <name>
 ```
 
 This writes a complete `capabilities.yml` under
-`aqueduct/executor/<name>/` with **every** governed leaf present and set to
-`undeclared` — currently 294 rows: ~189 Blueprint-grammar leaves (module
-types, Channel ops, Egress write modes, Junction/Funnel fan modes, feature
-flags, hub type constructors) plus ~105 `aqueduct.yml` config leaves. The
-leaf set is derived live from the grammar and config walkers
-(`capability_leaves.py`, `config_leaves.py`), so the scaffold cannot go stale
-the way a checked-in template would, and it cannot be gamed — there is no
-default-verdict sweep anywhere in the framework.
+`aqueduct/executor/<name>/` with **every leaf on YOUR engine's own
+checklist** present and set to `undeclared` — currently 189
+Blueprint-grammar leaves (module types, Channel ops, Egress write modes,
+Junction/Funnel fan modes, feature flags, hub type constructors) plus your
+engine's own engine-scoped `aqueduct.yml` config leaves (17 today, minus one
+per OTHER engine's `engine.<name>.*` block — 15 for a second engine given
+Spark already owns two). The leaf set is derived live from the grammar and
+config walkers (`capability_leaves.py`, `config_leaves.py`), so the scaffold
+cannot go stale the way a checked-in template would, and it cannot be gamed
+— there is no default-verdict sweep anywhere in the framework.
 
-**Do not copy another engine's `capabilities.yml`.** Spark's table has 294
-`supported` rows because Spark actually implements 294 things. Cloning it
-onto a new engine is a silent claim that the new engine supports the entire
-grammar — precisely the blind spot this framework exists to catch. Read
-Spark's table as a reference for what a verdict/`requires`/`hint` row looks
-like; never paste it wholesale. DuckDB's own table
+**Your checklist is NOT the whole `config.*` surface.** Of `AqueductConfig`'s
+105 `config.*` leaves, ~88 are CORE — `webhooks.*`, `secrets.*`, `stores.*`,
+`lineage.*`, most of `agent.*`/`danger.*` — they run in core code paths with
+no per-engine implementation to diverge from, so no engine (yours included)
+is ever asked for a verdict on them; they simply never appear in your
+scaffold. (`lineage.*` is core because OpenLineage emission is built in
+`Surveyor.__init__` gated only on a configured URL, with no engine
+condition — a DuckDB run emits the same events a Spark run does.) The ones
+that DO appear are the ones that genuinely dispatch through an engine:
+`probes.*`, `metrics.use_observe`, `timezone`, `checkpoint_root`,
+`deployment.target`/`databricks.*`, `handoff.root`,
+`agent.sandbox_master_url`/`block_on_explain_regression`,
+`danger.allow_full_probe_actions`. A field under `engine.<name>.*`
+(`engine.spark.master_url`, a future `engine.duckdb.*`) is positionally
+yours alone — it never appears on another engine's checklist and no other
+engine's such leaves appear on yours.
+
+**Do not copy another engine's `capabilities.yml`.** Spark's table has 206
+rows, ~205 of them `supported`, because Spark actually implements that much.
+Cloning it onto a new engine is a silent claim that the new engine supports
+the entire grammar — precisely the blind spot this framework exists to
+catch. Read Spark's table as a reference for what a verdict/`requires`/`hint`
+row looks like; never paste it wholesale. DuckDB's own table
 (`aqueduct/executor/duckdb_/capabilities.yml`) is a better model of an
 *honest* subset declaration: parquet/csv/json ingress, a handful of Channel
 ops, both Junction modes and both Funnel modes, parquet/csv egress —
@@ -126,12 +145,17 @@ aqueduct dev capabilities check    # read-only, what CI runs
 aqueduct dev capabilities sync     # appends any newly-derived leaves as `undeclared`
 ```
 
-`sync` never invents a verdict and never deletes a row — a human decides
-what a new leaf means for an existing engine, and an orphaned row (one that
-no longer matches a real leaf, e.g. after a rename) is reported for review
-rather than silently dropped. Run `sync` whenever the grammar or config
-schema grows a new leaf on `main` while your engine is mid-build; it keeps
-your table current without doing the deciding for you.
+`sync` never invents a verdict — a human decides what a new leaf means for
+an existing engine, so a new leaf is always parked at `undeclared`. An
+orphaned row (one that no longer matches a real leaf on your checklist —
+after a rename, a reclassification to core, or because it is now
+positionally owned by a different engine) is DELETED by default: it already
+makes your table invalid, so `sync`'s job is to hand back a valid table, not
+just report the problem. The deletion is a plain, reviewable git diff on a
+data file. Pass `--no-prune` to fall back to report-only. Run `sync`
+whenever the grammar or config schema grows a new leaf on `main` while your
+engine is mid-build; it keeps your table current without doing the deciding
+for you.
 
 ### 4. Generate the docs matrix
 
@@ -357,11 +381,13 @@ third-party engine ships this same table in its own package's
 `load_engines()` discovers it via `importlib.metadata.entry_points()` at
 process start.
 
-## The two failure modes — never conflate them
+## The three failure modes — never conflate them
 
-Two error types cover two genuinely different situations on this seam, and
-callers distinguish them by exception **type**, never by matching message
-text:
+Three error types cover three genuinely different situations on this seam,
+and callers distinguish them by exception **type**, never by matching
+message text. All three are direct `AqueductError` subclasses — none is a
+subclass of another — so a handler written for one cannot accidentally
+swallow another and re-conflate two states that need different fixes:
 
 - **`EnginePluginError`** — the `aqueduct.engines` entry point failed to
   **import**. The plugin is broken or half-installed (a syntax error, a
@@ -377,13 +403,31 @@ text:
   build failure. The fix is `aqueduct dev capabilities sync` followed by a
   real verdict — reinstalling fixes nothing, because the package installed
   fine; the *data it ships* is the problem.
+- **`CapabilityScopeError`** — a `config.*` field's engine-scoping is
+  **undecided or contradictory**: EVERY `config.*` field in
+  `aqueduct/config.py` must carry an explicit
+  `Field(..., json_schema_extra={"engine_scoped": True})` or `{"...": False}`
+  tag — there is no "untagged means core" fallback anywhere, precisely so a
+  brand-new field can never fall silently into either bucket with nobody
+  deciding. A field with neither key raises, naming the field and both legal
+  resolutions (tag it `True` if it dispatches through an engine, `False` if
+  it is core-only). A field living under an `engine.<name>.*` block is
+  additionally restricted to `True` — tagging it `False` (or leaving it
+  untagged) is a contradiction and also raises, since there is no coherent
+  "core" reading for something namespaced to one engine. Raised the moment
+  the walker runs (every engine's `capabilities.py` walks it at import, i.e.
+  at registration time — never CI-only). This one is a first-party
+  `aqueduct/config.py` bug, not something a third-party engine plugin can
+  trigger by shipping bad data. See `docs/specs.md` §10.9 "Config-leaf
+  scoping".
 
-Conflating these two once already made the closure guarantee meaningless in
-an earlier iteration of this framework: a message telling a developer who
+Conflating the first two once already made the closure guarantee meaningless
+in an earlier iteration of this framework: a message telling a developer who
 had just added a schema key to "reinstall the package" fixes nothing and
 sends them down the wrong path. If you write code that catches errors from
 this seam, branch on `isinstance(exc, EnginePluginError)` /
-`isinstance(exc, CapabilityDeclarationError)`, never on substring matching.
+`isinstance(exc, CapabilityDeclarationError)` /
+`isinstance(exc, CapabilityScopeError)`, never on substring matching.
 
 ## Layer rules
 

@@ -372,9 +372,10 @@ def execute(
     kwargs are a per-engine extension point."
 
     ``block_full_actions`` is accepted for Blueprint/config parity (Probe's
-    ``config.danger.allow_full_probe_actions`` leaf is SUPPORTED even though
-    Probe itself is not — see capabilities.yml) but Stage A never executes a
-    Probe module, so it is currently inert.
+    ``config.danger.allow_full_probe_actions`` leaf is declared
+    ``ignored_with_warning`` — see capabilities.yml — because Probe itself
+    is not implemented on this engine) but Stage A never executes a Probe
+    module, so it is currently inert.
 
     ``observability_store``/``handoff_spill_uris`` (Phase 81 step 3) back the
     Handoff module ONLY — see the Handoff dispatch branch below. A Manifest

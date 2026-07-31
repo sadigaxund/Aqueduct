@@ -15,6 +15,16 @@
 # A bare string is the verdict. A mapping carries `support:` plus optional
 # `requires:` (dependency version constraints, checked by `aqueduct doctor`)
 # and `hint:` (actionable text shown to the user when the leaf is refused).
+#
+# Q4 STEP 2 (see AGENTS.md + docs/specs.md §10.9): only ENGINE-SCOPED
+# `config.*` leaves appear below (17 today — genuinely dispatch through an
+# engine, e.g. probes.*, timezone, engine.spark.*). CORE config leaves
+# (webhooks.*, secrets.*, stores.*, lineage.*, most of agent.*/danger.*,
+# ...) never appear here — no engine declares a verdict for them; they run
+# only in core code paths. `lineage.*` moved to core 2026-07-31: OpenLineage
+# emission (`Surveyor.__init__`) is gated only on `openlineage_url`, no
+# engine condition — the two `supported` rows this file used to carry for
+# it were true but for the wrong reason (nothing here is Spark-specific).
 
 engine: spark
 
@@ -114,111 +124,23 @@ leaves:
     support: supported
     tests:
       - tests/test_executor/test_executor_channel.py::test_union_two_upstreams
-  config.agent.api_key: supported
-  config.agent.base_url: supported
   config.agent.block_on_explain_regression: supported
-  config.agent.budget.max_reprompts: supported
-  config.agent.budget.max_seconds: supported
-  config.agent.budget.max_tokens_total: supported
-  config.agent.budget.progress_stalled_window: supported
-  config.agent.budget.same_error_consecutive: supported
-  config.agent.budget.same_signature_overall: supported
-  config.agent.cascade: supported
-  config.agent.ci_webhook_url: supported
-  config.agent.max_chain: supported
-  config.agent.max_heal_attempts_per_hour: supported
-  config.agent.max_reprompts: supported
-  config.agent.max_tool_calls: supported
-  config.agent.memory.coaching: supported
-  config.agent.memory.replay: supported
-  config.agent.mode: supported
-  config.agent.model: supported
-  config.agent.patch_validation: supported
-  config.agent.progressive: supported
-  config.agent.prompt_context: supported
-  config.agent.provider: supported
-  config.agent.provider_options: supported
-  config.agent.regression_artifact: supported
-  config.agent.retry.backoff_seconds: supported
-  config.agent.retry.max_retries: supported
   config.agent.sandbox_master_url: supported
-  config.agent.supports_tools: supported
-  config.agent.timeout: supported
-  config.aqueduct_config: supported
   config.checkpoint_root: supported
-  config.danger.allow_command_hooks: supported
-  config.danger.allow_full_preflight: supported
   config.danger.allow_full_probe_actions: supported
-  config.danger.allow_multi_patch: supported
-  config.danger.allow_skip_sandbox: supported
   config.deployment.databricks.cluster_id: supported
   config.deployment.databricks.libraries: supported
   config.deployment.databricks.max_concurrent_runs: supported
   config.deployment.databricks.new_cluster: supported
   config.deployment.databricks.workspace_url: supported
-  config.deployment.engine: supported
-  config.deployment.env: supported
   config.deployment.target: supported
   config.engine.spark.conf: supported
   config.engine.spark.master_url: supported
-  config.handoff.keep_on_failure: supported
   config.handoff.root: supported
-  config.lineage.openlineage_namespace: supported
-  config.lineage.openlineage_url: supported
   config.metrics.use_observe: supported
   config.probes.default_sample_fraction: supported
   config.probes.max_sample_rows: supported
-  config.secrets.provider: supported
-  config.secrets.region: supported
-  config.secrets.resolver: supported
-  config.stores.benchmark.backend: supported
-  config.stores.benchmark.gate_on_regression: supported
-  config.stores.benchmark.path: supported
-  config.stores.benchmark.persist: supported
-  config.stores.blob.backend: supported
-  config.stores.blob.path: supported
-  config.stores.depots: supported
-  config.stores.observability.backend: supported
-  config.stores.observability.path: supported
   config.timezone: supported
-  config.warnings.strict: supported
-  config.warnings.suppress: supported
-  config.webhooks.on_ci_patch.backoff_seconds: supported
-  config.webhooks.on_ci_patch.headers: supported
-  config.webhooks.on_ci_patch.health_probe: supported
-  config.webhooks.on_ci_patch.max_retries: supported
-  config.webhooks.on_ci_patch.method: supported
-  config.webhooks.on_ci_patch.payload: supported
-  config.webhooks.on_ci_patch.secret: supported
-  config.webhooks.on_ci_patch.timeout: supported
-  config.webhooks.on_ci_patch.url: supported
-  config.webhooks.on_failure.backoff_seconds: supported
-  config.webhooks.on_failure.headers: supported
-  config.webhooks.on_failure.health_probe: supported
-  config.webhooks.on_failure.max_retries: supported
-  config.webhooks.on_failure.method: supported
-  config.webhooks.on_failure.payload: supported
-  config.webhooks.on_failure.secret: supported
-  config.webhooks.on_failure.timeout: supported
-  config.webhooks.on_failure.url: supported
-  config.webhooks.on_patch_pending.backoff_seconds: supported
-  config.webhooks.on_patch_pending.headers: supported
-  config.webhooks.on_patch_pending.health_probe: supported
-  config.webhooks.on_patch_pending.max_retries: supported
-  config.webhooks.on_patch_pending.method: supported
-  config.webhooks.on_patch_pending.payload: supported
-  config.webhooks.on_patch_pending.secret: supported
-  config.webhooks.on_patch_pending.timeout: supported
-  config.webhooks.on_patch_pending.url: supported
-  config.webhooks.on_success.backoff_seconds: supported
-  config.webhooks.on_success.headers: supported
-  config.webhooks.on_success.health_probe: supported
-  config.webhooks.on_success.max_retries: supported
-  config.webhooks.on_success.method: supported
-  config.webhooks.on_success.payload: supported
-  config.webhooks.on_success.secret: supported
-  config.webhooks.on_success.timeout: supported
-  config.webhooks.on_success.url: supported
   edge.field.error_types: supported
   edge.field.from_id: supported
   edge.field.port: supported

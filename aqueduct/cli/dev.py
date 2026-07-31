@@ -3,11 +3,13 @@
 `aqueduct dev capabilities scaffold|sync|check|docs` is the capability-declaration
 tooling (`aqueduct/executor/capability_tooling.py`). It used to live in
 `scripts/capabilities.py`, which is not in the wheel — so a third-party engine
-author who `pip install`ed aqueduct could not generate the 261-row capability
-table their engine cannot register without. The alternatives were hand-writing it
-or copying Spark's, and copying Spark's hands the new engine 261 `supported` rows:
-a silent claim to implement the whole grammar, which is the exact bug the
-capability framework was just fixed to prevent. So the tool ships.
+author who `pip install`ed aqueduct could not generate the ~206-row capability
+table their engine cannot register without (Spark's own checklist today; a new
+engine's is smaller still — no core `config.*` leaves, no other engine's
+`engine.<name>.*` leaves, see Q4 step 2 / `docs/specs.md` §10.9). The alternatives
+were hand-writing it or copying Spark's, and copying Spark's hands the new engine
+~206 `supported` rows: a silent claim to implement the whole grammar, which is
+the exact bug the capability framework was just fixed to prevent. So the tool ships.
 
 `dev` is a dev-tooling surface, not a runtime one — it reads and writes source
 files in a checkout of an engine package. It follows the same group conventions
@@ -94,15 +96,29 @@ def capabilities_check() -> None:
 
 
 @dev_capabilities.command("sync")
-def capabilities_sync() -> None:
-    """Append every newly-derived leaf to each engine's table as `undeclared`.
+@click.option(
+    "--no-prune",
+    "no_prune",
+    is_flag=True,
+    default=False,
+    help="Report orphaned rows instead of deleting them (the pre-Q4-step-2 behaviour).",
+)
+def capabilities_sync(no_prune: bool) -> None:
+    """Append every newly-derived leaf to each engine's table as `undeclared`;
+    prune orphaned rows.
 
-    Never invents a verdict and never deletes a row: a human decides what an
-    engine does with a new leaf, and an orphaned row is reported for review
-    rather than silently dropped. The build stays red until each `undeclared`
-    becomes a real verdict — that is the point.
+    Never invents a verdict: a human decides what an engine does with a new
+    leaf, so a new leaf is always parked at `undeclared`. An orphaned row (a
+    declared leaf id that is no longer real — renamed, removed from the
+    schema, reclassified core, or now positionally owned by a different
+    engine) is DELETED by default — it already makes the table invalid
+    (`CapabilityDeclarationError` at registration), so this command's job is
+    to leave the table valid, not just report the problem. The deletion is a
+    reviewable git diff on a data file, same as any other `sync` edit. Pass
+    `--no-prune` to fall back to report-only. The build stays red until each
+    `undeclared` becomes a real verdict — that is the point.
     """
-    reports = tooling.sync()
+    reports = tooling.sync(prune_orphans=not no_prune)
     if not reports:
         style.warn("no engine capability declarations found")
         sys.exit(exit_codes.CONFIG_ERROR)
@@ -116,10 +132,8 @@ def capabilities_sync() -> None:
             for leaf in r.missing:
                 click.echo(f"    {leaf}")
         if r.orphaned:
-            style.warn(
-                f"{rel} — {len(r.orphaned)} orphaned row(s) NOT removed "
-                "(review + delete by hand if the leaf really is gone):"
-            )
+            verb = "reported (NOT removed — --no-prune)" if no_prune else "removed"
+            style.warn(f"{rel} — {len(r.orphaned)} orphaned row(s) {verb}:")
             for leaf in r.orphaned:
                 click.echo(f"    {leaf}")
 

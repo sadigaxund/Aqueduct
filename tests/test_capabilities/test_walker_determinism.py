@@ -91,15 +91,30 @@ def test_real_config_optional_submodel_leaves_present():
     ``AgentBudgetConfig | None`` in ``aqueduct/config.py``, so its sub-leaves
     must be derived on every interpreter. Their ABSENCE is what orphaned the
     committed ``capabilities.yml`` rows and failed Spark registration below
-    3.14."""
-    from aqueduct.executor.config_leaves import all_config_leaves
+    3.14.
 
-    leaves = all_config_leaves()
+    Q4 step 2: ``config.agent.budget.*`` is a CORE leaf (untagged — the
+    budget knobs run in ``aqueduct/agent/``, never dispatched through an
+    engine), so it is asserted via ``core_config_leaves()`` rather than
+    ``all_config_leaves()`` now. ``config.deployment.databricks.cluster_id``
+    is the ENGINE-SCOPED example of the SAME PEP 604 union shape
+    (``databricks: DatabricksDeployConfig | None``) — asserted via
+    ``all_config_leaves()`` alongside it, so both sides of the tag stay
+    covered by this determinism proof."""
+    from aqueduct.executor.config_leaves import all_config_leaves, core_config_leaves
+
+    core_leaves = core_config_leaves()
+    scoped_leaves = all_config_leaves()
     # A sub-leaf reached only through the `agent.budget: AgentBudgetConfig | None`
     # PEP 604 union — the exact leaf named in the CapabilityDeclarationError.
-    assert "config.agent.budget.max_reprompts" in leaves
+    assert "config.agent.budget.max_reprompts" in core_leaves
+    assert "config.agent.budget.max_reprompts" not in scoped_leaves
     # And the parent must NOT survive as an atomic leaf (that was the buggy shape).
-    assert "config.agent.budget" not in leaves
+    assert "config.agent.budget" not in core_leaves
+    assert "config.agent.budget" not in scoped_leaves
+    # Same PEP 604 union shape, engine-scoped side (`deployment.databricks`).
+    assert "config.deployment.databricks.cluster_id" in scoped_leaves
+    assert "config.deployment.databricks.cluster_id" not in core_leaves
 
 
 def test_registered_engine_tables_match_walker_on_this_interpreter():

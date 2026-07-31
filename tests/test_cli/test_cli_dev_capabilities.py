@@ -49,7 +49,10 @@ def test_scaffold_emits_every_leaf_all_undeclared(tmp_path):
     assert result.exit_code == 0, result.output
 
     rows = _rows(out)
-    assert set(rows) == set(governed_leaves())
+    # Q4 step 2: a scaffolded engine's checklist is ITS OWN — no core leaves,
+    # no other engine's engine.<name>.* leaves (e.g. engine.spark.master_url
+    # is Spark's alone, never toyengine's to declare).
+    assert set(rows) == set(governed_leaves(engine="toyengine"))
     assert {_verdict(v) for v in rows.values()} == {Support.UNDECLARED.value}
 
     header = out.read_text(encoding="utf-8")
@@ -71,16 +74,16 @@ def test_scaffolded_engine_cannot_register_until_verdicts_are_filled_in(tmp_path
     )
 
     with pytest.raises(CapabilityDeclarationError) as exc:
-        load_declaration(out, governed_leaves())
+        load_declaration(out, governed_leaves(engine="toyengine"))
     assert "UNDECLARED" in str(exc.value)
     assert "aqueduct dev capabilities sync" in str(exc.value)
     assert "Reinstall" not in str(exc.value)  # wrong advice for this state
-    assert len(exc.value.leaves) == len(governed_leaves())
+    assert len(exc.value.leaves) == len(governed_leaves(engine="toyengine"))
 
     # …and once every row is a real verdict, the same file loads.
     text = out.read_text(encoding="utf-8").replace(": undeclared", ": unsupported")
     out.write_text(text, encoding="utf-8")
-    caps = load_declaration(out, governed_leaves())
+    caps = load_declaration(out, governed_leaves(engine="toyengine"))
     assert caps.engine == "toyengine"
     assert all(c.support is Support.UNSUPPORTED for c in caps.table.values())
 
@@ -116,7 +119,9 @@ def test_check_fails_and_names_the_gap(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     monkeypatch.setattr(tooling, "discover_declarations", lambda extra=None: [decl])
-    monkeypatch.setattr(tooling, "governed_leaves", lambda: frozenset({"feature.a", "feature.new"}))
+    monkeypatch.setattr(
+        tooling, "governed_leaves", lambda engine=None: frozenset({"feature.a", "feature.new"})
+    )
 
     result = CliRunner().invoke(cli, ["dev", "capabilities", "check"])
     assert result.exit_code == exit_codes.CONFIG_ERROR
@@ -131,7 +136,9 @@ def test_sync_appends_undeclared_and_never_invents_a_verdict(tmp_path, monkeypat
     decl = tmp_path / "capabilities.yml"
     decl.write_text("engine: toy\nleaves:\n  feature.a: supported\n", encoding="utf-8")
     monkeypatch.setattr(tooling, "discover_declarations", lambda extra=None: [decl])
-    monkeypatch.setattr(tooling, "governed_leaves", lambda: frozenset({"feature.a", "feature.new"}))
+    monkeypatch.setattr(
+        tooling, "governed_leaves", lambda engine=None: frozenset({"feature.a", "feature.new"})
+    )
 
     result = CliRunner().invoke(cli, ["dev", "capabilities", "sync"])
     assert result.exit_code == 0, result.output
@@ -146,7 +153,11 @@ def test_sync_appends_undeclared_and_never_invents_a_verdict(tmp_path, monkeypat
         load_declaration(decl, frozenset({"feature.a", "feature.new"}))
 
 
-def test_sync_reports_orphans_but_never_deletes_them(tmp_path, monkeypatch):
+def test_sync_prunes_orphans_by_default(tmp_path, monkeypatch):
+    """Q4 step 2: an orphaned row already makes the table invalid
+    (CapabilityDeclarationError at registration), so `sync` must be able to
+    produce a VALID table, not just report the problem. Default behaviour is
+    now DELETE, mechanically, via a reviewable git diff on the data file."""
     import aqueduct.executor.capability_tooling as tooling
 
     decl = tmp_path / "capabilities.yml"
@@ -155,9 +166,29 @@ def test_sync_reports_orphans_but_never_deletes_them(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     monkeypatch.setattr(tooling, "discover_declarations", lambda extra=None: [decl])
-    monkeypatch.setattr(tooling, "governed_leaves", lambda: frozenset({"feature.a"}))
+    monkeypatch.setattr(tooling, "governed_leaves", lambda engine=None: frozenset({"feature.a"}))
 
     result = CliRunner().invoke(cli, ["dev", "capabilities", "sync"])
+    assert result.exit_code == 0
+    assert "orphaned" in result.output
+    assert "removed" in result.output
+    assert "feature.ghost" not in _rows(decl)  # pruned
+    assert _rows(decl)["feature.a"] == "supported"  # survivor untouched
+
+
+def test_sync_no_prune_flag_reports_orphans_without_deleting(tmp_path, monkeypatch):
+    """`--no-prune` falls back to the pre-Q4-step-2 report-only behaviour."""
+    import aqueduct.executor.capability_tooling as tooling
+
+    decl = tmp_path / "capabilities.yml"
+    decl.write_text(
+        "engine: toy\nleaves:\n  feature.a: supported\n  feature.ghost: supported\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(tooling, "discover_declarations", lambda extra=None: [decl])
+    monkeypatch.setattr(tooling, "governed_leaves", lambda engine=None: frozenset({"feature.a"}))
+
+    result = CliRunner().invoke(cli, ["dev", "capabilities", "sync", "--no-prune"])
     assert result.exit_code == 0
     assert "orphaned" in result.output
     assert "feature.ghost" in _rows(decl)  # a rename gets reviewed, not silently dropped

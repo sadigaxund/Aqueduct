@@ -110,5 +110,36 @@ class CapabilityDeclarationError(AqueductError):
         self.leaves = list(leaves or [])
 
 
+class CapabilityScopeError(AqueductError):
+    """Raised when a ``config.*`` leaf's engine-scoping is undecided (Q4 step 2).
+
+    A SIBLING of ``CapabilityDeclarationError`` — both are direct
+    ``AqueductError`` subclasses, deliberately NOT one derived from the other
+    — so ``except CapabilityDeclarationError:`` (e.g. ``aqueduct/doctor/
+    checks_io.py``) cannot silently swallow this and re-conflate the two.
+    They are different states with three DIFFERENT fixes:
+
+      - ``EnginePluginError``: the ``aqueduct.engines`` entry point failed to
+        IMPORT. Fix: reinstall.
+      - ``CapabilityDeclarationError``: a governed leaf has no row / an
+        ``undeclared`` row / an orphaned row / an illegal verdict. Fix: run
+        ``aqueduct dev capabilities sync`` and declare a verdict.
+      - ``CapabilityScopeError`` (this one): a ``config.*`` leaf living under
+        an ``engine.<name>.*`` block has no
+        ``Field(..., json_schema_extra={"engine_scoped": True})`` tag in
+        ``aqueduct/config.py``. There is no valid "core" reading for a field
+        namespaced to exactly one engine, so the walker
+        (``aqueduct/executor/config_leaves.py``) raises this at REGISTRATION
+        TIME (import of each engine's ``capabilities.py``, which calls
+        ``all_config_leaves(engine=...)``) — never CI-only. Fix: either tag
+        the field ``engine_scoped: True`` (if it is genuinely engine-scoped),
+        or, for a field NOT under ``engine.<name>.*``, decide whether it
+        dispatches through an engine (tag it) or only ever executes in core
+        code paths (leave it untagged — untagged means core).
+
+    Raised by ``aqueduct.executor.config_leaves``.
+    """
+
+
 class ConfigError(AqueductError):
     """Raised when aqueduct.yml cannot be loaded or fails validation."""

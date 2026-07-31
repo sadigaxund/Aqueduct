@@ -14,11 +14,29 @@
 #     egress.mode.*, egress.on_new_columns.*, junction.mode.*, funnel.mode.*,
 #     module.type.*, feature.*): `supported` only with a real handler AND a
 #     test exercising it on DuckDB.
-#   - ENGINE-INVARIANT leaves (agent.*, config.agent.*, config.webhooks.*,
-#     hooks.*, retry_policy.*, backoff.*, edge.*, udf.field.*,
-#     module.field.*, warnings.*, most config.*): `supported` because core
-#     orchestration handles them identically regardless of engine and the
-#     executor never touches them — proven by end-to-end tests, not assumed.
+#   - ENGINE-INVARIANT grammar leaves (agent.*, hooks.*, retry_policy.*,
+#     backoff.*, edge.*, udf.field.*, module.field.*, warnings.*): `supported`
+#     because core orchestration handles them identically regardless of
+#     engine and the executor never touches them — proven by end-to-end
+#     tests, not assumed.
+#
+# Q4 STEP 2 (see AGENTS.md + docs/specs.md §10.9): the CHECKLIST below only
+# ever lists ENGINE-SCOPED `config.*` leaves (those genuinely dispatch
+# through an engine — probes.*, metrics.use_observe, timezone,
+# checkpoint_root, deployment.target/databricks.*, handoff.root,
+# agent.sandbox_master_url, agent.block_on_explain_regression,
+# danger.allow_full_probe_actions). CORE config leaves (config.webhooks.*,
+# config.secrets.*, config.stores.*, config.lineage.*, most of
+# config.agent.*/config.danger.*, ...) never appear here at all — no engine
+# declares a verdict for them, because they run in core code paths with no
+# per-engine implementation to diverge from. `config.lineage.*` was
+# corrected to CORE 2026-07-31: OpenLineage emission is built in
+# `Surveyor.__init__` gated only on `openlineage_url`, with no engine
+# condition — a DuckDB run emits OpenLineage events exactly like Spark, so
+# the two `ignored_with_warning` rows this file used to carry for
+# `lineage.openlineage_url`/`openlineage_namespace` were false claims and
+# are now gone. `engine.spark.*` leaves are Spark's own and never appear
+# here either — positionally owned by exactly one engine.
 #
 # STAGE A scope (see AGENTS.md maintenance playbook + the Phase 78 brief):
 #   Ingress:  read_parquet / read_csv / read_json only.
@@ -152,47 +170,16 @@ leaves:
       - tests/test_executor_duckdb/test_executor.py::test_channel_union
 
   # ── Engine config (aqueduct.yml) ─────────────────────────────────────────
-  config.agent.api_key: supported
-  config.agent.base_url: supported
   config.agent.block_on_explain_regression:
     support: unsupported
     hint: "relies on the Spark explain()-plan snapshot gate; no DuckDB equivalent implemented."
-  config.agent.budget.max_reprompts: supported
-  config.agent.budget.max_seconds: supported
-  config.agent.budget.max_tokens_total: supported
-  config.agent.budget.progress_stalled_window: supported
-  config.agent.budget.same_error_consecutive: supported
-  config.agent.budget.same_signature_overall: supported
-  config.agent.cascade: supported
-  config.agent.ci_webhook_url: supported
-  config.agent.max_chain: supported
-  config.agent.max_heal_attempts_per_hour: supported
-  config.agent.max_reprompts: supported
-  config.agent.max_tool_calls: supported
-  config.agent.memory.coaching: supported
-  config.agent.memory.replay: supported
-  config.agent.mode: supported
-  config.agent.model: supported
-  config.agent.patch_validation: supported
-  config.agent.progressive: supported
-  config.agent.prompt_context: supported
-  config.agent.provider: supported
-  config.agent.provider_options: supported
-  config.agent.regression_artifact: supported
-  config.agent.retry.backoff_seconds: supported
-  config.agent.retry.max_retries: supported
   config.agent.sandbox_master_url:
     support: unsupported
     hint: "sandbox_master_url pins a Spark master URL for the patch-preview sandbox session; DuckDB has no cluster master to pin (single-process, always local)."
-  config.agent.supports_tools: supported
-  config.agent.timeout: supported
-  config.aqueduct_config: supported
   config.checkpoint_root: supported
-  config.danger.allow_command_hooks: supported
-  config.danger.allow_full_preflight: supported
-  config.danger.allow_full_probe_actions: supported
-  config.danger.allow_multi_patch: supported
-  config.danger.allow_skip_sandbox: supported
+  config.danger.allow_full_probe_actions:
+    support: ignored_with_warning
+    hint: "Probe (module.type.Probe) is not implemented on DuckDB, so the full-vs-sampled probe-action gate it would configure is inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
   config.deployment.databricks.cluster_id:
     support: unsupported
     hint: "single-node engine — schedule the container on one node. Databricks is a Spark deployment target."
@@ -208,25 +195,10 @@ leaves:
   config.deployment.databricks.workspace_url:
     support: unsupported
     hint: "single-node engine — schedule the container on one node. Databricks is a Spark deployment target."
-  config.deployment.engine: supported
-  config.deployment.env: supported
   config.deployment.target:
     support: supported
     hint: "DuckDB is a single-node engine — only target=local is meaningful. Remote-submit / cluster targets (databricks, emr, dataproc, yarn, kubernetes, standalone) have no DuckDB execution path; use the spark engine for those."
-  config.engine.spark.conf:
-    support: ignored_with_warning
-    hint: "engine.spark.conf configures a SparkSession that does not exist here; ignored. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
-  config.engine.spark.master_url:
-    support: ignored_with_warning
-    hint: "DuckDB is single-process and has no cluster master to submit to; master_url is ignored. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
-  config.handoff.keep_on_failure: supported
   config.handoff.root: supported
-  config.lineage.openlineage_namespace:
-    support: ignored_with_warning
-    hint: "the DuckDB executor does not emit OpenLineage events; the namespace key is accepted but inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
-  config.lineage.openlineage_url:
-    support: ignored_with_warning
-    hint: "the DuckDB executor does not emit OpenLineage events; the URL key is accepted but inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
   config.metrics.use_observe:
     support: unsupported
     hint: "use_observe toggles Spark's Observation API (a SparkListener-driven zero-cost row-count mechanism); DuckDB has no equivalent listener hook. Module metrics are collected directly from relation execution instead, unconditionally."
@@ -236,57 +208,7 @@ leaves:
   config.probes.max_sample_rows:
     support: ignored_with_warning
     hint: "Probe (module.type.Probe) is not implemented on DuckDB, so the sample-row cap it would configure is inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
-  config.secrets.provider: supported
-  config.secrets.region: supported
-  config.secrets.resolver: supported
-  config.stores.benchmark.backend: supported
-  config.stores.benchmark.gate_on_regression: supported
-  config.stores.benchmark.path: supported
-  config.stores.benchmark.persist: supported
-  config.stores.blob.backend: supported
-  config.stores.blob.path: supported
-  config.stores.depots: supported
-  config.stores.observability.backend: supported
-  config.stores.observability.path: supported
   config.timezone: supported
-  config.warnings.strict: supported
-  config.warnings.suppress: supported
-  config.webhooks.on_ci_patch.backoff_seconds: supported
-  config.webhooks.on_ci_patch.headers: supported
-  config.webhooks.on_ci_patch.health_probe: supported
-  config.webhooks.on_ci_patch.max_retries: supported
-  config.webhooks.on_ci_patch.method: supported
-  config.webhooks.on_ci_patch.payload: supported
-  config.webhooks.on_ci_patch.secret: supported
-  config.webhooks.on_ci_patch.timeout: supported
-  config.webhooks.on_ci_patch.url: supported
-  config.webhooks.on_failure.backoff_seconds: supported
-  config.webhooks.on_failure.headers: supported
-  config.webhooks.on_failure.health_probe: supported
-  config.webhooks.on_failure.max_retries: supported
-  config.webhooks.on_failure.method: supported
-  config.webhooks.on_failure.payload: supported
-  config.webhooks.on_failure.secret: supported
-  config.webhooks.on_failure.timeout: supported
-  config.webhooks.on_failure.url: supported
-  config.webhooks.on_patch_pending.backoff_seconds: supported
-  config.webhooks.on_patch_pending.headers: supported
-  config.webhooks.on_patch_pending.health_probe: supported
-  config.webhooks.on_patch_pending.max_retries: supported
-  config.webhooks.on_patch_pending.method: supported
-  config.webhooks.on_patch_pending.payload: supported
-  config.webhooks.on_patch_pending.secret: supported
-  config.webhooks.on_patch_pending.timeout: supported
-  config.webhooks.on_patch_pending.url: supported
-  config.webhooks.on_success.backoff_seconds: supported
-  config.webhooks.on_success.headers: supported
-  config.webhooks.on_success.health_probe: supported
-  config.webhooks.on_success.max_retries: supported
-  config.webhooks.on_success.method: supported
-  config.webhooks.on_success.payload: supported
-  config.webhooks.on_success.secret: supported
-  config.webhooks.on_success.timeout: supported
-  config.webhooks.on_success.url: supported
 
   # ── Edges / spillway routing — pure filters, engine-independent ─────────
   edge.field.error_types: supported

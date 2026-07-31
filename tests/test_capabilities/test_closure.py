@@ -36,10 +36,17 @@ from aqueduct.executor.capability_leaves import all_leaves
 from aqueduct.executor.config_leaves import all_config_leaves
 
 
-def _all_governed_leaves() -> frozenset[str]:
+def _all_governed_leaves(engine: str | None = None) -> frozenset[str]:
     """Blueprint grammar leaves ∪ engine-config leaves — the combined set
-    every registered engine's declaration must be a total function over."""
-    return all_leaves() | all_config_leaves()
+    every registered engine's declaration must be a total function over.
+
+    Q4 step 2: ``all_config_leaves()`` narrows to ENGINE-SCOPED config leaves
+    only (core leaves — webhooks/secrets/stores/most agent/danger/... — leave
+    the checklist entirely), and an ``engine.<name>.*`` leaf is only ever
+    governed for ITS OWN engine — pass ``engine`` to get one declaration's
+    real checklist; omit it only for whole-framework spot checks.
+    """
+    return all_leaves() | all_config_leaves(engine=engine)
 
 
 _REPO = Path(__file__).resolve().parents[2]
@@ -54,6 +61,14 @@ _DECLARATIONS = sorted((_REPO / "aqueduct" / "executor").glob("*/capabilities.ym
 def _declared_rows(path: Path) -> dict:
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     return raw.get("leaves") or {}
+
+
+def _engine_of(path: Path) -> str:
+    """The ``engine:`` field of a declaration — same reader as
+    ``capability_tooling._engine_name``, duplicated here (tiny, pure) to
+    avoid pulling the whole tooling module into this pure-closure test."""
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return str(raw.get("engine") or path.parent.name)
 
 
 def _verdict_of(row) -> str:
@@ -155,7 +170,7 @@ def test_every_leaf_has_a_verdict(decl_path):
          sees names the offending leaf instead of an import error.
     """
     rows = _declared_rows(decl_path)
-    leaves = _all_governed_leaves()
+    leaves = _all_governed_leaves(engine=_engine_of(decl_path))
     missing = sorted(leaves - set(rows))
     undeclared = sorted(k for k, v in rows.items() if _verdict_of(v) == Support.UNDECLARED.value)
     assert not missing and not undeclared, (
@@ -173,7 +188,7 @@ def test_every_leaf_has_a_verdict(decl_path):
 def test_every_verdict_key_is_a_real_leaf(decl_path):
     """Reverse direction: every declared row must be a real derived leaf."""
     rows = _declared_rows(decl_path)
-    leaves = _all_governed_leaves()
+    leaves = _all_governed_leaves(engine=_engine_of(decl_path))
     orphaned = sorted(set(rows) - leaves)
     assert not orphaned, (
         f"{decl_path.name} declares capability verdicts for leaf ids that don't exist in "
@@ -209,10 +224,11 @@ def test_declaration_has_no_default_sweep():
 
 
 def test_spark_declares_every_leaf_explicitly():
-    """Spark's table is ~261 explicit rows, not a swept default. Guards the
-    row count against silently collapsing back to a generated table."""
+    """Spark's table is ~208 explicit rows (189 grammar + 19 engine-scoped
+    config, Q4 step 2), not a swept default. Guards the row count against
+    silently collapsing back to a generated table."""
     rows = _declared_rows(_REPO / "aqueduct" / "executor" / "spark" / "capabilities.yml")
-    assert len(rows) == len(_all_governed_leaves())
+    assert len(rows) == len(_all_governed_leaves(engine="spark"))
     assert len(rows) > 200  # sanity floor — grammar + config is not tiny
 
 
@@ -233,23 +249,60 @@ def test_all_config_leaves_deterministic():
 
 
 def test_all_config_leaves_nonempty():
-    assert len(all_config_leaves()) > 50  # sanity floor — aqueduct.yml is not tiny
+    # Q4 step 2 narrowed the checklist to ENGINE-SCOPED leaves only (~19 of
+    # 105) — sanity floor lowered accordingly; see test_core_config_leaves_*
+    # for the (much larger) core complement.
+    assert len(all_config_leaves()) > 10
+
+
+def test_core_config_leaves_nonempty():
+    from aqueduct.executor.config_leaves import core_config_leaves
+
+    assert len(core_config_leaves()) > 50  # sanity floor — most of aqueduct.yml is core
 
 
 def test_all_config_leaves_contains_known_examples():
-    """Spot-check leaf ids the brief calls out by name, so a naming-scheme
-    refactor is a deliberate, visible test update rather than a silent drift."""
+    """Spot-check ENGINE-SCOPED leaf ids the brief calls out by name, so a
+    naming-scheme refactor is a deliberate, visible test update rather than
+    a silent drift. Q4 step 2: ``all_config_leaves()`` (no engine filter)
+    only ever contains TAGGED (engine-scoped) leaves — core leaves like
+    ``config.deployment.engine`` / ``config.stores.observability.backend``
+    moved to ``core_config_leaves()``, see the test below."""
     leaves = all_config_leaves()
     for expected in (
         "config.engine.spark.master_url",
         "config.deployment.target",
-        "config.deployment.engine",
         "config.agent.sandbox_master_url",
-        "config.stores.observability.backend",
         "config.checkpoint_root",
         "config.engine.spark.conf",
+        "config.probes.max_sample_rows",
+        "config.timezone",
     ):
-        assert expected in leaves, f"expected config leaf {expected!r} not derived"
+        assert expected in leaves, f"expected engine-scoped config leaf {expected!r} not derived"
+
+
+def test_core_config_leaves_contains_known_examples():
+    """Spot-check CORE leaf ids — the complement of ``all_config_leaves()``,
+    same tag, so the two cannot drift apart (see
+    ``aqueduct/executor/config_leaves.py``)."""
+    from aqueduct.executor.config_leaves import core_config_leaves
+
+    core = core_config_leaves()
+    for expected in (
+        "config.deployment.engine",
+        "config.deployment.env",
+        "config.stores.observability.backend",
+        "config.webhooks.on_failure.url",
+        "config.secrets.provider",
+        "config.handoff.keep_on_failure",
+    ):
+        assert expected in core, f"expected core config leaf {expected!r} not derived"
+    # And the engine-scoped/core split is a true partition of the full set.
+    from aqueduct.config import AqueductConfig
+    from aqueduct.executor.config_leaves import leaves_for_model
+
+    assert core & all_config_leaves() == frozenset()
+    assert core | all_config_leaves() == leaves_for_model(AqueductConfig)
 
 
 def test_config_leaves_do_not_collide_with_grammar_leaves():
@@ -273,13 +326,19 @@ def test_config_leaves_do_not_collide_with_grammar_leaves():
 
 def _plant(monkeypatch, leaf_id: str) -> None:
     """Make the real governed-leaf set contain one extra leaf, as if a
-    developer had just added a field to parser/schema.py or config.py."""
+    developer had just added a field to parser/schema.py or config.py.
+
+    The planted ``config.*`` leaf is NOT under ``engine.<name>.*``, so it is
+    added unconditionally regardless of the (now per-engine) ``engine=``
+    filter — the point of this test is the closure/registration guard, not
+    the engine.<name>.* positional-scoping mechanism (covered separately).
+    """
     import aqueduct.executor.capability_leaves as cl
     import aqueduct.executor.config_leaves as cfgl
 
     if leaf_id.startswith("config."):
         real = cfgl.all_config_leaves()
-        monkeypatch.setattr(cfgl, "all_config_leaves", lambda: real | {leaf_id})
+        monkeypatch.setattr(cfgl, "all_config_leaves", lambda engine=None: real | {leaf_id})
     else:
         real = cl.all_leaves()
         monkeypatch.setattr(cl, "all_leaves", lambda: real | {leaf_id})
@@ -305,11 +364,13 @@ def test_closure_fails_on_a_planted_leaf_with_no_verdict(monkeypatch, planted):
     import aqueduct.executor.capability_leaves as cl
     import aqueduct.executor.config_leaves as cfgl
 
-    governed = cl.all_leaves() | cfgl.all_config_leaves()
-    assert planted in governed  # the plant took effect
+    assert planted in (cl.all_leaves() | cfgl.all_config_leaves())  # the plant took effect
 
     for decl_path in _DECLARATIONS:
         rows = _declared_rows(decl_path)
+        # Per-engine governed set (Q4 step 2) — this declaration's REAL
+        # checklist, not the cross-engine union.
+        governed = cl.all_leaves() | cfgl.all_config_leaves(engine=_engine_of(decl_path))
         missing = sorted(governed - set(rows))
         assert planted in missing, (
             f"{decl_path.name} silently accepted a brand-new leaf {planted!r} with no "
@@ -332,7 +393,7 @@ def test_registration_hard_fails_on_a_planted_leaf(planted):
     from aqueduct.executor.capabilities import load_declaration
     from aqueduct.executor.spark.capabilities import DECLARATION_PATH
 
-    governed = _all_governed_leaves() | {planted}
+    governed = _all_governed_leaves(engine="spark") | {planted}
     with pytest.raises(CapabilityDeclarationError) as exc:
         load_declaration(DECLARATION_PATH, governed)
     assert planted in str(exc.value)
@@ -400,7 +461,10 @@ def test_scaffold_generates_a_complete_all_undeclared_table(tmp_path):
     assert result.exit_code == 0, result.output
 
     rows = _declared_rows(out)
-    governed = _all_governed_leaves()
+    # Q4 step 2: scaffold(engine="toyengine") emits THAT engine's own
+    # checklist — no core leaves, no other engine's engine.<name>.* leaves
+    # (e.g. Spark's engine.spark.master_url is never toyengine's to declare).
+    governed = _all_governed_leaves(engine="toyengine")
     assert set(rows) == set(governed), "scaffold must emit every governed leaf"
     verdicts = {_verdict_of(v) for v in rows.values()}
     assert verdicts == {Support.UNDECLARED.value}, (

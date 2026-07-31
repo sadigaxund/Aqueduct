@@ -28,8 +28,8 @@ Each engine declares a verdict for every capability leaf in a YAML data file shi
 
 | Engine | Leaves declared | Supported | Version-gated | Ignored with warning | Unsupported |
 |---|---|---|---|---|---|
-| `duckdb` | 294 | 249 | 0 | 6 | 39 |
-| `spark` | 294 | 293 | 7 | 0 | 1 |
+| `duckdb` | 204 | 162 | 0 | 3 | 39 |
+| `spark` | 206 | 205 | 7 | 0 | 1 |
 
 ### Conditional and refused capabilities
 
@@ -43,15 +43,12 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 | `duckdb` | `channel.op.repartition` | unsupported | — | op=repartition is a Spark physical-partition-count hint; DuckDB has no partition concept to repartition. Not applicable. |
 | `duckdb` | `config.agent.block_on_explain_regression` | unsupported | — | relies on the Spark explain()-plan snapshot gate; no DuckDB equivalent implemented. |
 | `duckdb` | `config.agent.sandbox_master_url` | unsupported | — | sandbox_master_url pins a Spark master URL for the patch-preview sandbox session; DuckDB has no cluster master to pin (single-process, always local). |
+| `duckdb` | `config.danger.allow_full_probe_actions` | ignored_with_warning | — | Probe (module.type.Probe) is not implemented on DuckDB, so the full-vs-sampled probe-action gate it would configure is inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines. |
 | `duckdb` | `config.deployment.databricks.cluster_id` | unsupported | — | single-node engine — schedule the container on one node. Databricks is a Spark deployment target. |
 | `duckdb` | `config.deployment.databricks.libraries` | unsupported | — | single-node engine — schedule the container on one node. Databricks is a Spark deployment target. |
 | `duckdb` | `config.deployment.databricks.max_concurrent_runs` | unsupported | — | single-node engine — schedule the container on one node. Databricks is a Spark deployment target. |
 | `duckdb` | `config.deployment.databricks.new_cluster` | unsupported | — | single-node engine — schedule the container on one node. Databricks is a Spark deployment target. |
 | `duckdb` | `config.deployment.databricks.workspace_url` | unsupported | — | single-node engine — schedule the container on one node. Databricks is a Spark deployment target. |
-| `duckdb` | `config.engine.spark.conf` | ignored_with_warning | — | engine.spark.conf configures a SparkSession that does not exist here; ignored. Kept as a valid key so the same aqueduct.yml works unmodified on both engines. |
-| `duckdb` | `config.engine.spark.master_url` | ignored_with_warning | — | DuckDB is single-process and has no cluster master to submit to; master_url is ignored. Kept as a valid key so the same aqueduct.yml works unmodified on both engines. |
-| `duckdb` | `config.lineage.openlineage_namespace` | ignored_with_warning | — | the DuckDB executor does not emit OpenLineage events; the namespace key is accepted but inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines. |
-| `duckdb` | `config.lineage.openlineage_url` | ignored_with_warning | — | the DuckDB executor does not emit OpenLineage events; the URL key is accepted but inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines. |
 | `duckdb` | `config.metrics.use_observe` | unsupported | — | use_observe toggles Spark's Observation API (a SparkListener-driven zero-cost row-count mechanism); DuckDB has no equivalent listener hook. Module metrics are collected directly from relation execution instead, unconditionally. |
 | `duckdb` | `config.probes.default_sample_fraction` | ignored_with_warning | — | Probe (module.type.Probe) is not implemented on DuckDB, so the sample-fraction knob it would configure is inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines. |
 | `duckdb` | `config.probes.max_sample_rows` | ignored_with_warning | — | Probe (module.type.Probe) is not implemented on DuckDB, so the sample-row cap it would configure is inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines. |

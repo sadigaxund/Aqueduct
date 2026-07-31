@@ -15,10 +15,14 @@ only), ``sync`` (append newly-derived leaves as ``undeclared``), ``scaffold``
 **Why it lives in the package and not in ``scripts/``.** ``scripts/`` is not in
 the wheel (``[tool.hatch.build.targets.wheel] packages = ["aqueduct"]``), so a
 third-party engine author who ``pip install``s aqueduct had no way to generate
-the table their engine cannot register without — and the table is 294 rows, so
-the alternatives are hand-writing it or copying Spark's (which hands the new
-engine 294 ``supported`` rows: a silent claim to implement the entire grammar,
-the exact blindness this framework exists to prevent). The CLI surface is
+the table their engine cannot register without — and Spark's table alone is
+206 rows (189 grammar + its own 17 engine-scoped config leaves; a NEW
+engine's own checklist is smaller still — no core leaves, no other engine's
+``engine.<name>.*`` leaves, see ``config_leaves.py`` / Q4 step 2), so the
+alternatives are hand-writing it or copying Spark's (which hands the new
+engine ~206 ``supported`` rows: a silent claim to implement the entire
+grammar, the exact blindness this framework exists to prevent). The CLI
+surface is
 ``aqueduct dev capabilities …`` (``aqueduct/cli/dev.py``); ``scripts/capabilities.py``
 is a thin wrapper over this module so there is exactly one implementation.
 
@@ -31,6 +35,7 @@ from __future__ import annotations
 import ast
 import importlib.metadata
 import importlib.util
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -124,9 +129,20 @@ def resolve_test_id(test_id: str, repo_root: Path | None = None) -> tuple[bool, 
     return False, f"unrecognized node id shape: {test_id!r}"
 
 
-def governed_leaves() -> frozenset[str]:
-    """Blueprint-grammar leaves ∪ engine-config leaves — the checklist."""
-    return all_leaves() | all_config_leaves()
+def governed_leaves(engine: str | None = None) -> frozenset[str]:
+    """Blueprint-grammar leaves ∪ engine-config leaves — the checklist.
+
+    Q4 step 2: ``all_config_leaves()`` now yields only ``engine_scoped: True``
+    config leaves (core config leaves — webhooks, secrets, stores, most of
+    agent/danger, ... — leave the checklist entirely, see
+    ``aqueduct/executor/config_leaves.py``). ``engine`` threads through to
+    ``all_config_leaves(engine=...)`` so an ``engine.<name>.*`` leaf appears
+    ONLY in that engine's own checklist — positionally owned, never asked of
+    another engine. ``engine=None`` returns the full engine-scoped union
+    (every engine's ``engine.<name>.*`` leaves included) — used for
+    reference/spot-check purposes, never for validating one engine's table.
+    """
+    return all_leaves() | all_config_leaves(engine=engine)
 
 
 # ── declaration discovery ─────────────────────────────────────────────────────
@@ -249,11 +265,17 @@ def check(paths: list[Path] | None = None) -> list[DeclarationReport]:
     does not resolve against the real test tree (``resolve_test_id``) is
     ``dangling_test_links``. Both are informational — see ``DeclarationReport``
     docstring for why they do not flip ``.ok``.
+
+    Q4 step 2: the governed-leaf checklist is now PER-ENGINE (an
+    ``engine.<name>.*`` leaf is only ever checked against ITS OWN engine's
+    declaration — see ``governed_leaves()``), so it is recomputed inside the
+    loop from each declaration's own ``engine:`` field rather than once
+    up front.
     """
-    leaves = governed_leaves()
     exec_leaves = execution_leaves()
     reports: list[DeclarationReport] = []
     for path in paths if paths is not None else discover_declarations():
+        leaves = governed_leaves(engine=_engine_name(path))
         rows = load_rows(path)
         missing_test_links: list[str] = []
         dangling_test_links: list[tuple[str, str, str]] = []
@@ -282,22 +304,77 @@ def check(paths: list[Path] | None = None) -> list[DeclarationReport]:
 
 # ── sync ──────────────────────────────────────────────────────────────────────
 
+# Matches a top-level ``leaves:`` row key line: exactly two leading spaces,
+# the dotted leaf id, a colon (bare-verdict or mapping-opening). Used only by
+# `_remove_leaf_rows` to find/delete a row's block by text surgery — the
+# declaration is otherwise treated as opaque YAML (loaded via `yaml.safe_load`
+# everywhere else in this module).
+_ROW_KEY_RE = re.compile(r"^  ([A-Za-z0-9_.]+):")
 
-def sync(paths: list[Path] | None = None) -> list[DeclarationReport]:
-    """Append every missing leaf to each declaration as ``undeclared``.
 
-    Deliberately NEVER writes a real verdict and never removes a row — a human
-    decides what an engine does with a new leaf. Orphaned rows are reported, not
-    deleted, so a rename is reviewed rather than silently dropped.
+def _remove_leaf_rows(text: str, leaf_ids: set[str]) -> str:
+    """Delete each named leaf's row (and its mapping-form continuation lines,
+    if any) from a ``capabilities.yml``'s text, leaving everything else —
+    including section-header comments — untouched.
 
-    Returns the PRE-sync reports (what was appended / what is orphaned).
+    A row is its ``  <leaf_id>:`` line plus every immediately-following line
+    indented four spaces or more (``support:``/``requires:``/``hint:``/
+    ``tests:``/``- <item>``). A blank line always ends a row's continuation,
+    so a comment block or the next row is never accidentally swallowed.
+    """
+    if not leaf_ids:
+        return text
+    out: list[str] = []
+    removing = False
+    for line in text.split("\n"):
+        m = _ROW_KEY_RE.match(line)
+        if m is not None:
+            removing = m.group(1) in leaf_ids
+            if removing:
+                continue
+        elif removing:
+            if line.strip() and line.startswith("    "):
+                continue
+            removing = False
+        out.append(line)
+    return "\n".join(out)
+
+
+def sync(paths: list[Path] | None = None, *, prune_orphans: bool = True) -> list[DeclarationReport]:
+    """Append every missing leaf as ``undeclared``; prune orphaned rows.
+
+    Deliberately NEVER writes a real verdict — a human decides what an engine
+    does with a new leaf; new leaves are always parked at the ``undeclared``
+    sentinel.
+
+    ``prune_orphans`` (default True): an orphaned row (a declared leaf id
+    that is no longer a real capability leaf — renamed, removed from the
+    schema, reclassified core, or now positionally owned by a DIFFERENT
+    engine after Q4 step 2's ``engine.<name>.*`` scoping) already makes the
+    declaration invalid (``CapabilityDeclarationError`` at registration), so
+    the tooling must be able to produce a valid table rather than only
+    reporting the problem. Deletion is a mechanical text edit
+    (``_remove_leaf_rows``) reviewable as an ordinary git diff on a DATA
+    file, same as any other ``sync`` edit. Pass ``prune_orphans=False`` to
+    fall back to report-only for orphans (the pre-Q4-step-2 behaviour).
+
+    Returns the PRE-sync reports (what was appended / pruned / is orphaned).
     """
     reports = check(paths)
     for r in reports:
+        text = r.path.read_text(encoding="utf-8")
+        changed = False
+        if prune_orphans and r.orphaned:
+            new_text = _remove_leaf_rows(text, set(r.orphaned))
+            if new_text != text:
+                text = new_text
+                changed = True
         if r.missing:
-            text = r.path.read_text(encoding="utf-8").rstrip("\n")
             block = "\n".join(f"  {leaf}: {UNDECLARED}" for leaf in r.missing)
-            r.path.write_text(f"{text}\n{block}\n", encoding="utf-8")
+            text = f"{text.rstrip(chr(10))}\n{block}\n"
+            changed = True
+        if changed:
+            r.path.write_text(text, encoding="utf-8")
     return reports
 
 
@@ -353,9 +430,14 @@ def scaffold(engine: str, out: Path | str | None = None, force: bool = False) ->
 
     This is the answer to "how do I implement a new engine". Not a static
     template (it would go stale the moment the grammar changed) and emphatically
-    not "copy Spark's table" (that inherits ~261 ``supported`` rows — a new
+    not "copy Spark's table" (that inherits ~206 ``supported`` rows — a new
     engine silently claiming to support everything). Generated from the walkers,
     so it cannot drift and cannot smuggle in a default verdict.
+
+    Q4 step 2: uses ``governed_leaves(engine=engine)`` — the new engine's own
+    checklist only. A core config leaf never appears (no engine declares a
+    verdict for webhook backoff); another engine's ``engine.<name>.*`` leaves
+    never appear either (positionally not this engine's to declare).
 
     Raises:
         FileExistsError: ``out`` exists and ``force`` is False.
@@ -368,7 +450,7 @@ def scaffold(engine: str, out: Path | str | None = None, force: bool = False) ->
     if target.exists() and not force:
         raise FileExistsError(target)
 
-    leaves = sorted(governed_leaves())
+    leaves = sorted(governed_leaves(engine=engine))
     body = "".join(f"  {leaf}: {UNDECLARED}\n" for leaf in leaves)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(SCAFFOLD_HEADER.format(engine=engine, n=len(leaves)) + body, encoding="utf-8")
@@ -377,7 +459,7 @@ def scaffold(engine: str, out: Path | str | None = None, force: bool = False) ->
         engine=engine,
         leaves=len(leaves),
         grammar_leaves=len(all_leaves()),
-        config_leaves=len(all_config_leaves()),
+        config_leaves=len(all_config_leaves(engine=engine)),
     )
 
 
@@ -388,7 +470,7 @@ def render_matrix(paths: list[Path] | None = None) -> str:
     """Render the engine capability matrix FROM THE DECLARATIONS.
 
     The YAML is the source of truth, so this is generated, not hand-maintained.
-    A 261-row table per engine would be noise, so the matrix reports the summary
+    A ~200-row table per engine would be noise, so the matrix reports the summary
     (verdict counts per engine) plus every row that is NOT a plain unconditional
     ``supported`` — the version-gated, ignored, and unsupported leaves are
     exactly the ones a user needs to know about.

@@ -23,7 +23,10 @@ from aqueduct.executor.config_leaves import all_config_leaves
 
 DECLARATION_PATH = Path(__file__).with_name("capabilities.yml")
 
-_ALL_LEAVES = all_leaves() | all_config_leaves()
+# Q4 step 2: `all_config_leaves(engine="duckdb")` — DuckDB's own engine-scoped
+# config checklist only (core config leaves and Spark's `engine.spark.*`
+# leaves never appear; see aqueduct/executor/config_leaves.py).
+_ALL_LEAVES = all_leaves() | all_config_leaves(engine="duckdb")
 
 DUCKDB = load_declaration(DECLARATION_PATH, _ALL_LEAVES)
 

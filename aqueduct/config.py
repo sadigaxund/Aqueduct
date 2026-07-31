@@ -82,23 +82,28 @@ class DatabricksDeployConfig(BaseModel):
     workspace_url: str = Field(
         ...,
         description="Databricks workspace URL, e.g. https://dbc-xxxx.cloud.databricks.com",
+        json_schema_extra={"engine_scoped": True},
     )
     cluster_id: str | None = Field(
         default=None,
         description="Existing all-purpose cluster ID. Mutually exclusive with new_cluster.",
+        json_schema_extra={"engine_scoped": True},
     )
     new_cluster: dict | None = Field(
         default=None,
         description="Raw cluster-creation spec per the Databricks Jobs API new_cluster object. "
                     "Mutually exclusive with cluster_id.",
+        json_schema_extra={"engine_scoped": True},
     )
     libraries: list[dict] | None = Field(
         default=None,
         description="Libraries to install on the cluster, e.g. [{'pypi': {'package': 'aqueduct-core[spark]'}}].",
+        json_schema_extra={"engine_scoped": True},
     )
     max_concurrent_runs: int | None = Field(
         default=1,
         description="Maximum concurrent runs for the generated one-shot job.",
+        json_schema_extra={"engine_scoped": True},
     )
 
     @model_validator(mode="after")
@@ -124,16 +129,19 @@ class DeploymentConfig(BaseModel):
             "through the aqueduct.engines entry-point group (see "
             "docs/specs.md §10.9) — today just spark."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
     target: Literal[
         "local", "standalone", "yarn", "kubernetes", "databricks", "emr", "dataproc"
     ] = Field(
         default="local",
         description="Deployment target: local | standalone | yarn | kubernetes | databricks | emr | dataproc",
+        json_schema_extra={"engine_scoped": True},
     )
     env: Literal["local", "cluster", "cloud"] = Field(
         default="local",
         description="Deployment environment tier. Doctor warns on local paths in cluster/cloud mode.",
+        json_schema_extra={"engine_scoped": False},
     )
 
     @model_validator(mode="after")
@@ -233,6 +241,7 @@ class RelationalStoreConfig(BaseModel):
             "DSN — supports concurrent writers across multiple driver "
             "processes. `s3 | gcs | adls` are deferred (TODOs.md Phase 28+)."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
     path: Annotated[str, FsPath()] | None = Field(
         default=None,
@@ -246,6 +255,7 @@ class RelationalStoreConfig(BaseModel):
             "store). Postgres: libpq DSN such as "
             "`postgresql://user:pass@host/aqueduct_db`."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
 
     @model_validator(mode="after")
@@ -344,6 +354,7 @@ class ObjectStoreConfig(BaseModel):
             "writes to the driver filesystem. `s3` / `gcs` / `adls` route through "
             "fsspec (requires the `[object-store]` extra)."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
     path: Annotated[str, FsPath()] = Field(
         default="",
@@ -352,6 +363,7 @@ class ObjectStoreConfig(BaseModel):
             "default: blobs under the observability dir, patches under cwd). "
             "`s3` / `gcs` / `adls`: base URI such as `s3://bucket/aqueduct`."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
 
 
@@ -370,6 +382,7 @@ class BenchmarkStoreConfig(BaseModel):
     backend: RelationalBackend = Field(
         default="duckdb",
         description="`duckdb` (default, embedded file) or `postgres` (networked DSN).",
+        json_schema_extra={"engine_scoped": False},
     )
     path: str | None = Field(
         default=None,
@@ -378,10 +391,12 @@ class BenchmarkStoreConfig(BaseModel):
             "`.aqueduct/benchmark.duckdb`). Postgres: libpq DSN. Not FsPath-"
             "anchored — the CLI resolves the scenario-relative default."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
     persist: bool = Field(
         default=True,
         description="Write each (scenario, model) row to the store. False = the old `--no-persist`.",
+        json_schema_extra={"engine_scoped": False},
     )
     gate_on_regression: bool = Field(
         default=False,
@@ -389,6 +404,7 @@ class BenchmarkStoreConfig(BaseModel):
             "After persisting, diff each (scenario, model) vs its baseline and "
             "exit non-zero on any regression. The old `--gate-on-regression`."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
 
 
@@ -466,6 +482,7 @@ class StoresConfig(BaseModel):
             "for cross-blueprint (raw-key) sharing. Override a mount with "
             "`--set stores.depots.<name>.backend=…`."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
 
     def default_depot(self) -> DepotMountConfig:
@@ -553,14 +570,21 @@ class MetricsConfig(BaseModel):
             "codegen, at the cost of less accurate per-module attribution "
             "(stage fusion groups consecutive modules into one stage)."
         ),
+        json_schema_extra={"engine_scoped": True},
     )
 
 
 class ProbesConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    max_sample_rows: int = Field(default=100, ge=1, description="Maximum rows to sample in probes (>= 1)")
-    default_sample_fraction: float = Field(default=0.1, gt=0, le=1, description="Default sampling fraction (0 < x <= 1)")
+    max_sample_rows: int = Field(
+        default=100, ge=1, description="Maximum rows to sample in probes (>= 1)",
+        json_schema_extra={"engine_scoped": True},
+    )
+    default_sample_fraction: float = Field(
+        default=0.1, gt=0, le=1, description="Default sampling fraction (0 < x <= 1)",
+        json_schema_extra={"engine_scoped": True},
+    )
     # Full probe actions are gated by `danger.allow_full_probe_actions` (inverted polarity).
 
 
@@ -570,6 +594,7 @@ class DangerConfig(BaseModel):
     allow_full_probe_actions: bool = Field(
         default=False,
         description="Allow full Spark actions in Probes (row_count, freshness). Default false = safe.",
+        json_schema_extra={"engine_scoped": True},
     )
     # `allow_multi_patch` gates the multi-patch loop (max_patches > 1).
     allow_multi_patch: bool = Field(
@@ -578,6 +603,7 @@ class DangerConfig(BaseModel):
             "Allow `max_patches > 1` — the multi-patch reprompt loop. Auto-applies "
             "successive LLM patches without human review until success or budget exhaustion."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
     allow_full_preflight: bool = Field(
         default=False,
@@ -585,6 +611,7 @@ class DangerConfig(BaseModel):
             "Allow agent.sandbox_mode: preflight — full-dataset sandbox replay "
             "(no Egress writes). Slow but conclusive. Default false = safe."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
     allow_skip_sandbox: bool = Field(
         default=False,
@@ -594,6 +621,7 @@ class DangerConfig(BaseModel):
             "Most dangerous; combine with approval: auto + max_patches > 1 "
             "only when you fully trust the model and blueprint scope is tiny."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
     allow_command_hooks: bool = Field(
         default=False,
@@ -605,6 +633,7 @@ class DangerConfig(BaseModel):
             "entries are declarative and never gated. Default false = command "
             "hooks are skipped with a warning."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
 
 
@@ -614,16 +643,19 @@ class SecretsConfig(BaseModel):
     provider: str = Field(
         default="env",
         description="Secrets provider: env | aws | gcp | azure | custom",
+        json_schema_extra={"engine_scoped": False},
     )
     region: str | None = Field(
         default=None,
         description="Cloud region for aws/gcp/azure providers (e.g. 'us-east-1').",
+        json_schema_extra={"engine_scoped": False},
     )
     resolver: str | None = Field(
         default=None,
         description="Dotted import path for custom provider: 'mypackage.secrets.fetch'. "
                     "Callable signature: (key: str) -> str | None. "
                     "Return None to fall back to os.environ.",
+        json_schema_extra={"engine_scoped": False},
     )
 
 
@@ -638,12 +670,12 @@ class AgentBudgetConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    max_reprompts: int = 5
-    max_seconds: float = 120.0
-    max_tokens_total: int | None = 50_000
-    same_error_consecutive: int = 2
-    same_signature_overall: int = 3
-    progress_stalled_window: int = 3
+    max_reprompts: int = Field(default=5, json_schema_extra={"engine_scoped": False})
+    max_seconds: float = Field(default=120.0, json_schema_extra={"engine_scoped": False})
+    max_tokens_total: int | None = Field(default=50_000, json_schema_extra={"engine_scoped": False})
+    same_error_consecutive: int = Field(default=2, json_schema_extra={"engine_scoped": False})
+    same_signature_overall: int = Field(default=3, json_schema_extra={"engine_scoped": False})
+    progress_stalled_window: int = Field(default=3, json_schema_extra={"engine_scoped": False})
 
 
 class AgentRetryConfig(BaseModel):
@@ -661,10 +693,12 @@ class AgentRetryConfig(BaseModel):
     max_retries: int = Field(
         default=2, ge=0,
         description="Extra attempts after the first call on 429/503/529. 0 disables retry.",
+        json_schema_extra={"engine_scoped": False},
     )
     backoff_seconds: float = Field(
         default=2.0, gt=0,
         description="Base backoff; attempt N sleeps ~backoff_seconds * 2^N (+ jitter), capped by the remaining budget deadline.",
+        json_schema_extra={"engine_scoped": False},
     )
 
 
@@ -685,10 +719,12 @@ class AgentMemoryConfig(BaseModel):
     replay: bool = Field(
         default=True,
         description="Zero-token reuse of pending/archived patches matching the failure signature.",
+        json_schema_extra={"engine_scoped": False},
     )
     coaching: bool = Field(
         default=True,
         description="Signature-matched (failure → validated fix) few-shot examples in the heal prompt.",
+        json_schema_extra={"engine_scoped": False},
     )
 
 
@@ -701,9 +737,11 @@ class AgentConnectionConfig(BaseModel):
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    provider: Literal["anthropic", "openai_compat"] = "anthropic"
-    base_url: str | None = None
-    model: str = DEFAULT_LLM_MODEL
+    provider: Literal["anthropic", "openai_compat"] = Field(
+        default="anthropic", json_schema_extra={"engine_scoped": False},
+    )
+    base_url: str | None = Field(default=None, json_schema_extra={"engine_scoped": False})
+    model: str = Field(default=DEFAULT_LLM_MODEL, json_schema_extra={"engine_scoped": False})
     api_key: str | None = Field(
         default=None,
         description=(
@@ -713,6 +751,7 @@ class AgentConnectionConfig(BaseModel):
             "a literal triggers an insecure-config warning and is redacted "
             "from logs and LLM payloads."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
     cascade: list[CascadeTierSchema] | None = Field(
         default=None,
@@ -723,8 +762,11 @@ class AgentConnectionConfig(BaseModel):
             "overrides this default. The engine cascade does NOT support the "
             "model: [list] shorthand — use an explicit list of tiers."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
-    provider_options: dict[str, Any] | None = None
+    provider_options: dict[str, Any] | None = Field(
+        default=None, json_schema_extra={"engine_scoped": False},
+    )
     timeout: float = Field(
         default=300.0,
         gt=0,
@@ -736,19 +778,23 @@ class AgentConnectionConfig(BaseModel):
             "them. Increase to 600+ for very large local models, or set "
             "explicitly to 120 to restore the pre-1.0.3 behaviour."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
     max_reprompts: int = Field(
         default=3,
         ge=1,
         description="Max reprompt attempts when the agent returns invalid PatchSpec JSON.",
+        json_schema_extra={"engine_scoped": False},
     )
     prompt_context: str | None = Field(
         default=None,
         description="Extra context appended to the LLM system prompt for all blueprints. Use for cluster constraints, naming conventions, schema hints.",
+        json_schema_extra={"engine_scoped": False},
     )
     ci_webhook_url: str | None = Field(
         default=None,
         description="Webhook URL for approval: ci. POST target for external CI to create PR.",
+        json_schema_extra={"engine_scoped": False},
     )
     max_heal_attempts_per_hour: int | None = Field(
         default=None,
@@ -759,6 +805,7 @@ class AgentConnectionConfig(BaseModel):
             "and skips further LLM calls when the count is reached. Defaults to "
             "None (unlimited). Per-blueprint override: agent.max_heal_attempts_per_hour."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
     patch_validation: Literal["full_run", "sandbox"] = Field(
         default="full_run",
@@ -769,6 +816,7 @@ class AgentConnectionConfig(BaseModel):
             "only if both pass. `sandbox`: sandbox replay only; write on sandbox "
             "pass. Per-blueprint override: agent.patch_validation."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
     budget: AgentBudgetConfig | None = Field(
         default=None,
@@ -789,6 +837,7 @@ class AgentConnectionConfig(BaseModel):
             "rejected instead of merely warned. Default False — the explain gate is "
             "warn-only across all healing modes, preserving current behaviour."
         ),
+        json_schema_extra={"engine_scoped": True},
     )
     sandbox_master_url: str | None = Field(
         default=None,
@@ -799,6 +848,7 @@ class AgentConnectionConfig(BaseModel):
             "to run sandbox on a cluster when your blueprint is too large for "
             "a single driver node."
         ),
+        json_schema_extra={"engine_scoped": True},
     )
     memory: AgentMemoryConfig = Field(
         default_factory=AgentMemoryConfig,
@@ -832,6 +882,7 @@ class AgentConnectionConfig(BaseModel):
             "to synthesize fixture rows from, or a multi-module patch). "
             "Default False. Per-blueprint override: agent.regression_artifact."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
     mode: Literal["oneshot", "agentic"] = Field(
         default="oneshot",
@@ -844,6 +895,7 @@ class AgentConnectionConfig(BaseModel):
             "answering with a PatchSpec — see docs/specs.md §8.11. "
             "Per-blueprint override: agent.mode."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
     max_tool_calls: int = Field(
         default=8,
@@ -853,6 +905,7 @@ class AgentConnectionConfig(BaseModel):
             "Exceeding it forces the model to answer with a PatchSpec on a "
             "final no-tools turn. Per-blueprint override: agent.max_tool_calls."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
     supports_tools: Literal["auto", True, False] = Field(
         default="auto",
@@ -866,6 +919,7 @@ class AgentConnectionConfig(BaseModel):
             "to skip the probe. Per-blueprint / per-cascade-tier override: "
             "agent.supports_tools / cascade tier supports_tools."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
     progressive: bool = Field(
         default=False,
@@ -885,6 +939,7 @@ class AgentConnectionConfig(BaseModel):
             "otherwise — each link's advancement test IS the sandbox "
             "gate). Default False. Per-blueprint override: agent.progressive."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
     max_chain: int = Field(
         default=3,
@@ -896,6 +951,7 @@ class AgentConnectionConfig(BaseModel):
             "`agent.progressive: true`. Default 3. Per-blueprint override: "
             "agent.max_chain."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
 
 
@@ -920,11 +976,16 @@ class WebhookEndpointConfig(BaseModel):
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    url: str = Field(..., description="HTTP(S) endpoint URL")
-    method: Literal["POST", "PUT", "PATCH"] = "POST"
+    url: str = Field(
+        ..., description="HTTP(S) endpoint URL", json_schema_extra={"engine_scoped": False},
+    )
+    method: Literal["POST", "PUT", "PATCH"] = Field(
+        default="POST", json_schema_extra={"engine_scoped": False},
+    )
     headers: dict[str, str] = Field(
         default_factory=dict,
         description="Additional HTTP headers. Values may contain ${ENV_VAR} tokens.",
+        json_schema_extra={"engine_scoped": False},
     )
     payload: dict[str, Any] | None = Field(
         default=None,
@@ -932,8 +993,12 @@ class WebhookEndpointConfig(BaseModel):
             "Custom payload template. Values may contain ${VAR} tokens. "
             "If null, the full FailureContext JSON is sent as-is."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
-    timeout: int = Field(default=10, ge=1, description="HTTP socket timeout in seconds (>= 1)")
+    timeout: int = Field(
+        default=10, ge=1, description="HTTP socket timeout in seconds (>= 1)",
+        json_schema_extra={"engine_scoped": False},
+    )
     secret: str | None = Field(
         default=None,
         description=(
@@ -942,6 +1007,7 @@ class WebhookEndpointConfig(BaseModel):
             "receiver can verify payload authenticity and integrity. The digest "
             "is computed over the exact request body. May contain ${ENV_VAR} tokens."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
     max_retries: int = Field(
         default=1,
@@ -950,11 +1016,13 @@ class WebhookEndpointConfig(BaseModel):
             "Retries beyond the first attempt on transient failures "
             "(429/500/502/503/504 or network errors). 0 disables retry."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
     backoff_seconds: float = Field(
         default=2.0,
         gt=0,
         description="Base backoff between retries; exponential (base * 2**(n-1)) when max_retries > 1.",
+        json_schema_extra={"engine_scoped": False},
     )
     health_probe: Literal["connect", "options", "full"] = Field(
         default="options",
@@ -967,6 +1035,7 @@ class WebhookEndpointConfig(BaseModel):
             "consumer-side side effects on endpoints that react to any "
             "request body."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
 
 
@@ -1018,6 +1087,7 @@ class WarningsConfig(BaseModel):
             "`AQ-WARN [...]` prefix). The single entry `\"*\"` silences ALL "
             "Aqueduct warnings."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
     # Phase 79 — the escalation counterpart to `suppress`: rule_ids listed
     # here are promoted from warning to a hard CompileError instead of being
@@ -1032,6 +1102,7 @@ class WarningsConfig(BaseModel):
             "CompileError. Default empty (warn-only, current behaviour). "
             "Symmetric with `suppress` — same rule_id vocabulary."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
 
 
@@ -1044,6 +1115,14 @@ class LineageConfig(BaseModel):
     configures *emission* of OpenLineage run events.
 
     When `openlineage_url` is unset (default), no events are emitted — zero cost.
+
+    CORE, not engine-scoped (Q4 step 2, corrected 2026-07-31): the emitter is
+    built in `Surveyor.__init__` (`aqueduct/surveyor/surveyor.py`) gated only
+    on `openlineage_url` being set — no engine condition anywhere. Emission
+    (START/COMPLETE/FAIL) and the column-level `columnLineage` facet are both
+    derived from compile-time lineage (sqlglot) and delivered via
+    `infra/http.py`; no engine module reads either key. A DuckDB run emits
+    OpenLineage events exactly like a Spark run.
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -1051,10 +1130,13 @@ class LineageConfig(BaseModel):
         default=None,
         description="OpenLineage receiver endpoint (Marquez / DataHub / Atlan). "
                     "POST target for run events. Unset → emission disabled.",
+        json_schema_extra={"engine_scoped": False},
     )
     openlineage_namespace: str = Field(
         default="aqueduct",
-        description="OpenLineage namespace for jobs and datasets emitted by this engine.",
+        description="OpenLineage namespace for jobs and datasets emitted by this run "
+                    "(engine-independent — see class docstring).",
+        json_schema_extra={"engine_scoped": False},
     )
 
 
@@ -1076,6 +1158,7 @@ class SparkEngineConfig(BaseModel):
             "Spark cluster URL (SparkSession.builder.master()). Moved from "
             "deployment.master_url in 2.0."
         ),
+        json_schema_extra={"engine_scoped": True},
     )
     conf: dict[str, Any] = Field(
         default_factory=dict,
@@ -1084,6 +1167,7 @@ class SparkEngineConfig(BaseModel):
             "Blueprint's own engine.spark.conf (Blueprint wins). Replaces "
             "the pre-2.0 top-level spark_config dict."
         ),
+        json_schema_extra={"engine_scoped": True},
     )
 
 
@@ -1151,6 +1235,7 @@ class HandoffConfig(BaseModel):
             "abfss://, ...). Unlike `checkpoint_root`, remote URI schemes "
             "are NOT rejected here."
         ),
+        json_schema_extra={"engine_scoped": True},
     )
     keep_on_failure: bool = Field(
         default=True,
@@ -1161,6 +1246,7 @@ class HandoffConfig(BaseModel):
             "it. When false, spill directories are removed regardless of "
             "outcome."
         ),
+        json_schema_extra={"engine_scoped": False},
     )
 
 
@@ -1175,7 +1261,10 @@ class AqueductConfig(BaseModel):
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    aqueduct_config: str = Field(default="2.0", description="Config schema version")
+    aqueduct_config: str = Field(
+        default="2.0", description="Config schema version",
+        json_schema_extra={"engine_scoped": False},
+    )
     deployment: DeploymentConfig = Field(default_factory=DeploymentConfig)
     engine: EngineConfig = Field(default_factory=EngineConfig)
     stores: StoresConfig = Field(default_factory=StoresConfig)
@@ -1197,6 +1286,7 @@ class AqueductConfig(BaseModel):
             "gs://, hdfs://, abfss://, ...) are rejected at config-load; see "
             "docs/roadmap.md 'Remote-Filesystem Checkpoint Root'."
         ),
+        json_schema_extra={"engine_scoped": True},
     )
     timezone: str | None = Field(
         default=None,
@@ -1213,6 +1303,7 @@ class AqueductConfig(BaseModel):
             "that engine, and Aqueduct warns (rule_id "
             "'engine_timezone_conflict') when the two disagree."
         ),
+        json_schema_extra={"engine_scoped": True},
     )
 
     @field_validator("checkpoint_root")

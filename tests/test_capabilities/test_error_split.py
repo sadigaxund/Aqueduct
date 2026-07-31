@@ -15,7 +15,12 @@ from __future__ import annotations
 
 import pytest
 
-from aqueduct.errors import AqueductError, CapabilityDeclarationError, EnginePluginError
+from aqueduct.errors import (
+    AqueductError,
+    CapabilityDeclarationError,
+    CapabilityScopeError,
+    EnginePluginError,
+)
 from aqueduct.executor.capabilities import load_declaration
 
 pytestmark = pytest.mark.unit
@@ -50,6 +55,21 @@ def test_both_are_aqueduct_errors_but_distinct_types():
     assert issubclass(CapabilityDeclarationError, AqueductError)
     assert not issubclass(CapabilityDeclarationError, EnginePluginError)
     assert not issubclass(EnginePluginError, CapabilityDeclarationError)
+
+
+def test_capability_scope_error_is_a_sibling_not_a_subclass():
+    """Q4 step 2's THIRD error type (a config.* leaf's engine-scoping is
+    undecided — see aqueduct/errors.py::CapabilityScopeError). It must be a
+    direct AqueductError subclass, deliberately NOT derived from
+    CapabilityDeclarationError, so a `except CapabilityDeclarationError:`
+    site (aqueduct/doctor/checks_io.py) cannot swallow it and re-conflate
+    the two — the same mistake this file's docstring records for the
+    EnginePluginError/CapabilityDeclarationError split."""
+    assert issubclass(CapabilityScopeError, AqueductError)
+    assert not issubclass(CapabilityScopeError, CapabilityDeclarationError)
+    assert not issubclass(CapabilityDeclarationError, CapabilityScopeError)
+    assert not issubclass(CapabilityScopeError, EnginePluginError)
+    assert not issubclass(EnginePluginError, CapabilityScopeError)
 
 
 def test_failed_entry_point_import_is_an_engine_plugin_error(monkeypatch, _reset_engine_load_cache):
@@ -177,3 +197,134 @@ def test_doctor_reports_a_declaration_error_as_fail_not_a_blueprint_skip(monkeyp
     results = checks_io.check_capabilities(bp, engine="spark")
     assert [r.status for r in results] == ["fail"]
     assert "feature.b" in results[0].detail
+
+
+# ── Q4 step 2 — CapabilityScopeError (the third state) ─────────────────────
+
+
+def test_capability_scope_error_raised_for_any_untagged_field():
+    """The general form (mandatory, not just the engine.<name>.* case): ANY
+    config.* field with no explicit engine_scoped tag raises — there is no
+    'untagged means core' fallback anywhere. A field with neither True nor
+    False is nobody's decision, and that must be loud everywhere in the
+    model, not only inside a per-engine block."""
+    from pydantic import BaseModel, ConfigDict, Field
+
+    from aqueduct.executor import config_leaves as cfgl
+
+    class _UntaggedTopLevel(BaseModel):
+        model_config = ConfigDict(frozen=True, extra="forbid")
+        knob: int = 1  # no engine_scoped tag at all, and NOT under engine.<name>.*
+
+    with pytest.raises(CapabilityScopeError) as exc:
+        cfgl._walk_tagged(_UntaggedTopLevel, "config", (_UntaggedTopLevel,), False)
+    assert "config.knob" in str(exc.value)
+    assert "engine_scoped" in str(exc.value)
+    assert "True" in str(exc.value) and "False" in str(exc.value)  # both resolutions named
+
+
+def test_capability_scope_error_raised_for_false_tagged_engine_block_field():
+    """The contradiction form: a field under engine.<name>.* CANNOT be
+    engine_scoped: False either — there is no valid 'core' reading for
+    something namespaced to exactly one engine."""
+    from pydantic import BaseModel, ConfigDict, Field
+
+    from aqueduct.executor import config_leaves as cfgl
+
+    class _FalseTaggedEngineBlock(BaseModel):
+        model_config = ConfigDict(frozen=True, extra="forbid")
+        memory_limit: str = Field(
+            default="2GB", json_schema_extra={"engine_scoped": False},
+        )
+
+    class _EngineRouting(BaseModel):
+        model_config = ConfigDict(frozen=True, extra="forbid")
+        duckdb: _FalseTaggedEngineBlock = Field(default_factory=_FalseTaggedEngineBlock)
+
+    class _FakeConfig(BaseModel):
+        model_config = ConfigDict(frozen=True, extra="forbid")
+        engine: _EngineRouting = Field(default_factory=_EngineRouting)
+
+    with pytest.raises(CapabilityScopeError) as exc:
+        cfgl._walk_tagged(_FakeConfig, "config", (_FakeConfig,), False)
+    assert "config.engine.duckdb.memory_limit" in str(exc.value)
+    assert "engine_scoped: False" in str(exc.value)
+    assert "contradiction" in str(exc.value)
+
+
+def test_capability_scope_error_raised_for_untagged_engine_block_field():
+    """The walker-level guard (aqueduct/executor/config_leaves.py): a field
+    discovered under an `engine.<name>.*` block with no
+    `engine_scoped: True` tag has no valid 'core' reading (it is namespaced
+    to exactly one engine), so it raises at the WALKER — never CI-only.
+    Fires at real registration time via `all_config_leaves(engine=...)`,
+    which every engine's `capabilities.py` calls at import."""
+    from pydantic import BaseModel, ConfigDict, Field
+
+    from aqueduct.executor import config_leaves as cfgl
+
+    class _UntaggedEngineBlock(BaseModel):
+        model_config = ConfigDict(frozen=True, extra="forbid")
+        memory_limit: str = Field(default="2GB")  # no engine_scoped tag — the bug
+
+    class _EngineRouting(BaseModel):
+        model_config = ConfigDict(frozen=True, extra="forbid")
+        duckdb: _UntaggedEngineBlock = Field(default_factory=_UntaggedEngineBlock)
+
+    class _FakeConfig(BaseModel):
+        model_config = ConfigDict(frozen=True, extra="forbid")
+        engine: _EngineRouting = Field(default_factory=_EngineRouting)
+
+    with pytest.raises(CapabilityScopeError) as exc:
+        cfgl._walk_tagged(_FakeConfig, "config", (_FakeConfig,), False)
+    assert "config.engine.duckdb.memory_limit" in str(exc.value)
+    assert "engine_scoped" in str(exc.value)
+
+
+def test_capability_scope_error_names_a_valid_resolution():
+    """Both legal fixes are named, per the hard constraint on this error."""
+    from pydantic import BaseModel, ConfigDict, Field
+
+    from aqueduct.executor import config_leaves as cfgl
+
+    class _Untagged(BaseModel):
+        model_config = ConfigDict(frozen=True, extra="forbid")
+        knob: int = 1
+
+    class _Routing(BaseModel):
+        model_config = ConfigDict(frozen=True, extra="forbid")
+        toy: _Untagged = Field(default_factory=_Untagged)
+
+    class _Cfg(BaseModel):
+        model_config = ConfigDict(frozen=True, extra="forbid")
+        engine: _Routing = Field(default_factory=_Routing)
+
+    with pytest.raises(CapabilityScopeError) as exc:
+        cfgl._walk_tagged(_Cfg, "config", (_Cfg,), False)
+    msg = str(exc.value)
+    assert "config.engine.toy.knob" in msg
+    assert "engine_scoped: True" in msg  # resolution 1: tag it
+
+
+def test_doctor_reports_a_scope_error_as_fail_not_a_blueprint_skip(monkeypatch, tmp_path):
+    """Mirrors ``test_doctor_reports_a_declaration_error_as_fail_not_a_blueprint_skip``
+    for the third error type — a shared handler is fine (same response
+    shape), silent conflation into the broad `except Exception` catch-all
+    (which files it as 'blueprint did not parse/compile', a `skip`) is not."""
+    from aqueduct.doctor import checks_io
+
+    bp = tmp_path / "blueprint.yml"
+    bp.write_text("aqueduct: '1.0'\npipeline:\n  name: p\nmodules: []\n", encoding="utf-8")
+
+    def _boom(*a, **kw):
+        raise CapabilityScopeError(
+            "'config.engine.duckdb.memory_limit' lives under an engine.<name>.* "
+            "block but carries no engine_scoped tag. Tag it engine_scoped: True."
+        )
+
+    monkeypatch.setattr("aqueduct.parser.parser.parse", _boom)
+
+    results = checks_io.check_capabilities(bp, engine="spark")
+    assert [r.status for r in results] == ["fail"]
+    assert "memory_limit" in results[0].detail
+    assert "engine_scoped" in results[0].detail

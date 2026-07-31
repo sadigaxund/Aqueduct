@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.38: Reference Document**
+**Version 2.39: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -1744,7 +1744,10 @@ Two adjacent failure modes get their own diagnosis:
 
 - **No engines registered at all.** An empty registry means aqueduct's own entry points are invisible to `importlib.metadata`, in practice a stale install whose metadata predates the entry-point declaration. Since engine validation is fail-closed, that state would otherwise hard-fail every `aqueduct.yml` load with a misleading "Registered engines: []". The error says what it actually is: reinstall the package.
 - **A broken engine plugin.** An `aqueduct.engines` entry point that fails to import raises `EnginePluginError` (an `AqueductError`) naming the entry point, its target, and the underlying cause. A half-installed third-party engine surfaces as a clean Aqueduct error, not as a raw `ImportError` out of config loading. The plugin is broken or half-present, so the message ends in reinstall advice.
-- **An incomplete or invalid declaration.** A `capabilities.yml` with a leaf that has no row, a row still on `undeclared`, a row naming a leaf that does not exist, an illegal verdict, or a malformed version specifier raises `CapabilityDeclarationError` (an `AqueductError`). This is a dev-time build failure, typically a developer who has just added a schema key that every engine now owes a verdict for, so reinstalling the package fixes nothing. The message names the offending leaves (also carried on the exception as `.leaves`) and gives the fix that works: run `aqueduct dev capabilities sync`, then declare a verdict per engine. These two states are distinguished by exception type, never by matching message text.
+- **An incomplete or invalid declaration.** A `capabilities.yml` with a leaf that has no row, a row still on `undeclared`, a row naming a leaf that does not exist, an illegal verdict, or a malformed version specifier raises `CapabilityDeclarationError` (an `AqueductError`). This is a dev-time build failure, typically a developer who has just added a schema key that every engine now owes a verdict for, so reinstalling the package fixes nothing. The message names the offending leaves (also carried on the exception as `.leaves`) and gives the fix that works: run `aqueduct dev capabilities sync`, then declare a verdict per engine.
+- **An undecided config-leaf scope.** A `config.*` field living under an `engine.<name>.*` block with no `engine_scoped: True` tag raises `CapabilityScopeError` (an `AqueductError`, a SIBLING of `CapabilityDeclarationError` — deliberately not a subclass, so a shared `except CapabilityDeclarationError:` cannot swallow it). See "Config-leaf scoping" below. Raised by the walker at every engine's registration time, never CI-only.
+
+These three states are distinguished by exception type, never by matching message text.
 
 ### Verdicts
 
@@ -1763,11 +1766,45 @@ An engine earns `supported` rather than assuming it. For a leaf the engine execu
 
 ### Declarations are data, one explicit row per leaf
 
-Each engine ships a YAML capability declaration alongside its package (`aqueduct/executor/spark/capabilities.yml`, `aqueduct/executor/duckdb_/capabilities.yml`) carrying one row for every capability leaf: a verdict, plus the optional `requires` constraint and `hint` text. Both files currently hold 294 rows: 189 Blueprint-grammar leaves and 105 engine-config leaves.
+Each engine ships a YAML capability declaration alongside its package (`aqueduct/executor/spark/capabilities.yml`, `aqueduct/executor/duckdb_/capabilities.yml`) carrying one row for every capability leaf: a verdict, plus the optional `requires` constraint and `hint` text. Spark's file holds 206 rows (189 Blueprint-grammar leaves + 17 engine-scoped config leaves); DuckDB's holds 204 (189 + 15 — two of Spark's are `engine.spark.*`, positionally not DuckDB's to declare; see "Config-leaf scoping" below). Every engine's table also has ~88 config leaves it is never asked about at all — see that section for why the two counts differ from a single flat total.
 
 There is no default-verdict sweep. An engine states which leaves it supports, one row at a time, and never "everything, by assumption". A third-party engine author ships reviewable data rather than Python.
 
 `load_declaration()` hard-validates the file at registration and raises `CapabilityDeclarationError` on: a row for a leaf that does not exist (a typo or a stale rename), an illegal verdict string, a malformed version specifier, a leaf with **no row at all**, or a row still parked on `undeclared`. An engine cannot register half-declared.
+
+### Config-leaf scoping
+
+Blueprint-grammar leaves (`module.type.*`, `channel.op.*`, formats, modes, `feature.*`) are engine-invariant by construction: every registered engine declares every one, because whether an engine can run a module type or a Channel op is genuinely a question every engine has to answer. `config.*` leaves — the `aqueduct.yml` surface — are not all that shape. Of the 105 `config.*` leaves `AqueductConfig` derives, ~88 run entirely in core code paths (`webhooks.*`, `secrets.*`, `stores.*`, `lineage.*`, most of `agent.*`, most of `danger.*`, …) that never dispatch through an engine at all: asking DuckDB whether it "supports" webhook retry backoff is a category error, not a governance win, and the framework used to force an answer anyway because the closure test needed something to compare against.
+
+This is a **scoping** change, not a fourth verdict: `Support` stays `supported` / `unsupported` / `ignored_with_warning` / `undeclared`, and `verdict()` callers are unchanged in meaning. What changes is the **checklist** — which leaves an engine is asked about at all.
+
+**The tag is mandatory and explicit — there is no "untagged means core" default.** Every `config.*` field carries `json_schema_extra={"engine_scoped": True}` or `{"engine_scoped": False}` in `aqueduct/config.py`:
+
+```python
+max_sample_rows: int = Field(..., json_schema_extra={"engine_scoped": True})
+api_key: str | None = Field(..., json_schema_extra={"engine_scoped": False})
+```
+
+A field carrying **neither** key raises `CapabilityScopeError` naming the field and both legal resolutions, the moment the walker runs. An earlier design let an absent tag fall back to "core" implicitly; that was rejected — it let a brand-new field (or a genuinely engine-scoped one someone forgot to mark) disappear into the core bucket with nobody deciding, silently deleting the `engine_key_ignored` warning path it should have had. Requiring the `False` half explicitly is what makes "core" a decision instead of an omission. `aqueduct/executor/config_leaves.py::all_config_leaves()` yields the `True`-tagged fields (the checklist every engine must have a verdict for); `core_config_leaves()` yields the `False`-tagged complement (leaves that never appear in any engine's table at all — not a question that gets asked). Both are derived from the SAME per-field tag, so they cannot drift apart, and no committed snapshot file exists to go stale either — see "Why no snapshot file" below. Reclassifying a key is now a one-word `True`↔`False` diff at the field itself, reviewable in a pull request — the property the dropped snapshot file existed to provide.
+
+**`engine.<name>.*` is positionally owned.** A leaf under a per-engine namespaced block (`engine.spark.master_url`, `engine.spark.conf`, and any future `engine.duckdb.*`) can only ever mean something to that ONE engine, so it appears ONLY in that engine's own checklist — `all_config_leaves(engine="spark")` excludes every other engine's `engine.<name>.*` leaves, and `capability_tooling.governed_leaves(engine=...)` threads the same filter through `check`/`sync`/`scaffold`/`docs`. Spark's table therefore has 206 rows (189 grammar + 17 engine-scoped config, including its own two `engine.spark.*` leaves) and DuckDB's has 204 (189 + 15 — the same 17 minus Spark's two). Because a field namespaced to one engine has no coherent "core" reading, a field discovered there tagged `False` (or untagged) is ALSO a contradiction and raises `CapabilityScopeError` at the walker.
+
+**Why no snapshot file.** An earlier design considered committing a generated `core_config_leaves.yml` and diffing it in CI, the same pattern `docs/compatibility.md` uses. It was dropped: the per-field tag already IS the single source of truth, and it sits AT the field it describes rather than in a generated copy. What replaces the snapshot is one build-enforced invariant plus a check that already existed:
+
+| someone does this | caught by | how loud |
+| :- | :- | :- |
+| untags a key some engine declared `unsupported`/`ignored_with_warning` | the invariant test (`tests/test_capabilities/test_config_scope_invariant.py`) | red build, names the leaf |
+| untags a key but leaves the rows behind | the existing orphaned-row check (`dev capabilities check`) | red build, names the leaf |
+| untags a key every engine declared `supported` | nothing, and nothing needs to — a `supported` verdict emits no warning, so there was no warning path to delete | inert by construction |
+| adds a config field anywhere, forgets the tag | the walker raises `CapabilityScopeError` naming the field | every command fails locally |
+| tags a field under `engine.<name>.*` as `False` (or leaves it untagged) | the walker raises `CapabilityScopeError` — a contradiction, not a valid state | every command fails locally |
+| tags a new field `True` | new `undeclared` rows | red build |
+
+The load-bearing row is the first: a leaf some engine declares non-`supported` has a live user-visible warning path (`_warn_ignored_config_keys` emits `engine_key_ignored` for any explicitly-set leaf whose verdict isn't `SUPPORTED`). Reclassifying such a leaf to core would silently delete that warning path with nothing else noticing — the only keys whose reclassification can destroy user-visible behavior are exactly the keys the invariant test forbids reclassifying.
+
+**Corrected classification, 2026-07-31: `config.lineage.*` is CORE, not engine-scoped.** OpenLineage emission is built in `Surveyor.__init__` (`aqueduct/surveyor/surveyor.py`) gated only on `openlineage_url` being set, with no engine condition anywhere; emission (START/COMPLETE/FAIL) and the column-level `columnLineage` facet are both derived from compile-time lineage (sqlglot) and delivered via `infra/http.py` — no engine module reads either key. A DuckDB run emits OpenLineage events exactly like a Spark run. Both engines' declarations previously carried a verdict for `lineage.openlineage_url`/`openlineage_namespace` (Spark `supported`, DuckDB `ignored_with_warning` with a hint claiming "the DuckDB executor does not emit OpenLineage events") — that hint was false, and both rows are now gone from both tables; the leaves left the checklist entirely.
+
+**`explicitly_set_config_leaves()` is narrowed too.** `aqueduct/config.py::load_config()` calls it to find which leaves the user actually wrote, then calls `caps.verdict(leaf_id)` for each; once a core leaf leaves the checklist there is no row for it in any engine's table, so this walker narrows to the same tag — otherwise it would ask `verdict()` about an id no engine declares.
 
 ### Where the per-engine differences are published
 
@@ -1882,13 +1919,13 @@ Reading the YAML from disk rather than from the loaded registry is what makes th
 
 `aqueduct dev capabilities check` reports drift without writing, which is what CI runs. `aqueduct dev capabilities docs` regenerates the engine matrix in `docs/compatibility.md` from the declarations.
 
-The four commands live in the installed package (`aqueduct/executor/capability_tooling.py`, exposed through `aqueduct/cli/dev.py`), not in the repository's `scripts/` directory, which is not in the wheel. An engine registers only once all 294 of its leaves carry a verdict, so an author who cannot generate the table cannot ship an engine: hand-writing 294 rows does not scale. `scripts/capabilities.py` is a thin wrapper that forwards to the same code, so there is exactly one implementation.
+The four commands live in the installed package (`aqueduct/executor/capability_tooling.py`, exposed through `aqueduct/cli/dev.py`), not in the repository's `scripts/` directory, which is not in the wheel. An engine registers only once every leaf on ITS OWN checklist (grammar leaves plus its own engine-scoped config leaves — see "Config-leaf scoping" below) carries a verdict, so an author who cannot generate the table cannot ship an engine: hand-writing ~200 rows does not scale. `scripts/capabilities.py` is a thin wrapper that forwards to the same code, so there is exactly one implementation.
 
 ### Starting a new engine
 
 An engine author needs nothing but `pip install aqueduct-core`. `aqueduct dev capabilities scaffold --engine <name>` writes a complete `capabilities.yml` with every leaf present and every verdict set to `undeclared`, so the author is walked through the entire grammar and config surface one leaf at a time and the engine will not register until each row is a real decision. The scaffold is generated from the walkers, so it cannot go stale the way a checked-in template would.
 
-Do not copy an existing engine's declaration. Cloning Spark's table hands a new engine 294 `supported` rows, which is a silent claim to implement the whole grammar and precisely the blindness the framework exists to prevent. Read it as a reference.
+Do not copy an existing engine's declaration. Cloning Spark's table hands a new engine 206 `supported` rows, which is a silent claim to implement the whole grammar and precisely the blindness the framework exists to prevent. Read it as a reference.
 
 ### `ExecutorProtocol`: the execution contract
 
