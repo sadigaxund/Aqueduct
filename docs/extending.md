@@ -105,12 +105,12 @@ that DO appear are the ones that genuinely dispatch through an engine:
 `deployment.target`/`databricks.*`, `handoff.root`,
 `agent.sandbox_master_url`/`block_on_explain_regression`,
 `danger.allow_full_probe_actions`. A field under `engine.<name>.*`
-(`engine.spark.master_url`, a future `engine.duckdb.*`) is positionally
+(`engine.spark.master_url`, `engine.duckdb.memory_limit`) is positionally
 yours alone — it never appears on another engine's checklist and no other
 engine's such leaves appear on yours.
 
-**Do not copy another engine's `capabilities.yml`.** Spark's table has 206
-rows, ~205 of them `supported`, because Spark actually implements that much.
+**Do not copy another engine's `capabilities.yml`.** Spark's table has 208
+rows, ~207 of them `supported`, because Spark actually implements that much.
 Cloning it onto a new engine is a silent claim that the new engine supports
 the entire grammar — precisely the blind spot this framework exists to
 catch. Read Spark's table as a reference for what a verdict/`requires`/`hint`

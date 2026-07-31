@@ -125,11 +125,36 @@ class TestCheckHandoffEngineAccess:
         # No leftover probe files under the root.
         assert list(root.glob("*")) == []
 
-    def test_duckdb_remote_root_skips_with_httpfs_reason(self, tmp_path):
+    def test_duckdb_remote_root_attempts_round_trip_not_blanket_skip(self, tmp_path, monkeypatch):
+        """Remote roots are no longer unconditionally skipped with a claim
+        that DuckDB "has no httpfs wiring" — httpfs autoloads on first
+        s3:// touch (measured 2026-07-31: `autoinstall_known_extensions`/
+        `autoload_known_extensions` default True), so a remote root now
+        genuinely ATTEMPTS the round trip through the SAME code path as a
+        local one. Network-free: stubs `duckdb.connect` so this asserts
+        the ROUTING change (no more blanket skip), not a live S3 round
+        trip — see `tests/test_executor_duckdb/test_engine_config.py` for
+        the real-DuckDB proofs (secret creation, extension error wrapping)
+        this task's report documents as network-dependent."""
+        import duckdb as _duckdb
+
+        class _FakeConn:
+            def sql(self, _q):
+                raise RuntimeError("simulated: no route to remote storage")
+
+            def execute(self, *a, **k):
+                return self
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(_duckdb, "connect", lambda *_a, **_k: _FakeConn())
         results = check_handoff_engine_access("s3://bucket/handoff", tmp_path, preflight=False)
         by_name = {r.name: r for r in results}
-        assert by_name["handoff-access:duckdb"].status == "skip"
-        assert "httpfs" in by_name["handoff-access:duckdb"].detail.lower()
+        result = by_name["handoff-access:duckdb"]
+        assert result.status == "fail"
+        assert "no httpfs wiring" not in result.detail.lower()
+        assert "simulated" in result.detail
 
     def test_spark_default_skips_pending_preflight(self, tmp_path):
         root = tmp_path / "handoff"

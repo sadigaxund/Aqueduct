@@ -764,7 +764,6 @@ push to `feat/**` or `phase/**`, and PRs into `main`/`feat/**`/`phase/**`.
 | `parser-tests` | `aqueduct/parser/**` or `tests/test_parser/**` | `pytest tests/test_parser/ -m "not spark"` |
 | `compiler-tests` | `aqueduct/compiler/**` or `tests/test_compiler/**` | `pytest tests/test_compiler/ -m "not spark"` |
 | `executor-tests` | `aqueduct/executor/**`, `tests/test_executor/**`, `tests/test_compiler/test_blueprints.py`, or `gallery/snippets/**` | `pytest tests/test_executor/ tests/test_compiler/test_blueprints.py -m spark` |
-| `snippets` | same as executor | `bash scripts/run_snippets.sh` (full-runs each snippet, slow) |
 | `gallery-tests` | `gallery/**`, `tests/test_gallery.py`, parser/compiler | `pytest tests/test_gallery.py` (fast parse/compile/load guard) |
 | `surveyor-tests` | `aqueduct/surveyor/**` or `tests/test_surveyor/**` | `pytest tests/test_surveyor/ tests/test_benchmark_store.py` |
 | `agent-tests` | `aqueduct/agent/**` or `tests/test_agent/**` | `pytest tests/test_agent/` |
@@ -787,6 +786,17 @@ push to `feat/**` or `phase/**`, and PRs into `main`/`feat/**`/`phase/**`.
 
 **New area**: if you add a new top-level directory under `aqueduct/`, add
 its path glob to the `changes` job filter and add a corresponding test job.
+
+**Gallery snippets live in `version-matrix.yml`, not here.** Full end-to-end
+snippet runs (`bash scripts/run_snippets.sh`) moved out of `test-suite.yml` on
+2026-07-03 — they're compat checks, not per-push unit checks; `gallery-tests`
+above stays as the fast parse/compile guard for branch pushes. `version-matrix.yml`'s
+`snippets` (unpinned canary, `continue-on-error: true`) and `snippets-lts`
+(pinned to `requirements/compat-py3.11.txt`, blocking) jobs both carry a
+`strategy.matrix.engine: [spark, duckdb]` — one task per registered engine, run
+via `bash scripts/run_snippets.sh -e ${{ matrix.engine }}`. `tests/test_meta_ci.py::test_snippets_lanes_cover_every_registered_engine`
+fails the build if either job's matrix is missing a registered engine (resolved
+from `CAPABILITY_REGISTRY`, never hardcoded).
 
 ### A meta-test that guards CI can be unfalsifiable — prove it can fail
 

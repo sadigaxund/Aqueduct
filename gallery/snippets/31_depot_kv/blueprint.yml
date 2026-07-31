@@ -20,6 +20,10 @@ modules:
   - id: incremental_filter
     label: "Incremental Filter"
     type: Channel
+    # materialize/watermark_column are module-level fields, NOT inside
+    # config (2.40).
+    materialize: incremental
+    watermark_column: created_at
     config:
       op: sql
       # @aq.depot.get resolves at compile time — the returned value replaces
@@ -27,8 +31,6 @@ modules:
       query: >
         SELECT * FROM raw_events
         WHERE created_at > '@aq.depot.get('watermark', '2025-06-01')'
-      materialize: incremental
-      watermark_column: created_at
 
   - id: output
     label: "Save Result"

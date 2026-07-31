@@ -19,18 +19,26 @@ deliberately does not implement (see the module-level notes below):
      ``f"{from_id}.{port}"``).
   3. Return a frozen ``ExecutionResult`` — identical shape to Spark's.
 
+Incremental Channel watermark (``materialize: incremental`` /
+``watermark_column`` — declared Module fields, see
+``aqueduct.parser.schema.ModuleSchema``) mirrors Spark's
+``read -> substitute -> run -> persist-new-max`` cycle exactly, including the
+quoted substitution and the ``'1900-01-01 00:00:00'`` first-run sentinel: the
+Depot's persisted ``MAX(watermark_column)`` is substituted for the literal
+``${ctx._watermark}`` token in the Channel branch below before
+``execute_channel`` runs, and after a successful downstream Egress write the
+new ``MAX(watermark_column)`` is computed with a DuckDB SQL aggregate over
+the WRITTEN output file (not the upstream DAG) and persisted back to the
+Depot. The Depot is engine-independent (``aqueduct/depot/``), so this is the
+same cycle Spark's executor runs, in DuckDB's own idiom (SQL instead of a
+DataFrame action).
+
 What this stage does NOT implement (honest gaps, not silent ones):
   - Parallel component execution (``feature.parallel_mode`` — UNSUPPORTED).
     Execution is always serial. DuckDB itself parallelizes a single query
     across threads internally; the Aqueduct-level "independent DAG subtrees
     on separate Python threads" optimization Spark's executor has is simply
     not built yet.
-  - Incremental Channel materialize / watermark persistence. Not gated by a
-    capability leaf (``materialize`` is a freeform Channel config key), so a
-    Blueprint using it compiles cleanly but the ``${ctx._watermark}`` token
-    is never substituted — it reaches DuckDB verbatim and fails at the SQL
-    layer with a plain column-not-found error. Documented as a known Stage A
-    gap in the Phase 78 report, not hidden.
   - Sandbox/lineage/explain-snapshot capture, per-module runtime metrics
     persistence to the observability store, and hook firing are all left to
     the caller (the ``aqueduct run`` CLI path composes those around
@@ -41,6 +49,7 @@ What this stage does NOT implement (honest gaps, not silent ones):
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import random
 import time
@@ -343,6 +352,48 @@ def _on_retry_exhausted(
     return False, _fail(blueprint_id, run_id, module_results)
 
 
+# ── Watermark persistence (Depot-only) — mirrors
+# executor/spark/executor.py's "Watermark persistence" section exactly, in
+# DuckDB's own idiom (SQL aggregate instead of a DataFrame action). ─────────
+
+
+def _find_downstream_egress_ids(channel_id: str, manifest: Manifest) -> list[str]:
+    """Return IDs of all Egress modules reachable (any depth) downstream of channel_id."""
+    reachable = _reachable_forward(channel_id, manifest.edges)
+    return [
+        m.id for m in manifest.modules
+        if m.id in reachable and m.id != channel_id and m.type == ModuleType.Egress
+    ]
+
+
+def _compute_watermark_from_output(
+    con: duckdb.DuckDBPyConnection,
+    path: str,
+    fmt: str,
+    watermark_col: str,
+) -> str | None:
+    """Compute MAX(watermark_col) from already-written Egress output.
+
+    Mirrors Spark's ``_compute_watermark_from_output`` — reads the WRITTEN
+    Egress output (never the upstream DAG). DuckDB's Stage A Egress
+    (``egress.py``) supports ``format: parquet`` / ``format: csv`` only and
+    ``COPY ... TO`` always writes a single file at ``path`` (no Delta
+    transaction-log shortcut to take — DuckDB has no Delta writer, see
+    AGENTS.md's standing decision), so this is a plain file read + SQL
+    aggregate. Returns None on any failure (missing file, bad column, ...) —
+    the caller logs and skips advancing the watermark this run, same
+    fail-open contract as Spark's.
+    """
+    try:
+        reader = "read_parquet" if fmt == "parquet" else "read_csv"
+        result = con.sql(
+            f'SELECT MAX("{watermark_col}") FROM {reader}(\'{_escape(path)}\')'
+        ).fetchone()
+        return str(result[0]) if result is not None and result[0] is not None else None
+    except Exception:
+        return None
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def execute(
@@ -402,6 +453,20 @@ def execute(
         if not resume_dir.exists():
             raise ExecuteError(f"Resume run_id={resume_run_id!r} has no checkpoints at {resume_dir}")
 
+    # ── Session-startup warnings (httpfs availability, ...) ──────────────
+    # Mirrors executor/spark/executor.py's tier-2 session-startup pass.
+    # `warnings_suppress`/`warnings_silence_all` were accepted by this
+    # signature but never read anywhere in this function — a silent no-op —
+    # until this call gave them a real consumer.
+    if not warnings_silence_all:
+        try:
+            from aqueduct.executor.duckdb_.warnings import run_all as _run_session_warnings
+            from aqueduct.warnings import emit as _aq_emit
+            for _rid, _msg in _run_session_warnings(manifest, con, suppress=warnings_suppress):
+                _aq_emit(_rid, _msg, suppress=warnings_suppress)
+        except Exception:
+            pass  # session-startup warnings must never crash the executor
+
     order = _build_execution_order(manifest)
 
     included_ids: set[str] | None = None
@@ -410,7 +475,9 @@ def execute(
 
     frame_store: dict[str, Any] = {}
     module_results: list[ModuleResult] = []
-    _pending: dict[str, Any] = {}
+    # Maps egress_id -> (channel_id, watermark_col, depot_key) for the
+    # sidecar write after Egress success — see "Watermark persistence" above.
+    _pending_watermarks: dict[str, tuple[str, str, str]] = {}
     # For `_effective_frame_key` — resolving a BY-NAME upstream reference
     # (Channel SQL, Funnel `inputs:`) transparently across a Handoff.
     modules_by_id: dict[str, Module] = {m.id: m for m in manifest.modules}
@@ -488,9 +555,50 @@ def execute(
             if gate_closed_upstream:
                 continue
 
+            # ── Incremental watermark injection ────────────────────────
+            # `materialize`/`watermark_column` are declared module fields
+            # (2.40), not `config:` keys — see
+            # `aqueduct.parser.schema.ModuleSchema.materialize`. Mirrors
+            # `executor/spark/executor.py`'s Channel branch exactly.
+            _incremental = module.materialize == "incremental"
+            _channel_module = module
+            _watermark_col = ""
+            _depot_key = ""
+            if _incremental:
+                _watermark_col = module.watermark_column or ""
+                _depot_key = f"{manifest.blueprint_id}:{module.id}:_watermark"
+                # Depot is the sole watermark store (same as Spark).
+                _watermark_val = (
+                    (depot.get(_depot_key, "") if depot else "")
+                    or "1900-01-01 00:00:00"
+                )
+                _query = module.config.get("query", "")
+                _patched_query = _query.replace("${ctx._watermark}", f"'{_watermark_val}'")
+                if _patched_query != _query:
+                    _channel_module = dataclasses.replace(
+                        module, config={**module.config, "query": _patched_query},
+                    )
+                # Warn if downstream Egress uses mode=overwrite (compiler
+                # also warns statically; this is the runtime echo, same as
+                # Spark's).
+                _downstream_ids = {e.to_id for e in manifest.edges if e.from_id == module.id}
+                for _ds_m in manifest.modules:
+                    if (
+                        _ds_m.id in _downstream_ids
+                        and _ds_m.type == ModuleType.Egress
+                        and _ds_m.config.get("mode") == "overwrite"
+                    ):
+                        logger.warning(
+                            "[runtime_incremental_overwrite] [%s] "
+                            "materialize=incremental → downstream Egress "
+                            "%r uses mode=overwrite; incremental rows will "
+                            "replace prior data.",
+                            module.id, _ds_m.id,
+                        )
+
             mod_policy = _module_retry_policy(module, manifest.retry_policy)
             try:
-                rel = _with_retry(lambda: execute_channel(module, upstream, con), mod_policy, module.id)
+                rel = _with_retry(lambda: execute_channel(_channel_module, upstream, con), mod_policy, module.id)
             except ChannelError as exc:
                 gate_closed, fail_result = _on_retry_exhausted(exc, mod_policy, module, manifest.blueprint_id, run_id, module_results)
                 if gate_closed:
@@ -510,6 +618,14 @@ def execute(
                 frame_store[f"{module.id}.spillway"] = rel.filter("1=0")
             else:
                 frame_store[module.id] = rel
+
+            # ── Incremental watermark — defer update to post-Egress ────
+            # The actual MAX computation happens after the Egress write,
+            # reading from the materialized output instead of re-executing
+            # the DAG (same as Spark).
+            if _incremental and _watermark_col:
+                for _eg_id in _find_downstream_egress_ids(module.id, manifest):
+                    _pending_watermarks[_eg_id] = (module.id, _watermark_col, _depot_key)
 
             _write_checkpoint(con, module, checkpoint_dir, manifest, data={"data": frame_store[module.id]})
             module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
@@ -654,6 +770,37 @@ def execute(
                     continue
                 return fail_result
             _write_checkpoint(con, module, checkpoint_dir, manifest)
+
+            # ── Watermark update (Depot-only) — mirrors Spark's ────────────
+            if module.id in _pending_watermarks:
+                _ch_id, _wm_col, _wm_depot_key = _pending_watermarks.pop(module.id)
+                _eg_path = module.config.get("path", "")
+                _eg_fmt = module.config.get("format", "parquet")
+                if _eg_path and _eg_fmt not in ("depot",):
+                    _new_wm = _compute_watermark_from_output(con, _eg_path, _eg_fmt, _wm_col)
+                    if _new_wm is None:
+                        logger.warning(
+                            "[runtime_watermark_compute_failed] [%s] Could "
+                            "not compute watermark from output path %r; "
+                            "watermark not advanced this run.",
+                            module.id, _eg_path,
+                        )
+                    elif depot is None:
+                        logger.warning(
+                            "[runtime_watermark_no_depot] [%s] Incremental "
+                            "Channel %r advanced watermark to %s=%s but no "
+                            "depot is configured — it cannot be persisted, "
+                            "so the next run re-scans all source data. "
+                            "Configure stores.depots.",
+                            module.id, _ch_id, _wm_col, _new_wm,
+                        )
+                    else:
+                        depot.put(_wm_depot_key, _new_wm)
+                        logger.debug(
+                            "[%s] Watermark persisted to depot: %s=%s",
+                            module.id, _wm_col, _new_wm,
+                        )
+
             module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
 
         # ── Handoff (Phase 81 step 3 — cross-engine boundary) ───────────────

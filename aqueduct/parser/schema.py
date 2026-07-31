@@ -268,6 +268,15 @@ class ModuleSchema(BaseModel):
     # Arcade-specific
     ref: str | None = None
     context_override: dict[str, Any] | None = None
+    # Channel-specific (2.40) — incremental watermark processing. Promoted
+    # out of the freeform `config:` dict to a declared module field so the
+    # capability framework can see it (a freeform key is invisible to it by
+    # construction — see AGENTS.md's capability-leaf workflow). `op: sql`
+    # only; see docs/specs.md §4.4 Channel for the substitution semantics.
+    materialize: Literal["incremental"] | None = None
+    # Channel-specific (2.40). Required when `materialize: incremental` —
+    # column whose MAX() tracks the incremental high-water mark.
+    watermark_column: str | None = None
 
     @field_validator("id")
     @classmethod

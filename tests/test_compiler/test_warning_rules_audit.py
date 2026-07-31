@@ -62,8 +62,8 @@ class TestIncrementalWatermarkScan:
         return _bp(
             [_ingress(),
              {"id": "inc", "label": "C", "type": "Channel",
-              "config": {"op": "sql", "query": "SELECT * FROM raw",
-                         "materialize": "incremental", "watermark_column": "ts"}},
+              "materialize": "incremental", "watermark_column": "ts",
+              "config": {"op": "sql", "query": "SELECT * FROM raw"}},
              {"id": "out", "label": "O", "type": "Egress",
               "config": {"format": egress_format, "path": "o", "coalesce": 1,
                          "partition_by": ["d"], "mode": "append"}}],

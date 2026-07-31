@@ -190,3 +190,102 @@ class TestCheckpointRoot:
         p.write_text('checkpoint_root: "s3a://bucket/ckpts"\n', encoding="utf-8")
         with pytest.raises(ConfigError, match="checkpoint_root"):
             load_config(p)
+
+
+class TestDuckDBEngineConfig:
+    """``engine.duckdb.*`` — memory_limit/threads/database_path/
+    extension_repository/s3_* (the DuckDB config-surface + httpfs task).
+    Every field carries a real consumer in
+    ``duckdb_/engine.py::_make_session`` — see
+    ``tests/test_executor_duckdb/test_engine_config.py`` for the
+    live-DuckDB wiring proofs; this class covers pure pydantic validation."""
+
+    def test_defaults_are_all_none(self):
+        from aqueduct.config import DuckDBEngineConfig
+        cfg = DuckDBEngineConfig()
+        assert cfg.memory_limit is None
+        assert cfg.threads is None
+        assert cfg.database_path is None
+        assert cfg.extension_repository is None
+        assert cfg.s3_key_id_secret is None
+        assert cfg.s3_secret_access_key_secret is None
+        assert cfg.s3_region is None
+
+    def test_threads_must_be_positive(self):
+        from pydantic import ValidationError
+
+        from aqueduct.config import DuckDBEngineConfig
+        with pytest.raises(ValidationError):
+            DuckDBEngineConfig(threads=0)
+
+    @pytest.mark.parametrize("uri", [
+        "s3://bucket/db.duckdb",
+        "gs://bucket/db.duckdb",
+        "abfss://container@acct.dfs.core.windows.net/db.duckdb",
+    ])
+    def test_database_path_rejects_remote_uri_scheme(self, uri):
+        from pydantic import ValidationError
+
+        from aqueduct.config import DuckDBEngineConfig
+        with pytest.raises(ValidationError, match="database_path"):
+            DuckDBEngineConfig(database_path=uri)
+
+    def test_database_path_accepts_local_path(self):
+        from aqueduct.config import DuckDBEngineConfig
+        cfg = DuckDBEngineConfig(database_path="/mnt/fast/db.duckdb")
+        assert cfg.database_path == "/mnt/fast/db.duckdb"
+
+    def test_s3_credential_pair_required_together(self):
+        from pydantic import ValidationError
+
+        from aqueduct.config import DuckDBEngineConfig
+        with pytest.raises(ValidationError, match="TOGETHER"):
+            DuckDBEngineConfig(s3_key_id_secret="AWS_ACCESS_KEY_ID")
+        with pytest.raises(ValidationError, match="TOGETHER"):
+            DuckDBEngineConfig(s3_secret_access_key_secret="AWS_SECRET_ACCESS_KEY")
+
+    def test_s3_credential_pair_accepted_together(self):
+        from aqueduct.config import DuckDBEngineConfig
+        cfg = DuckDBEngineConfig(
+            s3_key_id_secret="AWS_ACCESS_KEY_ID",
+            s3_secret_access_key_secret="AWS_SECRET_ACCESS_KEY",
+            s3_region="us-east-1",
+        )
+        assert cfg.s3_key_id_secret == "AWS_ACCESS_KEY_ID"
+
+    def test_load_config_yaml_engine_duckdb_block(self, tmp_path):
+        p = tmp_path / "aqueduct.yml"
+        p.write_text(
+            "deployment:\n"
+            "  engine: duckdb\n"
+            "engine:\n"
+            "  duckdb:\n"
+            "    memory_limit: '4GB'\n"
+            "    threads: 4\n"
+            "    database_path: '/mnt/fast/db.duckdb'\n",
+            encoding="utf-8",
+        )
+        cfg = load_config(p)
+        assert cfg.engine.duckdb.memory_limit == "4GB"
+        assert cfg.engine.duckdb.threads == 4
+        assert cfg.engine.duckdb.database_path == "/mnt/fast/db.duckdb"
+
+    def test_engine_duckdb_leaves_engine_scoped_to_duckdb_only(self):
+        """``config.engine.duckdb.*`` leaves must appear ONLY in DuckDB's
+        own capability checklist, never Spark's (Q4 step 2 positional
+        scoping)."""
+        from aqueduct.executor.config_leaves import all_config_leaves
+
+        duckdb_leaves = all_config_leaves(engine="duckdb")
+        spark_leaves = all_config_leaves(engine="spark")
+        new_leaves = {
+            "config.engine.duckdb.memory_limit",
+            "config.engine.duckdb.threads",
+            "config.engine.duckdb.database_path",
+            "config.engine.duckdb.extension_repository",
+            "config.engine.duckdb.s3_key_id_secret",
+            "config.engine.duckdb.s3_secret_access_key_secret",
+            "config.engine.duckdb.s3_region",
+        }
+        assert new_leaves <= duckdb_leaves
+        assert not (new_leaves & spark_leaves)

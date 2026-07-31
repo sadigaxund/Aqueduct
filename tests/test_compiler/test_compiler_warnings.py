@@ -190,8 +190,8 @@ modules:
   - id: ch
     type: Channel
     label: CH
-    config:
-      materialize: incremental
+    materialize: incremental
+    config: {}
 edges:
   - from: in
     to: ch
@@ -215,8 +215,8 @@ modules:
   - id: ch
     type: Channel
     label: CH
-    config:
-      materialize: incremental
+    materialize: incremental
+    config: {}
 edges:
   - from: cp
     to: ch

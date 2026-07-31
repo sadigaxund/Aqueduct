@@ -238,7 +238,17 @@ SQL form (upstream module ids are temp views; single-input upstream is also `__i
     spillway_condition: "amount IS NULL"   # optional — matching rows go to spillway port
 ```
 Most ops are lazy (no Spark action) except `cache`. `join` is sugar over SQL JOIN.
-Incremental: `materialize: incremental` + `watermark_column: <col>` (needs a Depot).
+Incremental: `materialize: incremental` + `watermark_column: <col>` (needs a Depot) — both are
+MODULE-level fields, siblings of `config:`, NOT config keys:
+```yaml
+- id: new_events
+  type: Channel
+  materialize: incremental        # module-level, NOT inside config
+  watermark_column: event_ts      # module-level, NOT inside config
+  config:
+    op: sql
+    query: "SELECT * FROM events WHERE event_ts > CAST(${ctx._watermark} AS TIMESTAMP)"
+```
 
 ### Egress — write data
 ```yaml

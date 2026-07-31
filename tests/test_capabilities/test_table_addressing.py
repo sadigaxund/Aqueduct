@@ -1,7 +1,11 @@
 """``feature.table_addressing`` — catalog ``table:`` addressing on Ingress/Egress.
 
-DuckDB Ingress/Egress require ``format:`` + ``path:``; there is no catalog to
-resolve a bare ``table:`` name against. Before this leaf existed, nothing
+DuckDB Ingress/Egress require ``format:`` + ``path:``. DuckDB DOES have a real
+catalog (``memory.main``, ``system.main``/``information_schema``/``pg_catalog``,
+plus whatever ``ATTACH`` adds — verified 2026-07-31) — what is missing is an
+IMPLEMENTATION mapping a Blueprint's bare ``table:`` name onto it, not the
+absence of a catalog (an earlier hint claimed the latter; corrected as part of
+the httpfs-work hint audit). Before this leaf existed, nothing
 gated ``table:`` addressing at compile time on ``engine=duckdb`` — the
 gallery snippet ``gallery/snippets/23_table_first/blueprint.yml`` (Ingress
 ``table: demo_table`` / Egress ``format: parquet, table: demo_output``) would
@@ -110,4 +114,4 @@ def test_table_first_snippet_fails_clean_compile_error_on_duckdb():
     # Names the module, the unsupported capability, and the hint.
     assert "'src'" in msg
     assert "feature.table_addressing" in msg
-    assert "no catalog to resolve a bare table" in msg
+    assert "Use format:+path: instead of table: addressing" in msg

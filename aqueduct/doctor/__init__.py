@@ -314,20 +314,27 @@ def check_java() -> CheckResult:
 
 # ── Cross-engine handoff access (Phase 81/82) ───────────────────────────────
 
-def _probe_duckdb_handoff(root: str, is_remote: bool, name: str, t: float) -> CheckResult:
+def _probe_duckdb_handoff(
+    root: str, is_remote: bool, name: str, t: float,
+    duckdb_engine_config: dict[str, Any] | None = None,
+    secrets_config: dict[str, Any] | None = None,
+) -> CheckResult:
     """Round-trip write+read+cleanup a tiny parquet probe via DuckDB.
 
     A bare ``duckdb.connect(":memory:")`` is near-instant (no JVM, no cluster)
     so this runs unconditionally — there is no cheaper-vs-honest tradeoff to
-    make the way there is for Spark below.
+    make the way there is for Spark below. A REMOTE root is attempted the
+    SAME way a local one is (previously an unconditional ``skip`` naming
+    "DuckDB has no httpfs wiring yet" — no longer true: DuckDB's own
+    ``read_parquet``/``COPY ... TO`` already handle ``s3://``/``gs://`` paths
+    once httpfs autoloads, and ``engine.duckdb.s3_*`` credentials, if
+    configured, are wired the same way a real run wires them — see
+    ``duckdb_/extensions.py``). A failure (missing credentials, unreachable
+    bucket, airgapped install) still reports honestly as `fail` via the
+    existing broad except below — this function draws no distinction
+    between "DuckDB can't do this" (no longer true) and "this DuckDB can't
+    reach THIS root" (a real, reportable finding).
     """
-    if is_remote:
-        return CheckResult(
-            name, "skip",
-            f"remote handoff.root ({root!r}) — DuckDB has no httpfs wiring yet, "
-            "so remote handoff roots are Spark-only today (see docs/specs.md §11)",
-            _ms(t), group="stores",
-        )
     try:
         import duckdb
     except ImportError:
@@ -337,26 +344,43 @@ def _probe_duckdb_handoff(root: str, is_remote: bool, name: str, t: float) -> Ch
 
     probe_path = f"{root.rstrip('/')}/.aqueduct_doctor_probe_{uuid.uuid4().hex[:8]}.parquet"
     safe_path = probe_path.replace("'", "''")
+    con = None
     try:
-        ensure_parent_exists(root)
+        if not is_remote:
+            ensure_parent_exists(root)
         con = duckdb.connect(":memory:")
-        try:
-            con.sql(f"COPY (SELECT 1 AS x) TO '{safe_path}' (FORMAT PARQUET)")
-            row = con.sql(f"SELECT x FROM read_parquet('{safe_path}')").fetchone()
-            if row != (1,):
-                return CheckResult(
-                    name, "fail", f"round-trip mismatch at {probe_path}: got {row!r}", _ms(t), group="stores",
-                )
-        finally:
-            con.close()
+        if is_remote:
+            from aqueduct.executor.duckdb_.extensions import (
+                configure_s3_secret,
+                ensure_extension,
+                resolve_s3_secret_from_config,
+            )
+            engine_cfg = duckdb_engine_config or {}
+            extension_repository = engine_cfg.get("extension_repository")
+            s3_creds = resolve_s3_secret_from_config(engine_cfg, secrets_config or {})
+            if s3_creds is not None:
+                key_id, secret_value, region = s3_creds
+                configure_s3_secret(con, key_id=key_id, secret=secret_value, region=region)
+                ensure_extension(con, "httpfs", extension_repository=extension_repository)
+            elif extension_repository:
+                ensure_extension(con, "httpfs", extension_repository=extension_repository)
+        con.sql(f"COPY (SELECT 1 AS x) TO '{safe_path}' (FORMAT PARQUET)")
+        row = con.sql(f"SELECT x FROM read_parquet('{safe_path}')").fetchone()
+        if row != (1,):
+            return CheckResult(
+                name, "fail", f"round-trip mismatch at {probe_path}: got {row!r}", _ms(t), group="stores",
+            )
         return CheckResult(name, "ok", f"read+write round-trip verified at {root}", _ms(t), group="stores")
     except Exception as exc:
         return CheckResult(name, "fail", f"{root}: {exc}", _ms(t), group="stores")
     finally:
-        try:
-            Path(probe_path).unlink(missing_ok=True)
-        except OSError:
-            pass
+        if con is not None:
+            con.close()
+        if not is_remote:
+            try:
+                Path(probe_path).unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _probe_spark_handoff(
@@ -416,14 +440,17 @@ def check_handoff_engine_access(
     preflight: bool = False,
     spark_config: dict[str, Any] | None = None,
     master_url: str | None = None,
+    duckdb_engine_config: dict[str, Any] | None = None,
+    secrets_config: dict[str, Any] | None = None,
 ) -> list[CheckResult]:
     """Verify BOTH engines on a polyglot Blueprint can read AND write
     ``handoff.root``, round-tripping a tiny probe artifact per engine.
 
     Why this exists: each engine resolves the handoff URI through its OWN
     filesystem layer and its OWN credentials — Hadoop FS settings under
-    `engine.spark.conf` for Spark, DuckDB's own (local-only; no httpfs wiring
-    yet) for DuckDB. Nothing today cross-checks that both sides can actually
+    `engine.spark.conf` for Spark, DuckDB's own (`engine.duckdb.s3_*` +
+    httpfs, same wiring a real run uses) for DuckDB. Nothing today
+    cross-checks that both sides can actually
     reach the same URI; a mismatch (wrong bucket, a missing key, a DuckDB
     island pointed at a remote root) only surfaces mid-run, after the
     upstream island has already materialised its output — the worst possible
@@ -472,7 +499,11 @@ def check_handoff_engine_access(
         name = f"handoff-access:{engine}"
 
         if engine == "duckdb":
-            results.append(_probe_duckdb_handoff(resolved_root, is_remote, name, t))
+            results.append(_probe_duckdb_handoff(
+                resolved_root, is_remote, name, t,
+                duckdb_engine_config=duckdb_engine_config,
+                secrets_config=secrets_config,
+            ))
             continue
 
         if engine == "spark":
@@ -1514,6 +1545,13 @@ def run_doctor(
         preflight=preflight,
         spark_config=cfg.engine.spark.conf,
         master_url=cfg.engine.spark.master_url,
+        duckdb_engine_config=cfg.engine.duckdb.model_dump(),
+        secrets_config={
+            "provider": cfg.secrets.provider,
+            "region": cfg.secrets.region,
+            "resolver": cfg.secrets.resolver,
+            "base_dir": str(_handoff_project_root),
+        },
     ))
 
     # Cloudpickle compatibility (pure version check — no Spark needed)

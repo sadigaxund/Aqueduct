@@ -69,8 +69,34 @@ engine:
       # spark.hadoop.fs.s3a.secret.key: "@aq.secret('MINIO_SECRET_KEY')"
       # spark.jars.packages: "org.apache.hadoop:hadoop-aws:3.3.4"
 
-  # duckdb: {}   # no engine.duckdb knob is wired to real behaviour yet —
-                 # the DuckDB executor always opens a bare :memory: connection.
+  # duckdb:
+  #   # memory_limit / threads: SET at session creation. Unset keeps DuckDB's
+  #   # own defaults (~80% of system RAM; all available cores).
+  #   memory_limit: "4GB"
+  #   threads: 4
+  #
+  #   # database_path: a persistent file, replacing the default :memory:
+  #   # connection. LOCAL PATHS ONLY (rejected at config-load if given a
+  #   # remote URI scheme) — raises the RAM ceiling on a receiving
+  #   # cross-engine handoff island and lets large intermediates spill to
+  #   # disk instead of aborting.
+  #   database_path: "/data/aqueduct/run.duckdb"
+  #
+  #   # extension_repository: SET custom_extension_repository — the
+  #   # airgapped/hermetic-CI escape hatch for DuckDB's httpfs extension,
+  #   # which autoinstalls over the network on first s3://-style touch
+  #   # otherwise. The other escape hatch (a pre-populated
+  #   # ~/.duckdb/extensions directory) needs no config at all.
+  #   extension_repository: "https://internal-mirror.example.com/duckdb-extensions"
+  #
+  #   # s3_key_id_secret / s3_secret_access_key_secret: SECRET KEY NAMES
+  #   # (never literal credentials), resolved through the secrets: block
+  #   # below — the same aqueduct.secrets.resolve_secret() @aq.secret()
+  #   # uses — and fed into DuckDB's own CREATE SECRET via parameter
+  #   # binding. Must be set together. s3_region is not sensitive.
+  #   s3_key_id_secret: "AWS_ACCESS_KEY_ID"
+  #   s3_secret_access_key_secret: "AWS_SECRET_ACCESS_KEY"
+  #   s3_region: "us-east-1"
 
   # ── Object storage — AWS S3 (IAM role or key-pair) ──────────────────────────
   # spark.hadoop.fs.s3a.aws.credentials.provider: "com.amazonaws.auth.InstanceProfileCredentialsProvider"

@@ -275,6 +275,7 @@ def run_polyglot(
     master_url: str = "",
     quiet_startup: bool = True,
     timezone: str | None = None,
+    secrets_config: dict[str, Any] | None = None,
     block_full_actions: bool = False,
     parallel: bool = False,
     use_observe: bool = False,
@@ -330,6 +331,16 @@ def run_polyglot(
                          present here gets ``{}``.
         master_url:      Passed to every island's ``SessionSpec`` (engines
                          that ignore it, e.g. DuckDB, simply don't read it).
+        secrets_config:  ``aqueduct.yml``'s resolved ``secrets:`` block —
+                         ``{"provider": ..., "region": ..., "resolver": ...,
+                         "base_dir": ...}`` — passed through every island's
+                         ``SessionSpec.engine_options["secrets"]`` so an
+                         engine that needs to resolve a secret KEY NAME into
+                         a VALUE (DuckDB's ``engine.duckdb.s3_key_id_secret``
+                         -> DuckDB's own ``CREATE SECRET``) calls the SAME
+                         ``aqueduct.secrets.resolve_secret`` ``@aq.secret()``
+                         uses, never a parallel credential path. An engine
+                         with no use for it (Spark) ignores the key.
         timezone:        ``aqueduct.yml``'s top-level ``timezone:`` (Phase
                          81/82), passed to EVERY island's ``SessionSpec`` —
                          each engine applies it its own way (Spark's
@@ -457,6 +468,7 @@ def run_polyglot(
                 master_url=master_url,
                 quiet_startup=quiet_startup,
                 timezone=timezone,
+                engine_options={"secrets": secrets_config} if secrets_config else {},
             )
         )
         try:

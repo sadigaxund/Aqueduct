@@ -184,6 +184,35 @@ the blueprint's `engine.spark.conf`.
 
 ---
 
+## DuckDB engine configuration
+
+`engine.duckdb:` (`aqueduct.yml`) configures the DuckDB engine's session — see
+`docs/specs.md` §10.9 for the full field reference. Production-relevant points:
+
+- **`database_path`** replaces the default `:memory:` connection with a
+  persistent local file — raises a receiving cross-engine handoff island's
+  RAM ceiling and lets large intermediates spill to disk. LOCAL PATHS ONLY;
+  point it at fast local disk, not a network mount shared with other
+  processes (DuckDB's own file locking assumes single-writer).
+- **`memory_limit`/`threads`** bound the connection's resource usage — set
+  these in a shared/multi-tenant environment the same way you would tune
+  `engine.spark.conf` for a Spark executor.
+- **S3/GCS credentials** (`s3_key_id_secret`/`s3_secret_access_key_secret`/
+  `s3_region`) are secret KEY NAMES resolved through the `secrets:` block —
+  never put a literal credential in `aqueduct.yml`. Same rule as every other
+  credential in this table.
+- **Airgapped / hermetic-CI clusters**: DuckDB's `httpfs` extension
+  autoinstalls over the network the first time a Blueprint touches a remote
+  (`s3://`, `gs://`, ...) path. A cluster with no route to DuckDB's public
+  extension repository needs one of two escapes BEFORE the first such run:
+  pre-populate `~/.duckdb/extensions` with `httpfs` (fetched once on a
+  machine with network access, shipped alongside the deployment image — no
+  config needed), or set `engine.duckdb.extension_repository` to an internal
+  mirror. Without one of these, the first remote read/write raises
+  `DuckDBExtensionError` naming the cause.
+
+---
+
 ## Path conventions
 
 **Rule: all I/O paths in production Blueprints must be cloud/HDFS URIs, never local filesystem paths.**

@@ -198,10 +198,44 @@ leaves:
   config.deployment.target:
     support: supported
     hint: "DuckDB is a single-node engine — only target=local is meaningful. Remote-submit / cluster targets (databricks, emr, dataproc, yarn, kubernetes, standalone) have no DuckDB execution path; use the spark engine for those."
-  config.handoff.root: supported
+  config.engine.duckdb.database_path:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_engine_config.py::TestMakeSessionDatabasePath::test_database_path_persists_across_sessions
+      - tests/test_executor_duckdb/test_engine_config.py::TestMakeSessionDatabasePath::test_unset_database_path_is_memory_only
+  config.engine.duckdb.extension_repository:
+    support: supported
+    hint: "SET custom_extension_repository, applied before any extension install — the airgapped/hermetic-CI escape hatch for the first s3://-style path a Blueprint touches (DuckDB's own httpfs extension autoinstalls over the network otherwise). See also a pre-populated ~/.duckdb/extensions, which needs no config at all."
+    tests:
+      - tests/test_executor_duckdb/test_engine_config.py::TestEnsureExtension::test_ensure_extension_sets_custom_repository_before_install
+  config.engine.duckdb.memory_limit:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_engine_config.py::TestMakeSessionMemoryAndThreads::test_memory_limit_applied
+  config.engine.duckdb.s3_key_id_secret:
+    support: supported
+    hint: "A secret KEY NAME, resolved through the configured secrets: provider (same aqueduct.secrets.resolve_secret() @aq.secret() uses) and fed into DuckDB's own CREATE SECRET (TYPE S3, ...) via parameter binding — never a literal credential in aqueduct.yml, never string-interpolated into SQL."
+    tests:
+      - tests/test_executor_duckdb/test_engine_config.py::TestS3SecretResolution::test_make_session_wires_s3_secret_via_engine_options
+  config.engine.duckdb.s3_region:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_engine_config.py::TestS3SecretResolution::test_configure_s3_secret_creates_duckdb_secret_no_network
+  config.engine.duckdb.s3_secret_access_key_secret:
+    support: supported
+    hint: "A secret KEY NAME — see config.engine.duckdb.s3_key_id_secret. Must be set together with it."
+    tests:
+      - tests/test_executor_duckdb/test_engine_config.py::TestS3SecretResolution::test_make_session_wires_s3_secret_via_engine_options
+  config.engine.duckdb.threads:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_engine_config.py::TestMakeSessionMemoryAndThreads::test_threads_applied
+  config.handoff.root:
+    support: supported
+    hint: "A remote handoff.root (s3://, gs://, ...) is reached the same way any other remote path is on this engine — DuckDB's httpfs extension, autoloaded on first touch, plus engine.duckdb.s3_* credentials if the target requires authentication. Not reachable before httpfs work landed; now genuinely probed (aqueduct doctor's handoff-access:duckdb check attempts a real round trip, no longer a blanket skip)."
   config.metrics.use_observe:
     support: unsupported
-    hint: "use_observe toggles Spark's Observation API (a SparkListener-driven zero-cost row-count mechanism); DuckDB has no equivalent listener hook. Module metrics are collected directly from relation execution instead, unconditionally."
+    hint: "use_observe toggles Spark's Observation API (a SparkListener-driven zero-cost row-count mechanism); DuckDB has no equivalent listener hook. This engine does not yet collect per-module runtime metrics (rows/bytes) outside the Handoff module at all (see executor/models.py's module_metrics writer), so there is no existing collection path for this flag to toggle either way — the key is inert here, not superseded by an always-on alternative."
   config.probes.default_sample_fraction:
     support: ignored_with_warning
     hint: "Probe (module.type.Probe) is not implemented on DuckDB, so the sample-fraction knob it would configure is inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
@@ -273,7 +307,7 @@ leaves:
     hint: "Requires a delta-rs bridge (the deltalake Python package writes a Delta log DuckDB has no writer for). Not implemented."
   egress.format.depot:
     support: unsupported
-    hint: "Requires the httpfs extension (Depot's blob-store backends are S3/GCS/Azure, which httpfs can address directly). Not implemented."
+    hint: "format: depot writes a single KV entry via the DepotStore Python interface (depot.put(key, value)) — a plain Python call, engine-independent, never routed through this engine's own SQL/relation layer. httpfs is unrelated: even a DepotStore backed by an S3 blob store resolves through stores/object_store.py's own IO, not DuckDB's. The actual gap is simply no format=depot dispatch branch implemented in this engine's egress.py (same category as jdbc/kafka/custom — no handler, not a missing extension)."
 
   # ── Feature flags ─────────────────────────────────────────────────────────
   feature.broadcast_junction:
@@ -291,17 +325,17 @@ leaves:
     hint: "lang: java UDFs require a JVM UDF registry (Spark-only). Not applicable to DuckDB."
   feature.metrics_boundary:
     support: unsupported
-    hint: "metrics_boundary works around Spark's stage-fusion by forcing a shuffle boundary so SparkListener attributes metrics per module; DuckDB has no stage-fusion concept to work around — module metrics are already collected per module."
+    hint: "metrics_boundary works around Spark's stage-fusion by forcing a shuffle boundary so SparkListener attributes metrics per module — a fix for a problem specific to that collection mechanism. DuckDB has no stage-fusion concept to work around, but this engine's executor does not yet collect per-module runtime metrics (rows/bytes) at all outside the Handoff module (see executor/models.py's module_metrics writer), so there is no per-module attribution for this flag to configure either way."
   feature.python_udf:
     support: unsupported
-    hint: "DuckDB Python UDFs are vectorized (operate on Arrow batches) and semantically different from Spark's row-at-a-time UDFs. Not implemented or tested: declaring it 'supported' without a real handler would silently produce wrong results on the first UDF that assumes row semantics."
+    hint: "conn.create_function(name, fn, params, ret) defaults to NATIVE (row-at-a-time) execution, matching Spark's UDF semantics — measured: a per-row call log shows one call per input row, not a batch. Vectorized (Arrow-batch) execution is opt-in via type='arrow'. Not implemented or tested on this engine: declaring it 'supported' without a real handler would silently produce wrong results on the first UDF that relies on the registry, the deterministic flag, or an error-handling convention this engine hasn't built."
   feature.spillway:
     support: supported
     tests:
       - tests/test_executor_duckdb/test_executor.py::test_feature_spillway_driven_through_execute
   feature.table_addressing:
     support: unsupported
-    hint: "DuckDB Ingress/Egress require format:+path: — there is no catalog to resolve a bare table: name against. Use format:+path: instead of table: addressing on this engine."
+    hint: "DuckDB Ingress/Egress require format:+path: — measured: DuckDB DOES have a real catalog (memory.main, system.main/information_schema/pg_catalog, plus whatever ATTACH adds), so a three-part catalog.schema.table namespace genuinely exists. What is missing is an IMPLEMENTATION mapping a Blueprint's bare table: name onto it (which catalog/schema to default to, whether ATTACH is required first) — not the absence of a catalog. Use format:+path: instead of table: addressing on this engine until that mapping is built."
 
   # ── DEFERRED (Stage B candidates) — see the Egress deferred block above
   # for the grouping rationale; same "one-line flip later" intent. ─────────
@@ -313,7 +347,7 @@ leaves:
     hint: "Requires a delta-rs bridge (the deltalake Python package writes a Delta log DuckDB has no writer for). Not implemented."
   feature.parallel_mode:
     support: unsupported
-    hint: "Requires a Python ThreadPoolExecutor over independent DAG subtrees (a DuckDB connection is thread-safe for concurrent read queries). Not implemented: the executor runs the topological order serially today."
+    hint: "Requires a Python ThreadPoolExecutor over independent DAG subtrees. Measured: a single DuckDBPyConnection object is NOT safe for concurrent queries from multiple threads — two threads calling .sql() on the SAME connection object concurrently raise 'Invalid Input Error: Attempting to execute an unsuccessful or closed pending query result'. Each thread needs its OWN cursor (con.cursor()), which IS safe for concurrent reads — a real but small additional wiring cost this engine has not built yet. Not implemented: the executor runs the topological order serially today."
 
   # ── Funnel modes — Stage A scope: union_all, union, coalesce, zip (each
   # has a real handler + a DuckDB test) ────────────────────────────────────
@@ -390,7 +424,7 @@ leaves:
     hint: "Requires a delta-rs bridge (the deltalake Python package can read a Delta table's transaction log). Not implemented."
   ingress.format.depot:
     support: unsupported
-    hint: "Requires the httpfs extension (Depot's blob-store backends are S3/GCS/Azure, which httpfs can address directly). Not implemented."
+    hint: "format: depot reads a single KV entry via the DepotStore Python interface (depot.get(key)) — a plain Python call, engine-independent, never routed through this engine's own SQL/relation layer. httpfs is unrelated: even a DepotStore backed by an S3 blob store resolves through stores/object_store.py's own IO, not DuckDB's. The actual gap is simply no format=depot dispatch branch implemented in this engine's ingress.py (same category as jdbc/kafka/custom — no handler, not a missing extension)."
   ingress.format.jdbc:
     support: unsupported
     hint: "Requires the postgres scanner extension (ATTACH ... (TYPE POSTGRES), the same wire protocol jdbc: postgres:// targets). Not implemented."
@@ -607,3 +641,27 @@ leaves:
     support: supported
     tests:
       - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  # Incremental Channel watermark (2.40) — promoted out of the freeform
+  # `config:` dict to declared module fields so the capability framework can
+  # see them (see AGENTS.md's capability-leaf workflow). This is the exact
+  # defect that used to ship silently: `${ctx._watermark}` reached
+  # duckdb_/channel.py's sqlglot transpile unsubstituted and raised a
+  # confusing ParseError, with the real cause (materialize/watermark_column
+  # were freeform config keys, invisible to any gate) documented as a known
+  # gap in this module's own docstring instead of fixed. Fixed 2.40 —
+  # executor.py's Channel branch now runs the same read -> substitute -> run
+  # -> persist-new-max cycle Spark's executor runs, in DuckDB's own idiom
+  # (SQL aggregate instead of a DataFrame action). `tests:` added
+  # voluntarily (not required for a module.field.* leaf — see
+  # capability_leaves.py::execution_leaves(), which excludes this category).
+  module.field.materialize:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_incremental.py::test_incremental_watermark_no_prior
+      - tests/test_executor_duckdb/test_incremental.py::test_incremental_watermark_with_prior
+      - tests/test_executor_duckdb/test_incremental.py::test_incremental_two_runs_real_incremental_behavior
+  module.field.watermark_column:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_incremental.py::test_incremental_watermark_with_prior
+      - tests/test_executor_duckdb/test_incremental.py::test_incremental_two_runs_real_incremental_behavior

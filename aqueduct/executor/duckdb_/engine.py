@@ -95,28 +95,85 @@ def _extract_error(exc: BaseException | None) -> dict[str, Any] | None:
 
 
 def _make_session(spec: SessionSpec) -> Any:
-    """``ExecutorProtocol.make_session`` for DuckDB — an in-memory connection.
+    """``ExecutorProtocol.make_session`` for DuckDB.
 
-    Stage A always opens a fresh ``:memory:`` connection (see the engine's
-    capability table: ``config.engine.spark.conf``/``config.engine.spark.
-    master_url`` are ``ignored_with_warning`` and there is no
-    ``config.engine.duckdb.*`` knob yet — see ``aqueduct.config.
-    DuckDBEngineConfig``). The ``SessionSpec``'s
-    ``engine_config``/``master_url``/``quiet*`` fields are
-    accepted for cross-engine parity and ignored here. ``duckdb`` is imported
-    inside the body so constructing the protocol object never requires it.
+    Reads ``spec.engine_config`` (``DuckDBEngineConfig.model_dump()`` — see
+    ``aqueduct.config.DuckDBEngineConfig`` and the caller that builds this
+    ``SessionSpec``) so every ``engine.duckdb.*`` field is a real knob, never
+    a silent no-op:
+
+      - ``database_path`` (unset -> ``:memory:``, the historical Stage A
+        behaviour): a persistent file both raises a receiving handoff
+        island's RAM ceiling and lets large intermediates spill to disk.
+      - ``memory_limit``/``threads``: ``SET memory_limit=...``/
+        ``SET threads=...``, applied right after connecting.
+      - ``extension_repository``: ``SET custom_extension_repository=...``
+        BEFORE any extension install attempt — the airgapped-mirror escape
+        hatch (see ``duckdb_/extensions.py``).
+      - ``s3_key_id_secret``/``s3_secret_access_key_secret``/``s3_region``:
+        secret KEY NAMES resolved through the ``secrets:`` block resolver
+        (via ``spec.engine_options["secrets"]`` — the caller-populated
+        provider/region/resolver/base_dir bag) and fed into DuckDB's own
+        ``CREATE SECRET (TYPE S3, ...)``. When configured, this also
+        proactively ``INSTALL``/``LOAD``s ``httpfs`` (``ensure_httpfs``) so
+        an airgapped-install failure surfaces LOUDLY at session creation
+        as a ``DuckDBExtensionError``, not as a bare HTTP error buried
+        inside some later query. When NOT configured, ``httpfs`` is left
+        entirely alone — DuckDB's own ``autoinstall_known_extensions``/
+        ``autoload_known_extensions`` (both default ``True``) still load it
+        lazily on the first ``s3://``/``gs://`` touch, same as always; a
+        user who never touches remote storage sees zero new behaviour.
 
     ``spec.timezone`` (Phase 81/82 — ``aqueduct.yml``'s top-level
     ``timezone:``) IS applied, via ``SET TimeZone`` — DuckDB has no
-    ``engine.duckdb.*`` knob at all yet (see above), so there is no
-    engine-native override to defer to and no divergence to check for
-    (unlike Spark's ``engine.spark.conf.spark.sql.session.timeZone``).
+    ``engine.duckdb.*`` timezone override to defer to, so there is no
+    divergence to check for (unlike Spark's
+    ``engine.spark.conf.spark.sql.session.timeZone``).
+
+    ``master_url``/``quiet``/``quiet_startup`` are accepted for cross-engine
+    parity and ignored — meaningless for a single-process embedded engine.
+    ``duckdb`` is imported inside the body so constructing the protocol
+    object never requires it.
     """
     import duckdb
 
-    conn = duckdb.connect(":memory:")
+    from aqueduct.executor.duckdb_.extensions import (
+        configure_s3_secret,
+        ensure_extension,
+        resolve_s3_secret_from_config,
+    )
+
+    engine_config = spec.engine_config or {}
+    database_path = engine_config.get("database_path") or ":memory:"
+    conn = duckdb.connect(database_path)
+
     if spec.timezone:
         conn.execute("SET TimeZone=?", [spec.timezone])
+
+    memory_limit = engine_config.get("memory_limit")
+    if memory_limit:
+        conn.execute("SET memory_limit=?", [memory_limit])
+
+    threads = engine_config.get("threads")
+    if threads:
+        conn.execute("SET threads=?", [threads])
+
+    extension_repository = engine_config.get("extension_repository")
+
+    secrets_options = (spec.engine_options or {}).get("secrets", {})
+    s3_creds = resolve_s3_secret_from_config(engine_config, secrets_options)
+    if s3_creds is not None:
+        key_id, secret_value, region = s3_creds
+        configure_s3_secret(conn, key_id=key_id, secret=secret_value, region=region)
+        # S3 credentials configured — remote storage is clearly intended, so
+        # surface an airgapped-install failure LOUDLY here rather than
+        # letting it hit as a bare HTTP error inside a later query.
+        ensure_extension(conn, "httpfs", extension_repository=extension_repository)
+    elif extension_repository:
+        # No S3 creds, but an explicit mirror was configured — same signal
+        # of deliberate remote-storage intent.
+        ensure_extension(conn, "httpfs", extension_repository=extension_repository)
+
     return conn
 
 

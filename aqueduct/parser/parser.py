@@ -329,6 +329,8 @@ def parse_dict(
                 attach_to=m.attach_to,
                 ref=m.ref,
                 context_override=resolve_value(m.context_override, ctx_map),
+                materialize=m.materialize,
+                watermark_column=m.watermark_column,
             )
             for m in validated.modules
         )

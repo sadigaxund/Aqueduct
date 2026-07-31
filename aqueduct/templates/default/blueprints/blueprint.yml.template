@@ -510,17 +510,19 @@ modules: []
   # Processes only new rows each run. The last MAX(watermark_column) is persisted
   # in Depot and injected as ${ctx._watermark} at runtime.
   # First run sentinel: '1900-01-01 00:00:00' (full scan). Use mode: append downstream.
+  # `materialize`/`watermark_column` are MODULE-level fields, siblings of
+  # `config:` — NOT config keys (same shape as Probe's `attach_to`).
 
   # - id: new_orders
   #   type: Channel
+  #   materialize: incremental
+  #   watermark_column: event_ts     # column whose MAX tracks progress
   #   config:
   #     op: sql
-  #     materialize: incremental
-  #     watermark_column: event_ts     # column whose MAX tracks progress
   #     query: |
   #       SELECT *
   #       FROM source_orders
-  #       WHERE event_ts > CAST('${ctx._watermark}' AS TIMESTAMP)
+  #       WHERE event_ts > CAST(${ctx._watermark} AS TIMESTAMP)
 
 
   # ── CHANNEL — join syntax (alternative to raw SQL JOIN) ───────────────────────

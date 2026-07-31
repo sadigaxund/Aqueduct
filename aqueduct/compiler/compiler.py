@@ -546,7 +546,7 @@ def compile(  # noqa: A001
         return fmts
 
     for m in modules:
-        if m.type != ModuleType.Channel or m.config.get("materialize") != "incremental":
+        if m.type != ModuleType.Channel or m.materialize != "incremental":
             continue
         _egress_fmts = _reachable_egress_formats(m.id)
         if _egress_fmts and all(f == "delta" for f in _egress_fmts):

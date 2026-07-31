@@ -538,3 +538,23 @@ leaves:
     support: supported
     tests:
       - tests/test_executor/test_executor_channel.py::test_cast_hub_type_constructors
+  # Incremental Channel watermark (2.40) — promoted out of the freeform
+  # `config:` dict to declared module fields so the capability framework can
+  # see them (see AGENTS.md's capability-leaf workflow). Unlike the
+  # ENGINE-INVARIANT module.field.* leaves above, these two genuinely DO
+  # dispatch through per-engine runtime code (executor/spark/executor.py's
+  # "Incremental watermark injection" section) — they land in this category
+  # only because ModuleSchema is shared across every module type. `tests:`
+  # added voluntarily (not required for a module.field.* leaf — see
+  # capability_leaves.py::execution_leaves(), which excludes this category).
+  module.field.materialize:
+    support: supported
+    tests:
+      - tests/test_executor/test_incremental.py::test_incremental_watermark_no_prior
+      - tests/test_executor/test_incremental.py::test_incremental_watermark_with_prior
+      - tests/test_executor/test_incremental.py::test_incremental_no_materialize_no_logic
+  module.field.watermark_column:
+    support: supported
+    tests:
+      - tests/test_executor/test_incremental.py::test_incremental_watermark_with_prior
+      - tests/test_executor/test_incremental.py::test_watermark_computed_from_output_not_channel_df

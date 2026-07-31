@@ -1174,17 +1174,141 @@ class SparkEngineConfig(BaseModel):
 class DuckDBEngineConfig(BaseModel):
     """Engine-level DuckDB configuration (`engine.duckdb:` block, 2.0).
 
-    Empty today. ``aqueduct/executor/duckdb_/engine.py::_make_session``
-    always opens a bare ``:memory:`` connection and reads nothing from
-    ``SessionSpec.engine_config`` yet — there is no session-creation knob
-    (``memory_limit``, ``threads``, ...) wired to real behaviour. Per
-    AGENTS.md's "no silent no-ops" rule, a field nothing reads is worse than
-    no field at all, so none is declared here until one is actually
-    consumed. The block still exists (and is still `extra="forbid"`) so
-    `engine.duckdb: {}` is valid config/Blueprint YAML ahead of the first
-    real knob.
+    Every field here is read by ``aqueduct/executor/duckdb_/engine.py::
+    _make_session`` — no field exists without a consumer (AGENTS.md's "no
+    silent no-ops" rule). Two independent motivations for ``database_path``:
+    (1) the RAM ceiling — a bare ``:memory:`` connection hard-caps a
+    receiving cross-engine handoff island at available RAM; (2) disk spill —
+    a file-backed connection lets DuckDB spill large intermediates to disk
+    instead of failing, which is what lets a large RECEIVING island survive
+    at all.
+
+    S3/GCS credentials (``s3_key_id_secret``/``s3_secret_access_key_secret``)
+    are SECRET KEY NAMES, resolved through the existing ``secrets:`` block
+    resolver (``aqueduct.secrets.resolve_secret`` — the same function
+    ``@aq.secret()`` calls) at session-creation time, never a parallel
+    credential path. The resolved values are fed into DuckDB's own
+    ``CREATE SECRET (TYPE S3, ...)`` (core DuckDB, works with the ``httpfs``
+    extension unloaded) via parameter binding — never string-interpolated,
+    so a credential value can never end up embedded in generated SQL text.
+    ``httpfs`` itself is a DuckDB EXTENSION, not a Python package — no new
+    dependency, no new extra.
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+    memory_limit: str | None = Field(
+        default=None,
+        description=(
+            "DuckDB `SET memory_limit='<value>'` (e.g. '4GB'), applied at "
+            "session creation. Unset leaves DuckDB's own default (roughly "
+            "80% of detected system RAM)."
+        ),
+        json_schema_extra={"engine_scoped": True},
+    )
+    threads: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "DuckDB `SET threads=<value>`, applied at session creation. "
+            "Unset leaves DuckDB's own default (all available cores)."
+        ),
+        json_schema_extra={"engine_scoped": True},
+    )
+    database_path: str | None = Field(
+        default=None,
+        description=(
+            "Local filesystem path for a persistent DuckDB database file, "
+            "replacing the default `:memory:` connection. LOCAL PATHS "
+            "ONLY — remote URI schemes (s3://, gs://, abfss://, ...) are "
+            "rejected at config-load; DuckDB's own database file is always "
+            "local even when the tables/relations it reads or writes point "
+            "at remote storage. Two independent reasons to set this: "
+            "raising the RAM ceiling a receiving cross-engine handoff "
+            "island is bound by, and letting large intermediates spill to "
+            "disk instead of aborting. Unset (default) keeps the "
+            "always-fresh `:memory:` connection."
+        ),
+        json_schema_extra={"engine_scoped": True},
+    )
+    extension_repository: str | None = Field(
+        default=None,
+        description=(
+            "DuckDB `SET custom_extension_repository='<url>'`, applied "
+            "before any extension install. Points DuckDB's extension "
+            "installer at an internal mirror instead of the public "
+            "repository — the escape hatch for an airgapped/hermetic "
+            "environment that cannot reach the network the first time a "
+            "Blueprint touches a remote (s3://, gs://, ...) path and DuckDB "
+            "tries to autoinstall `httpfs`. The other escape hatch is a "
+            "pre-populated `~/.duckdb/extensions` directory, which needs no "
+            "config at all."
+        ),
+        json_schema_extra={"engine_scoped": True},
+    )
+    s3_key_id_secret: str | None = Field(
+        default=None,
+        description=(
+            "Secret KEY NAME (resolved through the configured `secrets:` "
+            "provider — env | aws | gcp | azure | custom) holding the S3/GCS "
+            "access-key-id credential. NOT the credential value itself — "
+            "never put a literal key in aqueduct.yml. Fed into `CREATE "
+            "SECRET (TYPE S3, KEY_ID ..., ...)` at session creation via "
+            "parameter binding. Must be set together with "
+            "`s3_secret_access_key_secret`."
+        ),
+        json_schema_extra={"engine_scoped": True},
+    )
+    s3_secret_access_key_secret: str | None = Field(
+        default=None,
+        description=(
+            "Secret KEY NAME for the matching S3/GCS secret-access-key "
+            "credential — see `s3_key_id_secret`. Must be set together "
+            "with it."
+        ),
+        json_schema_extra={"engine_scoped": True},
+    )
+    s3_region: str | None = Field(
+        default=None,
+        description=(
+            "AWS region for the `CREATE SECRET (TYPE S3, ...)` statement "
+            "(e.g. 'us-east-1'). Not sensitive — given literally, unlike "
+            "the key_id/secret_access_key fields above. Optional: DuckDB's "
+            "S3 secret does not require a region."
+        ),
+        json_schema_extra={"engine_scoped": True},
+    )
+
+    @field_validator("database_path")
+    @classmethod
+    def _validate_database_path(cls, v: str | None) -> str | None:
+        if v is None or not v:
+            return v
+        if _URI_SCHEME_RE.match(v):
+            scheme = v.split("://", 1)[0]
+            raise ValueError(
+                f"engine.duckdb.database_path={v!r} uses a remote URI scheme "
+                f"({scheme!r}://) — database_path only supports local "
+                "filesystem paths. DuckDB's own database FILE is always "
+                "local even when the tables/relations it reads or writes "
+                "point at remote storage (s3://, gs://, ...) — use "
+                "`s3_key_id_secret`/`s3_secret_access_key_secret`/`s3_region` "
+                "for those. Use a local path, or omit database_path to keep "
+                "the default `:memory:` connection."
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _validate_s3_credential_pair(self) -> "DuckDBEngineConfig":
+        has_key = bool(self.s3_key_id_secret)
+        has_secret = bool(self.s3_secret_access_key_secret)
+        if has_key != has_secret:
+            raise ValueError(
+                "engine.duckdb.s3_key_id_secret and s3_secret_access_key_secret "
+                "must be set TOGETHER (both name secret keys for one S3 "
+                "credential pair) — got only "
+                f"{'s3_key_id_secret' if has_key else 's3_secret_access_key_secret'}."
+            )
+        return self
 
 
 class EngineConfig(BaseModel):

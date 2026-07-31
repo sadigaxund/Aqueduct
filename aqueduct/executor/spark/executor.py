@@ -1051,10 +1051,13 @@ def execute(
                     _t0 = time.monotonic()
 
                     # ── Incremental watermark injection ────────────────────────
-                    _incremental = module.config.get("materialize") == "incremental"
+                    # `materialize`/`watermark_column` are declared module fields
+                    # (2.40), not `config:` keys — see
+                    # `aqueduct.parser.schema.ModuleSchema.materialize`.
+                    _incremental = module.materialize == "incremental"
                     _channel_module = module
                     if _incremental:
-                        _watermark_col = module.config.get("watermark_column", "")
+                        _watermark_col = module.watermark_column or ""
                         _depot_key = f"{manifest.blueprint_id}:{module.id}:_watermark"
                         # Phase 53 — Depot is the sole watermark store.
                         _watermark_val = (

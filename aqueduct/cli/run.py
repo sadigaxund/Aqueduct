@@ -576,6 +576,56 @@ class _SurveyorSetupResult:
     _r: object  # click.style rule for banner
 
 
+def _resolve_session_engine_config(cfg: "AqueductConfig", engine: str, manifest: Any) -> dict[str, Any]:
+    """Build one engine's ``SessionSpec.engine_config`` dict.
+
+    Spark keeps its existing precedence (``engine.spark.conf`` merged with
+    the Blueprint's own ``spark_config`` override, Blueprint wins) — that is
+    Spark's own documented session-config merge, not a generic shape every
+    engine shares. Every OTHER registered engine (``duckdb``, ...) gets its
+    own ``engine.<name>`` sub-model dumped to a flat dict via
+    ``model_dump()`` — whatever fields THAT engine declares
+    (``memory_limit``/``threads``/``database_path``/``s3_*``/... for
+    DuckDB) flow through to ``_make_session`` automatically; a new engine
+    needs no change here.
+
+    Fixes a latent no-op this helper replaces: every call site used to build
+    ``SessionSpec.engine_config`` unconditionally from Spark's merged conf
+    dict regardless of the ACTUAL target engine — harmless only because
+    DuckDB's ``_make_session`` ignored ``engine_config`` entirely. Now that
+    DuckDB reads real fields from it (``engine.duckdb.*`` — Q4/httpfs work),
+    that would have silently discarded every DuckDB engine-config field.
+    """
+    if engine == "spark":
+        return {**cfg.engine.spark.conf, **manifest.spark_config}
+    engine_cfg = getattr(cfg.engine, engine, None)
+    if engine_cfg is None:
+        return {}
+    return engine_cfg.model_dump()
+
+
+def _session_secrets_options(cfg: "AqueductConfig", manifest: Any) -> dict[str, Any]:
+    """Build the ``secrets`` entry of ``SessionSpec.engine_options``.
+
+    The resolved ``secrets:`` block (provider/region/resolver/base_dir),
+    passed through so an engine that needs to resolve a secret KEY NAME into
+    a VALUE (DuckDB's ``engine.duckdb.s3_key_id_secret`` -> DuckDB's own
+    ``CREATE SECRET``) calls the SAME ``aqueduct.secrets.resolve_secret``
+    ``@aq.secret()`` uses — never a parallel credential path. An engine that
+    has no use for it (Spark) simply ignores the key, per
+    ``SessionSpec.engine_options``'s documented "opaque bag, read what you
+    understand" contract.
+    """
+    return {
+        "secrets": {
+            "provider": cfg.secrets.provider,
+            "region": cfg.secrets.region,
+            "resolver": cfg.secrets.resolver,
+            "base_dir": manifest.base_dir,
+        },
+    }
+
+
 def _setup_surveyor(
     resolved_store_dir,
     manifest,
@@ -905,15 +955,15 @@ def _setup_surveyor(
     session = None
     if len(manifest.islands) <= 1:
         from aqueduct.executor.protocol import SessionSpec, get_protocol
-        merged_spark_config = {**cfg.engine.spark.conf, **manifest.spark_config}
         _protocol = get_protocol(engine)
         session = _protocol.session_factory()(
             SessionSpec(
                 blueprint_id=manifest.blueprint_id,
-                engine_config=merged_spark_config,
+                engine_config=_resolve_session_engine_config(cfg, engine, manifest),
                 master_url=master_url,
                 quiet_startup=not verbose,
                 timezone=cfg.timezone,
+                engine_options=_session_secrets_options(cfg, manifest),
             )
         )
 
@@ -1681,17 +1731,10 @@ def run(
             # ── Polyglot ──────────────────────────────────────────────────
             from aqueduct.executor.orchestrator import run_polyglot
 
-            _engine_configs: dict[str, dict] = {}
-            for _isl in target_manifest.islands:
-                _isl_cfg = getattr(cfg.engine, _isl.engine, None)
-                _conf = dict(getattr(_isl_cfg, "conf", None) or {})
-                if _isl.engine == "spark":
-                    # Same merge order the single-engine session build uses
-                    # (`{**cfg.engine.spark.conf, **manifest.spark_config}`)
-                    # — a per-module `engine.spark.conf` override in the
-                    # Blueprint wins over the engine-level default.
-                    _conf = {**_conf, **target_manifest.spark_config}
-                _engine_configs[_isl.engine] = _conf
+            _engine_configs: dict[str, dict] = {
+                _isl.engine: _resolve_session_engine_config(cfg, _isl.engine, target_manifest)
+                for _isl in target_manifest.islands
+            }
 
             polyglot_result = run_polyglot(
                 target_manifest,
@@ -1709,6 +1752,7 @@ def run(
                 master_url=master_url,
                 quiet_startup=not verbose,
                 timezone=cfg.timezone,
+                secrets_config=_session_secrets_options(cfg, target_manifest)["secrets"],
                 block_full_actions=kw.get("block_full_actions", False),
                 parallel=kw.get("parallel", False),
                 use_observe=kw.get("use_observe", False),

@@ -43,16 +43,14 @@ def test_incremental_watermark_no_prior(spark, tmp_path):
     manifest = create_manifest(
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
-            Module(id="inc", type="Channel", label="Inc", config={
+            Module(id="inc", type="Channel", label="Inc", materialize="incremental", watermark_column="ts", config={
                 "op": "sql",
-                "materialize": "incremental",
-                "watermark_column": "ts",
                 "query": "SELECT * FROM in WHERE ts > ${ctx._watermark}"
             }),
         ),
         edges=(Edge(from_id="in", to_id="inc", port="main"),)
     )
-    
+
     result = execute(manifest, spark, depot=depot)
     # Execution succeeds — sentinel substitution allowed query to run
     assert result.status == "success"
@@ -74,10 +72,8 @@ def test_incremental_watermark_with_prior(spark, tmp_path):
     manifest = create_manifest(
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
-            Module(id="inc_p", type="Channel", label="Inc", config={
+            Module(id="inc_p", type="Channel", label="Inc", materialize="incremental", watermark_column="ts", config={
                 "op": "sql",
-                "materialize": "incremental",
-                "watermark_column": "ts",
                 "query": "SELECT * FROM in WHERE ts > ${ctx._watermark}"
             }),
             Module(id="out", type="Egress", label="Out", config={"format": "parquet", "path": out_path}),
@@ -108,10 +104,8 @@ def test_incremental_watermark_failure_not_updated(spark, tmp_path):
     manifest = create_manifest(
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
-            Module(id="inc_f", type="Channel", label="Inc", config={
+            Module(id="inc_f", type="Channel", label="Inc", materialize="incremental", watermark_column="ts", config={
                 "op": "sql",
-                "materialize": "incremental",
-                "watermark_column": "ts",
                 "query": "SELECT * FROM non_existent"
             }),
         ),
@@ -132,10 +126,8 @@ def test_incremental_egress_overwrite_warning(spark, tmp_path, caplog):
     manifest = create_manifest(
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
-            Module(id="inc", type="Channel", label="Inc", config={
+            Module(id="inc", type="Channel", label="Inc", materialize="incremental", watermark_column="ts", config={
                 "op": "sql",
-                "materialize": "incremental",
-                "watermark_column": "ts",
                 "query": "SELECT * FROM in"
             }),
             Module(id="out", type="Egress", label="Out", config={"format": "parquet", "path": str(tmp_path/"out"), "mode": "overwrite"}),
@@ -160,15 +152,14 @@ def test_incremental_no_materialize_no_logic(spark, tmp_path):
     manifest = create_manifest(
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
-            Module(id="inc", type="Channel", label="Inc", config={
+            Module(id="inc", type="Channel", label="Inc", watermark_column="ts", config={
                 "op": "sql",
-                "watermark_column": "ts",
                 "query": "SELECT * FROM in"
             }),
         ),
         edges=(Edge(from_id="in", to_id="inc", port="main"),)
     )
-    
+
     execute(manifest, spark, depot=depot)
     # Depot should be empty
     assert not depot.data
@@ -181,16 +172,14 @@ def test_incremental_depot_none_no_crash(spark, tmp_path):
     manifest = create_manifest(
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
-            Module(id="inc", type="Channel", label="Inc", config={
+            Module(id="inc", type="Channel", label="Inc", materialize="incremental", watermark_column="ts", config={
                 "op": "sql",
-                "materialize": "incremental",
-                "watermark_column": "ts",
                 "query": "SELECT * FROM in WHERE ts > ${ctx._watermark}"
             }),
         ),
         edges=(Edge(from_id="in", to_id="inc", port="main"),)
     )
-    
+
     result = execute(manifest, spark, depot=None)
     assert result.status == "success"
 
@@ -264,8 +253,8 @@ def test_watermark_depot_only_no_sidecar(spark, tmp_path):
     manifest = create_manifest(
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
-            Module(id="inc", type="Channel", label="Inc", config={
-                "op": "sql", "materialize": "incremental", "watermark_column": "ts",
+            Module(id="inc", type="Channel", label="Inc", materialize="incremental", watermark_column="ts", config={
+                "op": "sql",
                 "query": "SELECT * FROM in WHERE ts > ${ctx._watermark}",
             }),
             Module(id="out", type="Egress", label="Out", config={
@@ -299,8 +288,8 @@ def test_watermark_no_depot_warns_and_persists_nothing(spark, tmp_path, caplog):
     manifest = create_manifest(
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
-            Module(id="inc", type="Channel", label="Inc", config={
-                "op": "sql", "materialize": "incremental", "watermark_column": "ts",
+            Module(id="inc", type="Channel", label="Inc", materialize="incremental", watermark_column="ts", config={
+                "op": "sql",
                 "query": "SELECT * FROM in WHERE ts > ${ctx._watermark}",
             }),
             Module(id="out", type="Egress", label="Out", config={
@@ -342,10 +331,8 @@ def test_watermark_computed_from_output_not_channel_df(spark, tmp_path):
     manifest = create_manifest(
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
-            Module(id="inc", type="Channel", label="Inc", config={
+            Module(id="inc", type="Channel", label="Inc", materialize="incremental", watermark_column="ts", config={
                 "op": "sql",
-                "materialize": "incremental",
-                "watermark_column": "ts",
                 "query": "SELECT * FROM in WHERE ts > ${ctx._watermark}",
             }),
             Module(id="out", type="Egress", label="Out", config={

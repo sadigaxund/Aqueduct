@@ -219,6 +219,12 @@ class Module:
     # Arcade-specific: sub-Blueprint path and context overrides
     ref: str | None = None
     context_override: dict[str, Any] | None = None
+    # Channel-specific (2.40): incremental watermark processing — see
+    # `aqueduct.parser.schema.ModuleSchema.materialize`/`watermark_column`.
+    # Promoted out of `config` (a freeform dict, invisible to the capability
+    # framework) to a declared field.
+    materialize: str | None = None
+    watermark_column: str | None = None
     # True ONLY for a compiler-synthesized module (currently: a Handoff —
     # `aqueduct.compiler.handoff.insert_handoff_modules`). Never settable
     # from Blueprint YAML (`ModuleSchema` has no such field), so a module

@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.39: Reference Document**
+**Version 2.41: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -402,8 +402,27 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
 | **columns** | Column mapping or list. Semantics depend on op. |
 | **num_partitions** | Target partition count. Used by `repartition` and `coalesce`. |
 | **spillway_condition** | Optional SQL boolean expression. Matching rows are routed to the spillway port. |
-| **materialize** | Set to `incremental` for watermark-based incremental processing. |
-| **watermark_column** | Required when `materialize: incremental`. Column used to track the high-water mark. |
+
+**Incremental watermark (`materialize:` / `watermark_column:`, 2.40).** Declared MODULE-level fields, siblings of `config:` — NOT config keys (same shape as Probe's `attach_to`, §4.4). Promoted out of the freeform `config:` dict in 2.40 so the capability framework can see them (a freeform key is invisible to it by construction; every engine must now declare a verdict for `module.field.materialize` / `module.field.watermark_column`). `op: sql` only:
+
+```yaml
+- id: new_events
+  type: Channel
+  materialize: incremental          # module-level field, NOT inside config
+  watermark_column: event_ts        # module-level field, NOT inside config
+  config:
+    op: sql
+    query: |
+      SELECT * FROM events
+      WHERE event_ts > CAST(${ctx._watermark} AS TIMESTAMP)
+```
+
+| Field | Description |
+| :- | :- |
+| **materialize** | Optional. Set to `incremental` to opt this Channel into watermark-based incremental processing. On each run, the Depot's persisted `MAX(watermark_column)` (or the sentinel `1900-01-01 00:00:00` on the first run, so the first run is a full scan) is substituted, quoted, for the literal token `${ctx._watermark}` in the `config.query` string. After the run succeeds, the new `MAX(watermark_column)` — computed from the WRITTEN downstream Egress output, not the upstream DAG — is persisted back to the Depot. Requires a configured Depot (`stores.depots`); without one the watermark is lost between runs and every run re-scans all source data. |
+| **watermark_column** | Required when `materialize: incremental`. Column used to track the high-water mark (typically a timestamp or monotonic integer). |
+
+**BREAKING (2.40):** `materialize`/`watermark_column` used to live inside a Channel's `config:` block, a freeform dict that never validated their spelling or gated them by capability. Move both out of `config:` up to the module (siblings of `config:`, like `attach_to`). A Blueprint that still nests them inside `config:` parses (the dict stays freeform) but neither field is read from there anymore — the incremental behaviour silently stops. See `CHANGELOG.md`.
 
 **Op reference:**
 
@@ -1546,7 +1565,14 @@ engine:
     master_url: "local[*]"           # SparkSession.builder.master() — validated against deployment.target
     conf:                            # per-run Spark session configuration
       spark.sql.shuffle.partitions: 200
-  duckdb: {}                         # reserved — no knob is wired to real behaviour yet
+  duckdb:
+    memory_limit: "4GB"              # SET memory_limit — unset keeps DuckDB's own default
+    threads: 4                       # SET threads — unset keeps DuckDB's own default
+    database_path: "/data/run.duckdb"  # persistent file, replacing the default :memory: connection
+    extension_repository: null       # SET custom_extension_repository — airgapped-mirror escape hatch
+    s3_key_id_secret: null           # secret KEY NAME (resolved via secrets:), fed into CREATE SECRET
+    s3_secret_access_key_secret: null  # secret KEY NAME — must be set together with s3_key_id_secret
+    s3_region: null                  # not sensitive — given literally
 ```
 
 **2.0 BREAKING — moved off two pre-2.0 locations.** `deployment.master_url` (it is Spark's own cluster-connection string, not a cross-engine deployment concern — `deployment.target` stays where it is) and the top-level `spark_config` dict (named after one engine, with nowhere for a second engine's knobs to live) both move under `engine.spark:`. `aqueduct_config` bumps `"1.0"` → `"2.0"`. Both are now hard-rejected (`extra="forbid"`) at their old location — a pre-2.0 file fails at config-load naming the rejected key directly (`ConfigError`, exit code `CONFIG_ERROR`), never silently accepted or auto-migrated:
@@ -1574,7 +1600,20 @@ spark_config:                      engine:
                                           spark.sql.shuffle.partitions: 200
 ```
 
-`engine.spark.conf` at both levels merge the same way `spark_config` always did (Blueprint wins on conflict). The `set_spark_config` PatchSpec op (§8) is unchanged by name; only its write target moved to `engine.spark.conf.<key>`. `engine.duckdb` exists as an accepted, empty block — no DuckDB session-creation knob (`memory_limit`, `threads`, ...) is wired to real behaviour yet, so none is declared (a config field nothing reads is worse than no field — see AGENTS.md).
+`engine.spark.conf` at both levels merge the same way `spark_config` always did (Blueprint wins on conflict). The `set_spark_config` PatchSpec op (§8) is unchanged by name; only its write target moved to `engine.spark.conf.<key>`.
+
+### The `engine.duckdb:` block — session config + remote storage (2.41)
+
+Every field is read by `_make_session` — none is a silent no-op (see AGENTS.md's "no silent no-ops" rule).
+
+- **`memory_limit`/`threads`** — `SET memory_limit=...`/`SET threads=...`, applied right after connecting. Unset keeps DuckDB's own defaults.
+- **`database_path`** — a persistent file, replacing the default `:memory:` connection. LOCAL PATHS ONLY (a remote URI scheme is rejected at config-load, mirroring `checkpoint_root`): DuckDB's own database file is always local even when the tables it reads/writes point at remote storage. Two independent reasons to set it: it raises a receiving cross-engine handoff island's RAM ceiling (a bare `:memory:` connection hard-caps it at available RAM), and it lets large intermediates spill to disk instead of aborting.
+- **`extension_repository`** — `SET custom_extension_repository=...`, applied before any extension install. The airgapped/hermetic-CI escape hatch: `httpfs` (below) autoinstalls over the network on first use by default, which fails on a cluster with no route to DuckDB's public extension repository. The other escape hatch, a pre-populated `~/.duckdb/extensions` directory, needs no config at all — DuckDB checks its local cache first.
+- **`s3_key_id_secret`/`s3_secret_access_key_secret`/`s3_region`** — S3/GCS credentials for remote ingress/egress/handoff paths. The first two are secret KEY NAMES (never a literal credential), resolved through the EXISTING `secrets:` block resolver (`aqueduct.secrets.resolve_secret` — the same function `@aq.secret()` calls) at session creation, and fed into DuckDB's own `CREATE SECRET (TYPE S3, KEY_ID ?, SECRET ?, REGION ?)` via parameter binding — never string-interpolated into SQL, so a credential value can never end up in a logged or rendered statement. `s3_region` is not sensitive and is given literally. The two secret-name fields must be set together (config-load validation error otherwise).
+
+**`httpfs` is a DuckDB EXTENSION, not a Python package** — nothing enters `pyproject.toml`, no new dependency or extra. On duckdb>=1.0, `autoinstall_known_extensions`/`autoload_known_extensions` both default to `True`, so any module touching an `s3://`/`gs://` path already makes DuckDB install and load `httpfs` on its own with zero Aqueduct code. `_make_session` proactively `INSTALL`s/`LOAD`s `httpfs` only when S3 credentials or `extension_repository` are configured — a deliberate signal of remote-storage intent — so an airgapped-install failure surfaces LOUDLY at session creation as `aqueduct.executor.duckdb_.extensions.DuckDBExtensionError` (an `AqueductError` naming both escape hatches), not as a bare `duckdb.IOException`/HTTP error buried inside a later query. When neither is configured, a DuckDB session-startup warning (`duckdb_httpfs_availability`, mirroring Spark's `jar_availability` rule — same diagnostic shape, not the same mechanism: a jar ships to Spark's executor fleet at session creation, a DuckDB extension installs per-connection in-process) fires if the compiled Manifest reads/writes a remote path and `httpfs` is not yet loaded, naming the network requirement and both escapes.
+
+`aqueduct doctor`'s `handoff-access:duckdb` check (§10.4.3) attempts a real round trip against a remote `handoff.root` the same way it always has for a local one — it no longer unconditionally reports `skip` for a remote root.
 
 ## **10.2 Environment variables & .env**
 
@@ -1658,7 +1697,7 @@ handoff:
   keep_on_failure: true       # default — the resume story
 ```
 
-Unlike `checkpoint_root`, `root` is **not** local-filesystem-only: a handoff spill must be reachable by BOTH engines on either side of a boundary, so a remote URI scheme (`s3://`, `gs://`, `abfss://`, ...) is accepted with no rejection. `handoff:` borrows `checkpoint`'s LIFECYCLE semantics (kept on failure, cleaned up on success) — not its location or its local-only constraint, and not its config key (`handoff:` is its own top-level block, never nested under `checkpoint_root`).
+Unlike `checkpoint_root`, `root` is **not** local-filesystem-only: a handoff spill must be reachable by BOTH engines on either side of a boundary, so a remote URI scheme (`s3://`, `gs://`, `abfss://`, ...) is accepted with no rejection. `handoff:` borrows `checkpoint`'s LIFECYCLE semantics (kept on failure, cleaned up on success) — not its location or its local-only constraint, and not its config key (`handoff:` is its own top-level block, never nested under `checkpoint_root`). On the DuckDB side, a remote root is reached the same way any other remote path is (§10.9's `engine.duckdb:` subsection) — `httpfs`, autoloaded on first touch, plus `engine.duckdb.s3_*` credentials if the target requires authentication.
 
 Directory layout: `<root>/<manifest_hash>/<run_id>/<edge_id>/`, one subdirectory per boundary per run. Deleted when the run succeeds; kept when it fails and `keep_on_failure` is true (the default), so a rerun — most commonly after a self-heal — can read the upstream island's already-materialized spill instead of recomputing it. Parquet is a fixed internal transport detail: there is no format knob, on either the Blueprint or the config side.
 
@@ -1730,7 +1769,7 @@ The Blueprint grammar (module types, Channel ops, Egress write modes, feature fl
 
 The two are not interchangeable, and Aqueduct does not present them as such. A Blueprint that compiles for both engines is one whose leaves both engines have declared `supported`. That is a property the compiler checks per Blueprint, not a property of the product.
 
-The DuckDB engine currently reads `parquet`, `csv`, and `json`; runs Channel `sql`, `join`, `filter`, `select`, `deduplicate`, `cast`, `rename`, `sort`, and `union`; runs every Junction mode and every Funnel mode; and writes `parquet` and `csv`. Channel `sql` and `join` are authored in Spark SQL and transpiled to DuckDB SQL with `sqlglot`. Assert, Probe, and Python and Java UDFs are declared `unsupported` rather than silently accepted. The per-leaf verdicts are published as a generated matrix (see below) rather than restated here.
+The DuckDB engine currently reads `parquet`, `csv`, and `json`; runs Channel `sql`, `join`, `filter`, `select`, `deduplicate`, `cast`, `rename`, `sort`, and `union`; runs every Junction mode and every Funnel mode; and writes `parquet` and `csv`. Channel `sql` and `join` are authored in Spark SQL and transpiled to DuckDB SQL with `sqlglot`. Assert, Probe, and Python and Java UDFs are declared `unsupported` rather than silently accepted. Any of those paths may point at remote storage (`s3://`, `gs://`, ...) — DuckDB's `httpfs` extension autoloads on first touch, and `engine.duckdb.*` config (below) wires memory/thread limits, a persistent database file, and S3 credentials reconciled with the `secrets:` resolver. The per-leaf verdicts are published as a generated matrix (see below) rather than restated here.
 
 ### How an engine registers
 
@@ -1766,7 +1805,7 @@ An engine earns `supported` rather than assuming it. For a leaf the engine execu
 
 ### Declarations are data, one explicit row per leaf
 
-Each engine ships a YAML capability declaration alongside its package (`aqueduct/executor/spark/capabilities.yml`, `aqueduct/executor/duckdb_/capabilities.yml`) carrying one row for every capability leaf: a verdict, plus the optional `requires` constraint and `hint` text. Spark's file holds 206 rows (189 Blueprint-grammar leaves + 17 engine-scoped config leaves); DuckDB's holds 204 (189 + 15 — two of Spark's are `engine.spark.*`, positionally not DuckDB's to declare; see "Config-leaf scoping" below). Every engine's table also has ~88 config leaves it is never asked about at all — see that section for why the two counts differ from a single flat total.
+Each engine ships a YAML capability declaration alongside its package (`aqueduct/executor/spark/capabilities.yml`, `aqueduct/executor/duckdb_/capabilities.yml`) carrying one row for every capability leaf: a verdict, plus the optional `requires` constraint and `hint` text. Spark's file holds 208 rows (191 Blueprint-grammar leaves + 17 engine-scoped config leaves); DuckDB's holds 213 (191 + 22 — 15 shared/DuckDB-only engine-scoped leaves plus the 7 `engine.duckdb.*` leaves from the 2.41 config-surface work, minus the 2 `engine.spark.*` leaves that are positionally Spark's to declare, not DuckDB's; see "Config-leaf scoping" below). Every engine's table also has 88 config leaves it is never asked about at all — see that section for why the two counts differ from a single flat total.
 
 There is no default-verdict sweep. An engine states which leaves it supports, one row at a time, and never "everything, by assumption". A third-party engine author ships reviewable data rather than Python.
 
@@ -1787,7 +1826,7 @@ api_key: str | None = Field(..., json_schema_extra={"engine_scoped": False})
 
 A field carrying **neither** key raises `CapabilityScopeError` naming the field and both legal resolutions, the moment the walker runs. An earlier design let an absent tag fall back to "core" implicitly; that was rejected — it let a brand-new field (or a genuinely engine-scoped one someone forgot to mark) disappear into the core bucket with nobody deciding, silently deleting the `engine_key_ignored` warning path it should have had. Requiring the `False` half explicitly is what makes "core" a decision instead of an omission. `aqueduct/executor/config_leaves.py::all_config_leaves()` yields the `True`-tagged fields (the checklist every engine must have a verdict for); `core_config_leaves()` yields the `False`-tagged complement (leaves that never appear in any engine's table at all — not a question that gets asked). Both are derived from the SAME per-field tag, so they cannot drift apart, and no committed snapshot file exists to go stale either — see "Why no snapshot file" below. Reclassifying a key is now a one-word `True`↔`False` diff at the field itself, reviewable in a pull request — the property the dropped snapshot file existed to provide.
 
-**`engine.<name>.*` is positionally owned.** A leaf under a per-engine namespaced block (`engine.spark.master_url`, `engine.spark.conf`, and any future `engine.duckdb.*`) can only ever mean something to that ONE engine, so it appears ONLY in that engine's own checklist — `all_config_leaves(engine="spark")` excludes every other engine's `engine.<name>.*` leaves, and `capability_tooling.governed_leaves(engine=...)` threads the same filter through `check`/`sync`/`scaffold`/`docs`. Spark's table therefore has 206 rows (189 grammar + 17 engine-scoped config, including its own two `engine.spark.*` leaves) and DuckDB's has 204 (189 + 15 — the same 17 minus Spark's two). Because a field namespaced to one engine has no coherent "core" reading, a field discovered there tagged `False` (or untagged) is ALSO a contradiction and raises `CapabilityScopeError` at the walker.
+**`engine.<name>.*` is positionally owned.** A leaf under a per-engine namespaced block (`engine.spark.master_url`, `engine.spark.conf`, `engine.duckdb.*`) can only ever mean something to that ONE engine, so it appears ONLY in that engine's own checklist — `all_config_leaves(engine="spark")` excludes every other engine's `engine.<name>.*` leaves, and `capability_tooling.governed_leaves(engine=...)` threads the same filter through `check`/`sync`/`scaffold`/`docs`. Spark's table therefore has 208 rows (191 grammar + 17 engine-scoped config, including its own two `engine.spark.*` leaves) and DuckDB's has 213 (191 + 22 — 15 shared engine-scoped leaves, minus Spark's two, plus its own seven `engine.duckdb.*` leaves: `memory_limit`, `threads`, `database_path`, `extension_repository`, `s3_key_id_secret`, `s3_secret_access_key_secret`, `s3_region`). Because a field namespaced to one engine has no coherent "core" reading, a field discovered there tagged `False` (or untagged) is ALSO a contradiction and raises `CapabilityScopeError` at the walker.
 
 **Why no snapshot file.** An earlier design considered committing a generated `core_config_leaves.yml` and diffing it in CI, the same pattern `docs/compatibility.md` uses. It was dropped: the per-field tag already IS the single source of truth, and it sits AT the field it describes rather than in a generated copy. What replaces the snapshot is one build-enforced invariant plus a check that already existed:
 
