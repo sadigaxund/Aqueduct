@@ -23,8 +23,15 @@ def main():
     console.print(t)
     console.print(f"[dim]  Row count: {len(df_clean)}[/dim]\n")
 
-    csv_files = glob.glob(os.path.join(quarantine_path, "part-*.csv"))
-    df_bad = pd.concat([pd.read_csv(f) for f in csv_files], ignore_index=True) if csv_files else pd.DataFrame()
+    # Spark writes a directory of part-*.csv files; DuckDB writes a single
+    # CSV file at the configured path. Read whichever shape is there.
+    if os.path.isdir(quarantine_path):
+        csv_files = glob.glob(os.path.join(quarantine_path, "part-*.csv"))
+        df_bad = pd.concat([pd.read_csv(f) for f in csv_files], ignore_index=True) if csv_files else pd.DataFrame()
+    elif os.path.exists(quarantine_path):
+        df_bad = pd.read_csv(quarantine_path)
+    else:
+        df_bad = pd.DataFrame()
     t = Table(title="Quarantined Orders (Spillway)", header_style="bold red")
     if not df_bad.empty:
         for c in df_bad.columns:

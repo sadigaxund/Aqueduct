@@ -233,6 +233,40 @@ def test_snippets_lts_lane_is_pinned_and_blocking():
     )
 
 
+def test_snippets_lanes_cover_every_registered_engine():
+    """The gallery-snippets twin of `test_compat_lane_covers_every_registered_engine`
+    below. `run_snippets.sh -e ENGINE` forwards to `--set deployment.engine=ENGINE`
+    (see scripts/run_snippets.sh), so a matrix job covers an engine only if that
+    engine name actually appears in `strategy.matrix.engine` — a job that just
+    runs the script with no `-e` flag exercises whatever each snippet's own
+    aqueduct.yml defaults to (today: spark for every snippet), never the other
+    registered engine, no matter how many times it runs.
+
+    Both `snippets` (the unpinned canary) and `snippets-lts` (the pinned,
+    blocking lane) must cover every engine — a DuckDB-only regression must be
+    visible on both the early-warning lane and the promise lane, exactly like
+    Spark already is. The engine list is resolved from the registry
+    (`_registered_engines()`, shared with the `compat`-lane guard below), never
+    hardcoded, so a third engine registered tomorrow is covered here with no
+    edit to this test.
+    """
+    engines = _registered_engines()
+    wf = _workflow("version-matrix.yml")
+    for job_name in ("snippets", "snippets-lts"):
+        matrix_engines = (
+            (wf["jobs"][job_name].get("strategy") or {}).get("matrix") or {}
+        ).get("engine", [])
+        for engine in engines:
+            assert engine in matrix_engines, (
+                f"engine {engine!r} is registered (aqueduct.engines entry point) "
+                f"but version-matrix.yml's {job_name!r} job's strategy.matrix.engine "
+                f"({matrix_engines!r}) does not include it. Add it to the matrix "
+                "(and forward it via `run_snippets.sh -e ${{ matrix.engine }}`) so "
+                f"the gallery snippets are actually exercised against {engine!r}, "
+                "not just whichever engine each snippet's own aqueduct.yml defaults to."
+            )
+
+
 def _compat_run_tests_script() -> str:
     """The `compat` job's ``Run tests`` step's shell script (its pytest invocation)."""
     steps = _workflow("version-matrix.yml")["jobs"]["compat"]["steps"]

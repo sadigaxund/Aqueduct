@@ -63,10 +63,20 @@ jobs:
   # free: resolving fresh is what makes the canary go red first when upstream drifts,
   # and that early warning IS the feature. Constraining it would silently delete the
   # only lane that watches upstream. It is unpinned on purpose, not by omission.
+  #
+  # ENGINE MATRIX: one task per registered engine (spark, duckdb — see
+  # `run_snippets.sh -e`), so a DuckDB-only regression doesn't hide behind a
+  # green Spark row and vice versa. `tests/test_meta_ci.py` resolves this
+  # list from `CAPABILITY_REGISTRY`, never a hardcoded name here, so a third
+  # engine is expected to extend `matrix.engine` too.
   snippets:
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [spark, duckdb]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -81,7 +91,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
       - run: pip install -e ".[dev,spark,llm]"
-      - run: bash scripts/run_snippets.sh
+      - run: bash scripts/run_snippets.sh -e ${{ matrix.engine }}
 
   # BLOCKING snippet lane (Phase 78) — the PROMISE-lane counterpart to the
   # `snippets` canary above, same split as `compat` vs. that canary.
@@ -100,9 +110,19 @@ jobs:
   # DO NOT fold this into the `snippets` canary above or give that job a
   # PIP_CONSTRAINT — the two serve opposite purposes (fresh/non-blocking vs.
   # pinned/blocking) and `tests/test_meta_ci.py` enforces the split for both.
+  #
+  # ENGINE MATRIX: same rationale as the canary's matrix above — one task per
+  # registered engine, so this BLOCKING lane can fail on a DuckDB-only
+  # regression without needing a Spark failure alongside it. An UNSUPPORTED
+  # snippet (a capability-gate CompileError, see run_snippets.sh) is not a
+  # failure — only a genuine FAIL blocks this lane, on either engine.
   snippets-lts:
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [spark, duckdb]
     env:
       PIP_CONSTRAINT: ${{ github.workspace }}/requirements/compat-py3.11.txt
     steps:
@@ -113,6 +133,8 @@ jobs:
       # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env.
       # Safe to cache (unlike the canary above): this lane is pinned, so the
       # resolved dependency set is deterministic for a given lock-file hash.
+      # Shared across the engine matrix on purpose — both legs install the
+      # exact same dependency tree, only `aqueduct run`'s target differs.
       - uses: actions/cache@v4
         with:
           path: ~/.cache/pip
@@ -124,7 +146,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
       - run: pip install -e ".[dev,spark,llm]"
-      - run: bash scripts/run_snippets.sh
+      - run: bash scripts/run_snippets.sh -e ${{ matrix.engine }}
 
   # PROMISE LANES (Phase 78): the 3 pinned combos below (LTS / Latest / Legacy)
   # are the versions Aqueduct is actually tested against and supports — see

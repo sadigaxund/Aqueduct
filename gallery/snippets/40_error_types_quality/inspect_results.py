@@ -7,10 +7,16 @@ import glob
 console = Console()
 
 def read_csv_from_dir(path):
-    csv_files = glob.glob(os.path.join(path, "part-*.csv"))
-    if not csv_files:
-        return pd.DataFrame()
-    return pd.concat([pd.read_csv(f) for f in csv_files], ignore_index=True)
+    # Spark writes a directory of part-*.csv files; DuckDB writes a single
+    # CSV file at the configured path. Read whichever shape is there.
+    if os.path.isdir(path):
+        csv_files = glob.glob(os.path.join(path, "part-*.csv"))
+        if not csv_files:
+            return pd.DataFrame()
+        return pd.concat([pd.read_csv(f) for f in csv_files], ignore_index=True)
+    if os.path.exists(path):
+        return pd.read_csv(path)
+    return pd.DataFrame()
 
 def main():
     clean_path = "data/output/clean.parquet"

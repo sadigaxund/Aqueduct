@@ -123,3 +123,33 @@ def test_aqscenario_heals_with_mocked_agent(sc_path, tmp_path):
     assert result.model == "test-model"
     assert hasattr(result, "passed")
     assert hasattr(result, "failures")
+
+
+# ── unit: 44_dag_cycle_detection generates its own fixture data ──────────────
+#
+# Regression guard replacing the xfail stub that used to live in
+# tests/test_backlog.py (test_44_dag_cycle_detection_fixture_data_is_present).
+# 44 was the one gallery snippet with no populate*.py script, so its
+# data/nodes.csv only ever existed as an untracked local file —
+# gallery/**/data/ is git-ignored by design (.gitignore:160), and every OTHER
+# snippet regenerates its own input data at run time. This exercises the real
+# populate script (scripts/run_snippets.sh's run_dag_cycle_snippet invokes the
+# same file) rather than asserting a committed fixture that is never supposed
+# to exist in git.
+
+
+@pytest.mark.unit
+def test_44_dag_cycle_detection_populate_script_generates_nodes_csv(tmp_path):
+    import subprocess
+    import sys
+
+    populate = _GALLERY / "snippets" / "44_dag_cycle_detection" / "populate_data.py"
+    assert populate.is_file(), f"missing populate script: {populate}"
+
+    subprocess.run([sys.executable, str(populate)], check=True, cwd=tmp_path)
+
+    nodes_csv = tmp_path / "data" / "nodes.csv"
+    assert nodes_csv.is_file(), f"populate script did not create {nodes_csv}"
+    rows = nodes_csv.read_text(encoding="utf-8").strip().splitlines()
+    assert rows[0] == "id,value"
+    assert rows[1:] == ["1,alpha", "2,beta", "3,gamma"]

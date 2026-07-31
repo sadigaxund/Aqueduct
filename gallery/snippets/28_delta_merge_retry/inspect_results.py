@@ -7,13 +7,17 @@ console = Console()
 
 
 def main():
+    # A Delta table is always a directory (transaction log + data files) —
+    # unlike the plain-Parquet snippets elsewhere in the gallery, there is no
+    # single-file DuckDB shape to handle here (DuckDB does not write Delta at
+    # all; see egress.format.delta in docs/compatibility.md).
     output = Path("data/output/delta_orders")
-    if not output.is_dir():
+    if not output.exists():
         console.print(f"[bold red]✗[/bold red] Delta output not found at {output}. Did you run the pipeline?")
         console.print("  [dim]Delta requires Delta Lake JARs — see aqueduct.yml for DELTA_SPARK_VER / DELTA_VER.[/dim]")
         return
 
-    parquet_files = list(output.rglob("*.parquet"))
+    parquet_files = list(output.rglob("*.parquet")) if output.is_dir() else [output]
     if not parquet_files:
         console.print(f"[bold yellow]⚠[/bold yellow] No Parquet files found in {output}.")
         return

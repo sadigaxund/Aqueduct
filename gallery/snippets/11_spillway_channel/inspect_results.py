@@ -25,8 +25,15 @@ def main():
     console.print(t)
     console.print(f"[dim]  Row count: {len(df_valid)}[/dim]\n")
 
-    csv_files = glob.glob(os.path.join(rejected_path, "part-*.csv"))
-    df_bad = pd.concat([pd.read_csv(f) for f in csv_files], ignore_index=True) if csv_files else pd.DataFrame()
+    # Spark writes a directory of part-*.csv files; DuckDB writes a single
+    # CSV file at the configured path. Read whichever shape is there.
+    if os.path.isdir(rejected_path):
+        csv_files = glob.glob(os.path.join(rejected_path, "part-*.csv"))
+        df_bad = pd.concat([pd.read_csv(f) for f in csv_files], ignore_index=True) if csv_files else pd.DataFrame()
+    elif os.path.exists(rejected_path):
+        df_bad = pd.read_csv(rejected_path)
+    else:
+        df_bad = pd.DataFrame()
     t = Table(title="Rejected Scores (Spillway Stream)", header_style="bold red")
     if not df_bad.empty:
         for c in df_bad.columns:

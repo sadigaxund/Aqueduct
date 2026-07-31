@@ -24,8 +24,15 @@ def main():
     console.print(t)
     console.print(f"[dim]  Row count: {len(df_fresh)}[/dim]\n")
 
-    csv_files = glob.glob(os.path.join(stale_path, "part-*.csv"))
-    df_stale = pd.concat([pd.read_csv(f) for f in csv_files], ignore_index=True) if csv_files else pd.DataFrame()
+    # Spark writes a directory of part-*.csv files; DuckDB writes a single
+    # CSV file at the configured path. Read whichever shape is there.
+    if os.path.isdir(stale_path):
+        csv_files = glob.glob(os.path.join(stale_path, "part-*.csv"))
+        df_stale = pd.concat([pd.read_csv(f) for f in csv_files], ignore_index=True) if csv_files else pd.DataFrame()
+    elif os.path.exists(stale_path):
+        df_stale = pd.read_csv(stale_path)
+    else:
+        df_stale = pd.DataFrame()
     t = Table(title="Stale Events (Quarantined to Spillway)", header_style="bold yellow")
     if not df_stale.empty:
         for c in df_stale.columns:

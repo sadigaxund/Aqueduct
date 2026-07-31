@@ -8,19 +8,27 @@ console = Console()
 
 
 def main():
+    # Spark writes a table as a directory of part files; a single-file
+    # writer (e.g. DuckDB) would write one Parquet file at the same path.
+    # DuckDB's read_parquet() accepts a directory, a glob, or a single file
+    # transparently, so only the "does anything exist yet" check needs both
+    # shapes.
     output_dir = Path("spark-warehouse/demo_output")
-    if not output_dir.is_dir():
-        console.print(f"[bold red]✗[/bold red] Output table directory not found at {output_dir}. Did you run the pipeline?")
-        return
-
-    parquet_files = list(output_dir.glob("*.parquet")) + list(output_dir.glob("part-*"))
-    if not parquet_files:
-        console.print(f"[bold yellow]⚠[/bold yellow] No Parquet files found in {output_dir}.")
+    if output_dir.is_dir():
+        parquet_files = list(output_dir.glob("*.parquet")) + list(output_dir.glob("part-*"))
+        if not parquet_files:
+            console.print(f"[bold yellow]⚠[/bold yellow] No Parquet files found in {output_dir}.")
+            return
+        read_target = output_dir
+    elif output_dir.exists():
+        read_target = output_dir
+    else:
+        console.print(f"[bold red]✗[/bold red] Output table not found at {output_dir}. Did you run the pipeline?")
         return
 
     con = duckdb.connect()
     try:
-        rows = con.execute(f"SELECT * FROM read_parquet('{output_dir}/*.parquet') ORDER BY id").fetchall()
+        rows = con.execute(f"SELECT * FROM read_parquet('{read_target}') ORDER BY id").fetchall()
         columns = [desc[0] for desc in con.description]
 
         if not rows:

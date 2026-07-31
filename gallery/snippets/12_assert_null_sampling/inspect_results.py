@@ -23,7 +23,7 @@ def main():
 
     null_count = df['email'].isna().sum()
     null_rate = null_count / len(df)
-    console.print(f"[dim]  Actual null rate for 'email': {null_rate:.2%} (threshold was 50%)[/dim]")
+    console.print(f"[dim]  Actual null rate for 'email': {null_rate:.2%} (max allowed 6%, sampled at 50%)[/dim]")
     console.print("\n[dim]Assert type=null_rate checks that column nulls stay below a threshold. "
                   "on_fail=abort stops the run if violated.[/dim]")
 
