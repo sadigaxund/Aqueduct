@@ -112,7 +112,7 @@ def test_replay_hit_auto_mode_zero_llm(tmp_path):
     from aqueduct.patch.grammar import PatchSpec
     spec = PatchSpec(patch_id="replay-1", rationale="replay",
                      operations=[{"op": "set_module_config_key",
-                                  "module_id": "m1", "key": "k", "value": "v"}])
+                                  "module_id": "m1", "key": "path", "value": "/fixed.csv"}])
 
     mock_candidate = MagicMock()
     mock_candidate.patch_id = "replay-1"
@@ -162,7 +162,7 @@ def test_replay_gate_fail_falls_through_to_llm(tmp_path):
     from aqueduct.patch.grammar import PatchSpec
     spec = PatchSpec(patch_id="replay-fail-1", rationale="replay",
                      operations=[{"op": "set_module_config_key",
-                                  "module_id": "m1", "key": "k", "value": "v"}])
+                                  "module_id": "m1", "key": "path", "value": "/fixed.csv"}])
 
     mock_candidate = MagicMock()
     mock_candidate.patch_id = "replay-fail-1"
@@ -216,7 +216,7 @@ def test_replay_human_mode_stages_pending(tmp_path):
     from aqueduct.patch.grammar import PatchSpec
     spec = PatchSpec(patch_id="replay-human-1", rationale="replay",
                      operations=[{"op": "set_module_config_key",
-                                  "module_id": "m1", "key": "k", "value": "v"}])
+                                  "module_id": "m1", "key": "path", "value": "/fixed.csv"}])
 
     mock_candidate = MagicMock()
     mock_candidate.patch_id = "replay-human-1"
@@ -250,7 +250,7 @@ def test_memory_replay_false_skips_pending_replay_lookups(tmp_path):
     from aqueduct.patch.grammar import PatchSpec
     spec = PatchSpec(patch_id="llm-fix", rationale="fix",
                      operations=[{"op": "set_module_config_key",
-                                  "module_id": "m1", "key": "k", "value": "v"}])
+                                  "module_id": "m1", "key": "path", "value": "/fixed.csv"}])
 
     os.environ["ANTHROPIC_API_KEY"] = "test-key"
 
@@ -376,7 +376,7 @@ def test_llm_heal_stamps_resolution_and_signature(tmp_path):
     from aqueduct.patch.grammar import PatchSpec
     spec = PatchSpec(patch_id="llm-stamp-1", rationale="fix",
                      operations=[{"op": "set_module_config_key",
-                                  "module_id": "m1", "key": "k", "value": "v"}])
+                                  "module_id": "m1", "key": "path", "value": "/fixed.csv"}])
 
     os.environ["ANTHROPIC_API_KEY"] = "test-key"
 

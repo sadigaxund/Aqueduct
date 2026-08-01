@@ -221,7 +221,7 @@ class TestInProcessBlueprintHook:
             "aqueduct: '1.0'\nid: target\nname: Target\n"
             "modules:\n"
             "  - id: c\n    label: C\n    type: Channel\n"
-            "    config: {sql: 'SELECT 1 AS x'}\n"
+            "    config: {op: sql, query: 'SELECT 1 AS x'}\n"
             f"{sc}"
         )
 
