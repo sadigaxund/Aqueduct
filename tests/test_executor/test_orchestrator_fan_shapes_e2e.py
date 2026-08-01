@@ -358,7 +358,7 @@ def test_probe_near_a_boundary_colocates_and_reports(spark, tmp_path, engine_a, 
             {"id": "out", "label": "out", "type": "Egress", "engine": engine_b,
              "config": {"format": "parquet", "path": str(out_path), "mode": "overwrite"}},
             {"id": "probe", "label": "probe", "type": "Probe", "attach_to": probe_target,
-             "config": {"report": "none", "signals": [
+             "config": {"signals": [
                  {"type": "row_count_estimate", "method": "sample", "fraction": 1.0},
              ]}},
         ],
@@ -413,7 +413,7 @@ def test_probe_engine_mismatch_near_boundary_raises_compile_error(spark, tmp_pat
              "config": {"format": "parquet", "path": str(out_path), "mode": "overwrite"}},
             {"id": "probe", "label": "probe", "type": "Probe", "attach_to": "in",
              "engine": engine_b,
-             "config": {"report": "none", "signals": [{"type": "schema_snapshot"}]}},
+             "config": {"signals": [{"type": "schema_snapshot"}]}},
         ],
         edges=[{"from": "in", "to": "out"}],
     )

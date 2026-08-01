@@ -91,8 +91,7 @@ def test_params_resolve_context_tokens_through_parse():
                 {"id": "load", "type": "Ingress", "label": "l",
                  "config": {"format": "parquet", "path": "x"}},
                 {"id": "c", "type": "Channel", "label": "c",
-                 "config": {"op": "sql", "query": "SELECT mask(name) AS name FROM load",
-                            "udfs": ["mask"]}},
+                 "config": {"op": "sql", "query": "SELECT mask(name) AS name FROM load"}},
             ],
             "edges": [{"from": "load", "to": "c"}],
             "udf_registry": [
