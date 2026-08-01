@@ -1,11 +1,11 @@
 """Executor orchestrator — runs a Manifest against a live DuckDB connection.
 
 Stage A supported module types: Ingress, Channel, Egress, Junction, Funnel,
-Regulator. Assert and Probe are UNSUPPORTED this stage (see
-``capabilities.yml``'s ``module.type.Assert`` / ``module.type.Probe`` rows) —
-a Blueprint using either gets a clean ``CompileError`` before it ever reaches
-this module, so ``_SUPPORTED_TYPES`` below never actually sees them; the
-check exists as defense in depth, mirroring Spark's.
+Regulator, Assert (Pass D). Probe is UNSUPPORTED this stage (see
+``capabilities.yml``'s ``module.type.Probe`` row) — a Blueprint using it
+gets a clean ``CompileError`` before it ever reaches this module, so
+``_SUPPORTED_TYPES`` below never actually sees it; the check exists as
+defense in depth, mirroring Spark's.
 
 Execution model — same shape as Spark's ``execute()``
 (``aqueduct/executor/spark/executor.py``), the contract
@@ -63,6 +63,7 @@ if TYPE_CHECKING:
     import duckdb
 
 from aqueduct.errors import AqueductError
+from aqueduct.executor.duckdb_.assert_ import AssertError, execute_assert
 from aqueduct.executor.duckdb_.channel import ChannelError, execute_channel
 from aqueduct.executor.duckdb_.egress import EgressError, _escape, write_egress
 from aqueduct.executor.duckdb_.funnel import FunnelError, execute_funnel
@@ -94,14 +95,14 @@ class ExecuteError(AqueductError):
     """Raised for unrecoverable execution failures (config, unsupported type, etc.)."""
 
 
-# Module types this executor actually dispatches. Assert/Probe are declared
-# UNSUPPORTED in capabilities.yml and are rejected at compile time before a
-# Manifest naming them ever reaches here — this set is defense in depth, same
+# Module types this executor actually dispatches. Probe is declared
+# UNSUPPORTED in capabilities.yml and is rejected at compile time before a
+# Manifest naming it ever reaches here — this set is defense in depth, same
 # as Spark's `_SUPPORTED_TYPES`.
 _SUPPORTED_TYPES: frozenset[str] = frozenset(
     {ModuleType.Ingress, ModuleType.Channel, ModuleType.Egress,
      ModuleType.Junction, ModuleType.Funnel, ModuleType.Regulator,
-     ModuleType.Handoff}
+     ModuleType.Handoff, ModuleType.Assert}
 )
 
 _SIGNAL_PORTS: frozenset[str] = frozenset({"signal"})
@@ -250,13 +251,14 @@ def _topo_sort(modules: tuple[Module, ...], edges: tuple[Edge, ...]) -> list[Mod
 
 
 def _build_execution_order(manifest: Manifest) -> list[Module]:
-    """Topo-sort dispatchable modules. Probe/Assert are excluded — Stage A
-    never dispatches them (see module docstring); they never reach this
-    function on a real compile because the capability gate refuses them
-    first, but the filter is kept as defense in depth.
+    """Topo-sort dispatchable modules. Probe is excluded — Stage A never
+    dispatches it (see module docstring); a Probe module never reaches this
+    function on a real compile because the capability gate refuses it first,
+    but the filter is kept as defense in depth. Assert (Pass D) IS
+    dispatched — it participates in the topo sort like any other module.
     """
     dispatchable = tuple(
-        m for m in manifest.modules if m.type not in (ModuleType.Probe, ModuleType.Assert)
+        m for m in manifest.modules if m.type != ModuleType.Probe
     )
     return _topo_sort(dispatchable, manifest.edges)
 
@@ -701,6 +703,56 @@ def execute(
                 return fail_result
             frame_store[module.id] = rel
             _write_checkpoint(con, module, checkpoint_dir, manifest, data={"data": rel})
+            module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
+
+        # ── Assert (Pass D — quality gates, quarantine via spillway port) ──
+        elif module.type == ModuleType.Assert:
+            main_edges = _incoming_main(module.id, manifest.edges)
+            if not main_edges:
+                module_results.append(_mr(module_id=module.id, status=ExecutionStatus.ERROR, error=f"[{module.id}] Assert has no main-port incoming edges"))
+                return _fail(manifest.blueprint_id, run_id, module_results)
+            upstream_id = main_edges[0].from_id
+            val = frame_store.get(upstream_id)
+            if _is_gate_closed(val):
+                frame_store[module.id] = _GATE_CLOSED
+                module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
+                continue
+            if val is None:
+                module_results.append(_mr(module_id=module.id, status=ExecutionStatus.ERROR, error=f"[{module.id}] upstream {upstream_id!r} produced no relation."))
+                return _fail(manifest.blueprint_id, run_id, module_results)
+
+            has_spillway_edge = any(e.from_id == module.id and e.port == "spillway" for e in manifest.edges)
+
+            try:
+                passing_rel, quarantine_rel = execute_assert(
+                    module, val, con, run_id, manifest.blueprint_id, base_dir=manifest.base_dir,
+                )
+            except AssertError as exc:
+                module_results.append(_mr(module_id=module.id, status=ExecutionStatus.ERROR, error=str(exc), error_type=exc.error_type, exception=exc))
+                return _fail(manifest.blueprint_id, run_id, module_results, trigger_agent=exc.trigger_agent)
+            except Exception as exc:  # noqa: BLE001 — assert dispatch must fail cleanly, not leak a raw traceback
+                module_results.append(_mr(module_id=module.id, status=ExecutionStatus.ERROR, error=str(exc), exception=exc))
+                return _fail(manifest.blueprint_id, run_id, module_results)
+
+            frame_store[module.id] = passing_rel
+            if quarantine_rel is not None and has_spillway_edge:
+                frame_store[f"{module.id}.spillway"] = quarantine_rel
+            elif quarantine_rel is not None:
+                logger.warning(
+                    "[runtime_assert_quarantine_no_spillway] [%s] Assert "
+                    "quarantine rows produced but no spillway edge; discarded.",
+                    module.id,
+                )
+            elif has_spillway_edge:
+                # A quarantine-eligible rule (e.g. `custom`) reported no rows
+                # to quarantine this run — still supply an empty relation so
+                # a wired spillway Egress doesn't see "upstream produced no
+                # relation" (same rule as the Channel spillway_condition
+                # mismatch case above).
+                frame_store[f"{module.id}.spillway"] = val.filter("1=0")
+            # No _write_checkpoint call here — mirrors Spark's Assert branch,
+            # which does not checkpoint either (and the resume-from-checkpoint
+            # branch above never special-cases ModuleType.Assert).
             module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
 
         # ── Regulator (pass-through gate; identical logic to Spark's) ──────
