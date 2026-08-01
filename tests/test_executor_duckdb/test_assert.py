@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import duckdb
 import pytest
 
 from aqueduct.executor.duckdb_.assert_ import AssertError, execute_assert
