@@ -26,7 +26,7 @@ def _bp(ctx_value: str = "false", **over) -> dict:
              "enabled": "${ctx.enable_enrich}",
              "config": {"format": "csv", "path": "data/c.csv"}},
             {"id": "enriched", "label": "E", "type": "Channel",
-             "config": {"steps": [{"op": "sql", "sql": "SELECT * FROM raw_users"}]}},
+             "config": {"op": "sql", "query": "SELECT * FROM raw_users"}},
             {"id": "out_main", "label": "O", "type": "Egress",
              "config": {"format": "parquet", "path": "out/main", "coalesce": 1}},
             {"id": "out_enriched", "label": "O2", "type": "Egress",
@@ -103,7 +103,8 @@ modules:
     type: Channel
     label: S
     config:
-      steps: [{op: sql, sql: "SELECT 1 AS x"}]
+      op: sql
+      query: "SELECT 1 AS x"
   - id: save
     type: Egress
     label: E

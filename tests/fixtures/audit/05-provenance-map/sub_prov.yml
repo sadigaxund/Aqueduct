@@ -10,6 +10,7 @@ modules:
     label: "Sub Module"
     type: "Ingress"
     config:
-      sub_key: "${ctx.shared_val}"
-      literal_key: "fixed"
+      options:
+        sub_key: "${ctx.shared_val}"
+        literal_key: "fixed"
 edges: []

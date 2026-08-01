@@ -19,20 +19,19 @@ pip install -r requirements.txt
 | `value_distribution` | Value frequency per column |
 | `distinct_count` | Distinct value counts |
 | `data_freshness` | MAX(timestamp) and age |
-| `partition_stats` | Row counts per partition column value |
-| `threshold` | Numeric column range check (min/max) — emits `passed` for Regulator gating |
+| `partition_stats` | Spark physical partition count (`df.rdd.getNumPartitions()`) — takes no config |
+| `threshold` | SQL aggregate boolean `expr:` — emits `passed` for Regulator gating |
 
 Results are stored in the `probe_signals` table in the observability store.
 
-> **`probes:` global config:** Add a `probes:` block at the Blueprint root
-> to set default sampling rate, seed, or signal overrides for all Probes
-> at once:
+> **`probes:` global config:** Add a `probes:` block to `aqueduct.yml` to
+> set sampling governance for every Probe in the run:
 > ```yaml
 > probes:
->   sample_rows_count: 100
->   default_seed: 42
+>   max_sample_rows: 100
+>   default_sample_fraction: 0.1
 > ```
-> Individual Probe modules can override these per signal.
+> A signal's own `n:`/`fraction:` still overrides these per signal.
 
 ## How to Run
 

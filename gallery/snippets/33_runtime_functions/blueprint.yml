@@ -48,7 +48,7 @@ modules:
     config:
       signals:
         - type: sample_rows
-          num_rows: 3
+          n: 3
 
   - id: output
     label: "Save Result"

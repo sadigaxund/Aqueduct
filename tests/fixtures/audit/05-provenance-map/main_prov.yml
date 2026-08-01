@@ -12,10 +12,14 @@ modules:
     label: "Main Module"
     type: "Ingress"
     config:
-      c1: "${ctx.my_ctx}"
-      e1: "${ctx.my_env}"
-      t1: "${ctx.my_tier1}"
-      l1: "literal_value"
+      # `options:` is the one freeform passthrough dict on Ingress config
+      # (Pass C, 2026-08) — used here purely to probe provenance tracking
+      # of nested config keys, which recurses into any dict.
+      options:
+        c1: "${ctx.my_ctx}"
+        e1: "${ctx.my_env}"
+        t1: "${ctx.my_tier1}"
+        l1: "literal_value"
 
   - id: "arc"
     label: "Arcade"

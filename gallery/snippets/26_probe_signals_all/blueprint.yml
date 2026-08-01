@@ -24,7 +24,7 @@ modules:
         - type: row_count_estimate
         - type: null_rates
         - type: sample_rows
-          num_rows: 3
+          n: 3
         - type: value_distribution
           columns: [price]
         - type: distinct_count
@@ -32,11 +32,8 @@ modules:
         - type: data_freshness
           column: created_at
         - type: partition_stats
-          partition_column: category
         - type: threshold
-          column: price
-          min: 0.0
-          max: 500.0
+          expr: "MIN(price) >= 0.0 AND MAX(price) <= 500.0"
 
   - id: output
     label: "Save Result"

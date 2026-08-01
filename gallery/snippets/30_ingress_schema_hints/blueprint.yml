@@ -39,7 +39,7 @@ modules:
       signals:
         - type: schema_snapshot
         - type: sample_rows
-          num_rows: 4
+          n: 4
 
   - id: output
     label: "Save Result"

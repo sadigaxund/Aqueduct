@@ -28,7 +28,8 @@ modules:
       report: stdout
       signals:
         - type: row_count_estimate
-          method: exact
+          method: sample
+          fraction: 1.0
 
   - id: probe_schema
     label: "Schema"

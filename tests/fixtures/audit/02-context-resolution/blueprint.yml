@@ -23,8 +23,12 @@ modules:
     type: "Ingress"
     config:
       path: "${ctx.full_path}"
-      env_check: "${ctx.env_val}"
-      tier1_check: "${ctx.dynamic_date}"
-      direct_env: "${MY_VAR:-fallback}"
+      # `options:` is the one freeform passthrough dict on Ingress config
+      # (Pass C, 2026-08) — used here purely as a place to probe Tier 0
+      # ${ctx.*}/${ENV} resolution, which recurses into any nested dict.
+      options:
+        env_check: "${ctx.env_val}"
+        tier1_check: "${ctx.dynamic_date}"
+        direct_env: "${MY_VAR:-fallback}"
 
 edges: []

@@ -122,17 +122,17 @@ def test_audit_05_provenance_map(monkeypatch):
     # Check Module m1
     m1_prov = prov.for_module("m1").config
 
-    assert m1_prov["c1"].source_type == "context_ref"
-    assert m1_prov["c1"].context_key == "my_ctx"
-    assert m1_prov["c1"].original_expression == "${ctx.my_ctx}"
+    assert m1_prov["options.c1"].source_type == "context_ref"
+    assert m1_prov["options.c1"].context_key == "my_ctx"
+    assert m1_prov["options.c1"].original_expression == "${ctx.my_ctx}"
 
-    assert m1_prov["e1"].source_type == "context_ref"
-    assert m1_prov["e1"].context_key == "my_env"
+    assert m1_prov["options.e1"].source_type == "context_ref"
+    assert m1_prov["options.e1"].context_key == "my_env"
 
-    assert m1_prov["t1"].source_type == "context_ref"
-    assert m1_prov["t1"].context_key == "my_tier1"
+    assert m1_prov["options.t1"].source_type == "context_ref"
+    assert m1_prov["options.t1"].context_key == "my_tier1"
 
-    assert m1_prov["l1"].source_type == "literal"
+    assert m1_prov["options.l1"].source_type == "literal"
 
     # Check context provenance
     assert prov.context["my_ctx"].source_type == "literal"
@@ -144,7 +144,7 @@ def test_audit_05_provenance_map(monkeypatch):
     sub_id = "arc__m_sub"
     arc_prov = prov.for_module(sub_id).config
 
-    assert arc_prov["sub_key"].source_type == "arcade_inherited"
-    assert arc_prov["sub_key"].arcade_module_id == "arc"
-    assert arc_prov["sub_key"].original_expression == "${ctx.shared_val}"
-    assert arc_prov["sub_key"].resolved_value == "injected"
+    assert arc_prov["options.sub_key"].source_type == "arcade_inherited"
+    assert arc_prov["options.sub_key"].arcade_module_id == "arc"
+    assert arc_prov["options.sub_key"].original_expression == "${ctx.shared_val}"
+    assert arc_prov["options.sub_key"].resolved_value == "injected"

@@ -22,7 +22,7 @@ You'll see note lines like:
 
 ```
   ✓ probe_count
-   ↳ row_count_estimate: method=exact · estimate=10
+   ↳ row_count_estimate: method=sample · estimate=10
   ✓ probe_schema
    ↳ schema_snapshot:
      order_id: int
@@ -42,7 +42,7 @@ You'll see note lines like:
 - Add `report: stdout` to any Probe's config — each signal result then
   prints as a `↳` note in the terminal.
 - Single-value payloads collapse onto one line
-  (`row_count_estimate: method=exact · estimate=10`).
+  (`row_count_estimate: method=sample · estimate=10`).
 - Dict/tabular payloads expand to one indented line per entry.
 - Output is capped at 10 lines unless `--verbose` (`-v`).
 - Signals are still persisted to the observability store as before —
@@ -60,14 +60,15 @@ You'll see note lines like:
       report: stdout
       signals:
         - type: row_count_estimate
-          method: exact
+          method: sample
+          fraction: 1.0
 ```
 
 ## Signal types
 
 | Signal | Payload shape | Example stdout line |
 |--------|--------------|-------------------|
-| `row_count_estimate` | scalar + method | `row_count_estimate: method=exact · estimate=10` |
+| `row_count_estimate` | scalar + method | `row_count_estimate: method=sample · estimate=10` |
 | `schema_snapshot` | dict of `col: type` | Multi-line, one per column |
 | `null_rates` | dict of `col: rate` | `null_rates: amount=0.0` |
 | `sample_rows` | list of dicts | Up to n rows shown |

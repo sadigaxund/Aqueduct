@@ -222,11 +222,11 @@ class TestContextResolution:
 
         m1 = next(m for m in manifest.modules if m.id == "m1")
         assert m1.config["path"] == "/data/raw/users"
-        assert m1.config["env_check"] == "env_value"
-        assert m1.config["direct_env"] == "env_value"
+        assert m1.config["options"]["env_check"] == "env_value"
+        assert m1.config["options"]["direct_env"] == "env_value"
 
         today = datetime.date.today().strftime("%Y-%m-%d")
-        assert m1.config["tier1_check"] == today
+        assert m1.config["options"]["tier1_check"] == today
 
     def test_agent_config_ctx_resolves(self, tmp_path):
         """Verify context references resolve in agent configurations."""

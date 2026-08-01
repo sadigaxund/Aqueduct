@@ -62,7 +62,8 @@ modules:
     type: Channel
     label: Transform
     config:
-      sql: "SELECT * FROM src"
+      op: sql
+      query: "SELECT * FROM src"
   - id: dst
     type: Egress
     label: Dest
@@ -134,7 +135,8 @@ modules:
     type: Channel
     label: Channel
     config:
-      sql: "SELECT * FROM src"
+      op: sql
+      query: "SELECT * FROM src"
   - id: chk
     type: Assert
     label: Check
@@ -180,8 +182,7 @@ modules:
   - id: junc
     type: Junction
     label: J
-    config:
-      sql: "SELECT * FROM a"
+    config: {}
   - id: b
     type: Egress
     label: B
@@ -209,8 +210,7 @@ modules:
   - id: bad_junction
     type: Junction
     label: J
-    config:
-      sql: "SELECT * FROM ingress_mod"
+    config: {}
 """)
         bp = parse(str(bp_path))
         with pytest.raises(CompileError, match=r"bad_junction.*Junction|Junction.*bad_junction"):
@@ -234,7 +234,6 @@ modules:
     label: F
     config:
       inputs: [a]
-      sql: "SELECT * FROM a"
   - id: b
     type: Egress
     label: B
@@ -287,8 +286,7 @@ modules:
   - id: reg
     type: Regulator
     label: R
-    config:
-      rules: []
+    config: {}
 """)
         bp = parse(str(bp_path))
         with pytest.raises(CompileError, match="Linear-edge sugar"):
@@ -310,8 +308,7 @@ modules:
   - id: j
     type: Junction
     label: J
-    config:
-      sql: "SELECT * FROM a"
+    config: {}
 """)
         bp = parse(str(bp_path))
         with pytest.raises(CompileError, match=r"auto-chain"):
@@ -333,8 +330,7 @@ modules:
   - id: arc
     type: Arcade
     label: Arc
-    config:
-      ref: sub_blueprint.yml
+    ref: sub_blueprint.yml
 """)
         bp = parse(str(bp_path))
         with pytest.raises(CompileError, match="Linear-edge sugar"):
@@ -395,7 +391,8 @@ modules:
     type: Channel
     label: B
     config:
-      sql: "SELECT * FROM a"
+      op: sql
+      query: "SELECT * FROM a"
   - id: c
     type: Egress
     label: C
@@ -454,7 +451,8 @@ modules:
     type: Channel
     label: Channel
     config:
-      sql: "SELECT 1 AS x"
+      op: sql
+      query: "SELECT 1 AS x"
 """)
         bp = parse(str(bp_path))
         manifest = compiler_compile(bp, blueprint_path=bp_path)

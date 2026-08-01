@@ -28,26 +28,24 @@ modules:
       rules:
         - id: min_order_count
           type: min_rows
-          min_count: 5
+          min: 5
         - id: max_amount
           type: sql
-          query: "SELECT MAX(amount) AS max_amt FROM __input__"
-          expect:
-            max_amt: {max: 2000}
+          expr: "MAX(amount) <= 2000"
         - id: zero_spillway
           type: spillway_rate
-          max_rate: 0.0
+          max: 0.0
         - id: non_null_id
           type: not_null
           column: order_id
           on_fail: abort
         - id: max_order_count
           type: max_rows
-          max_count: 100
+          max: 100
         - id: schema_check
           type: schema_match
-          columns:
-            order_id: integer
+          expected:
+            order_id: int
             customer: string
             amount: double
             status: string

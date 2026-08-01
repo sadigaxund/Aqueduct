@@ -91,6 +91,17 @@ stores:
     assert cfg.stores.observability.path == str(expected_path)
 
 def test_module_config_other_keys_resolution(tmp_path):
+    """Channel has NO path-typed config keys (``path_keys.get_path_keys("Channel")
+    == ()``) — a Channel's real string fields (``query``, ``condition``) must
+    pass through anchoring untouched, relative-looking value and all.
+
+    Pass C (2026-08) removed this test's original premise: it used to assert
+    that ``data_dir``/``input_dir``/``output_dir``/``jar`` on a Channel got
+    anchored via the pre-Pass-C legacy blanket-tuple fallback — but none of
+    those keys is a real Channel config field (confirmed: zero readers in
+    `executor/spark/channel.py` or `executor/duckdb_/channel.py`), and
+    Channel's typed `config:` (`extra="forbid"`) now rejects them outright.
+    """
     bp_file = tmp_path / "blueprint.yml"
     bp_file.write_text("""
 aqueduct: "1.0"
@@ -101,18 +112,15 @@ modules:
     type: Channel
     label: Mod
     config:
-      data_dir: my_data_dir
-      input_dir: my_input_dir
-      output_dir: my_output_dir
-      jar: my_jar.jar
+      op: filter
+      condition: "path/looking/but/not/a/path > 0"
 edges: []
 """)
     bp = parse(bp_file)
     mod = next(m for m in bp.modules if m.id == "mod")
-    assert mod.config["data_dir"] == str((tmp_path / "my_data_dir").resolve())
-    assert mod.config["input_dir"] == str((tmp_path / "my_input_dir").resolve())
-    assert mod.config["output_dir"] == str((tmp_path / "my_output_dir").resolve())
-    assert mod.config["jar"] == str((tmp_path / "my_jar.jar").resolve())
+    # Never anchored — Channel has no path keys, and `condition` isn't one
+    # even where it is registered (Ingress/Egress).
+    assert mod.config["condition"] == "path/looking/but/not/a/path > 0"
 
 
 # ── Phase 36 Part A — parse_dict() API + base_dir anchoring ─────────────────
@@ -197,25 +205,39 @@ def test_parse_dict_rejects_non_mapping(tmp_path):
 
 
 def test_path_keys_registry_per_module_type():
-    """Registry returns strict tuple for audited types and legacy fallback for the rest."""
+    """Registry returns a strict tuple for every module type — Pass C
+    (2026-08) audited all 9 types' real config-key readers and found only
+    Ingress/Egress `path` and UDF `jar` are genuine filesystem-path keys;
+    `data_dir`/`input_dir`/`output_dir` (previously registered on
+    Ingress/Egress) and `jar` on Ingress/Egress specifically were dead
+    entries nothing ever read — dropped. The legacy blanket-tuple fallback
+    is now empty; every type has an explicit row."""
     pytest.importorskip("pyspark")
     from aqueduct.executor.path_keys import get_path_keys
-    assert get_path_keys("Ingress") == ("path", "data_dir", "input_dir", "jar")
-    assert get_path_keys("Egress") == ("path", "output_dir", "jar")
+    assert get_path_keys("Ingress") == ("path",)
+    assert get_path_keys("Egress") == ("path",)
     assert get_path_keys("UDF") == ("jar",)
+    assert get_path_keys("Channel") == ()
+    assert get_path_keys("Junction") == ()
+    assert get_path_keys("Funnel") == ()
+    assert get_path_keys("Probe") == ()
+    assert get_path_keys("Regulator") == ()
+    assert get_path_keys("Arcade") == ()
+    assert get_path_keys("Assert") == ()
     # Phase 65 — `table` is a catalog identifier, never a filesystem path
     assert "table" not in get_path_keys("Ingress")
     assert "table" not in get_path_keys("Egress")
-    # Unknown / unregistered types fall back to the legacy blanket tuple.
-    legacy = ("path", "data_dir", "input_dir", "output_dir", "jar")
-    assert get_path_keys("Channel") == legacy
-    assert get_path_keys("Bogus") == legacy
+    # An unregistered type name falls back to the (now empty) legacy tuple.
+    assert get_path_keys("Bogus") == ()
 
 
 def test_parse_dict_anchors_only_registered_keys_per_type(tmp_path):
-    """An Ingress carrying ``output_dir`` (not in its registered tuple) must
-    stay untouched, while Egress with the same key anchors it. Catches the
-    regression where parser anchored a blanket tuple across all module types."""
+    """An Ingress's ``table`` (a legal, non-path config field — catalog
+    identifier) must stay untouched while its ``path`` anchors, and a
+    Channel (zero registered path keys) must never anchor anything —
+    catches the regression where parser anchored a blanket tuple across
+    every module type regardless of which keys that type actually uses as
+    filesystem paths."""
     raw = {
         "aqueduct": "1.0",
         "id": "test_registry_per_type",
@@ -228,17 +250,15 @@ def test_parse_dict_anchors_only_registered_keys_per_type(tmp_path):
                 "config": {
                     "format": "csv",
                     "path": "data/in.csv",
-                    "output_dir": "should-stay-relative",
                 },
             },
             {
-                "id": "eg",
-                "type": "Egress",
-                "label": "E",
+                "id": "ch",
+                "type": "Channel",
+                "label": "C",
                 "config": {
-                    "format": "parquet",
-                    "path": "out",
-                    "output_dir": "out/",
+                    "op": "filter",
+                    "condition": "looks/like/a/path but is not one",
                 },
             },
         ],
@@ -246,12 +266,10 @@ def test_parse_dict_anchors_only_registered_keys_per_type(tmp_path):
     }
     bp = parse_dict(raw, base_dir=tmp_path)
     ing = next(m for m in bp.modules if m.id == "ing")
-    eg = next(m for m in bp.modules if m.id == "eg")
-    # Ingress: ``output_dir`` is NOT in the registered tuple — passes through.
-    assert ing.config["output_dir"] == "should-stay-relative"
+    ch = next(m for m in bp.modules if m.id == "ch")
     assert ing.config["path"] == str((tmp_path / "data/in.csv").resolve())
-    # Egress: ``output_dir`` IS in the registered tuple — anchored.
-    assert eg.config["output_dir"] == str((tmp_path / "out/").resolve())
+    # Channel has no registered path keys — `condition` passes through verbatim.
+    assert ch.config["condition"] == "looks/like/a/path but is not one"
 
 
 def test_fs_path_marker_visible_on_store_fields():
