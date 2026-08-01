@@ -328,7 +328,7 @@ class TestPatchFormatting:
             "rationale": "Add module",
             "operations": [{
                 "op": "insert_module",
-                "module": {"id": "m2", "type": "Channel", "label": "Q", "config": {"q": '"value"'}}
+                "module": {"id": "m2", "type": "Channel", "label": "Q", "config": {"query": '"value"'}}
             }]
         }
         patch_path.write_text(json.dumps(patch_data))
@@ -338,7 +338,7 @@ class TestPatchFormatting:
         assert 'value' in patched_text
         from aqueduct.parser.parser import parse
         bp = parse(bp_path)
-        assert bp.modules[1].config["q"] == '"value"'
+        assert bp.modules[1].config["query"] == '"value"'
 
     def test_replace_module_config_preserves_quotes(self, tmp_path):
         bp_path = tmp_path / "bp.yml"
@@ -353,7 +353,7 @@ class TestPatchFormatting:
             "operations": [{
                 "op": "replace_module_config",
                 "module_id": "m1",
-                "config": {"sql": "SELECT 'x' as col"}
+                "config": {"options": {"sql": "SELECT 'x' as col"}}
             }]
         }
         patch_path.write_text(json.dumps(patch_data))
@@ -362,7 +362,7 @@ class TestPatchFormatting:
         assert "SELECT 'x' as col" in patched_text
         from aqueduct.parser.parser import parse
         bp = parse(bp_path)
-        assert bp.modules[0].config["sql"] == "SELECT 'x' as col"
+        assert bp.modules[0].config["options"]["sql"] == "SELECT 'x' as col"
 
 
 # ── Backend-aware lifecycle move (PatchStore + patch_index object_key) ──────────

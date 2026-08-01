@@ -6,6 +6,11 @@ description: >
   shuffle partitions and insert a repartition Channel to reduce per-task
   memory pressure.
 
+engine:
+  spark:
+    conf:
+      spark.sql.shuffle.partitions: "10"
+
 modules:
   - id: transactions_raw
     type: Ingress
@@ -38,8 +43,6 @@ modules:
         FROM transactions_raw t
         JOIN users_raw u ON t.user_id = u.user_id
         GROUP BY u.region
-      spark_config:
-        spark.sql.shuffle.partitions: "10"
 
   - id: out_aggregate
     type: Egress
