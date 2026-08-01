@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.41: Reference Document**
+**Version 2.42: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -256,6 +256,16 @@ Every Module regardless of type shares these fields:
 | **retry** | Optional. Per-module override of the top-level `retry_policy:` block (2.8), see below. |
 | **engine** | Optional. A scalar execution-engine NAME (`spark`, `duckdb`) selecting which engine runs THIS module (2.34), see below. Distinct from the blueprint-level `engine:` BLOCK (§4.2, per-engine settings namespaced by engine name) — same word, two levels. |
 
+### `config:` is a typed, per-module-type union (2.42)
+
+Every module type declares its own `config:` shape — a pydantic discriminated union on `type`, one member per module type (`Ingress`/`Channel`/`Egress`/`Junction`/`Funnel`/`Probe`/`Regulator`/`Arcade`/`Assert`), each absorbing that type's real keys with `extra="forbid"`. An Ingress's `config:` accepts `format`/`path`/`table`/`schema_hint`/`options`/…; an Egress's accepts `format`/`mode`/`maintenance`/…; a key that belongs to a DIFFERENT type (or belongs to no type at all) is a structural rejection at parse time naming the offending key — not a silent accept.
+
+The one deliberate exception is `options:` (Ingress/Egress) — a freeform passthrough dict forwarded verbatim to the engine's reader/writer `.option(k, v)` calls, since enumerating every Spark/DuckDB option is out of scope and the wrong target. A couple of genuinely polymorphic fields (Ingress `schema_hint`, Channel `columns`) are similarly kept as an untyped container with the accepted shapes documented on the field, rather than modeled as a second-level union.
+
+**BREAKING (2.42):** before this, ALL nine module types shared one flat schema with a freeform `config: dict[str, Any]` — any key parsed, whether or not any executor ever read it. A key that no code reads (a typo, a stale synonym, a dead knob) previously parsed, compiled, and ran as a silent no-op; it is now a `ParseError` naming the key. This is by design: a freeform dict is invisible to the capability framework by construction (a leaf is derived by introspecting a pydantic model), so a wrong key inside `config:` could never surface as a "this engine doesn't support X" capability gate — it just silently did nothing on every engine. Migrating a Blueprint that hit this: the error names the exact key and module; check that type's `config:` fields against this section (or `SKILL.md`) for the correct spelling. No accept-both-shapes reader was added — see `CHANGELOG.md`.
+
+Capability leaves follow the same split: fields common to every type (`id`, `label`, `engine`, `retry`, …) keep the `module.field.<name>` leaf id; every type-specific field — both the ones already living at the module's top level (`attach_to`, `ref`, `materialize`) and every field inside a typed `config:` — gets a `<type_lower>.field.<name>` leaf (e.g. `egress.field.maintenance`, `channel.field.query`), so every engine must give it a real verdict (`aqueduct/executor/capability_leaves.py`).
+
 ### Per-module retry override (`retry:`, 2.8)
 
 `retry_policy:` (§10.1-adjacent top-level block) sets the blueprint-wide default retry behaviour. A module's own `retry:` block overrides it **field-by-field**, any field left unset inherits the blueprint-level value for that field (same per-field inheritance shape as agent cascade tiers, §8):
@@ -395,7 +405,6 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
 | :- | :- |
 | **op** | Operation type. Built-in ops: `sql` \| `deduplicate` \| `filter` \| `select` \| `rename` \| `cast` \| `join` \| `union` \| `sort` \| `repartition` \| `coalesce` \| `cache`. |
 | **query** | SQL string (`op: sql` only). Upstream Module IDs available as temp views. |
-| **udfs** | List of UDF IDs to register before executing this Channel. |
 | **key** | Column name or list of column names. Used by `deduplicate`. |
 | **order_by** | Sort expression. Used by `deduplicate` and `sort`. |
 | **condition** | Filter expression (`op: filter`). Standard Spark SQL boolean expression. |
@@ -403,7 +412,7 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
 | **num_partitions** | Target partition count. Used by `repartition` and `coalesce`. |
 | **spillway_condition** | Optional SQL boolean expression. Matching rows are routed to the spillway port. |
 
-**Incremental watermark (`materialize:` / `watermark_column:`, 2.40).** Declared MODULE-level fields, siblings of `config:` — NOT config keys (same shape as Probe's `attach_to`, §4.4). Promoted out of the freeform `config:` dict in 2.40 so the capability framework can see them (a freeform key is invisible to it by construction; every engine must now declare a verdict for `module.field.materialize` / `module.field.watermark_column`). `op: sql` only:
+**Incremental watermark (`materialize:` / `watermark_column:`, 2.40).** Declared MODULE-level fields, siblings of `config:` — NOT config keys (same shape as Probe's `attach_to`, §4.4). Promoted out of the freeform `config:` dict in 2.40 so the capability framework can see them (a freeform key is invisible to it by construction; every engine must declare a verdict for the `channel.field.materialize` / `channel.field.watermark_column` capability leaves — renamed from the flat `module.field.*` id when 2.42 split the single Blueprint module schema into one discriminated-union member per module type, each with a typed `config:`; see §9's capability-leaf note below). `op: sql` only:
 
 ```yaml
 - id: new_events
@@ -468,6 +477,10 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
 | **overwrite_schema** | Optional (Delta). `true` sets `overwriteSchema`: replaces the target schema entirely (`mode: overwrite` only). |
 | **on_new_columns** | Optional schema-drift contract comparing the incoming DataFrame against the existing target: `allow` (absorb new columns via `mergeSchema`), `fail` (raise if the data adds columns the target lacks), `alert` (warn, then absorb). No-op on first write or `mode: merge`. |
 | **options** | Passed directly to Spark DataFrameWriter.option(). |
+| **register_as_table** | Optional. After a `path:`-based write, registers the location as an external table in the active catalog (`CREATE EXTERNAL TABLE IF NOT EXISTS`, best-effort, non-fatal on failure). Ignored (with a warning) when `table:` is set — the catalog table is already the direct write target. |
+| **maintenance** | Optional. Post-write compaction/cleanup, format-aware (`delta`: `optimize`/`zorder_by`/`vacuum`; `iceberg`: `rewrite_data_files`/`expire_snapshots`; `hudi`: `compaction`/`clean`) — full key reference in `docs/spark_guide.md`'s maintenance table. Runs synchronously after the write, non-fatal on failure. |
+| **header** | CSV only, whether to write a header row (default `true`). Read directly by the DuckDB engine's writer; on Spark, set `options: {header: "true"}` instead (Spark's writer has no dedicated top-level `header:` read). |
+| **key** / **value** / **value_expr** | `format: depot` only. `key` (required) names the Depot KV entry; exactly one of `value` (a literal string) or `value_expr` (a Spark aggregate expression, evaluated with one `.collect()`) supplies it. |
 
 **`mode: overwrite_partitions`** is the idempotent-backfill primitive: re-running for the same logical date replaces only that date's data instead of the whole table. Two strategies:
 
@@ -493,7 +506,21 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
 | Config field | Description |
 | :- | :- |
 | **mode** | Junction mode: `conditional` (filter-based), `broadcast` (zero-shuffle, same data to all branches), `partition` (key-based hash split). |
-| **branches** | List of branch definitions. Each has `id` and optional `condition`. |
+| **branches** | List of branch definitions. Each has `id`, an optional `condition` (required for `mode: conditional` — the sentinel `"_else_"` catches rows no other branch's condition matched), and an optional `value` (`mode: partition` only — the value to match against `partition_key`; falls back to the branch's `id` when omitted). |
+| **partition_key** | Required for `mode: partition`. Column whose value is matched against each branch's `value` (`{partition_key} = '{value}'`). |
+
+```yaml
+- id: split_by_region
+  type: Junction
+  config:
+    mode: partition
+    partition_key: region
+    branches:
+      - id: eu
+        value: "EU"          # optional; defaults to the branch id
+      - id: us
+        value: "US"
+```
 
 ### Funnel (Fan-in)
 
@@ -502,11 +529,14 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
   type: Funnel
   config:
     mode: union_all                # union_all | union | coalesce | zip
+    inputs: [ingress_a, ingress_b]
 ```
 
 | Config field | Description |
 | :- | :- |
 | **mode** | Funnel mode: `union_all` (zero-shuffle), `union` (distinct), `coalesce` (aligned), `zip` (monotonically increasing ID join). |
+| **inputs** | Required. List of at least two upstream module IDs, in the order they are merged. |
+| **schema_check** | `union_all`/`union` only. `strict` (default) requires identical schemas; `permissive` allows missing columns (filled with null). |
 
 ### Probe
 
@@ -579,19 +609,24 @@ See the [Observability Guide](observability_guide.md) for full signal reference 
 
 Regulators are passive: they compile away entirely if no signal edge is wired to them.
 
+| Config field | Description |
+| :- | :- |
+| **on_block** | Action when the wired signal is not `passed`: `skip` (default; downstream modules are skipped), `abort`, `trigger_agent`. |
+| **timeout_seconds** | Optional. Maximum time to poll a not-yet-available signal before giving up (default `0` — no polling wait). |
+| **poll_seconds** | Optional. Polling interval while waiting on `timeout_seconds` (default `30.0`, floored at `0.5`). |
+
 ### Arcade (Sub-pipeline)
 
 ```yaml
 - id: process_region
   type: Arcade
-  config:
-    ref: arcades/region_processor.yml
-    context_override:
-      env: ${ctx.env}
-      data_dir: "/data/regions/${ctx.region}"
+  ref: arcades/region_processor.yml   # module-level field, NOT inside config
+  context_override:                   # module-level field, NOT inside config
+    env: ${ctx.env}
+    data_dir: "/data/regions/${ctx.region}"
 ```
 
-Arcades are expanded at compile time into a flat module list. Module IDs are namespaced (`{arcade_id}__{child_id}`). Blueprint module IDs must not contain `__` (reserved for Arcade expansion).
+`ref` and `context_override` are MODULE-level fields, siblings of `config:` — NOT config keys (same shape as Probe's `attach_to` and Channel's `materialize`; Arcade has no legal `config:` keys at all). Arcades are expanded at compile time into a flat module list. Module IDs are namespaced (`{arcade_id}__{child_id}`). Blueprint module IDs must not contain `__` (reserved for Arcade expansion).
 
 ### Assert
 
@@ -619,13 +654,16 @@ Arcades are expanded at compile time into a flat module list. Module IDs are nam
         on_fail: quarantine   # routes null rows to spillway; needs spillway edge
       - type: sql_row
         expr: "amount > 0 AND order_id IS NOT NULL"
+        min_pass_rate: 0.99   # optional — additionally fail if the pass rate drops below this
         on_fail: quarantine
       - type: custom
         fn: my_rules.check_completed_max   # importable module.callable — see below
         on_fail: quarantine
 ```
 
-Assert rules are batched into 1-2 Spark actions. Rule types: `schema_match` (zero action), `not_null`, `min_rows`, `max_rows`, `null_rate`, `freshness`, `sql`, `sql_row`, `spillway_rate`, `custom`.
+Assert rules are batched into 1-2 Spark actions. Rule types: `schema_match` (zero action), `not_null`, `min_rows`, `max_rows`, `null_rate`, `freshness`, `sql`, `sql_row`, `spillway_rate`, `custom`. Every rule accepts an optional `id:` — a human-readable label carried through for authoring clarity; no rule-type handler reads it.
+
+**`sql_row`'s `min_pass_rate`** (optional) additionally fails the rule when the fraction of rows satisfying `expr` drops below the given threshold — one extra aggregate action (`count(*)` + `count_if(expr)`) beyond the row-level filter itself.
 
 **`type: custom`** points `fn:` at an importable `module.callable`, `fn(df) -> {"passed": bool, "message"?: str, "quarantine_df"?: DataFrame}`. Same pointer-only rule as UDFs/custom probes: no inline code body. `fn`'s module resolves against the Manifest's `base_dir` first (a sibling `.py` file next to the Blueprint, see **§3, `base_dir`**), falling back to a normal import.
 
@@ -1944,7 +1982,7 @@ Reading the YAML from disk rather than from the loaded registry is what makes th
 
 ### Verdict-to-test linking
 
-"`supported` requires a test" (see Verdicts, above) was policy rather than mechanism until every `supported` **EXECUTION** row — the leaves `aqueduct/executor/capability_leaves.py::execution_leaves()` derives (`module.type.*`, `channel.op.*`, `ingress.format.*`, `egress.format.*`/`.mode.*`/`.on_new_columns.*`, `junction.mode.*`, `funnel.mode.*`, `feature.*`) — gained an optional `tests:` key: a list of pytest node ids (`tests/test_executor_duckdb/test_executor.py::test_channel_filter`) or bare file paths where a whole file exercises the leaf. `config.*` leaves and the schema-authoring leaves (`module.field.*`, every `<block>.field.*`) are out of scope — they are warn-only or engine-invariant, with no per-engine runtime dispatch to exercise, so requiring a test id there would be busywork; `execution_leaves()` derives the in-scope set from the same per-category walkers `all_leaves()` unions, so the boundary is code, not a hand-maintained list.
+"`supported` requires a test" (see Verdicts, above) was policy rather than mechanism until every `supported` **EXECUTION** row — the leaves `aqueduct/executor/capability_leaves.py::execution_leaves()` derives (`module.type.*`, `channel.op.*`, `ingress.format.*`, `egress.format.*`/`.mode.*`/`.on_new_columns.*`, `junction.mode.*`, `funnel.mode.*`, `feature.*`) — gained an optional `tests:` key: a list of pytest node ids (`tests/test_executor_duckdb/test_executor.py::test_channel_filter`) or bare file paths where a whole file exercises the leaf. `config.*` leaves and the schema-authoring leaves (`module.field.*`, every `<type_lower>.field.*` and `<block>.field.*` — 2.42's per-module-type split, §4.3) are out of scope — they are warn-only or engine-invariant, with no per-engine runtime dispatch to exercise, so requiring a test id there would be busywork; `execution_leaves()` derives the in-scope set from the same per-category walkers `all_leaves()` unions, so the boundary is code, not a hand-maintained list.
 
 `tests/test_capabilities/test_verdict_test_links.py` enforces two things per engine, reading each declaration from disk the same independent-sources way `test_closure.py` does: every `supported` EXECUTION row names at least one test id, and every declared id resolves against the real test tree (the file exists; a `::name`/`::Class::method` node id names something pytest would actually collect). A row failing either check is a genuine gap, not a formatting error — the fix is to link a real test or leave the leaf unbacked and let the build say so loudly, never to invent an id or quietly downgrade the verdict. `aqueduct dev capabilities check` also reports missing/dangling test links (informational; it does not gate this command's exit code, which stays keyed to leaf completeness) so the same signal is visible outside pytest. `sync`/`scaffold` never touch an existing row's bytes, so a `tests:` block survives a sync unchanged; a freshly scaffolded leaf gets a bare `undeclared` string with no `tests:` key at all.
 

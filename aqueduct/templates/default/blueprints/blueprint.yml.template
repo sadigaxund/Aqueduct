@@ -774,11 +774,13 @@ udf_registry: []
 
   # - id: process_region
   #   type: Arcade
-  #   config:
-  #     ref: arcades/region_processor.yml   # path relative to THIS blueprint file
-  #     context_override:                   # values injected into the sub-Blueprint's context
-  #       env: ${ctx.env}
-  #       data_dir: "data/regions/west"
+  #   ref: arcades/region_processor.yml   # path relative to THIS blueprint file — a
+  #                                       # MODULE-level field, sibling of `config:`,
+  #                                       # not a config key (same shape as Probe's
+  #                                       # attach_to / Channel's materialize)
+  #   context_override:                   # values injected into the sub-Blueprint's context
+  #     env: ${ctx.env}
+  #     data_dir: "data/regions/west"
 
 
 # ── Edges ─────────────────────────────────────────────────────────────────────

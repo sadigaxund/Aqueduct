@@ -276,16 +276,18 @@ MODULE-level fields, siblings of `config:`, NOT config keys:
     branches:
       - { id: high, condition: "amount > 1000" }
       - { id: low,  condition: "amount <= 1000" }
+      # - { id: other, condition: "_else_" }         # catches unmatched rows
 ```
-Downstream edges use `port: high` / `port: low`.
+Downstream edges use `port: high` / `port: low`. `mode: partition` needs a top-level `partition_key:` (column name) plus each branch's `value:` (defaults to the branch `id`) — rows route where `partition_key = value`.
 
 ### Funnel — fan-in
 ```yaml
 - id: merge_all
   type: Funnel
   label: "Union"
-  config: { mode: union_all }   # union_all|union|coalesce|zip
+  config: { mode: union_all, inputs: [a, b] }   # mode: union_all|union|coalesce|zip; inputs required, >=2
 ```
+`schema_check: strict|permissive` (default strict) — `union_all`/`union` only.
 
 ### Assert — data-quality gate
 ```yaml
@@ -330,11 +332,10 @@ Wire a Probe's `signal` port to the Regulator via edges. Regulators with no sign
 - id: process_region
   type: Arcade
   label: "Region processor"
-  config:
-    ref: arcades/region_processor.yml
-    context_override: { region: "${ctx.region}" }
+  ref: arcades/region_processor.yml          # module-level field, NOT inside config
+  context_override: { region: "${ctx.region}" }   # module-level field, NOT inside config
 ```
-Expanded at compile time; child ids namespaced `arcade_id__child_id`.
+Expanded at compile time; child ids namespaced `arcade_id__child_id`. Arcade has no legal `config:` keys at all — `ref`/`context_override` are siblings of `config:`, same shape as Probe's `attach_to`.
 
 ## Edges & ports
 ```yaml
