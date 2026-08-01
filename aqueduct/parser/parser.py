@@ -309,6 +309,18 @@ def parse_dict(
             f"(true/false/1/0/yes/no/on/off), got {v!r}"
         )
 
+    # Pass C (2026-08) — each module's `config:` is now a typed per-type
+    # pydantic sub-model (`IngressConfigSchema`, `ChannelConfigSchema`, ...),
+    # not a freeform dict. `Module.config` (the dataclass field the
+    # Compiler/Executor read via `.get("...")`) stays a plain dict — dumping
+    # the validated sub-model back to a dict here means every downstream
+    # consumer is unaffected; only the PARSE-TIME validation got stricter.
+    # `by_alias=True` restores `class_` -> `"class"` etc.; `exclude_none=True`
+    # keeps the pre-Pass-C shape where an unset key is simply absent (never
+    # an explicit `None` a `.get(k, default)` caller would fail to default).
+    def _config_dict(m: Any) -> dict[str, Any]:
+        return m.config.model_dump(by_alias=True, exclude_none=True)
+
     try:
         modules = tuple(
             Module(
@@ -317,7 +329,7 @@ def parse_dict(
                 label=m.label,
                 description=m.description,
                 tags=tuple(m.tags),
-                config=_anchor_paths(resolve_value(m.config, ctx_map), m.type),
+                config=_anchor_paths(resolve_value(_config_dict(m), ctx_map), m.type),
                 engine=m.engine,
                 on_failure=m.on_failure,
                 on_failure_webhook=m.on_failure_webhook,
@@ -326,11 +338,11 @@ def parse_dict(
                 enabled=_coerce_enabled(m.enabled, m.id),
                 spillway=m.spillway,
                 depends_on=tuple(m.depends_on),
-                attach_to=m.attach_to,
-                ref=m.ref,
-                context_override=resolve_value(m.context_override, ctx_map),
-                materialize=m.materialize,
-                watermark_column=m.watermark_column,
+                attach_to=getattr(m, "attach_to", None),
+                ref=getattr(m, "ref", None),
+                context_override=resolve_value(getattr(m, "context_override", None), ctx_map),
+                materialize=getattr(m, "materialize", None),
+                watermark_column=getattr(m, "watermark_column", None),
             )
             for m in validated.modules
         )

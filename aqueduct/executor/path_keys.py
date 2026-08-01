@@ -30,24 +30,39 @@ from __future__ import annotations
 # whose string values are filesystem paths and must be anchored to
 # ``base_dir`` during ``parse_dict`` resolution.
 #
-# Unknown module types fall through to ``_LEGACY_FALLBACK`` for backward
-# compatibility — the earlier parser anchored a single blanket tuple for
-# every type. The fallback unblocks adoption; the long-term goal is a
-# row per module type and an empty fallback. Audited types: Ingress,
-# Egress, UDF. Pending audit: Arcade (when streaming lands), Probe (custom
-# probe ``fn:`` paths), Channel (none today).
+# EVERY module type has an explicit row (the long-term goal this module's
+# docstring used to defer) — the Pass C per-module-type schema audit
+# (2026-08) verified, for every one of the 9 authorable types, exactly
+# which config keys any executor actually reads. Result: only Ingress and
+# Egress `path` are real filesystem-path keys; `jar` is real only on
+# `UdfSchema` (java/scala UDF loading), never on Ingress/Egress — grepping
+# `executor/spark/ingress.py`/`egress.py` and their DuckDB counterparts for
+# `"jar"` returns zero hits. `data_dir`/`input_dir`/`output_dir` were dead
+# entries too (carried since an early parser revision; no executor for any
+# module type ever read them — confirmed by the same audit). Channel,
+# Junction, Funnel, Probe, Regulator, Assert have no path-typed config
+# keys at all. Arcade's `ref` IS a filesystem path but is resolved by the
+# compiler's expander (`aqueduct/compiler/expander.py`), not this
+# mechanism — it is a module-top-level field, not a `config:` entry, so it
+# is out of `_anchor_paths`' scope (which only ever walks `config:`).
 _PATH_KEYS: dict[str, tuple[str, ...]] = {
-    "Ingress": ("path", "data_dir", "input_dir", "jar"),
-    "Egress":  ("path", "output_dir", "jar"),
-    "UDF":     ("jar",),
+    "Ingress":  ("path",),
+    "Channel":  (),
+    "Egress":   ("path",),
+    "Junction": (),
+    "Funnel":   (),
+    "Probe":    (),
+    "Regulator": (),
+    "Arcade":   (),
+    "Assert":   (),
+    "UDF":      ("jar",),
 }
 
-# Module types not in ``_PATH_KEYS`` fall back to this union — preserves
-# the blanket-anchoring behaviour of earlier parser revisions. Shrink to
-# ``()`` once every executor module type has an explicit entry above.
-_LEGACY_FALLBACK: tuple[str, ...] = (
-    "path", "data_dir", "input_dir", "output_dir", "jar",
-)
+# Module types not in ``_PATH_KEYS`` fall back to this union. Empty now
+# that every module type has an explicit row above (Pass C, 2026-08) — kept
+# only as a structural safety net for a type this table has not yet been
+# extended to cover, never a source of real anchoring behaviour.
+_LEGACY_FALLBACK: tuple[str, ...] = ()
 
 
 def get_path_keys(module_type: str) -> tuple[str, ...]:

@@ -11,12 +11,45 @@ schema field or op landing without a capability verdict fails the build.
 Leaf-id naming scheme (stable — do not rename without a deprecation note,
 same as compiler warning ``rule_id``s):
   module.type.<ModuleType>              — one per ModuleType enum value
-  module.field.<name>                   — ModuleSchema's own fields
+  module.field.<name>                   — fields common to EVERY module type
+                                           (``parser.schema.ModuleCommonSchema``
+                                           — id, label, description, tags,
+                                           engine, on_failure,
+                                           on_failure_webhook, retry,
+                                           spillway, depends_on, checkpoint,
+                                           enabled). Unchanged since before
+                                           Pass C (2026-08) — these fields
+                                           never moved.
+  <type_lower>.field.<name>             — Pass C (2026-08) — one entry per
+                                           TYPE-SPECIFIC field, both the
+                                           module-top-level ones
+                                           (``probe.field.attach_to``,
+                                           ``arcade.field.ref``,
+                                           ``channel.field.materialize``, ...)
+                                           and every field inside that
+                                           type's typed ``config:``
+                                           sub-model (``ingress.field.format``,
+                                           ``egress.field.maintenance``, ...).
+                                           Derived from
+                                           ``parser.schema.MODULE_TYPE_SCHEMAS``
+                                           — never hand-listed. Pre-Pass-C,
+                                           every module type shared ONE flat
+                                           ``ModuleSchema`` with a freeform
+                                           ``config: dict`` (invisible to this
+                                           walker by construction); this
+                                           category is the fix.
   <block>.field.<name>                  — one entry per nested schema block
                                            (agent, agent_guardrails,
                                            agent_cascade_tier, retry_policy,
                                            module_retry, backoff, edge, udf,
-                                           warnings, hooks, hook_entry)
+                                           warnings, hooks, hook_entry,
+                                           healed_by) OR per module-type
+                                           nested/list-item block
+                                           (ingress_time_travel,
+                                           egress_maintenance,
+                                           junction_branch, probe_signal,
+                                           assert_on_fail, assert_rule — see
+                                           ``parser.schema.MODULE_NESTED_SCHEMA_BLOCKS``)
   channel.op.<op>                       — Channel op names
   egress.mode.<mode>                    — Egress write modes
   egress.on_new_columns.<policy>        — Egress schema-drift policy
@@ -43,10 +76,20 @@ same as compiler warning ``rule_id``s):
                                            exempt — see below).
 
 Derivation sources, by leaf category:
-  - module.type.*, module.field.*, and every <block>.field.* leaf are derived
-    by introspecting ``aqueduct/parser/schema.py`` pydantic models
-    (``model_fields``) — this IS schema-derived and drifts automatically as
-    fields are added/removed.
+  - module.type.*, module.field.*, <type_lower>.field.*, and every
+    <block>.field.* leaf are derived by introspecting
+    ``aqueduct/parser/schema.py`` pydantic models (``model_fields``) — this
+    IS schema-derived and drifts automatically as fields are added/removed.
+    ``module.field.*`` walks ``ModuleCommonSchema`` (fields shared by every
+    type); ``<type_lower>.field.*`` walks each entry of
+    ``parser.schema.MODULE_TYPE_SCHEMAS`` for its OWN fields (top-level
+    type-specific fields, e.g. ``attach_to``, PLUS every field on that
+    type's typed ``config:`` sub-model) — never the common ones, which stay
+    under ``module.field.*``. Nested/list-item blocks specific to a module
+    type (Ingress ``time_travel``, Egress ``maintenance``, Junction
+    ``branches[]``, Probe ``signals[]``, Assert ``rules[]``) walk via
+    ``parser.schema.MODULE_NESTED_SCHEMA_BLOCKS``, same mechanism as the
+    pre-existing ``agent``/``retry_policy``/... blocks below.
   - channel.op.*, egress.mode.*, egress.on_new_columns.*, junction.mode.*,
     funnel.mode.* are derived from named frozenset constants that live next
     to the op/mode dispatch code (``executor/channel_ops.py``,
@@ -108,8 +151,10 @@ from aqueduct.parser.schema import (
     HealedByRecordSchema,
     HookEntrySchema,
     HooksSchema,
+    MODULE_NESTED_SCHEMA_BLOCKS,
+    MODULE_TYPE_SCHEMAS,
+    ModuleCommonSchema,
     ModuleRetrySchema,
-    ModuleSchema,
     RetryPolicySchema,
     UdfSchema,
     WarningsSchema,
@@ -159,7 +204,36 @@ _SCHEMA_BLOCKS: tuple[tuple[str, type[BaseModel]], ...] = (
 
 
 def _module_field_leaves() -> set[str]:
-    return {f"module.field.{name}" for name in ModuleSchema.model_fields}
+    """Fields common to EVERY module type (``ModuleCommonSchema``) — unchanged
+    ``module.field.<name>`` ids since before Pass C. Type-specific fields
+    (including former-freeform ``config:`` keys) are `_module_type_field_leaves()`."""
+    return {f"module.field.{name}" for name in ModuleCommonSchema.model_fields}
+
+
+def _module_type_field_leaves() -> set[str]:
+    """Pass C (2026-08) — one ``<type_lower>.field.<name>`` leaf per
+    TYPE-SPECIFIC field: every field declared directly on a
+    ``MODULE_TYPE_SCHEMAS`` entry (its own top-level fields, e.g.
+    ``attach_to``/``ref``/``materialize``) minus the ones inherited from
+    ``ModuleCommonSchema`` (those stay under ``module.field.*``) minus the
+    ``type`` discriminator itself, PLUS every field on that type's typed
+    ``config:`` sub-model (walked one level deeper via its own
+    ``model_fields`` — ``config`` is a nested BaseModel field, not a leaf
+    in its own right)."""
+    common_names = set(ModuleCommonSchema.model_fields) | {"type"}
+    leaves: set[str] = set()
+    for type_name, model in MODULE_TYPE_SCHEMAS.items():
+        prefix = type_name.lower()
+        for name, field in model.model_fields.items():
+            if name in common_names:
+                continue
+            if name == "config":
+                config_model = field.annotation
+                for cname in config_model.model_fields:
+                    leaves.add(f"{prefix}.field.{cname}")
+                continue
+            leaves.add(f"{prefix}.field.{name}")
+    return leaves
 
 
 def _module_type_leaves() -> set[str]:
@@ -169,6 +243,9 @@ def _module_type_leaves() -> set[str]:
 def _schema_block_leaves() -> set[str]:
     leaves: set[str] = set()
     for prefix, model in _SCHEMA_BLOCKS:
+        for name in model.model_fields:
+            leaves.add(f"{prefix}.field.{name}")
+    for prefix, model in MODULE_NESTED_SCHEMA_BLOCKS:
         for name in model.model_fields:
             leaves.add(f"{prefix}.field.{name}")
     return leaves
@@ -239,6 +316,7 @@ def all_leaves() -> frozenset[str]:
     leaves: set[str] = set()
     leaves |= _module_type_leaves()
     leaves |= _module_field_leaves()
+    leaves |= _module_type_field_leaves()
     leaves |= _schema_block_leaves()
     leaves |= _channel_op_leaves()
     leaves |= _egress_leaves()

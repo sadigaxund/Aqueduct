@@ -355,10 +355,7 @@ leaves:
     support: supported
     tests:
       - tests/test_executor/test_junction.py::test_partition_explicit_value
-  module.field.attach_to: supported
   module.field.checkpoint: supported
-  module.field.config: supported
-  module.field.context_override: supported
   module.field.depends_on: supported
   module.field.description: supported
   module.field.enabled: supported
@@ -374,11 +371,9 @@ leaves:
   module.field.label: supported
   module.field.on_failure: supported
   module.field.on_failure_webhook: supported
-  module.field.ref: supported
   module.field.retry: supported
   module.field.spillway: supported
   module.field.tags: supported
-  module.field.type: supported
   module.type.Arcade:
     support: supported
     tests:
@@ -547,14 +542,121 @@ leaves:
   # only because ModuleSchema is shared across every module type. `tests:`
   # added voluntarily (not required for a module.field.* leaf — see
   # capability_leaves.py::execution_leaves(), which excludes this category).
-  module.field.materialize:
-    support: supported
-    tests:
-      - tests/test_executor/test_incremental.py::test_incremental_watermark_no_prior
-      - tests/test_executor/test_incremental.py::test_incremental_watermark_with_prior
-      - tests/test_executor/test_incremental.py::test_incremental_no_materialize_no_logic
-  module.field.watermark_column:
-    support: supported
-    tests:
-      - tests/test_executor/test_incremental.py::test_incremental_watermark_with_prior
-      - tests/test_executor/test_incremental.py::test_watermark_computed_from_output_not_channel_df
+  arcade.field.context_override: supported
+  arcade.field.ref: supported
+  assert.field.rules: supported
+  assert_on_fail.field.action: supported
+  assert_on_fail.field.url: supported
+  assert_rule.field.column: supported
+  assert_rule.field.error_type: supported
+  assert_rule.field.expected: supported
+  assert_rule.field.expr: supported
+  assert_rule.field.fn: supported
+  assert_rule.field.fraction: supported
+  assert_rule.field.max: supported
+  assert_rule.field.max_age_hours: supported
+  assert_rule.field.min: supported
+  assert_rule.field.min_pass_rate: supported
+  assert_rule.field.on_fail: supported
+  assert_rule.field.type: supported
+  channel.field.allow_missing_columns: supported
+  channel.field.broadcast_side: supported
+  channel.field.col: supported
+  channel.field.cols: supported
+  channel.field.column: supported
+  channel.field.columns: supported
+  channel.field.condition: supported
+  channel.field.expr: supported
+  channel.field.join_type: supported
+  channel.field.key: supported
+  channel.field.left: supported
+  channel.field.materialize:
+      support: supported
+      tests:
+        - tests/test_executor/test_incremental.py::test_incremental_watermark_no_prior
+        - tests/test_executor/test_incremental.py::test_incremental_no_materialize_no_logic
+  channel.field.metrics_boundary: supported
+  channel.field.num: supported
+  channel.field.num_partitions: supported
+  channel.field.op: supported
+  channel.field.order_by: supported
+  channel.field.query: supported
+  channel.field.right: supported
+  channel.field.spillway_condition: supported
+  channel.field.storage_level: supported
+  channel.field.watermark_column:
+      support: supported
+      tests:
+        - tests/test_executor/test_incremental.py::test_incremental_watermark_with_prior
+  egress.field.class_: supported
+  egress.field.coalesce: supported
+  egress.field.format: supported
+  egress.field.header: supported
+  egress.field.key: supported
+  egress.field.maintenance: supported
+  egress.field.merge_key: supported
+  egress.field.merge_schema: supported
+  egress.field.mode: supported
+  egress.field.on_new_columns: supported
+  egress.field.options: supported
+  egress.field.overwrite_schema: supported
+  egress.field.partition_by: supported
+  egress.field.path: supported
+  egress.field.register_as_table: supported
+  egress.field.repartition: supported
+  egress.field.replace_where: supported
+  egress.field.table: supported
+  egress.field.value: supported
+  egress.field.value_expr: supported
+  egress_maintenance.field.clean: supported
+  egress_maintenance.field.compaction: supported
+  egress_maintenance.field.expire_snapshots: supported
+  egress_maintenance.field.optimize: supported
+  egress_maintenance.field.rewrite_data_files: supported
+  egress_maintenance.field.vacuum: supported
+  egress_maintenance.field.zorder_by: supported
+  funnel.field.inputs: supported
+  funnel.field.mode: supported
+  funnel.field.schema_check: supported
+  ingress.field.class_: supported
+  ingress.field.format: supported
+  ingress.field.header: supported
+  ingress.field.infer_schema: supported
+  ingress.field.known_columns: supported
+  ingress.field.on_new_columns: supported
+  ingress.field.options: supported
+  ingress.field.partition_filters: supported
+  ingress.field.path: supported
+  ingress.field.schema_hint: supported
+  ingress.field.table: supported
+  ingress.field.time_travel: supported
+  ingress_time_travel.field.timestamp: supported
+  ingress_time_travel.field.version: supported
+  junction.field.branches: supported
+  junction.field.mode: supported
+  junction.field.partition_key: supported
+  junction_branch.field.condition: supported
+  junction_branch.field.id: supported
+  junction_branch.field.value: supported
+  probe.field.attach_to: supported
+  probe.field.report: supported
+  probe.field.signals: supported
+  probe_signal.field.allow_sample: supported
+  probe_signal.field.column: supported
+  probe_signal.field.columns: supported
+  probe_signal.field.entry: supported
+  probe_signal.field.expr: supported
+  probe_signal.field.fraction: supported
+  probe_signal.field.method: supported
+  probe_signal.field.module: supported
+  probe_signal.field.n: supported
+  probe_signal.field.passed_when: supported
+  probe_signal.field.percentiles: supported
+  probe_signal.field.plugin: supported
+  probe_signal.field.sql: supported
+  probe_signal.field.type: supported
+  regulator.field.on_block: supported
+  regulator.field.poll_seconds: supported
+  regulator.field.timeout_seconds: supported
+  assert_rule.field.id: supported
+  probe_signal.field.id: supported

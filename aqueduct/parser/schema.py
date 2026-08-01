@@ -6,10 +6,11 @@ spec requirement that Blueprints are always valid input for LLM patch generation
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from aqueduct.parser.fs_path import FsPath
 from aqueduct.parser.models import ModuleType
 
 # `Handoff` is a compiler-synthesized module kind (Phase 81 step 2) — the
@@ -223,15 +224,60 @@ class AgentSchema(BaseModel):
     max_chain: int | None = Field(default=None, ge=1)
 
 
-class ModuleSchema(BaseModel):
+# ═══════════════════════════════════════════════════════════════════════════
+# Per-module-type schemas (Pass C, 2026-08 — discriminated union on `type`)
+#
+# Pre-Pass-C, every one of the 9 module types shared ONE flat `ModuleSchema`
+# with a freeform `config: dict[str, Any]`. Two consequences: (a) a
+# type-specific field (`materialize`, `attach_to`, ...) had no validator
+# tying it to the type it actually applies to; (b) anything typed inside
+# `config:` was INVISIBLE to the capability framework by construction —
+# leaves are derived by introspecting pydantic models
+# (`executor/capability_leaves.py`), so a freeform dict key can never
+# become a leaf, and an engine that silently ignores it never has to say so.
+# `materialize`/`watermark_column` (2.40) were the first two keys promoted
+# out of `config:` for exactly this reason; Pass C generalises the fix: a
+# discriminated union of per-type schemas, each declaring only the fields
+# legal for THAT type (`extra="forbid"` then makes a misplaced or
+# misspelled key a structural rejection naming it, no validator to keep in
+# sync), with a TYPED `config:` sub-model per type absorbing that type's
+# semantic keys.
+#
+# `config:` remains a nested YAML block (unlike `materialize`/`attach_to`/
+# `ref`, which are genuinely module-top-level concepts) — only its
+# freeform-dict SHAPE is gone. The one deliberate exception is `options:`
+# (Ingress/Egress) and a couple of genuinely polymorphic fields
+# (`schema_hint`, Channel `columns`) — these stay typed as a narrow
+# container (`dict`/`Any`) with the polymorphism documented in the field's
+# description, per the mandatory design constraint: type the SEMANTIC keys,
+# never try to enumerate an engine's open-ended reader/writer option space.
+#
+# `MODULE_TYPE_SCHEMAS` (bottom of this section) is the single source of
+# truth the capability-leaf walker (`executor/capability_leaves.py`) uses to
+# derive one `<type_lower>.field.<name>` leaf per type-specific field —
+# fields common to every type (below, `ModuleCommonSchema`) keep the pre-Pass-C
+# `module.field.<name>` leaf id unchanged; only type-specific fields (the
+# already-promoted ones AND every newly-typed former-`config:` key) get the
+# new per-type prefix. See that module's docstring for the full scheme.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class ModuleCommonSchema(BaseModel):
+    """Fields legal on every one of the 9 module types.
+
+    Not itself part of the discriminated union — each concrete
+    ``<Type>Schema`` below inherits from this and adds its own ``type``
+    discriminator, type-specific top-level fields, and typed ``config:``.
+    Kept separate so these ~11 fields keep their pre-Pass-C
+    ``module.field.<name>`` capability-leaf ids (they didn't move; only the
+    type-specific surface did).
+    """
     model_config = ConfigDict(extra="forbid")
 
     id: str
     label: str
-    type: str
     description: str = ""
     tags: list[str] = Field(default_factory=list)
-    config: dict[str, Any] = Field(default_factory=dict)
     # Cross-engine handoff (2.34) — which execution engine runs THIS module.
     # A scalar engine NAME (e.g. "spark", "duckdb"), distinct from the
     # blueprint-level `engine:` BLOCK (EngineBlockSchema, per-engine SETTINGS
@@ -263,20 +309,6 @@ class ModuleSchema(BaseModel):
     # but is skipped (⏭) at run time, and the disable cascades to every module
     # consuming its output (edges, depends_on, Probe attach_to).
     enabled: bool | str = True
-    # Probe-specific
-    attach_to: str | None = None
-    # Arcade-specific
-    ref: str | None = None
-    context_override: dict[str, Any] | None = None
-    # Channel-specific (2.40) — incremental watermark processing. Promoted
-    # out of the freeform `config:` dict to a declared module field so the
-    # capability framework can see it (a freeform key is invisible to it by
-    # construction — see AGENTS.md's capability-leaf workflow). `op: sql`
-    # only; see docs/specs.md §4.4 Channel for the substitution semantics.
-    materialize: Literal["incremental"] | None = None
-    # Channel-specific (2.40). Required when `materialize: incremental` —
-    # column whose MAX() tracks the incremental high-water mark.
-    watermark_column: str | None = None
 
     @field_validator("id")
     @classmethod
@@ -290,21 +322,404 @@ class ModuleSchema(BaseModel):
             )
         return v
 
-    @field_validator("type")
-    @classmethod
-    def validate_type(cls, v: str) -> str:
-        if v in _COMPILER_SYNTHESIZED_TYPES:
-            raise ValueError(
-                f"Module type {v!r} is reserved for the compiler's synthetic "
-                "cross-engine handoff insertion (Phase 81) and cannot be "
-                "declared in a Blueprint — remove it; the compiler inserts "
-                "one automatically at each engine boundary."
-            )
-        if v not in VALID_MODULE_TYPES:
-            raise ValueError(
-                f"Unknown module type: {v!r}. Must be one of {sorted(VALID_MODULE_TYPES)}"
-            )
-        return v
+
+# ── Nested / list-item blocks (own capability-leaf prefix each) ────────────
+
+class IngressTimeTravelSchema(BaseModel):
+    """Ingress ``time_travel:`` — pin a Delta/Iceberg historical snapshot.
+    Exactly one of ``version``/``timestamp`` (enforced at read time)."""
+    model_config = ConfigDict(extra="forbid")
+
+    version: int | None = None
+    timestamp: str | None = None
+
+
+class EgressMaintenanceSchema(BaseModel):
+    """Egress ``maintenance:`` — post-write compaction/cleanup ops.
+    Field applicability is format-specific (see ``spark/egress.py::build_maintenance_ops``):
+    delta uses optimize/zorder_by/vacuum; iceberg uses rewrite_data_files/
+    expire_snapshots; hudi uses compaction/clean."""
+    model_config = ConfigDict(extra="forbid")
+
+    optimize: bool | None = None
+    zorder_by: str | list[str] | None = None
+    vacuum: int | float | None = None
+    rewrite_data_files: bool | None = None
+    expire_snapshots: bool | None = None
+    compaction: bool | None = None
+    clean: bool | None = None
+
+
+class JunctionBranchSchema(BaseModel):
+    """One Junction fan-out branch. ``condition`` required for `mode:
+    conditional` (the sentinel ``"_else_"`` catches unmatched rows);
+    ``value`` optional for `mode: partition` (falls back to ``id``)."""
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    condition: str | None = None
+    value: str | None = None
+
+
+class ProbeSignalSchema(BaseModel):
+    """One Probe signal. Field applicability is signal-``type``-specific —
+    see ``spark/probe.py`` module docstring for the full per-type contract;
+    fields are flat and mostly-optional here (same shape as
+    ``CascadeTierSchema``) rather than a second-level discriminated union,
+    since most fields are shared across several signal types (``fraction``,
+    ``columns``) and the type set only grows by hand-curated additions."""
+    model_config = ConfigDict(extra="forbid")
+
+    type: str
+    # Human-readable signal label — same gallery-wide authoring convention as
+    # `AssertRuleSchema.id`; not read by any signal-type handler.
+    id: str | None = None
+    # row_count_estimate only
+    method: Literal["sample", "spark_listener"] | None = None
+    # row_count_estimate / null_rates / value_distribution / distinct_count / data_freshness
+    fraction: float | None = None
+    # null_rates / value_distribution / distinct_count (omit → engine default column set)
+    columns: list[str] | None = None
+    # sample_rows
+    n: int | None = None
+    # value_distribution
+    percentiles: list[float] | None = None
+    # data_freshness (required there)
+    column: str | None = None
+    # data_freshness
+    allow_sample: bool | None = None
+    # threshold (required there); custom form 1 (value expression)
+    expr: str | None = None
+    # custom form 1 — value expression → "estimate"
+    sql: str | None = None
+    # custom form 1 — boolean expression → "passed"
+    passed_when: str | None = None
+    # custom form 2 — module pointer (mirrors UDF module/entry contract)
+    module: str | None = None
+    entry: str | None = None
+    # custom form 3 — entry-point plugin (setuptools group 'aqueduct.probe_signals')
+    plugin: str | None = None
+
+
+class AssertOnFailBlockSchema(BaseModel):
+    """Assert rule ``on_fail:`` as a block (vs. the bare-string shorthand) —
+    only ``action: webhook`` uses ``url``."""
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["abort", "warn", "webhook", "quarantine", "trigger_agent"]
+    url: str | None = None
+
+
+class AssertRuleSchema(BaseModel):
+    """One Assert rule. Field applicability is rule-``type``-specific — see
+    ``spark/assert_.py`` module docstring for the full per-type contract.
+    Flat and mostly-optional (same rationale as ``ProbeSignalSchema``)."""
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal[
+        "schema_match", "min_rows", "max_rows", "not_null", "null_rate",
+        "freshness", "sql", "sql_row", "custom", "spillway_rate",
+    ]
+    # Human-readable rule label — gallery-wide authoring convention (every
+    # shipped Assert snippet sets one). Not read by any rule-type handler in
+    # `spark/assert_.py` (no functional effect); kept as a legitimate field
+    # rather than rejected, since it is a genuine, harmless labeling
+    # convention, not a misspelled synonym of a real key (contrast the
+    # `min_count`/`max_count`/`max_rate` typos found and fixed in
+    # `24_assert_types_full` during Pass C — those WERE synonyms silently
+    # no-oping the rule).
+    id: str | None = None
+    on_fail: Literal["abort", "warn", "webhook", "quarantine", "trigger_agent"] | AssertOnFailBlockSchema | None = None
+    # generic across every rule type
+    error_type: str | None = None
+    # schema_match (required there)
+    expected: dict[str, str] | None = None
+    # min_rows
+    min: int | None = None
+    # max_rows / null_rate / spillway_rate — meaning is rule-type-specific
+    # (a row-count ceiling for max_rows, a fraction ceiling for the other two)
+    max: float | None = None
+    # null_rate / freshness / not_null (required on those three)
+    column: str | None = None
+    # null_rate
+    fraction: float | None = None
+    # freshness
+    max_age_hours: float | None = None
+    # sql / sql_row (required on both)
+    expr: str | None = None
+    # sql_row only
+    min_pass_rate: float | None = None
+    # custom (required there) — dotted `module.callable`
+    fn: str | None = None
+
+
+# ── Per-type `config:` sub-models ───────────────────────────────────────────
+
+class IngressConfigSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Any format string the active engine's reader supports (parquet, delta,
+    # csv, json, orc, avro, jdbc, kafka, depot, custom, ...) — deliberately
+    # NOT a closed Literal; see `executor/capability_leaves.py`'s
+    # INGRESS_FORMATS docstring for why only a curated subset gets its own
+    # capability leaf.
+    format: str | None = None
+    # Catalog-addressed read (`spark.read.table()`); mutually exclusive with `path`.
+    table: str | None = None
+    path: Annotated[str, FsPath()] | None = None
+    # `format: custom` — dotted Python DataSource class path (pyspark>=4.0).
+    class_: str | None = Field(default=None, alias="class")
+    partition_filters: str | None = None
+    # Polymorphic passthrough — `{col: type}`, `{mode, columns: [{name,type}]}`,
+    # or `[{name, type}]`. Kept untyped-shape (documented here, not modeled)
+    # per the narrow-freeform-passthrough carve-out: the 3 accepted shapes
+    # are a display convenience, not an engine option space to enumerate.
+    schema_hint: dict[str, Any] | list[Any] | None = None
+    time_travel: IngressTimeTravelSchema | None = None
+    on_new_columns: Literal["allow", "fail", "alert"] | None = None
+    known_columns: list[str] | None = None
+    # Deliberate freeform passthrough — forwarded verbatim to the engine's
+    # DataFrameReader `.option(k, v)`; enumerating every Spark/DuckDB reader
+    # option is out of scope (see module docstring's mandatory constraint).
+    options: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Freeform passthrough reader options forwarded verbatim to the engine's reader.",
+    )
+    header: bool | None = None
+    infer_schema: bool | None = None
+
+
+class ChannelConfigSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Not a closed Literal — the canonical op set lives in
+    # `executor/channel_ops.py::ALL_OPS` (engine-agnostic; parser must not
+    # import pyspark, so it isn't imported here) and is already the runtime
+    # dispatch guard plus the `channel.op.*` capability-leaf source.
+    op: str | None = None
+    query: str | None = None
+    # op: join
+    left: str | None = None
+    right: str | None = None
+    join_type: Literal["inner", "left", "right", "full", "semi", "anti", "cross"] | None = None
+    # op: join (ON clause) / op: filter (alias of `expr`)
+    condition: str | None = None
+    expr: str | None = None
+    broadcast_side: Literal["left", "right"] | None = None
+    # op: deduplicate
+    key: str | list[str] | None = None
+    # op: deduplicate (ranking) / op: sort (alias of `columns`)
+    order_by: str | list[str] | None = None
+    # Polymorphic per op — select: list[str]; rename: `{old: new}` or
+    # `[{from, to}]`/`[{old, new}]`; cast: `{col: type}` or `[{column, type}]`.
+    # Kept untyped-shape (see IngressConfigSchema.schema_hint rationale).
+    columns: Any = None
+    # op: select (alias of `columns`)
+    cols: list[str] | None = None
+    # op: repartition / coalesce
+    num_partitions: int | None = None
+    num: int | None = None
+    # op: repartition (optional target column)
+    column: str | None = None
+    col: str | None = None
+    # op: cache
+    storage_level: Literal[
+        "MEMORY_AND_DISK", "MEMORY_AND_DISK_SER", "MEMORY_ONLY", "MEMORY_ONLY_SER",
+        "DISK_ONLY", "DISK_ONLY_2", "OFF_HEAP",
+    ] | None = None
+    # op: union
+    allow_missing_columns: bool | None = None
+    # applies to any op — forces a Spark stage-cut for accurate per-module metrics
+    metrics_boundary: bool | None = None
+    # Read by the executor orchestration layer (not this op's own handler) —
+    # rows matching route to the `spillway` port.
+    spillway_condition: str | None = None
+
+
+class EgressConfigSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    format: str | None = None
+    mode: Literal[
+        "overwrite", "append", "error", "errorifexists", "ignore", "merge", "overwrite_partitions",
+    ] | None = None
+    table: str | None = None
+    path: Annotated[str, FsPath()] | None = None
+    partition_by: list[str] | None = None
+    # mode: merge (required there)
+    merge_key: str | list[str] | None = None
+    # format: custom — dotted Python DataSource class path
+    class_: str | None = Field(default=None, alias="class")
+    # mode: overwrite_partitions
+    replace_where: str | None = None
+    merge_schema: bool | None = None
+    overwrite_schema: bool | None = None
+    on_new_columns: Literal["allow", "fail", "alert"] | None = None
+    # Deliberate freeform passthrough — see IngressConfigSchema.options.
+    options: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Freeform passthrough writer options forwarded verbatim to the engine's writer.",
+    )
+    register_as_table: str | None = None
+    maintenance: EgressMaintenanceSchema | None = None
+    header: bool | None = None
+    # format: depot
+    key: str | None = None
+    value: str | None = None
+    value_expr: str | None = None
+    # NOT a real repartition/coalesce — read only by two compiler warning
+    # heuristics (`file_format_no_repartition`, `perf_delta_append_no_partition`)
+    # to decide whether to suppress the "small files" warning; setting this
+    # has no effect on the actual write's file count. Kept (it has a real,
+    # if weaker-than-the-name-implies, reader) — see Pass C findings.
+    repartition: int | bool | None = None
+    coalesce: int | bool | None = None
+
+
+class JunctionConfigSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["conditional", "broadcast", "partition"] | None = None
+    branches: list[JunctionBranchSchema] = Field(default_factory=list)
+    # mode: partition (required there)
+    partition_key: str | None = None
+
+
+class FunnelConfigSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["union_all", "union", "coalesce", "zip"] | None = None
+    inputs: list[str] = Field(default_factory=list)
+    # union_all / union only
+    schema_check: Literal["strict", "permissive"] | None = None
+
+
+class ProbeConfigSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    report: Literal["stdout"] | None = None
+    signals: list[ProbeSignalSchema] = Field(default_factory=list)
+
+
+class RegulatorConfigSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    on_block: Literal["skip", "abort", "trigger_agent"] | None = None
+    timeout_seconds: float | None = None
+    poll_seconds: float | None = None
+
+
+class ArcadeConfigSchema(BaseModel):
+    """Arcade has NO legal `config:` keys — `ref`/`context_override` are
+    module-top-level fields (see `ArcadeSchema`), not `config:` entries.
+    Zero fields + `extra="forbid"` so a stray `config:` block on an Arcade
+    module is a structural rejection, not a silent freeform accept."""
+    model_config = ConfigDict(extra="forbid")
+
+
+class AssertConfigSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    rules: list[AssertRuleSchema] = Field(default_factory=list)
+
+
+# ── Per-type module schemas (the discriminated union members) ──────────────
+
+class IngressSchema(ModuleCommonSchema):
+    type: Literal["Ingress"]
+    config: IngressConfigSchema = Field(default_factory=IngressConfigSchema)
+
+
+class ChannelSchema(ModuleCommonSchema):
+    type: Literal["Channel"]
+    # Incremental watermark processing (2.40) — `op: sql` only; see
+    # docs/specs.md §4.4 Channel for the substitution semantics.
+    materialize: Literal["incremental"] | None = None
+    # Required when `materialize: incremental` — column whose MAX() tracks
+    # the incremental high-water mark.
+    watermark_column: str | None = None
+    config: ChannelConfigSchema = Field(default_factory=ChannelConfigSchema)
+
+
+class EgressSchema(ModuleCommonSchema):
+    type: Literal["Egress"]
+    config: EgressConfigSchema = Field(default_factory=EgressConfigSchema)
+
+
+class JunctionSchema(ModuleCommonSchema):
+    type: Literal["Junction"]
+    config: JunctionConfigSchema = Field(default_factory=JunctionConfigSchema)
+
+
+class FunnelSchema(ModuleCommonSchema):
+    type: Literal["Funnel"]
+    config: FunnelConfigSchema = Field(default_factory=FunnelConfigSchema)
+
+
+class ProbeSchema(ModuleCommonSchema):
+    type: Literal["Probe"]
+    # Module this Probe taps. Required at compile time (`compiler/wirer.py`),
+    # kept Optional here — same split as pre-Pass-C.
+    attach_to: str | None = None
+    config: ProbeConfigSchema = Field(default_factory=ProbeConfigSchema)
+
+
+class RegulatorSchema(ModuleCommonSchema):
+    type: Literal["Regulator"]
+    config: RegulatorConfigSchema = Field(default_factory=RegulatorConfigSchema)
+
+
+class ArcadeSchema(ModuleCommonSchema):
+    type: Literal["Arcade"]
+    # Sub-Blueprint path, required at expansion time (`compiler/expander.py`).
+    ref: str | None = None
+    context_override: dict[str, Any] | None = None
+    config: ArcadeConfigSchema = Field(default_factory=ArcadeConfigSchema)
+
+
+class AssertSchema(ModuleCommonSchema):
+    type: Literal["Assert"]
+    config: AssertConfigSchema = Field(default_factory=AssertConfigSchema)
+
+
+# Type-name → schema class — the single source of truth for tooling that
+# needs to walk every module type's own schema (capability-leaf derivation,
+# scaffolding, docs generation). Keep in sync with the union below by
+# construction — both are built from this same set of classes.
+MODULE_TYPE_SCHEMAS: dict[str, type[BaseModel]] = {
+    "Ingress": IngressSchema,
+    "Channel": ChannelSchema,
+    "Egress": EgressSchema,
+    "Junction": JunctionSchema,
+    "Funnel": FunnelSchema,
+    "Probe": ProbeSchema,
+    "Regulator": RegulatorSchema,
+    "Arcade": ArcadeSchema,
+    "Assert": AssertSchema,
+}
+
+# Nested/list-item blocks that carry their own capability-leaf prefix — the
+# module-type analogue of `capability_leaves.py`'s `_SCHEMA_BLOCKS` (agent,
+# guardrails, cascade_tier, ...). Kept here, next to the models, rather than
+# hand-duplicated in capability_leaves.py.
+MODULE_NESTED_SCHEMA_BLOCKS: tuple[tuple[str, type[BaseModel]], ...] = (
+    ("ingress_time_travel", IngressTimeTravelSchema),
+    ("egress_maintenance", EgressMaintenanceSchema),
+    ("junction_branch", JunctionBranchSchema),
+    ("probe_signal", ProbeSignalSchema),
+    ("assert_on_fail", AssertOnFailBlockSchema),
+    ("assert_rule", AssertRuleSchema),
+)
+
+# The discriminated union — BlueprintSchema.modules' element type. Pydantic
+# dispatches on `type`; `BlueprintSchema._check_module_types` runs first
+# (mode="before") to give the Handoff-rejection and unknown-type messages
+# their pre-Pass-C wording instead of pydantic's generic discriminator error.
+ModuleSchema = Annotated[
+    IngressSchema | ChannelSchema | EgressSchema | JunctionSchema | FunnelSchema
+    | ProbeSchema | RegulatorSchema | ArcadeSchema | AssertSchema,
+    Field(discriminator="type"),
+]
 
 
 class EdgeSchema(BaseModel):
@@ -575,6 +990,32 @@ class BlueprintSchema(BaseModel):
     def validate_blueprint_id(cls, v: str) -> str:
         if not v.strip():
             raise ValueError("Blueprint id must not be empty")
+        return v
+
+    @field_validator("modules", mode="before")
+    @classmethod
+    def _check_module_types(cls, v: Any) -> Any:
+        """Give the Handoff-rejection and unknown-type messages their
+        pre-Pass-C wording, before pydantic's own discriminated-union
+        dispatch on `modules[i].type` runs (whose generic error is less
+        actionable for the Handoff case specifically)."""
+        if not isinstance(v, list):
+            return v
+        for m in v:
+            if not isinstance(m, dict):
+                continue
+            t = m.get("type")
+            if t in _COMPILER_SYNTHESIZED_TYPES:
+                raise ValueError(
+                    f"Module type {t!r} is reserved for the compiler's synthetic "
+                    "cross-engine handoff insertion (Phase 81) and cannot be "
+                    "declared in a Blueprint — remove it; the compiler inserts "
+                    "one automatically at each engine boundary."
+                )
+            if t not in VALID_MODULE_TYPES:
+                raise ValueError(
+                    f"Unknown module type: {t!r}. Must be one of {sorted(VALID_MODULE_TYPES)}"
+                )
         return v
 
     @model_validator(mode="after")

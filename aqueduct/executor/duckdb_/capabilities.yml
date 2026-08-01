@@ -444,10 +444,7 @@ leaves:
       - tests/test_executor_duckdb/test_executor.py::test_junction_partition
 
   # ── Module fields — generic Blueprint authoring surface ─────────────────
-  module.field.attach_to: supported
   module.field.checkpoint: supported
-  module.field.config: supported
-  module.field.context_override: supported
   module.field.depends_on: supported
   module.field.description: supported
   module.field.enabled: supported
@@ -463,11 +460,9 @@ leaves:
   module.field.label: supported
   module.field.on_failure: supported
   module.field.on_failure_webhook: supported
-  module.field.ref: supported
   module.field.retry: supported
   module.field.spillway: supported
   module.field.tags: supported
-  module.field.type: supported
 
   # ── Module types ──────────────────────────────────────────────────────────
   module.type.Arcade:
@@ -654,17 +649,6 @@ leaves:
   # (SQL aggregate instead of a DataFrame action). `tests:` added
   # voluntarily (not required for a module.field.* leaf — see
   # capability_leaves.py::execution_leaves(), which excludes this category).
-  module.field.materialize:
-    support: supported
-    tests:
-      - tests/test_executor_duckdb/test_incremental.py::test_incremental_watermark_no_prior
-      - tests/test_executor_duckdb/test_incremental.py::test_incremental_watermark_with_prior
-      - tests/test_executor_duckdb/test_incremental.py::test_incremental_two_runs_real_incremental_behavior
-  module.field.watermark_column:
-    support: supported
-    tests:
-      - tests/test_executor_duckdb/test_incremental.py::test_incremental_watermark_with_prior
-      - tests/test_executor_duckdb/test_incremental.py::test_incremental_two_runs_real_incremental_behavior
   config.engine.duckdb.s3_endpoint:
     support: supported
     hint: "S3-compatible endpoint override for CREATE SECRET (TYPE S3, ..., ENDPOINT ...) — the non-AWS escape hatch (MinIO, on-prem object storage). Verified end-to-end against a real MinIO instance."
@@ -686,3 +670,255 @@ leaves:
       - tests/test_executor_duckdb/test_engine_config.py::TestS3SecretResolution::test_resolve_s3_secret_from_config_includes_minio_overrides
       - tests/test_executor_duckdb/test_engine_config.py::TestS3SecretResolution::test_configure_s3_secret_with_minio_overrides_no_network
       - tests/test_executor_duckdb/test_s3_minio.py::TestDuckDBS3RoundTrip::test_duckdb_ingress_egress_round_trip_against_minio
+  arcade.field.context_override: supported
+  arcade.field.ref: supported
+  assert.field.rules:
+      support: unsupported
+      hint: "Assert (row-quality rules + quarantine) is not implemented on DuckDB — see module.type.Assert."
+  assert_on_fail.field.action:
+      support: unsupported
+      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
+  assert_on_fail.field.url:
+      support: unsupported
+      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
+  assert_rule.field.column:
+      support: unsupported
+      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
+  assert_rule.field.error_type:
+      support: unsupported
+      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
+  assert_rule.field.expected:
+      support: unsupported
+      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
+  assert_rule.field.expr:
+      support: unsupported
+      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
+  assert_rule.field.fn:
+      support: unsupported
+      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
+  assert_rule.field.fraction:
+      support: unsupported
+      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
+  assert_rule.field.max:
+      support: unsupported
+      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
+  assert_rule.field.max_age_hours:
+      support: unsupported
+      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
+  assert_rule.field.min:
+      support: unsupported
+      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
+  assert_rule.field.min_pass_rate:
+      support: unsupported
+      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
+  assert_rule.field.on_fail:
+      support: unsupported
+      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
+  assert_rule.field.type:
+      support: unsupported
+      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
+  channel.field.allow_missing_columns: supported
+  channel.field.broadcast_side:
+      support: ignored_with_warning
+      hint: "Accepted but never inspected — DuckDB's join planner has no broadcast-hint concept; the query still runs correctly, just without the hint."
+  channel.field.col:
+      support: unsupported
+      hint: "op: repartition's optional target column is unimplemented on DuckDB — see channel.op.repartition."
+  channel.field.cols: supported
+  channel.field.column:
+      support: unsupported
+      hint: "op: repartition's optional target column is unimplemented on DuckDB — see channel.op.repartition."
+  channel.field.columns: supported
+  channel.field.condition: supported
+  channel.field.expr: supported
+  channel.field.join_type: supported
+  channel.field.key: supported
+  channel.field.left: supported
+  channel.field.materialize:
+      support: supported
+      tests:
+        - tests/test_executor_duckdb/test_incremental.py::test_incremental_watermark_no_prior
+        - tests/test_executor_duckdb/test_incremental.py::test_incremental_two_runs_real_incremental_behavior
+  channel.field.metrics_boundary:
+      support: unsupported
+      hint: "DuckDB's executor does not yet collect per-module runtime metrics outside the Handoff module — see feature.metrics_boundary."
+  channel.field.num:
+      support: unsupported
+      hint: "op: repartition/coalesce is unimplemented on DuckDB — see channel.op.repartition / channel.op.coalesce."
+  channel.field.num_partitions:
+      support: unsupported
+      hint: "op: repartition is unimplemented on DuckDB (no partition concept) — see channel.op.repartition."
+  channel.field.op: supported
+  channel.field.order_by: supported
+  channel.field.query: supported
+  channel.field.right: supported
+  channel.field.spillway_condition: supported
+  channel.field.storage_level:
+      support: unsupported
+      hint: "op: cache is unimplemented on DuckDB (single-process, no distributed cache tier) — see channel.op.cache."
+  channel.field.watermark_column:
+      support: supported
+      tests:
+        - tests/test_executor_duckdb/test_incremental.py::test_incremental_watermark_with_prior
+  egress.field.class_:
+      support: unsupported
+      hint: "format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB."
+  egress.field.coalesce: supported
+  egress.field.format: supported
+  egress.field.header: supported
+  egress.field.key:
+      support: unsupported
+      hint: "format: depot has no dispatch branch implemented in this engine's egress.py — see egress.format.depot."
+  egress.field.maintenance:
+      support: unsupported
+      hint: "DuckDB has no OPTIMIZE/VACUUM/compaction operation for parquet or any format it writes here — post-write maintenance is a no-op it cannot perform. Not implemented."
+  egress.field.merge_key:
+      support: unsupported
+      hint: "mode: merge (upsert) requires a target table format with a transaction log (Delta). Not implemented — see egress.mode.merge."
+  egress.field.merge_schema:
+      support: unsupported
+      hint: "Schema-evolution flags apply to Delta/Iceberg writers DuckDB does not have. Not implemented."
+  egress.field.mode: supported
+  egress.field.on_new_columns:
+      support: unsupported
+      hint: "Requires a schema diff against the existing file's columns before write — see egress.on_new_columns.*. Not implemented."
+  egress.field.options: supported
+  egress.field.overwrite_schema:
+      support: unsupported
+      hint: "Schema-evolution flags apply to Delta/Iceberg writers DuckDB does not have. Not implemented."
+  egress.field.partition_by: supported
+  egress.field.path: supported
+  egress.field.register_as_table:
+      support: unsupported
+      hint: "Requires registering an external table in a catalog that persists across sessions the way Spark's does; no such registration path exists on this engine. Not implemented."
+  egress.field.repartition: supported
+  egress.field.replace_where:
+      support: unsupported
+      hint: "mode: overwrite_partitions is unimplemented on DuckDB — see egress.mode.overwrite_partitions."
+  egress.field.table:
+      support: unsupported
+      hint: "Bare table: addressing is unimplemented on DuckDB — see feature.table_addressing."
+  egress.field.value:
+      support: unsupported
+      hint: "format: depot has no dispatch branch implemented in this engine's egress.py — see egress.format.depot."
+  egress.field.value_expr:
+      support: unsupported
+      hint: "format: depot has no dispatch branch implemented in this engine's egress.py — see egress.format.depot."
+  egress_maintenance.field.clean:
+      support: unsupported
+      hint: "Hudi maintenance procedures require a Hudi table DuckDB does not write. Not implemented — see egress.field.maintenance."
+  egress_maintenance.field.compaction:
+      support: unsupported
+      hint: "Hudi maintenance procedures require a Hudi table DuckDB does not write. Not implemented — see egress.field.maintenance."
+  egress_maintenance.field.expire_snapshots:
+      support: unsupported
+      hint: "Iceberg maintenance procedures require an Iceberg catalog DuckDB does not write through. Not implemented — see egress.field.maintenance."
+  egress_maintenance.field.optimize:
+      support: unsupported
+      hint: "DuckDB has no OPTIMIZE/compaction operation for the formats it writes. Not implemented — see egress.field.maintenance."
+  egress_maintenance.field.rewrite_data_files:
+      support: unsupported
+      hint: "Iceberg maintenance procedures require an Iceberg catalog DuckDB does not write through. Not implemented — see egress.field.maintenance."
+  egress_maintenance.field.vacuum:
+      support: unsupported
+      hint: "DuckDB has no VACUUM/cleanup operation for the formats it writes. Not implemented — see egress.field.maintenance."
+  egress_maintenance.field.zorder_by:
+      support: unsupported
+      hint: "DuckDB has no OPTIMIZE/ZORDER operation for the formats it writes. Not implemented — see egress.field.maintenance."
+  funnel.field.inputs: supported
+  funnel.field.mode: supported
+  funnel.field.schema_check: supported
+  ingress.field.class_:
+      support: unsupported
+      hint: "format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB."
+  ingress.field.format: supported
+  ingress.field.header: supported
+  ingress.field.infer_schema:
+      support: ignored_with_warning
+      hint: "DuckDB's CSV reader always infers types; this flag is accepted but has no effect — there is no toggle to force a fixed/string schema."
+  ingress.field.known_columns: supported
+  ingress.field.on_new_columns: supported
+  ingress.field.options:
+      support: ignored_with_warning
+      hint: "Only a small allowlist (sep, delimiter, quotechar, escapechar, encoding, compression, dtype, columns) is honored; other keys are silently dropped rather than forwarded."
+  ingress.field.partition_filters: supported
+  ingress.field.path: supported
+  ingress.field.schema_hint: supported
+  ingress.field.table:
+      support: unsupported
+      hint: "Bare table: addressing is unimplemented on DuckDB — see feature.table_addressing."
+  ingress.field.time_travel:
+      support: unsupported
+      hint: "Requires a delta-rs bridge to read a Delta table's transaction log at a version/timestamp. Not implemented — see feature.delta_time_travel."
+  ingress_time_travel.field.timestamp:
+      support: unsupported
+      hint: "time_travel is unimplemented on DuckDB — see feature.delta_time_travel."
+  ingress_time_travel.field.version:
+      support: unsupported
+      hint: "time_travel is unimplemented on DuckDB — see feature.delta_time_travel."
+  junction.field.branches: supported
+  junction.field.mode: supported
+  junction.field.partition_key: supported
+  junction_branch.field.condition: supported
+  junction_branch.field.id: supported
+  junction_branch.field.value: supported
+  probe.field.attach_to:
+      support: unsupported
+      hint: "Probe (signal sampling for Regulator gates) is not implemented on DuckDB — see module.type.Probe."
+  probe.field.report:
+      support: unsupported
+      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
+  probe.field.signals:
+      support: unsupported
+      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
+  probe_signal.field.allow_sample:
+      support: unsupported
+      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
+  probe_signal.field.column:
+      support: unsupported
+      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
+  probe_signal.field.columns:
+      support: unsupported
+      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
+  probe_signal.field.entry:
+      support: unsupported
+      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
+  probe_signal.field.expr:
+      support: unsupported
+      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
+  probe_signal.field.fraction:
+      support: unsupported
+      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
+  probe_signal.field.method:
+      support: unsupported
+      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
+  probe_signal.field.module:
+      support: unsupported
+      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
+  probe_signal.field.n:
+      support: unsupported
+      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
+  probe_signal.field.passed_when:
+      support: unsupported
+      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
+  probe_signal.field.percentiles:
+      support: unsupported
+      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
+  probe_signal.field.plugin:
+      support: unsupported
+      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
+  probe_signal.field.sql:
+      support: unsupported
+      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
+  probe_signal.field.type:
+      support: unsupported
+      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
+  regulator.field.on_block: supported
+  regulator.field.poll_seconds: supported
+  regulator.field.timeout_seconds: supported
+  assert_rule.field.id:
+    support: unsupported
+    hint: "Assert is not implemented on DuckDB — see module.type.Assert."
+  probe_signal.field.id:
+    support: unsupported
+    hint: "Probe is not implemented on DuckDB — see module.type.Probe."
