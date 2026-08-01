@@ -53,6 +53,15 @@
 #   Egress:   COPY ... TO parquet/csv. overwrite/error/errorifexists/ignore
 #             are native COPY modes; append is a non-atomic read-existing +
 #             UNION ALL BY NAME + rewrite workaround (see the leaf's hint).
+#   Assert:   ALL 10 rule types (the 9 in spark/assert_.py's AssertRuleType
+#             plus null_rate) and all 5 on_fail actions (abort/warn/webhook/
+#             quarantine/trigger_agent) — every rule is a SQL aggregate or a
+#             boolean/filter expression, which DuckDB does natively. sql/
+#             sql_row expressions are sqlglot-transpiled Spark SQL -> DuckDB
+#             SQL, same idiom as Channel op: sql. Quarantine reuses the
+#             feature.spillway machinery (Channel's spillway_condition path)
+#             rather than a second mechanism. custom resolves fn: through
+#             infra/module_loading.load_callable, never a bare import.
 #   UDFs:     lang: java is Spark-only (unsupported). DuckDB Python UDFs are
 #             vectorized and semantically different from Spark's row UDFs —
 #             not implemented/tested this stage, so unsupported honestly
@@ -470,8 +479,10 @@ leaves:
     tests:
       - tests/test_executor_duckdb/test_executor.py::test_arcade_compiles_and_runs_on_duckdb
   module.type.Assert:
-    support: unsupported
-    hint: "Assert (row-quality rules + quarantine) is not implemented on DuckDB. The DuckDB handlers cover Ingress/Channel/Junction/Funnel/Egress only."
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_assert.py::test_module_type_assert_driven_through_execute_quarantine
+      - tests/test_executor_duckdb/test_assert.py::test_module_type_assert_driven_through_execute_abort
   module.type.Channel:
     support: supported
     tests:
@@ -500,7 +511,7 @@ leaves:
       - tests/test_executor_duckdb/test_executor.py::test_module_type_junction_driven_through_execute
   module.type.Probe:
     support: unsupported
-    hint: "Probe (signal sampling for Regulator gates) is not implemented on DuckDB. The DuckDB handlers cover Ingress/Channel/Junction/Funnel/Egress only."
+    hint: "Probe (signal sampling for Regulator gates) is not implemented on DuckDB. The DuckDB handlers cover Ingress/Channel/Junction/Funnel/Egress/Assert only."
   module.type.Regulator:
     support: supported
     tests:
@@ -672,51 +683,21 @@ leaves:
       - tests/test_executor_duckdb/test_s3_minio.py::TestDuckDBS3RoundTrip::test_duckdb_ingress_egress_round_trip_against_minio
   arcade.field.context_override: supported
   arcade.field.ref: supported
-  assert.field.rules:
-      support: unsupported
-      hint: "Assert (row-quality rules + quarantine) is not implemented on DuckDB — see module.type.Assert."
-  assert_on_fail.field.action:
-      support: unsupported
-      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
-  assert_on_fail.field.url:
-      support: unsupported
-      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
-  assert_rule.field.column:
-      support: unsupported
-      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
-  assert_rule.field.error_type:
-      support: unsupported
-      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
-  assert_rule.field.expected:
-      support: unsupported
-      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
-  assert_rule.field.expr:
-      support: unsupported
-      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
-  assert_rule.field.fn:
-      support: unsupported
-      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
-  assert_rule.field.fraction:
-      support: unsupported
-      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
-  assert_rule.field.max:
-      support: unsupported
-      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
-  assert_rule.field.max_age_hours:
-      support: unsupported
-      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
-  assert_rule.field.min:
-      support: unsupported
-      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
-  assert_rule.field.min_pass_rate:
-      support: unsupported
-      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
-  assert_rule.field.on_fail:
-      support: unsupported
-      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
-  assert_rule.field.type:
-      support: unsupported
-      hint: "Assert is not implemented on DuckDB — see module.type.Assert."
+  assert.field.rules: supported
+  assert_on_fail.field.action: supported
+  assert_on_fail.field.url: supported
+  assert_rule.field.column: supported
+  assert_rule.field.error_type: supported
+  assert_rule.field.expected: supported
+  assert_rule.field.expr: supported
+  assert_rule.field.fn: supported
+  assert_rule.field.fraction: supported
+  assert_rule.field.max: supported
+  assert_rule.field.max_age_hours: supported
+  assert_rule.field.min: supported
+  assert_rule.field.min_pass_rate: supported
+  assert_rule.field.on_fail: supported
+  assert_rule.field.type: supported
   channel.field.allow_missing_columns: supported
   channel.field.broadcast_side:
       support: ignored_with_warning
@@ -916,9 +897,7 @@ leaves:
   regulator.field.on_block: supported
   regulator.field.poll_seconds: supported
   regulator.field.timeout_seconds: supported
-  assert_rule.field.id:
-    support: unsupported
-    hint: "Assert is not implemented on DuckDB — see module.type.Assert."
+  assert_rule.field.id: supported
   probe_signal.field.id:
     support: unsupported
     hint: "Probe is not implemented on DuckDB — see module.type.Probe."

@@ -2,12 +2,14 @@
 
 Before this, ``capability_check.leaves_for_module()`` only emitted
 channel.op / egress.* / ingress.format / junction.mode / funnel.mode, so a
-verdict like ``module.type.Assert: unsupported`` or ``feature.python_udf:
+verdict like ``module.type.Probe: unsupported`` or ``feature.python_udf:
 unsupported`` was DECORATIVE — compile passed and the failure surfaced as a raw
 runtime error (a DuckDB ``Catalog Error`` for a missing UDF; an ``ExecuteError``
 for an unhandled module type) instead of a clean ``CompileError``. These tests
 pin that the gate now FIRES on those leaves for an engine that declares them
 unsupported (DuckDB Stage A), and stays a no-op for Spark (all supported).
+Assert (Pass D) moved from the "gated unsupported" side to the "clean" side —
+see ``test_assert_module_supported_on_duckdb``.
 """
 
 from __future__ import annotations
@@ -97,12 +99,20 @@ def test_feature_leaves_empty_when_no_udfs():
 # ── The gate FIRES on DuckDB, stays a no-op on Spark ────────────────────────
 
 
-def test_assert_module_gated_unsupported_on_duckdb_not_spark():
-    m = _manifest([_module("q", "Assert", {})])
+def test_probe_module_gated_unsupported_on_duckdb_not_spark():
+    m = _manifest([_module("q", "Probe", {})])
     problems = check_capabilities(m, engine="duckdb")
     leaf_ids = {p.leaf_id for p in problems}
-    assert "module.type.Assert" in leaf_ids
+    assert "module.type.Probe" in leaf_ids
     # Spark supports every module type → no problem for the same manifest.
+    assert check_capabilities(m, engine="spark") == []
+
+
+def test_assert_module_supported_on_duckdb():
+    # Pass D — Assert moved from "gated unsupported" to genuinely implemented
+    # on DuckDB; the gate must stay silent for it on both engines now.
+    m = _manifest([_module("q", "Assert", {"rules": []})])
+    assert check_capabilities(m, engine="duckdb") == []
     assert check_capabilities(m, engine="spark") == []
 
 
