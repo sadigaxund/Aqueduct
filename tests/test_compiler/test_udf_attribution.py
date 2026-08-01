@@ -270,7 +270,11 @@ def test_compile_spark_only_udf_with_duckdb_island_present_compiles_cleanly():
     assert engines["agg"] == "duckdb"
 
 
-def test_compile_udf_referenced_from_duckdb_island_raises():
+def test_compile_python_udf_referenced_from_duckdb_island_compiles_cleanly():
+    """feature.python_udf is `supported` on DuckDB (Pass E item 2) — a Python
+    UDF genuinely referenced from a DuckDB island's SQL now compiles cleanly,
+    same as it already did for a Spark island. Real new behaviour introduced
+    by that flip; nothing at the compiler layer covered it before."""
     bp = _bp(
         [
             {"id": "extract", "label": "extract", "type": "Channel", "engine": "spark",
@@ -281,7 +285,30 @@ def test_compile_udf_referenced_from_duckdb_island_raises():
         edges=[{"from": "extract", "to": "agg"}],
         udf_registry=[{"id": "mask", "lang": "python", "module": "udfs.mask", "entry": "mask"}],
     )
-    with pytest.raises(CompileError, match="feature.python_udf"):
+    manifest = ccompile(bp, engine="spark")
+    engines = {m.id: m.engine for m in manifest.modules}
+    assert engines["extract"] == "spark"
+    assert engines["agg"] == "duckdb"
+
+
+def test_compile_udf_referenced_from_duckdb_island_raises():
+    """feature.java_udf stays unsupported on DuckDB (not on the JVM) — a
+    java-lang UDF genuinely referenced from a DuckDB island still raises,
+    naming the leaf. Was `lang: python` / `feature.python_udf` before Pass E
+    flipped that leaf to `supported`; rewritten around `feature.java_udf`,
+    the leaf DuckDB genuinely still does not support, to keep this coverage
+    (the gate rejects a UDF whose language an island's engine cannot run)."""
+    bp = _bp(
+        [
+            {"id": "extract", "label": "extract", "type": "Channel", "engine": "spark",
+             "config": {"op": "sql", "query": "SELECT name FROM up"}},
+            {"id": "agg", "label": "agg", "type": "Channel", "engine": "duckdb",
+             "config": {"op": "sql", "query": "SELECT mask(name) AS name FROM extract"}},
+        ],
+        edges=[{"from": "extract", "to": "agg"}],
+        udf_registry=[{"id": "mask", "lang": "java", "jar": "mask.jar", "class": "com.example.Mask"}],
+    )
+    with pytest.raises(CompileError, match="feature.java_udf"):
         ccompile(bp, engine="spark")
 
 
@@ -307,6 +334,8 @@ def test_compile_spark_dedup_order_by_udf_with_duckdb_island_compiles_cleanly():
 
 
 def test_compile_udf_referenced_from_duckdb_dedup_order_by_raises():
+    """See test_compile_udf_referenced_from_duckdb_island_raises's docstring
+    for why this is `lang: java` / `feature.java_udf` now, not python."""
     bp = _bp(
         [
             {"id": "extract", "label": "extract", "type": "Channel", "engine": "spark",
@@ -315,9 +344,9 @@ def test_compile_udf_referenced_from_duckdb_dedup_order_by_raises():
              "config": {"op": "deduplicate", "key": "id", "order_by": "mask(name) DESC"}},
         ],
         edges=[{"from": "extract", "to": "agg"}],
-        udf_registry=[{"id": "mask", "lang": "python", "module": "udfs.mask", "entry": "mask"}],
+        udf_registry=[{"id": "mask", "lang": "java", "jar": "mask.jar", "class": "com.example.Mask"}],
     )
-    with pytest.raises(CompileError, match="feature.python_udf"):
+    with pytest.raises(CompileError, match="feature.java_udf"):
         ccompile(bp, engine="spark")
 
 
@@ -343,6 +372,8 @@ def test_compile_spark_sort_order_by_udf_with_duckdb_island_compiles_cleanly():
 
 
 def test_compile_udf_referenced_from_duckdb_sort_order_by_raises():
+    """See test_compile_udf_referenced_from_duckdb_island_raises's docstring
+    for why this is `lang: java` / `feature.java_udf` now, not python."""
     bp = _bp(
         [
             {"id": "extract", "label": "extract", "type": "Channel", "engine": "spark",
@@ -351,9 +382,9 @@ def test_compile_udf_referenced_from_duckdb_sort_order_by_raises():
              "config": {"op": "sort", "order_by": ["mask(name) DESC"]}},
         ],
         edges=[{"from": "extract", "to": "agg"}],
-        udf_registry=[{"id": "mask", "lang": "python", "module": "udfs.mask", "entry": "mask"}],
+        udf_registry=[{"id": "mask", "lang": "java", "jar": "mask.jar", "class": "com.example.Mask"}],
     )
-    with pytest.raises(CompileError, match="feature.python_udf"):
+    with pytest.raises(CompileError, match="feature.java_udf"):
         ccompile(bp, engine="spark")
 
 
