@@ -15,11 +15,13 @@ row-level rules, two count queries for ``spillway_rate`` — because it is what
 Spark's own file organizes its rule types around, and staying in that shape
 makes the two engines' behavior easy to compare rule-by-rule.
 
-Rule types (10 — the 9 in ``spark/assert_.py``'s ``AssertRuleType`` plus
-``null_rate``, a legal ``assert_rule.type`` schema value Spark's own
-dispatcher recognizes only via a raw string literal, never promoted to its
-own enum member; it is formalized here because gallery snippet
-``12_assert_null_sampling`` uses it directly with ``on_fail: abort``):
+Rule types (10 — matches ``spark/assert_.py``'s ``AssertRuleType`` and
+``parser.schema.AssertRuleSchema.type``'s Literal exactly, ``null_rate``
+included; a cross-engine remediation pass added ``NULL_RATE`` to Spark's
+enum after finding its dispatcher had reached it only via a raw string
+literal, never a promoted member — see CHANGELOG. Formalized here from the
+start because gallery snippet ``12_assert_null_sampling`` uses it directly
+with ``on_fail: abort``):
 
   Aggregate rules (one ``rel.aggregate()`` query, all rules batched together):
     schema_match   Check ``rel.columns``/``rel.types`` against an expected
@@ -106,8 +108,10 @@ _AQ_ERROR_RULE = "_aq_error_rule"
 class AssertRuleType(StrEnum):
     """Rule type vocabulary — scalar string values matching Blueprint config keys.
 
-    Ten members: the nine in ``spark/assert_.py``'s ``AssertRuleType`` plus
-    ``NULL_RATE`` — see module docstring.
+    Ten members — matches ``spark/assert_.py``'s ``AssertRuleType`` exactly
+    (including ``NULL_RATE``, added there in a cross-engine remediation pass —
+    see module docstring) and ``parser.schema.AssertRuleSchema.type``'s
+    Literal.
     """
 
     SCHEMA_MATCH = "schema_match"

@@ -71,6 +71,7 @@ class AssertRuleType(StrEnum):
     SQL_ROW = "sql_row"
     CUSTOM = "custom"
     SPILLWAY_RATE = "spillway_rate"
+    NULL_RATE = "null_rate"
 
 
 class AssertOnFailAction(StrEnum):
@@ -448,7 +449,7 @@ def _batch_aggregate_rules(
                     )
 
     # ── Null rate rules — one shared sample.agg() ─────────────────────────────
-    null_rules = [(i, r) for i, r in enumerate(rules) if r.get("type") == "null_rate"]
+    null_rules = [(i, r) for i, r in enumerate(rules) if r.get("type") == AssertRuleType.NULL_RATE]
     if null_rules:
         fraction = max(float(r.get("fraction", 0.1)) for _, r in null_rules)
 
@@ -474,7 +475,7 @@ def _batch_aggregate_rules(
             max_rate = float(rule.get("max", 0.0))
             if rate > max_rate:
                 _handle_fail(
-                    on_fail, module_id, "null_rate",
+                    on_fail, module_id, AssertRuleType.NULL_RATE,
                     f"null_rate[{col}]: {rate:.4%} > allowed {max_rate:.4%} "
                     f"(sample_size={total}, fraction={fraction})",
                     blueprint_id, run_id, error_type=rule.get("error_type"),
