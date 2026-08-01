@@ -331,10 +331,6 @@ leaves:
     hint: "Delta Lake features require the delta-spark package (aqueduct-core[spark] extra). See docs/compatibility.md."
     tests:
       - tests/test_executor/test_executor_ingress.py::test_time_travel_version_sets_option
-  ingress.format.depot:
-    support: supported
-    tests:
-      - tests/test_executor/test_executor_ingress.py::test_ingress_pathless_formats_no_error
   ingress.format.jdbc:
     support: supported
     tests:

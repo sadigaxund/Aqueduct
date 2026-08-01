@@ -9,6 +9,12 @@ append semantics in a single ``COPY`` statement, so ``overwrite`` / ``error``
 
 The ``COPY`` execution is the sanctioned DuckDB action in this layer —
 mirrors Spark egress's ``.save()`` being the one sanctioned action there.
+
+The special pseudo-format ``depot`` writes a key-value pair to the Depot
+store instead of data — a plain ``depot.put(key, value)`` Python call, never
+routed through DuckDB's own SQL/relation layer at all (mirrors
+``aqueduct/executor/spark/egress.py``'s ``_write_depot`` exactly, including
+``value_expr``'s single opt-in aggregate action).
 """
 
 from __future__ import annotations
@@ -48,8 +54,7 @@ def write_egress(
         rel:    Relation produced by upstream module(s).
         module: An Egress Module from the compiled Manifest.
         con:    Active DuckDB connection (caller owns lifecycle).
-        depot:  Accepted for signature parity with Spark's writer; unused
-                this stage (format: depot is UNSUPPORTED — see capabilities.yml).
+        depot:  Optional DepotStore instance for ``format: depot`` writes.
         base_dir: Accepted for signature parity; unused (format: custom is
                   UNSUPPORTED — Spark-only Python DataSource API).
 
@@ -61,6 +66,12 @@ def write_egress(
     fmt: str | None = cfg.get("format")
     if not fmt:
         raise EgressError(f"[{module.id}] 'format' is required in Egress config")
+
+    # ── Depot pseudo-format ────────────────────────────────────────────────
+    if fmt == "depot":
+        _write_depot(rel, module, depot)
+        return
+
     if fmt not in SUPPORTED_FORMATS:
         raise EgressError(
             f"[{module.id}] format={fmt!r} is not implemented for the DuckDB engine in "
@@ -167,6 +178,53 @@ def _copy_options(fmt: str, cfg: dict, partition_by: list[str] | None) -> str:
     for key, value in options_cfg.items():
         parts.append(f"{str(key).upper()} '{_escape(str(value))}'")
     return ", ".join(parts)
+
+
+def _write_depot(rel: duckdb.DuckDBPyRelation, module: Module, depot: Any) -> None:
+    """Write a KV entry to the Depot store. ``depot`` must not be None.
+
+    Mirrors ``aqueduct/executor/spark/egress.py::_write_depot`` exactly:
+    ``depot.put(key, value)`` is a plain Python call, engine-independent,
+    never routed through this engine's own SQL/relation layer. The only
+    DuckDB-specific piece is ``value_expr``'s single aggregate query — this
+    engine's equivalent of Spark's single ``.collect()`` opt-in action.
+    """
+    cfg = module.config
+    key: str | None = cfg.get("key")
+    if not key:
+        raise EgressError(f"[{module.id}] depot Egress requires 'key'")
+
+    if depot is None:
+        raise EgressError(
+            f"[{module.id}] depot Egress configured but no DepotStore is wired. "
+            "Pass --config with a valid depot store path."
+        )
+
+    value_expr: str | None = cfg.get("value_expr")
+    if value_expr:
+        # Opt-in DuckDB action: single aggregate query over the relation.
+        try:
+            agg_result = rel.aggregate(value_expr).fetchone()[0]
+            value = "" if agg_result is None else str(agg_result)
+        except Exception as exc:
+            raise EgressError(
+                f"[{module.id}] depot value_expr {value_expr!r} failed: {exc}"
+            ) from exc
+    else:
+        raw_value: str | None = cfg.get("value")
+        if raw_value is None:
+            raise EgressError(
+                f"[{module.id}] depot Egress requires 'value' or 'value_expr'"
+            )
+        value = str(raw_value)
+
+    try:
+        depot.put(key, value)
+    except Exception as exc:
+        raise EgressError(
+            f"[{module.id}] depot.put({key!r}) failed: {exc}"
+        ) from exc
+    logger.info("Depot write: %s = %r", key, value)
 
 
 __all__ = ["EgressError", "write_egress", "SUPPORTED_FORMATS", "SUPPORTED_MODES"]

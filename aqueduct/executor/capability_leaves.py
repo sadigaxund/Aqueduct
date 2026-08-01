@@ -162,7 +162,20 @@ from aqueduct.parser.schema import (
 
 # ── Curated: format strings with a dedicated engine code path ──────────────
 # See module docstring — NOT the full open format list.
-INGRESS_FORMATS: frozenset[str] = frozenset({"custom", "delta", "csv", "jdbc", "kafka", "depot"})
+#
+# ``depot`` is EGRESS-only. It is not a Spark/DuckDB read format at all: the
+# only depot READ mechanism in the product is the compile-time
+# ``@aq.depot.get()`` function (``aqueduct/compiler/runtime.py``), resolved
+# by the parser before any engine session exists — no Ingress module, on
+# either engine, has ever had a ``format=depot`` dispatch branch, and
+# ``IngressConfigSchema`` has no ``key`` field to name which KV entry to
+# read. A prior pass curated ``depot`` into this set on the (incorrect)
+# assumption of read/write symmetry with the Egress side, producing an
+# ``ingress.format.depot`` leaf no engine could ever legitimately mark
+# `supported` without inventing grammar that doesn't exist. Removed rather
+# than left `unsupported` forever describing a capability that cannot exist
+# without a Blueprint-grammar change — see CHANGELOG.
+INGRESS_FORMATS: frozenset[str] = frozenset({"custom", "delta", "csv", "jdbc", "kafka"})
 EGRESS_FORMATS: frozenset[str] = frozenset({"custom", "delta", "iceberg", "hudi", "depot"})
 
 # ── Curated: engine feature flags (not schema-derivable) ───────────────────

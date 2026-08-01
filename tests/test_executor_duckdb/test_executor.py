@@ -603,6 +603,49 @@ def test_write_egress_append_to_existing_target_unions_rows(duckdb_con, tmp_path
     assert sorted(r[0] for r in duckdb_con.read_parquet(out_path).fetchall()) == [1, 2]
 
 
+# ── Egress: format=depot (Pass E item 1) ────────────────────────────────────
+# Mirrors tests/test_executor/test_executor_egress.py's depot coverage exactly
+# — same MockDepot shape, same four cases — proving the DuckDB dispatch branch
+# behaves identically to Spark's: a plain depot.put(key, value) Python call,
+# never routed through DuckDB's own relation/SQL layer.
+
+class MockDepot:
+    def __init__(self):
+        self.puts = {}
+    def put(self, key, value):
+        self.puts[key] = value
+
+
+def test_write_egress_format_depot_no_depot(duckdb_con):
+    rel = duckdb_con.sql("SELECT 1 AS a")
+    module = _module("eg", "Egress", {"format": "depot", "key": "k1", "value": "v1"})
+    with pytest.raises(EgressError, match="no DepotStore is wired"):
+        write_egress(rel, module, duckdb_con, depot=None)
+
+
+def test_write_egress_format_depot_missing_key(duckdb_con):
+    rel = duckdb_con.sql("SELECT 1 AS a")
+    module = _module("eg", "Egress", {"format": "depot", "value": "v1"})
+    with pytest.raises(EgressError, match="requires 'key'"):
+        write_egress(rel, module, duckdb_con, depot=MockDepot())
+
+
+def test_write_egress_format_depot_value(duckdb_con):
+    rel = duckdb_con.sql("SELECT 1 AS a")
+    depot = MockDepot()
+    module = _module("eg", "Egress", {"format": "depot", "key": "k1", "value": "v1"})
+    write_egress(rel, module, duckdb_con, depot=depot)
+    assert depot.puts["k1"] == "v1"
+
+
+def test_write_egress_format_depot_value_expr(duckdb_con):
+    rel = duckdb_con.sql("SELECT * FROM (VALUES (0), (1), (2), (3), (4)) AS t(id)")
+    depot = MockDepot()
+    module = _module("eg", "Egress", {"format": "depot", "key": "k1", "value_expr": "max(id)"})
+    write_egress(rel, module, duckdb_con, depot=depot)
+    assert depot.puts["k1"] == "4"
+
+
 # ── Error extraction ─────────────────────────────────────────────────────
 
 def test_extract_duckdb_error_binder_exception(duckdb_con):

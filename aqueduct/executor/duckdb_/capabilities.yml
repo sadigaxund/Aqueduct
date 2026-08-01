@@ -315,8 +315,11 @@ leaves:
     support: unsupported
     hint: "Requires a delta-rs bridge (the deltalake Python package writes a Delta log DuckDB has no writer for). Not implemented."
   egress.format.depot:
-    support: unsupported
-    hint: "format: depot writes a single KV entry via the DepotStore Python interface (depot.put(key, value)) — a plain Python call, engine-independent, never routed through this engine's own SQL/relation layer. httpfs is unrelated: even a DepotStore backed by an S3 blob store resolves through stores/object_store.py's own IO, not DuckDB's. The actual gap is simply no format=depot dispatch branch implemented in this engine's egress.py (same category as jdbc/kafka/custom — no handler, not a missing extension)."
+    support: supported
+    hint: "format: depot writes a single KV entry via the DepotStore Python interface (depot.put(key, value)) — a plain Python call, engine-independent, never routed through this engine's own SQL/relation layer. value_expr opts into a single DuckDB aggregate query (rel.aggregate(expr).fetchone()), mirroring Spark's single .collect() action."
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_write_egress_format_depot_value
+      - tests/test_executor_duckdb/test_executor.py::test_write_egress_format_depot_value_expr
 
   # ── Feature flags ─────────────────────────────────────────────────────────
   feature.broadcast_junction:
@@ -336,8 +339,14 @@ leaves:
     support: unsupported
     hint: "metrics_boundary works around Spark's stage-fusion by forcing a shuffle boundary so SparkListener attributes metrics per module — a fix for a problem specific to that collection mechanism. DuckDB has no stage-fusion concept to work around, but this engine's executor does not yet collect per-module runtime metrics (rows/bytes) at all outside the Handoff module (see executor/models.py's module_metrics writer), so there is no per-module attribution for this flag to configure either way."
   feature.python_udf:
-    support: unsupported
-    hint: "conn.create_function(name, fn, params, ret) defaults to NATIVE (row-at-a-time) execution, matching Spark's UDF semantics — measured: a per-row call log shows one call per input row, not a batch. Vectorized (Arrow-batch) execution is opt-in via type='arrow'. Not implemented or tested on this engine: declaring it 'supported' without a real handler would silently produce wrong results on the first UDF that relies on the registry, the deterministic flag, or an error-handling convention this engine hasn't built."
+    support: supported
+    hint: "conn.create_function(name, fn, parameters=None, return_type) defaults to NATIVE (row-at-a-time) execution, matching Spark's UDF semantics — measured: a per-row call log shows one call per input row, not a batch. null_handling='special' is set explicitly (DuckDB's own default silently skips the call on a NULL argument instead of invoking the function — measured, the opposite of Spark's always-call behavior). Exception propagation is DuckDB's default (an uncaught exception aborts the query, matching Spark). return_type renders through the same Arrow type hub as schema_hint/schema_match. Parameterized (factory) UDFs via params: are supported, same contract as Spark. deterministic maps onto DuckDB's side_effects (inverted) — Spark's own udf.py never reads this field either, so this is a strict improvement, not a divergence. lang: java/scala UDFs stay unsupported — see feature.java_udf; DuckDB is not on the JVM."
+    tests:
+      - tests/test_executor_duckdb/test_udf.py::test_successful_registration_and_call
+      - tests/test_executor_duckdb/test_udf.py::test_row_at_a_time_not_batched
+      - tests/test_executor_duckdb/test_udf.py::test_null_argument_still_calls_function
+      - tests/test_executor_duckdb/test_udf.py::test_exception_in_udf_propagates
+      - tests/test_executor_duckdb/test_udf.py::test_parameterized_udf_factory
   feature.spillway:
     support: supported
     tests:
@@ -431,9 +440,6 @@ leaves:
   ingress.format.delta:
     support: unsupported
     hint: "Requires a delta-rs bridge (the deltalake Python package can read a Delta table's transaction log). Not implemented."
-  ingress.format.depot:
-    support: unsupported
-    hint: "format: depot reads a single KV entry via the DepotStore Python interface (depot.get(key)) — a plain Python call, engine-independent, never routed through this engine's own SQL/relation layer. httpfs is unrelated: even a DepotStore backed by an S3 blob store resolves through stores/object_store.py's own IO, not DuckDB's. The actual gap is simply no format=depot dispatch branch implemented in this engine's ingress.py (same category as jdbc/kafka/custom — no handler, not a missing extension)."
   ingress.format.jdbc:
     support: unsupported
     hint: "Requires the postgres scanner extension (ATTACH ... (TYPE POSTGRES), the same wire protocol jdbc: postgres:// targets). Not implemented."
@@ -747,9 +753,7 @@ leaves:
   egress.field.coalesce: supported
   egress.field.format: supported
   egress.field.header: supported
-  egress.field.key:
-      support: unsupported
-      hint: "format: depot has no dispatch branch implemented in this engine's egress.py — see egress.format.depot."
+  egress.field.key: supported
   egress.field.maintenance:
       support: unsupported
       hint: "DuckDB has no OPTIMIZE/VACUUM/compaction operation for parquet or any format it writes here — post-write maintenance is a no-op it cannot perform. Not implemented."
@@ -779,12 +783,8 @@ leaves:
   egress.field.table:
       support: unsupported
       hint: "Bare table: addressing is unimplemented on DuckDB — see feature.table_addressing."
-  egress.field.value:
-      support: unsupported
-      hint: "format: depot has no dispatch branch implemented in this engine's egress.py — see egress.format.depot."
-  egress.field.value_expr:
-      support: unsupported
-      hint: "format: depot has no dispatch branch implemented in this engine's egress.py — see egress.format.depot."
+  egress.field.value: supported
+  egress.field.value_expr: supported
   egress_maintenance.field.clean:
       support: unsupported
       hint: "Hudi maintenance procedures require a Hudi table DuckDB does not write. Not implemented — see egress.field.maintenance."

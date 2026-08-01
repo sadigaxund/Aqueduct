@@ -34,8 +34,8 @@ Each engine declares a verdict for every capability leaf in a YAML data file shi
 
 | Engine | Leaves declared | Supported | Version-gated | Ignored with warning | Unsupported |
 |---|---|---|---|---|---|
-| `duckdb` | 320 | 228 | 0 | 6 | 86 |
-| `spark` | 312 | 311 | 7 | 0 | 1 |
+| `duckdb` | 319 | 233 | 0 | 6 | 80 |
+| `spark` | 311 | 310 | 7 | 0 | 1 |
 
 ### Conditional and refused capabilities
 
@@ -66,7 +66,6 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 | `duckdb` | `config.probes.default_sample_fraction` | ignored_with_warning | — | Probe (module.type.Probe) is not implemented on DuckDB, so the sample-fraction knob it would configure is inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines. |
 | `duckdb` | `config.probes.max_sample_rows` | ignored_with_warning | — | Probe (module.type.Probe) is not implemented on DuckDB, so the sample-row cap it would configure is inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines. |
 | `duckdb` | `egress.field.class_` | unsupported | — | format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB. |
-| `duckdb` | `egress.field.key` | unsupported | — | format: depot has no dispatch branch implemented in this engine's egress.py — see egress.format.depot. |
 | `duckdb` | `egress.field.maintenance` | unsupported | — | DuckDB has no OPTIMIZE/VACUUM/compaction operation for parquet or any format it writes here — post-write maintenance is a no-op it cannot perform. Not implemented. |
 | `duckdb` | `egress.field.merge_key` | unsupported | — | mode: merge (upsert) requires a target table format with a transaction log (Delta). Not implemented — see egress.mode.merge. |
 | `duckdb` | `egress.field.merge_schema` | unsupported | — | Schema-evolution flags apply to Delta/Iceberg writers DuckDB does not have. Not implemented. |
@@ -75,11 +74,8 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 | `duckdb` | `egress.field.register_as_table` | unsupported | — | Requires registering an external table in a catalog that persists across sessions the way Spark's does; no such registration path exists on this engine. Not implemented. |
 | `duckdb` | `egress.field.replace_where` | unsupported | — | mode: overwrite_partitions is unimplemented on DuckDB — see egress.mode.overwrite_partitions. |
 | `duckdb` | `egress.field.table` | unsupported | — | Bare table: addressing is unimplemented on DuckDB — see feature.table_addressing. |
-| `duckdb` | `egress.field.value` | unsupported | — | format: depot has no dispatch branch implemented in this engine's egress.py — see egress.format.depot. |
-| `duckdb` | `egress.field.value_expr` | unsupported | — | format: depot has no dispatch branch implemented in this engine's egress.py — see egress.format.depot. |
 | `duckdb` | `egress.format.custom` | unsupported | — | format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB. |
 | `duckdb` | `egress.format.delta` | unsupported | — | Requires a delta-rs bridge (the deltalake Python package writes a Delta log DuckDB has no writer for). Not implemented. |
-| `duckdb` | `egress.format.depot` | unsupported | — | format: depot writes a single KV entry via the DepotStore Python interface (depot.put(key, value)) — a plain Python call, engine-independent, never routed through this engine's own SQL/relation layer. httpfs is unrelated: even a DepotStore backed by an S3 blob store resolves through stores/object_store.py's own IO, not DuckDB's. The actual gap is simply no format=depot dispatch branch implemented in this engine's egress.py (same category as jdbc/kafka/custom — no handler, not a missing extension). |
 | `duckdb` | `egress.format.hudi` | unsupported | — | Hudi is not implemented for the DuckDB engine. |
 | `duckdb` | `egress.format.iceberg` | unsupported | — | Iceberg is not implemented for the DuckDB engine. |
 | `duckdb` | `egress.mode.merge` | unsupported | — | mode=merge (upsert) requires a target table format with a transaction log (Delta). Not implemented for DuckDB. |
@@ -101,7 +97,6 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 | `duckdb` | `feature.java_udf` | unsupported | — | lang: java UDFs require a JVM UDF registry (Spark-only). Not applicable to DuckDB. |
 | `duckdb` | `feature.metrics_boundary` | unsupported | — | metrics_boundary works around Spark's stage-fusion by forcing a shuffle boundary so SparkListener attributes metrics per module — a fix for a problem specific to that collection mechanism. DuckDB has no stage-fusion concept to work around, but this engine's executor does not yet collect per-module runtime metrics (rows/bytes) at all outside the Handoff module (see executor/models.py's module_metrics writer), so there is no per-module attribution for this flag to configure either way. |
 | `duckdb` | `feature.parallel_mode` | unsupported | — | Requires a Python ThreadPoolExecutor over independent DAG subtrees. Measured: a single DuckDBPyConnection object is NOT safe for concurrent queries from multiple threads — two threads calling .sql() on the SAME connection object concurrently raise 'Invalid Input Error: Attempting to execute an unsuccessful or closed pending query result'. Each thread needs its OWN cursor (con.cursor()), which IS safe for concurrent reads — a real but small additional wiring cost this engine has not built yet. Not implemented: the executor runs the topological order serially today. |
-| `duckdb` | `feature.python_udf` | unsupported | — | conn.create_function(name, fn, params, ret) defaults to NATIVE (row-at-a-time) execution, matching Spark's UDF semantics — measured: a per-row call log shows one call per input row, not a batch. Vectorized (Arrow-batch) execution is opt-in via type='arrow'. Not implemented or tested on this engine: declaring it 'supported' without a real handler would silently produce wrong results on the first UDF that relies on the registry, the deterministic flag, or an error-handling convention this engine hasn't built. |
 | `duckdb` | `feature.table_addressing` | unsupported | — | DuckDB Ingress/Egress require format:+path: — measured: DuckDB DOES have a real catalog (memory.main, system.main/information_schema/pg_catalog, plus whatever ATTACH adds), so a three-part catalog.schema.table namespace genuinely exists. What is missing is an IMPLEMENTATION mapping a Blueprint's bare table: name onto it (which catalog/schema to default to, whether ATTACH is required first) — not the absence of a catalog. Use format:+path: instead of table: addressing on this engine until that mapping is built. |
 | `duckdb` | `ingress.field.class_` | unsupported | — | format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB. |
 | `duckdb` | `ingress.field.infer_schema` | ignored_with_warning | — | DuckDB's CSV reader always infers types; this flag is accepted but has no effect — there is no toggle to force a fixed/string schema. |
@@ -110,7 +105,6 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 | `duckdb` | `ingress.field.time_travel` | unsupported | — | Requires a delta-rs bridge to read a Delta table's transaction log at a version/timestamp. Not implemented — see feature.delta_time_travel. |
 | `duckdb` | `ingress.format.custom` | unsupported | — | format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB. |
 | `duckdb` | `ingress.format.delta` | unsupported | — | Requires a delta-rs bridge (the deltalake Python package can read a Delta table's transaction log). Not implemented. |
-| `duckdb` | `ingress.format.depot` | unsupported | — | format: depot reads a single KV entry via the DepotStore Python interface (depot.get(key)) — a plain Python call, engine-independent, never routed through this engine's own SQL/relation layer. httpfs is unrelated: even a DepotStore backed by an S3 blob store resolves through stores/object_store.py's own IO, not DuckDB's. The actual gap is simply no format=depot dispatch branch implemented in this engine's ingress.py (same category as jdbc/kafka/custom — no handler, not a missing extension). |
 | `duckdb` | `ingress.format.jdbc` | unsupported | — | Requires the postgres scanner extension (ATTACH ... (TYPE POSTGRES), the same wire protocol jdbc: postgres:// targets). Not implemented. |
 | `duckdb` | `ingress.format.kafka` | unsupported | — | Kafka streaming ingress has no DuckDB equivalent — DuckDB is a batch, single-process engine. |
 | `duckdb` | `ingress_time_travel.field.timestamp` | unsupported | — | time_travel is unimplemented on DuckDB — see feature.delta_time_travel. |
