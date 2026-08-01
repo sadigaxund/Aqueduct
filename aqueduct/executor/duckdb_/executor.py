@@ -69,6 +69,7 @@ from aqueduct.executor.duckdb_.egress import EgressError, _escape, write_egress
 from aqueduct.executor.duckdb_.funnel import FunnelError, execute_funnel
 from aqueduct.executor.duckdb_.ingress import IngressError, read_ingress
 from aqueduct.executor.duckdb_.junction import JunctionError, execute_junction
+from aqueduct.executor.duckdb_.udf import UDFError, register_udfs
 from aqueduct.executor.models import (
     ExecutionResult,
     ExecutionStatus,
@@ -468,6 +469,13 @@ def execute(
                 _aq_emit(_rid, _msg, suppress=warnings_suppress)
         except Exception:
             pass  # session-startup warnings must never crash the executor
+
+    # Register UDFs before any module executes so Channel SQL can reference
+    # them — same placement as Spark's executor.py.
+    try:
+        register_udfs(manifest.udf_registry, con, base_dir=manifest.base_dir)
+    except UDFError as exc:
+        raise ExecuteError(str(exc)) from exc
 
     order = _build_execution_order(manifest)
 

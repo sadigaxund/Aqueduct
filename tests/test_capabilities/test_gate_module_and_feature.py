@@ -2,14 +2,15 @@
 
 Before this, ``capability_check.leaves_for_module()`` only emitted
 channel.op / egress.* / ingress.format / junction.mode / funnel.mode, so a
-verdict like ``module.type.Probe: unsupported`` or ``feature.python_udf:
+verdict like ``module.type.Probe: unsupported`` or ``feature.java_udf:
 unsupported`` was DECORATIVE — compile passed and the failure surfaced as a raw
 runtime error (a DuckDB ``Catalog Error`` for a missing UDF; an ``ExecuteError``
 for an unhandled module type) instead of a clean ``CompileError``. These tests
 pin that the gate now FIRES on those leaves for an engine that declares them
 unsupported (DuckDB Stage A), and stays a no-op for Spark (all supported).
 Assert (Pass D) moved from the "gated unsupported" side to the "clean" side —
-see ``test_assert_module_supported_on_duckdb``.
+see ``test_assert_module_supported_on_duckdb``. ``feature.python_udf`` moved
+the same way in Pass E — see ``test_python_udf_clean_on_both_engines``.
 """
 
 from __future__ import annotations
@@ -116,14 +117,29 @@ def test_assert_module_supported_on_duckdb():
     assert check_capabilities(m, engine="spark") == []
 
 
-def test_python_udf_gated_unsupported_on_duckdb_not_spark():
+def test_python_udf_clean_on_both_engines():
+    """feature.python_udf is `supported` on both engines (DuckDB's Pass E
+    implementation via conn.create_function — see
+    aqueduct/executor/duckdb_/udf.py) — the gate must stay silent on both."""
     m = _manifest(
         [_module("ch", "Channel", {"op": "sql", "query": "SELECT mask(x) FROM up"})],
         udf_registry=[{"id": "mask", "lang": "python"}],
     )
+    assert check_capabilities(m, engine="duckdb") == []
+    assert check_capabilities(m, engine="spark") == []
+
+
+def test_java_udf_gated_unsupported_on_duckdb_not_spark():
+    """DuckDB is not on the JVM — feature.java_udf stays unsupported there
+    while Spark (JVM-native) supports it — unlike python_udf, this one is a
+    genuine, permanent cross-engine gap, not a Pass E gap."""
+    m = _manifest(
+        [_module("ch", "Channel", {"op": "sql", "query": "SELECT mask(x) FROM up"})],
+        udf_registry=[{"id": "mask", "lang": "java", "jar": "geo.jar", "class": "com.example.Mask"}],
+    )
     problems = check_capabilities(m, engine="duckdb")
-    hit = [p for p in problems if p.leaf_id == "feature.python_udf"]
-    assert hit, f"feature.python_udf not gated on duckdb: {[p.leaf_id for p in problems]}"
+    hit = [p for p in problems if p.leaf_id == "feature.java_udf"]
+    assert hit, f"feature.java_udf not gated on duckdb: {[p.leaf_id for p in problems]}"
     # The problem names the UDF that pulled the feature in.
     assert hit[0].module_id == "mask"
     assert check_capabilities(m, engine="spark") == []
