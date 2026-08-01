@@ -34,8 +34,8 @@ Each engine declares a verdict for every capability leaf in a YAML data file shi
 
 | Engine | Leaves declared | Supported | Version-gated | Ignored with warning | Unsupported |
 |---|---|---|---|---|---|
-| `duckdb` | 216 | 174 | 0 | 3 | 39 |
-| `spark` | 208 | 207 | 7 | 0 | 1 |
+| `duckdb` | 320 | 211 | 0 | 6 | 103 |
+| `spark` | 312 | 311 | 7 | 0 | 1 |
 
 ### Conditional and refused capabilities
 
@@ -44,6 +44,29 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 | Engine | Capability leaf | Verdict | Requires | Notes |
 |---|---|---|---|---|
 | `duckdb` | `agent.field.block_on_explain_regression` | unsupported | — | block_on_explain_regression relies on Spark's explain()-plan snapshot gate (aqueduct.patch.explain_gate); DuckDB has no equivalent plan-snapshot capture implemented. |
+| `duckdb` | `assert.field.rules` | unsupported | — | Assert (row-quality rules + quarantine) is not implemented on DuckDB — see module.type.Assert. |
+| `duckdb` | `assert_on_fail.field.action` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
+| `duckdb` | `assert_on_fail.field.url` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
+| `duckdb` | `assert_rule.field.column` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
+| `duckdb` | `assert_rule.field.error_type` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
+| `duckdb` | `assert_rule.field.expected` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
+| `duckdb` | `assert_rule.field.expr` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
+| `duckdb` | `assert_rule.field.fn` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
+| `duckdb` | `assert_rule.field.fraction` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
+| `duckdb` | `assert_rule.field.id` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
+| `duckdb` | `assert_rule.field.max` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
+| `duckdb` | `assert_rule.field.max_age_hours` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
+| `duckdb` | `assert_rule.field.min` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
+| `duckdb` | `assert_rule.field.min_pass_rate` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
+| `duckdb` | `assert_rule.field.on_fail` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
+| `duckdb` | `assert_rule.field.type` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
+| `duckdb` | `channel.field.broadcast_side` | ignored_with_warning | — | Accepted but never inspected — DuckDB's join planner has no broadcast-hint concept; the query still runs correctly, just without the hint. |
+| `duckdb` | `channel.field.col` | unsupported | — | op: repartition's optional target column is unimplemented on DuckDB — see channel.op.repartition. |
+| `duckdb` | `channel.field.column` | unsupported | — | op: repartition's optional target column is unimplemented on DuckDB — see channel.op.repartition. |
+| `duckdb` | `channel.field.metrics_boundary` | unsupported | — | DuckDB's executor does not yet collect per-module runtime metrics outside the Handoff module — see feature.metrics_boundary. |
+| `duckdb` | `channel.field.num` | unsupported | — | op: repartition/coalesce is unimplemented on DuckDB — see channel.op.repartition / channel.op.coalesce. |
+| `duckdb` | `channel.field.num_partitions` | unsupported | — | op: repartition is unimplemented on DuckDB (no partition concept) — see channel.op.repartition. |
+| `duckdb` | `channel.field.storage_level` | unsupported | — | op: cache is unimplemented on DuckDB (single-process, no distributed cache tier) — see channel.op.cache. |
 | `duckdb` | `channel.op.cache` | unsupported | — | op=cache maps to Spark's distributed persist(StorageLevel); DuckDB is single-process with no distributed cache tier to spill to. Not implemented. |
 | `duckdb` | `channel.op.coalesce` | unsupported | — | op=coalesce is a Spark physical-partition-count hint; DuckDB has no partition concept to coalesce. Not applicable. |
 | `duckdb` | `channel.op.repartition` | unsupported | — | op=repartition is a Spark physical-partition-count hint; DuckDB has no partition concept to repartition. Not applicable. |
@@ -58,6 +81,18 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 | `duckdb` | `config.metrics.use_observe` | unsupported | — | use_observe toggles Spark's Observation API (a SparkListener-driven zero-cost row-count mechanism); DuckDB has no equivalent listener hook. This engine does not yet collect per-module runtime metrics (rows/bytes) outside the Handoff module at all (see executor/models.py's module_metrics writer), so there is no existing collection path for this flag to toggle either way — the key is inert here, not superseded by an always-on alternative. |
 | `duckdb` | `config.probes.default_sample_fraction` | ignored_with_warning | — | Probe (module.type.Probe) is not implemented on DuckDB, so the sample-fraction knob it would configure is inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines. |
 | `duckdb` | `config.probes.max_sample_rows` | ignored_with_warning | — | Probe (module.type.Probe) is not implemented on DuckDB, so the sample-row cap it would configure is inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines. |
+| `duckdb` | `egress.field.class_` | unsupported | — | format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB. |
+| `duckdb` | `egress.field.key` | unsupported | — | format: depot has no dispatch branch implemented in this engine's egress.py — see egress.format.depot. |
+| `duckdb` | `egress.field.maintenance` | unsupported | — | DuckDB has no OPTIMIZE/VACUUM/compaction operation for parquet or any format it writes here — post-write maintenance is a no-op it cannot perform. Not implemented. |
+| `duckdb` | `egress.field.merge_key` | unsupported | — | mode: merge (upsert) requires a target table format with a transaction log (Delta). Not implemented — see egress.mode.merge. |
+| `duckdb` | `egress.field.merge_schema` | unsupported | — | Schema-evolution flags apply to Delta/Iceberg writers DuckDB does not have. Not implemented. |
+| `duckdb` | `egress.field.on_new_columns` | unsupported | — | Requires a schema diff against the existing file's columns before write — see egress.on_new_columns.*. Not implemented. |
+| `duckdb` | `egress.field.overwrite_schema` | unsupported | — | Schema-evolution flags apply to Delta/Iceberg writers DuckDB does not have. Not implemented. |
+| `duckdb` | `egress.field.register_as_table` | unsupported | — | Requires registering an external table in a catalog that persists across sessions the way Spark's does; no such registration path exists on this engine. Not implemented. |
+| `duckdb` | `egress.field.replace_where` | unsupported | — | mode: overwrite_partitions is unimplemented on DuckDB — see egress.mode.overwrite_partitions. |
+| `duckdb` | `egress.field.table` | unsupported | — | Bare table: addressing is unimplemented on DuckDB — see feature.table_addressing. |
+| `duckdb` | `egress.field.value` | unsupported | — | format: depot has no dispatch branch implemented in this engine's egress.py — see egress.format.depot. |
+| `duckdb` | `egress.field.value_expr` | unsupported | — | format: depot has no dispatch branch implemented in this engine's egress.py — see egress.format.depot. |
 | `duckdb` | `egress.format.custom` | unsupported | — | format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB. |
 | `duckdb` | `egress.format.delta` | unsupported | — | Requires a delta-rs bridge (the deltalake Python package writes a Delta log DuckDB has no writer for). Not implemented. |
 | `duckdb` | `egress.format.depot` | unsupported | — | format: depot writes a single KV entry via the DepotStore Python interface (depot.put(key, value)) — a plain Python call, engine-independent, never routed through this engine's own SQL/relation layer. httpfs is unrelated: even a DepotStore backed by an S3 blob store resolves through stores/object_store.py's own IO, not DuckDB's. The actual gap is simply no format=depot dispatch branch implemented in this engine's egress.py (same category as jdbc/kafka/custom — no handler, not a missing extension). |
@@ -68,6 +103,13 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 | `duckdb` | `egress.on_new_columns.alert` | unsupported | — | Requires a schema diff against the existing file's columns (read_parquet/read_csv schema introspection) before write. Not implemented. |
 | `duckdb` | `egress.on_new_columns.allow` | unsupported | — | Requires a schema diff against the existing file's columns (read_parquet/read_csv schema introspection) before write. Not implemented. |
 | `duckdb` | `egress.on_new_columns.fail` | unsupported | — | Requires a schema diff against the existing file's columns (read_parquet/read_csv schema introspection) before write. Not implemented. |
+| `duckdb` | `egress_maintenance.field.clean` | unsupported | — | Hudi maintenance procedures require a Hudi table DuckDB does not write. Not implemented — see egress.field.maintenance. |
+| `duckdb` | `egress_maintenance.field.compaction` | unsupported | — | Hudi maintenance procedures require a Hudi table DuckDB does not write. Not implemented — see egress.field.maintenance. |
+| `duckdb` | `egress_maintenance.field.expire_snapshots` | unsupported | — | Iceberg maintenance procedures require an Iceberg catalog DuckDB does not write through. Not implemented — see egress.field.maintenance. |
+| `duckdb` | `egress_maintenance.field.optimize` | unsupported | — | DuckDB has no OPTIMIZE/compaction operation for the formats it writes. Not implemented — see egress.field.maintenance. |
+| `duckdb` | `egress_maintenance.field.rewrite_data_files` | unsupported | — | Iceberg maintenance procedures require an Iceberg catalog DuckDB does not write through. Not implemented — see egress.field.maintenance. |
+| `duckdb` | `egress_maintenance.field.vacuum` | unsupported | — | DuckDB has no VACUUM/cleanup operation for the formats it writes. Not implemented — see egress.field.maintenance. |
+| `duckdb` | `egress_maintenance.field.zorder_by` | unsupported | — | DuckDB has no OPTIMIZE/ZORDER operation for the formats it writes. Not implemented — see egress.field.maintenance. |
 | `duckdb` | `feature.broadcast_junction` | unsupported | — | broadcast_junction names a Spark distributed-join optimization; DuckDB is single-process, so there is nothing to broadcast. junction.mode.broadcast (fan-out to identical branches) is unaffected and supported. |
 | `duckdb` | `feature.custom_datasource` | unsupported | — | Custom Python DataSource is a pyspark>=4.0 API — Spark-only. |
 | `duckdb` | `feature.delta_time_travel` | unsupported | — | Requires a delta-rs bridge (the deltalake Python package can read a Delta table's transaction log at a given version/timestamp). Not implemented. |
@@ -77,13 +119,38 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 | `duckdb` | `feature.parallel_mode` | unsupported | — | Requires a Python ThreadPoolExecutor over independent DAG subtrees. Measured: a single DuckDBPyConnection object is NOT safe for concurrent queries from multiple threads — two threads calling .sql() on the SAME connection object concurrently raise 'Invalid Input Error: Attempting to execute an unsuccessful or closed pending query result'. Each thread needs its OWN cursor (con.cursor()), which IS safe for concurrent reads — a real but small additional wiring cost this engine has not built yet. Not implemented: the executor runs the topological order serially today. |
 | `duckdb` | `feature.python_udf` | unsupported | — | conn.create_function(name, fn, params, ret) defaults to NATIVE (row-at-a-time) execution, matching Spark's UDF semantics — measured: a per-row call log shows one call per input row, not a batch. Vectorized (Arrow-batch) execution is opt-in via type='arrow'. Not implemented or tested on this engine: declaring it 'supported' without a real handler would silently produce wrong results on the first UDF that relies on the registry, the deterministic flag, or an error-handling convention this engine hasn't built. |
 | `duckdb` | `feature.table_addressing` | unsupported | — | DuckDB Ingress/Egress require format:+path: — measured: DuckDB DOES have a real catalog (memory.main, system.main/information_schema/pg_catalog, plus whatever ATTACH adds), so a three-part catalog.schema.table namespace genuinely exists. What is missing is an IMPLEMENTATION mapping a Blueprint's bare table: name onto it (which catalog/schema to default to, whether ATTACH is required first) — not the absence of a catalog. Use format:+path: instead of table: addressing on this engine until that mapping is built. |
+| `duckdb` | `ingress.field.class_` | unsupported | — | format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB. |
+| `duckdb` | `ingress.field.infer_schema` | ignored_with_warning | — | DuckDB's CSV reader always infers types; this flag is accepted but has no effect — there is no toggle to force a fixed/string schema. |
+| `duckdb` | `ingress.field.options` | ignored_with_warning | — | Only a small allowlist (sep, delimiter, quotechar, escapechar, encoding, compression, dtype, columns) is honored; other keys are silently dropped rather than forwarded. |
+| `duckdb` | `ingress.field.table` | unsupported | — | Bare table: addressing is unimplemented on DuckDB — see feature.table_addressing. |
+| `duckdb` | `ingress.field.time_travel` | unsupported | — | Requires a delta-rs bridge to read a Delta table's transaction log at a version/timestamp. Not implemented — see feature.delta_time_travel. |
 | `duckdb` | `ingress.format.custom` | unsupported | — | format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB. |
 | `duckdb` | `ingress.format.delta` | unsupported | — | Requires a delta-rs bridge (the deltalake Python package can read a Delta table's transaction log). Not implemented. |
 | `duckdb` | `ingress.format.depot` | unsupported | — | format: depot reads a single KV entry via the DepotStore Python interface (depot.get(key)) — a plain Python call, engine-independent, never routed through this engine's own SQL/relation layer. httpfs is unrelated: even a DepotStore backed by an S3 blob store resolves through stores/object_store.py's own IO, not DuckDB's. The actual gap is simply no format=depot dispatch branch implemented in this engine's ingress.py (same category as jdbc/kafka/custom — no handler, not a missing extension). |
 | `duckdb` | `ingress.format.jdbc` | unsupported | — | Requires the postgres scanner extension (ATTACH ... (TYPE POSTGRES), the same wire protocol jdbc: postgres:// targets). Not implemented. |
 | `duckdb` | `ingress.format.kafka` | unsupported | — | Kafka streaming ingress has no DuckDB equivalent — DuckDB is a batch, single-process engine. |
+| `duckdb` | `ingress_time_travel.field.timestamp` | unsupported | — | time_travel is unimplemented on DuckDB — see feature.delta_time_travel. |
+| `duckdb` | `ingress_time_travel.field.version` | unsupported | — | time_travel is unimplemented on DuckDB — see feature.delta_time_travel. |
 | `duckdb` | `module.type.Assert` | unsupported | — | Assert (row-quality rules + quarantine) is not implemented on DuckDB. The DuckDB handlers cover Ingress/Channel/Junction/Funnel/Egress only. |
 | `duckdb` | `module.type.Probe` | unsupported | — | Probe (signal sampling for Regulator gates) is not implemented on DuckDB. The DuckDB handlers cover Ingress/Channel/Junction/Funnel/Egress only. |
+| `duckdb` | `probe.field.attach_to` | unsupported | — | Probe (signal sampling for Regulator gates) is not implemented on DuckDB — see module.type.Probe. |
+| `duckdb` | `probe.field.report` | unsupported | — | Probe is not implemented on DuckDB — see module.type.Probe. |
+| `duckdb` | `probe.field.signals` | unsupported | — | Probe is not implemented on DuckDB — see module.type.Probe. |
+| `duckdb` | `probe_signal.field.allow_sample` | unsupported | — | Probe is not implemented on DuckDB — see module.type.Probe. |
+| `duckdb` | `probe_signal.field.column` | unsupported | — | Probe is not implemented on DuckDB — see module.type.Probe. |
+| `duckdb` | `probe_signal.field.columns` | unsupported | — | Probe is not implemented on DuckDB — see module.type.Probe. |
+| `duckdb` | `probe_signal.field.entry` | unsupported | — | Probe is not implemented on DuckDB — see module.type.Probe. |
+| `duckdb` | `probe_signal.field.expr` | unsupported | — | Probe is not implemented on DuckDB — see module.type.Probe. |
+| `duckdb` | `probe_signal.field.fraction` | unsupported | — | Probe is not implemented on DuckDB — see module.type.Probe. |
+| `duckdb` | `probe_signal.field.id` | unsupported | — | Probe is not implemented on DuckDB — see module.type.Probe. |
+| `duckdb` | `probe_signal.field.method` | unsupported | — | Probe is not implemented on DuckDB — see module.type.Probe. |
+| `duckdb` | `probe_signal.field.module` | unsupported | — | Probe is not implemented on DuckDB — see module.type.Probe. |
+| `duckdb` | `probe_signal.field.n` | unsupported | — | Probe is not implemented on DuckDB — see module.type.Probe. |
+| `duckdb` | `probe_signal.field.passed_when` | unsupported | — | Probe is not implemented on DuckDB — see module.type.Probe. |
+| `duckdb` | `probe_signal.field.percentiles` | unsupported | — | Probe is not implemented on DuckDB — see module.type.Probe. |
+| `duckdb` | `probe_signal.field.plugin` | unsupported | — | Probe is not implemented on DuckDB — see module.type.Probe. |
+| `duckdb` | `probe_signal.field.sql` | unsupported | — | Probe is not implemented on DuckDB — see module.type.Probe. |
+| `duckdb` | `probe_signal.field.type` | unsupported | — | Probe is not implemented on DuckDB — see module.type.Probe. |
 | `duckdb` | `type.native.spark` | unsupported | — | 'spark:<spelling>' names a type in Spark's native type system, which DuckDB's SQL parser does not understand. Use the hub vocabulary (bigint, array<T>, ...) or 'duckdb:<spelling>' for a DuckDB-native escape hatch. |
 | `spark` | `egress.format.custom` | supported | `pyspark>=4.0` | format: custom requires pyspark>=4.0 (the spark.dataSource registry). See docs/compatibility.md. |
 | `spark` | `egress.format.delta` | supported | `delta-spark>=4.0` | Delta Lake features require the delta-spark package (aqueduct-core[spark] extra). See docs/compatibility.md. |
