@@ -34,7 +34,7 @@ Each engine declares a verdict for every capability leaf in a YAML data file shi
 
 | Engine | Leaves declared | Supported | Version-gated | Ignored with warning | Unsupported |
 |---|---|---|---|---|---|
-| `duckdb` | 320 | 211 | 0 | 6 | 103 |
+| `duckdb` | 320 | 228 | 0 | 6 | 86 |
 | `spark` | 312 | 311 | 7 | 0 | 1 |
 
 ### Conditional and refused capabilities
@@ -44,22 +44,6 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 | Engine | Capability leaf | Verdict | Requires | Notes |
 |---|---|---|---|---|
 | `duckdb` | `agent.field.block_on_explain_regression` | unsupported | — | block_on_explain_regression relies on Spark's explain()-plan snapshot gate (aqueduct.patch.explain_gate); DuckDB has no equivalent plan-snapshot capture implemented. |
-| `duckdb` | `assert.field.rules` | unsupported | — | Assert (row-quality rules + quarantine) is not implemented on DuckDB — see module.type.Assert. |
-| `duckdb` | `assert_on_fail.field.action` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
-| `duckdb` | `assert_on_fail.field.url` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
-| `duckdb` | `assert_rule.field.column` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
-| `duckdb` | `assert_rule.field.error_type` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
-| `duckdb` | `assert_rule.field.expected` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
-| `duckdb` | `assert_rule.field.expr` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
-| `duckdb` | `assert_rule.field.fn` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
-| `duckdb` | `assert_rule.field.fraction` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
-| `duckdb` | `assert_rule.field.id` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
-| `duckdb` | `assert_rule.field.max` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
-| `duckdb` | `assert_rule.field.max_age_hours` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
-| `duckdb` | `assert_rule.field.min` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
-| `duckdb` | `assert_rule.field.min_pass_rate` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
-| `duckdb` | `assert_rule.field.on_fail` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
-| `duckdb` | `assert_rule.field.type` | unsupported | — | Assert is not implemented on DuckDB — see module.type.Assert. |
 | `duckdb` | `channel.field.broadcast_side` | ignored_with_warning | — | Accepted but never inspected — DuckDB's join planner has no broadcast-hint concept; the query still runs correctly, just without the hint. |
 | `duckdb` | `channel.field.col` | unsupported | — | op: repartition's optional target column is unimplemented on DuckDB — see channel.op.repartition. |
 | `duckdb` | `channel.field.column` | unsupported | — | op: repartition's optional target column is unimplemented on DuckDB — see channel.op.repartition. |
@@ -131,8 +115,7 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 | `duckdb` | `ingress.format.kafka` | unsupported | — | Kafka streaming ingress has no DuckDB equivalent — DuckDB is a batch, single-process engine. |
 | `duckdb` | `ingress_time_travel.field.timestamp` | unsupported | — | time_travel is unimplemented on DuckDB — see feature.delta_time_travel. |
 | `duckdb` | `ingress_time_travel.field.version` | unsupported | — | time_travel is unimplemented on DuckDB — see feature.delta_time_travel. |
-| `duckdb` | `module.type.Assert` | unsupported | — | Assert (row-quality rules + quarantine) is not implemented on DuckDB. The DuckDB handlers cover Ingress/Channel/Junction/Funnel/Egress only. |
-| `duckdb` | `module.type.Probe` | unsupported | — | Probe (signal sampling for Regulator gates) is not implemented on DuckDB. The DuckDB handlers cover Ingress/Channel/Junction/Funnel/Egress only. |
+| `duckdb` | `module.type.Probe` | unsupported | — | Probe (signal sampling for Regulator gates) is not implemented on DuckDB. The DuckDB handlers cover Ingress/Channel/Junction/Funnel/Egress/Assert only. |
 | `duckdb` | `probe.field.attach_to` | unsupported | — | Probe (signal sampling for Regulator gates) is not implemented on DuckDB — see module.type.Probe. |
 | `duckdb` | `probe.field.report` | unsupported | — | Probe is not implemented on DuckDB — see module.type.Probe. |
 | `duckdb` | `probe.field.signals` | unsupported | — | Probe is not implemented on DuckDB — see module.type.Probe. |

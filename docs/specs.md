@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.42: Reference Document**
+**Version 2.43: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -661,7 +661,7 @@ Regulators are passive: they compile away entirely if no signal edge is wired to
         on_fail: quarantine
 ```
 
-Assert rules are batched into 1-2 Spark actions. Rule types: `schema_match` (zero action), `not_null`, `min_rows`, `max_rows`, `null_rate`, `freshness`, `sql`, `sql_row`, `spillway_rate`, `custom`. Every rule accepts an optional `id:` — a human-readable label carried through for authoring clarity; no rule-type handler reads it.
+Assert rules are batched into 1-2 Spark actions (on DuckDB: one `rel.aggregate()` query plus one sampled query for `null_rate`). Rule types: `schema_match` (zero action), `not_null`, `min_rows`, `max_rows`, `null_rate`, `freshness`, `sql`, `sql_row`, `spillway_rate`, `custom`. Every rule accepts an optional `id:` — a human-readable label carried through for authoring clarity; no rule-type handler reads it.
 
 **`sql_row`'s `min_pass_rate`** (optional) additionally fails the rule when the fraction of rows satisfying `expr` drops below the given threshold — one extra aggregate action (`count(*)` + `count_if(expr)`) beyond the row-level filter itself.
 
@@ -1807,7 +1807,7 @@ The Blueprint grammar (module types, Channel ops, Egress write modes, feature fl
 
 The two are not interchangeable, and Aqueduct does not present them as such. A Blueprint that compiles for both engines is one whose leaves both engines have declared `supported`. That is a property the compiler checks per Blueprint, not a property of the product.
 
-The DuckDB engine currently reads `parquet`, `csv`, and `json`; runs Channel `sql`, `join`, `filter`, `select`, `deduplicate`, `cast`, `rename`, `sort`, and `union`; runs every Junction mode and every Funnel mode; and writes `parquet` and `csv`. Channel `sql` and `join` are authored in Spark SQL and transpiled to DuckDB SQL with `sqlglot`. Assert, Probe, and Python and Java UDFs are declared `unsupported` rather than silently accepted. Any of those paths may point at remote storage (`s3://`, `gs://`, ...) — DuckDB's `httpfs` extension autoloads on first touch, and `engine.duckdb.*` config (below) wires memory/thread limits, a persistent database file, and S3 credentials reconciled with the `secrets:` resolver. The per-leaf verdicts are published as a generated matrix (see below) rather than restated here.
+The DuckDB engine currently reads `parquet`, `csv`, and `json`; runs Channel `sql`, `join`, `filter`, `select`, `deduplicate`, `cast`, `rename`, `sort`, and `union`; runs every Junction mode and every Funnel mode; runs every Assert rule type (including `null_rate`, `custom`, and quarantine via the spillway port) and every `on_fail` action; and writes `parquet` and `csv`. Channel `sql`/`join` and Assert `sql`/`sql_row` are authored in Spark SQL and transpiled to DuckDB SQL with `sqlglot`. Probe, and Python and Java UDFs are declared `unsupported` rather than silently accepted. Any of those paths may point at remote storage (`s3://`, `gs://`, ...) — DuckDB's `httpfs` extension autoloads on first touch, and `engine.duckdb.*` config (below) wires memory/thread limits, a persistent database file, and S3 credentials reconciled with the `secrets:` resolver. The per-leaf verdicts are published as a generated matrix (see below) rather than restated here.
 
 ### How an engine registers
 
@@ -1915,7 +1915,7 @@ Two consequences are worth stating plainly. A Blueprint patched after a failure 
 
 The gate checks three kinds of leaf:
 
-1. `module.type.<Type>`, the module kind, emitted for every module. An engine that does not run a whole module type (DuckDB does not run `Assert` or `Probe`) fails compilation cleanly instead of crashing mid-run.
+1. `module.type.<Type>`, the module kind, emitted for every module. An engine that does not run a whole module type (DuckDB does not run `Probe`) fails compilation cleanly instead of crashing mid-run.
 2. The per-module config-dispatch leaves: Channel op, Egress mode, format and on-new-columns policy, Ingress format, Junction and Funnel fan mode.
 3. The `feature.*` leaves the compiled Manifest actually exercises, derived from real Manifest fields rather than a hardcoded list. `feature.python_udf` and `feature.java_udf` come from each `udf_registry` entry's `lang`, so a Blueprint that declares no UDF exercises no UDF feature.
 
