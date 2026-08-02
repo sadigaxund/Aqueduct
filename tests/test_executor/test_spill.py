@@ -83,9 +83,20 @@ def test_ensure_parent_exists_creates_local_dir(tmp_path):
     assert target.exists() and target.is_dir()
 
 
-def test_ensure_parent_exists_noop_for_remote_uri():
-    # Must not raise even though the path doesn't exist anywhere real.
+def test_ensure_parent_exists_noop_for_remote_uri(monkeypatch):
+    # Must not raise even though the path doesn't exist anywhere real, and
+    # must short-circuit BEFORE any local filesystem work — a remote URI has
+    # no local directory to create, so `_local_path`/`Path.mkdir` must never
+    # even be reached (not just "happen to not raise").
+    import aqueduct.executor.spill as spill_mod
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        spill_mod, "_local_path",
+        lambda uri: (calls.append(uri), spill_mod.Path(uri))[1],
+    )
     ensure_parent_exists("s3://bucket/does/not/exist")
+    assert calls == []
 
 
 def test_delete_spill_tree_removes_local_directory(tmp_path):
