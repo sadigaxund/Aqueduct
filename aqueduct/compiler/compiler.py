@@ -73,6 +73,7 @@ from aqueduct.executor.capabilities import Support
 from aqueduct.executor.path_keys import CLOUD_SCHEMES, PATHLESS_INGRESS_FORMATS
 from aqueduct.parser.models import Blueprint, Edge, Module, ModuleType
 from aqueduct.parser.resolver import _CTX_RE, _sub_ctx  # Tier 0 re-pass after Tier 1
+from aqueduct.parser.schema import AssertRuleType
 from aqueduct.typehub import parse_type
 
 logger = logging.getLogger(__name__)
@@ -288,7 +289,17 @@ def compile(  # noqa: A001
         raise CompileError(f"Wiring validation failed: {exc}") from exc
 
     # ── 5.5. Validate Assert rule / on_fail combinations ─────────────────────
-    _AGG_NO_QUARANTINE = {"min_rows", "max_rows", "sql", "null_rate"}
+    # Rule-type membership is sourced from AssertRuleType (parser/schema.py) —
+    # the same enum AssertRuleSchema.type's Literal derives from — rather than
+    # raw strings, so a renamed rule type cannot silently stop matching here
+    # while the rest of the pipeline still compiles (Pass G1; see
+    # AssertRuleType's docstring).
+    _AGG_NO_QUARANTINE = {
+        AssertRuleType.MIN_ROWS, AssertRuleType.MAX_ROWS, AssertRuleType.SQL, AssertRuleType.NULL_RATE,
+    }
+    _ROW_QUARANTINE_CAPABLE = {
+        AssertRuleType.NOT_NULL, AssertRuleType.FRESHNESS, AssertRuleType.SQL_ROW, AssertRuleType.CUSTOM,
+    }
     _assert_spillway_ids = {
         e.from_id for e in edges if e.port == "spillway"
     }
@@ -301,7 +312,7 @@ def compile(  # noqa: A001
             action = on_fail if isinstance(on_fail, str) else on_fail.get("action", "abort")
             if action == "quarantine":
                 if rtype in _AGG_NO_QUARANTINE:
-                    if rtype == "null_rate":
+                    if rtype == AssertRuleType.NULL_RATE:
                         raise CompileError(
                             f"Assert '{m.id}' rule type={rtype!r} uses on_fail=quarantine, "
                             "but null_rate is a population-level gate — when it trips, the "
@@ -321,7 +332,7 @@ def compile(  # noqa: A001
                             "Use on_fail=abort or on_fail=warn instead. "
                             "Row-level quarantine is supported by: not_null, sql_row, custom, freshness."
                         )
-                if rtype in ("not_null", "freshness", "sql_row", "custom") and m.id not in _assert_spillway_ids:
+                if rtype in _ROW_QUARANTINE_CAPABLE and m.id not in _assert_spillway_ids:
                     raise CompileError(
                         f"Assert '{m.id}' rule type={rtype!r} uses on_fail=quarantine "
                         "but no spillway edge is connected to this Assert module. "

@@ -6,6 +6,7 @@ spec requirement that Blueprints are always valid input for LLM patch generation
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Annotated, Any, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -410,16 +411,44 @@ class AssertOnFailBlockSchema(BaseModel):
     url: str | None = None
 
 
+class AssertRuleType(StrEnum):
+    """Assert rule-``type`` vocabulary — the PARSER-layer source of truth for
+    the ten rule-type strings (mirrors each engine's own ``AssertRuleType``
+    StrEnum — ``executor/spark/assert_.py``, ``executor/duckdb_/assert_.py``
+    — member-for-member; those engine copies exist because the Compiler
+    layer must not import an engine module, see AGENTS.md's layer-boundary
+    rule). ``AssertRuleSchema.type`` derives its ``Literal`` from this enum's
+    VALUES (``Literal[*(m.value for m in AssertRuleType)]`` — plain strings,
+    not the enum members themselves, so a parsed rule's ``type`` stays a
+    bare ``str`` exactly as before; unpacking the members directly would
+    make pydantic coerce a matching input into the enum instance, changing
+    ``repr()``/message-formatting behaviour downstream) so there is exactly
+    one place that lists the ten strings; the Compiler imports this enum
+    instead of hand-rolling a raw string like ``"null_rate"`` that would
+    silently stop matching if the vocabulary were ever renamed here without
+    a corresponding edit at every comparison site
+    (`aqueduct/compiler/compiler.py`'s quarantine-validation block, Pass
+    G1)."""
+
+    SCHEMA_MATCH = "schema_match"
+    MIN_ROWS = "min_rows"
+    MAX_ROWS = "max_rows"
+    NOT_NULL = "not_null"
+    NULL_RATE = "null_rate"
+    FRESHNESS = "freshness"
+    SQL = "sql"
+    SQL_ROW = "sql_row"
+    CUSTOM = "custom"
+    SPILLWAY_RATE = "spillway_rate"
+
+
 class AssertRuleSchema(BaseModel):
     """One Assert rule. Field applicability is rule-``type``-specific — see
     ``spark/assert_.py`` module docstring for the full per-type contract.
     Flat and mostly-optional (same rationale as ``ProbeSignalSchema``)."""
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal[
-        "schema_match", "min_rows", "max_rows", "not_null", "null_rate",
-        "freshness", "sql", "sql_row", "custom", "spillway_rate",
-    ]
+    type: Literal[*(m.value for m in AssertRuleType)]
     # Human-readable rule label — gallery-wide authoring convention (every
     # shipped Assert snippet sets one). Not read by any rule-type handler in
     # `spark/assert_.py` (no functional effect); kept as a legitimate field
