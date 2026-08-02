@@ -78,7 +78,6 @@ def test_hudi_roundtrip_with_maintenance(spark, tmp_path):
                     "format": "hudi",
                     "mode": "overwrite",
                     "path": str(out),
-                    "output_columns": ["id"],
                     # Hudi mandates a table name + record key on every write;
                     # forwarded verbatim to the writer via cfg["options"].
                     "options": {
@@ -125,7 +124,6 @@ def test_iceberg_roundtrip_with_maintenance(spark, tmp_path):
                     "format": "iceberg",
                     "mode": "overwrite",
                     "table": "local.db.test_table",
-                    "output_columns": ["id"],
                     "maintenance": {"rewrite_data_files": True, "expire_snapshots": True},
                 },
             },
