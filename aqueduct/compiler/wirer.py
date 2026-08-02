@@ -25,10 +25,23 @@ class WireError(AqueductError):
 
 
 def validate_probes(modules: list[Module]) -> None:
-    """Verify every Probe module has a valid attach_to target."""
+    """Verify every Probe module has a valid attach_to target.
+
+    Skips a directly-disabled Probe (``enabled: false``) — specs.md §4
+    documents "a disabled module still compiles but is skipped at run
+    time"; a Probe an author disabled while still wiring it up must not
+    block compilation on the very field they haven't finished writing yet.
+    This only covers a Probe's OWN `enabled` flag, not the full cascade
+    (a Probe attached to a module disabled elsewhere) — that closure isn't
+    computed until the later cascade-disable step (6.7), which runs after
+    this validation; disabling the Probe itself is the actionable escape
+    hatch for the "still fails to compile" complaint this fixes.
+    """
     module_ids = {m.id for m in modules}
     for m in modules:
         if m.type != ModuleType.Probe:
+            continue
+        if not m.enabled:
             continue
         if not m.attach_to:
             raise WireError(

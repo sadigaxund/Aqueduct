@@ -181,6 +181,29 @@ class TestProbeWiring:
         with pytest.raises(CompileError, match="attach_to"):
             compile(bp)
 
+    def test_disabled_probe_without_attach_to_still_compiles(self, tmp_path):
+        """A directly-disabled Probe (enabled: false) must not block
+        compilation on its own missing attach_to — specs.md documents "a
+        disabled module still compiles but is skipped at run time". Before
+        this fix, validate_probes had no `m.enabled` guard, so disabling a
+        Probe an author hasn't finished wiring still failed the whole
+        compile — you could not disable your way out."""
+        bp_file = tmp_path / "no_attach_disabled.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: test\nname: Test\ncontext: {}\n"
+            "modules:\n"
+            "  - id: ing\n    type: Ingress\n    label: In\n"
+            "    config: { format: parquet, path: data.parquet }\n"
+            "  - id: eg\n    type: Egress\n    label: Eg\n"
+            "    config: { format: parquet, path: out.parquet, mode: overwrite }\n"
+            "  - id: p\n    type: Probe\n    label: P\n    enabled: false\n    config: {}\n"
+            "edges:\n  - from: ing\n    to: eg\n"
+        )
+        bp = parse(bp_file)
+        manifest = compile(bp)
+        probe = next(m for m in manifest.modules if m.id == "p")
+        assert probe.enabled is False
+
 
 class TestRegulatorCompileAway:
     def test_passive_regulator_removed(self):

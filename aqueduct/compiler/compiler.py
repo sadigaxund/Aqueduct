@@ -322,6 +322,15 @@ def compile(  # noqa: A001
     for m in modules:
         if m.type != ModuleType.Assert:
             continue
+        # A directly-disabled Assert (enabled: false) never runs, so an
+        # on_fail=quarantine/no-spillway-edge combination on it can't
+        # discard anything — specs.md §4's "a disabled module still
+        # compiles" would otherwise be false for this one gate (see
+        # validate_probes' matching guard for the cascade-closure caveat,
+        # same limitation here: this checks the module's OWN flag, not the
+        # later-computed disable cascade in step 6.7).
+        if not m.enabled:
+            continue
         for rule in m.config.get("rules", []):
             rtype = rule.get("type", "")
             on_fail = rule.get("on_fail", "abort")

@@ -115,6 +115,41 @@ edges:
         compiler_compile(bp, blueprint_path=bp_path)
 
 
+def test_disabled_assert_quarantine_gate_not_blocked_by_missing_spillway_edge(tmp_path):
+    """A directly-disabled Assert (enabled: false) with on_fail=quarantine
+    and no spillway edge must still compile — it never runs, so there is
+    nothing to silently discard. Before this fix, the quarantine gate had
+    no `m.enabled` guard, so disabling a not-yet-fully-wired Assert still
+    failed the whole compile."""
+    bp_path = tmp_path / "blueprint.yml"
+    bp_path.write_text("""
+aqueduct: "1.0"
+id: test_bp
+name: Test Blueprint
+modules:
+  - id: ing
+    type: Ingress
+    label: In
+    config: { format: parquet, path: data.parquet }
+  - id: check
+    type: Assert
+    label: Check
+    enabled: false
+    config:
+      rules:
+        - type: not_null
+          column: a
+          on_fail: quarantine
+edges:
+  - from: ing
+    to: check
+""")
+    bp = parse(str(bp_path))
+    manifest = compiler_compile(bp, blueprint_path=bp_path)
+    check = next(m for m in manifest.modules if m.id == "check")
+    assert check.enabled is False
+
+
 def test_base_dir_round_trips_from_parse_through_compile(tmp_path):
     """Blueprint.base_dir (the blueprint YAML's own directory) must survive
     into Manifest.base_dir — executor-side user-code import sites (custom
