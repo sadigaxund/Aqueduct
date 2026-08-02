@@ -1356,3 +1356,143 @@ def test_duckdb_make_session_no_timezone_is_a_no_op():
         assert conn.execute("SELECT current_setting('TimeZone')").fetchone() is not None
     finally:
         protocol.close_session(conn)
+
+
+# ── feature.table_addressing (Pass G2) — catalog table: addressing ─────────
+#
+# DuckDB genuinely has a catalog (memory.main, system.*, plus whatever ATTACH
+# adds) — see duckdb_/ingress.py::_read_table's docstring for the full
+# defaulting rule. These tests exercise the real implementation against a
+# real DuckDBPyConnection, both engine-facing directions (Ingress read,
+# Egress write) plus register_as_table's external-file registration.
+
+
+def test_ingress_table_reads_existing_catalog_table(duckdb_con):
+    duckdb_con.sql("CREATE TABLE orders AS SELECT 1 AS id, 'a' AS name")
+    module = _module("ing", "Ingress", {"table": "orders"})
+    rel = read_ingress(module, duckdb_con)
+    assert rel.columns == ["id", "name"]
+    assert rel.fetchall() == [(1, "a")]
+
+
+def test_ingress_table_unresolvable_name_raises_ingress_error(duckdb_con):
+    module = _module("ing", "Ingress", {"table": "does_not_exist"})
+    with pytest.raises(IngressError, match="not found"):
+        read_ingress(module, duckdb_con)
+
+
+def test_ingress_table_and_path_mutually_exclusive(duckdb_con):
+    module = _module("ing", "Ingress", {"table": "orders", "path": "x.csv"})
+    with pytest.raises(IngressError, match="mutually exclusive"):
+        read_ingress(module, duckdb_con)
+
+
+def test_ingress_table_applies_schema_hint_and_partition_filters(duckdb_con):
+    duckdb_con.sql("CREATE TABLE orders AS SELECT 1 AS id, 100 AS amount UNION ALL SELECT 2, 200")
+    module = _module(
+        "ing",
+        "Ingress",
+        {"table": "orders", "partition_filters": "amount > 100", "schema_hint": {"id": "int"}},
+    )
+    rel = read_ingress(module, duckdb_con)
+    assert rel.fetchall() == [(2, 200)]
+
+
+def test_egress_table_overwrite_creates_and_replaces(duckdb_con):
+    rel1 = duckdb_con.sql("SELECT 1 AS id")
+    write_egress(rel1, _module("e1", "Egress", {"table": "t1", "mode": "overwrite"}), duckdb_con)
+    assert duckdb_con.table("t1").fetchall() == [(1,)]
+
+    rel2 = duckdb_con.sql("SELECT 2 AS id")
+    write_egress(rel2, _module("e2", "Egress", {"table": "t1", "mode": "overwrite"}), duckdb_con)
+    assert duckdb_con.table("t1").fetchall() == [(2,)]
+
+
+def test_egress_table_error_mode_raises_when_table_exists(duckdb_con):
+    rel = duckdb_con.sql("SELECT 1 AS id")
+    write_egress(rel, _module("e1", "Egress", {"table": "t2", "mode": "overwrite"}), duckdb_con)
+    with pytest.raises(EgressError, match="already exists"):
+        write_egress(rel, _module("e2", "Egress", {"table": "t2", "mode": "error"}), duckdb_con)
+
+
+def test_egress_table_ignore_mode_skips_when_table_exists(duckdb_con):
+    rel1 = duckdb_con.sql("SELECT 1 AS id")
+    write_egress(rel1, _module("e1", "Egress", {"table": "t3", "mode": "overwrite"}), duckdb_con)
+    rel2 = duckdb_con.sql("SELECT 2 AS id")
+    write_egress(rel2, _module("e2", "Egress", {"table": "t3", "mode": "ignore"}), duckdb_con)
+    assert duckdb_con.table("t3").fetchall() == [(1,)]  # unchanged
+
+
+def test_egress_table_append_creates_then_inserts(duckdb_con):
+    rel1 = duckdb_con.sql("SELECT 1 AS id")
+    write_egress(rel1, _module("e1", "Egress", {"table": "t4", "mode": "append"}), duckdb_con)
+    rel2 = duckdb_con.sql("SELECT 2 AS id")
+    write_egress(rel2, _module("e2", "Egress", {"table": "t4", "mode": "append"}), duckdb_con)
+    assert sorted(duckdb_con.table("t4").fetchall()) == [(1,), (2,)]
+
+
+def test_egress_table_and_path_mutually_exclusive(duckdb_con):
+    rel = duckdb_con.sql("SELECT 1 AS id")
+    module = _module("e1", "Egress", {"table": "t5", "path": "x.parquet", "format": "parquet"})
+    with pytest.raises(EgressError, match="mutually exclusive"):
+        write_egress(rel, module, duckdb_con)
+
+
+def test_egress_register_as_table_readable_back_by_ingress(duckdb_con, tmp_path):
+    path = str(tmp_path / "out.parquet")
+    rel = duckdb_con.sql("SELECT 1 AS id, 'x' AS name")
+    write_egress(
+        rel,
+        _module(
+            "e1",
+            "Egress",
+            {
+                "format": "parquet",
+                "path": path,
+                "mode": "overwrite",
+                "register_as_table": "registered_v",
+            },
+        ),
+        duckdb_con,
+    )
+    readback = read_ingress(_module("ing", "Ingress", {"table": "registered_v"}), duckdb_con)
+    assert readback.fetchall() == [(1, "x")]
+
+
+def test_egress_register_as_table_reflects_current_file_contents(duckdb_con, tmp_path):
+    """The registered name is a live VIEW over the file, not a snapshot copy —
+    re-writing the same path changes what a later read-by-name sees."""
+    path = str(tmp_path / "out.parquet")
+    write_egress(
+        duckdb_con.sql("SELECT 1 AS id"),
+        _module(
+            "e1",
+            "Egress",
+            {"format": "parquet", "path": path, "mode": "overwrite", "register_as_table": "v"},
+        ),
+        duckdb_con,
+    )
+    write_egress(
+        duckdb_con.sql("SELECT 2 AS id"),
+        _module(
+            "e2",
+            "Egress",
+            {"format": "parquet", "path": path, "mode": "overwrite", "register_as_table": "v"},
+        ),
+        duckdb_con,
+    )
+    assert duckdb_con.table("v").fetchall() == [(2,)]
+
+
+def test_egress_table_ignored_when_register_as_table_also_set(duckdb_con, caplog):
+    """`table:` writes already register the name; `register_as_table` is
+    ignored with a warning (never a silent drop) — mirrors Spark's
+    `runtime_egress_register_as_table_ignored` behaviour exactly."""
+    rel = duckdb_con.sql("SELECT 1 AS id")
+    module = _module(
+        "e1", "Egress", {"table": "t6", "mode": "overwrite", "register_as_table": "unused_name"}
+    )
+    write_egress(rel, module, duckdb_con)
+    assert duckdb_con.table("t6").fetchall() == [(1,)]
+    with pytest.raises(Exception):
+        duckdb_con.table("unused_name")

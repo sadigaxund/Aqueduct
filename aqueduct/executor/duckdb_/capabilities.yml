@@ -378,8 +378,15 @@ leaves:
     tests:
       - tests/test_executor_duckdb/test_executor.py::test_feature_spillway_driven_through_execute
   feature.table_addressing:
-    support: unsupported
-    hint: "DuckDB Ingress/Egress require format:+path: — measured: DuckDB DOES have a real catalog (memory.main, system.main/information_schema/pg_catalog, plus whatever ATTACH adds), so a three-part catalog.schema.table namespace genuinely exists. What is missing is an IMPLEMENTATION mapping a Blueprint's bare table: name onto it (which catalog/schema to default to, whether ATTACH is required first) — not the absence of a catalog. Use format:+path: instead of table: addressing on this engine until that mapping is built."
+    support: supported
+    hint: "table: reads via con.table() (Ingress) and writes via CREATE OR REPLACE/CREATE/INSERT INTO against DuckDB's own catalog (Egress), mode-mapped onto DuckDB's own DDL guards (overwrite/error/errorifexists/ignore/append) — see duckdb_/ingress.py::_read_table and duckdb_/egress.py::_write_table for the full catalog defaulting rule (unqualified name -> current catalog+schema memory.main; two-part -> schema.table within the current catalog; three-part -> a specific, already-ATTACHed catalog; Aqueduct never performs an implicit ATTACH). An unresolvable name is DuckDB's own CatalogException, wrapped into IngressError/EgressError."
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_ingress_table_reads_existing_catalog_table
+      - tests/test_executor_duckdb/test_executor.py::test_ingress_table_unresolvable_name_raises_ingress_error
+      - tests/test_executor_duckdb/test_executor.py::test_egress_table_overwrite_creates_and_replaces
+      - tests/test_executor_duckdb/test_executor.py::test_egress_table_error_mode_raises_when_table_exists
+      - tests/test_executor_duckdb/test_executor.py::test_egress_table_ignore_mode_skips_when_table_exists
+      - tests/test_executor_duckdb/test_executor.py::test_egress_table_append_creates_then_inserts
 
   # ── DEFERRED (Stage B candidates) — see the Egress deferred block above
   # for the grouping rationale; same "one-line flip later" intent. ─────────
@@ -802,8 +809,12 @@ leaves:
   egress.field.partition_by: supported
   egress.field.path: supported
   egress.field.register_as_table:
-      support: unsupported
-      hint: "Requires registering an external table in a catalog that persists across sessions the way Spark's does; no such registration path exists on this engine. Not implemented."
+      support: supported
+      hint: "Registers a CREATE OR REPLACE VIEW over the just-written file (read_parquet/read_csv), the DuckDB analog of Spark's CREATE EXTERNAL TABLE ... LOCATION — a live pointer to the file's current contents, not a snapshot copy. Non-fatal on failure (logged), same as Spark's version. Ignored (with a warning, never silently) when 'table:' is also set — writing directly to a catalog table already IS the registration."
+      tests:
+        - tests/test_executor_duckdb/test_executor.py::test_egress_register_as_table_readable_back_by_ingress
+        - tests/test_executor_duckdb/test_executor.py::test_egress_register_as_table_reflects_current_file_contents
+        - tests/test_executor_duckdb/test_executor.py::test_egress_table_ignored_when_register_as_table_also_set
   egress.field.repartition:
       support: unsupported
       hint: "DuckDB's COPY has no shuffle/partition-count concept for a write target: PARTITION_BY groups rows by column VALUE, not by a target file count, and PER_THREAD_OUTPUT (the only file-count lever this engine has) cannot even combine with PARTITION_BY. This field has no effect. Use partition_by for a grouped file layout, or coalesce (this engine already writes the minimum file count for a given write shape)."
@@ -811,8 +822,8 @@ leaves:
       support: unsupported
       hint: "mode: overwrite_partitions is unimplemented on DuckDB — see egress.mode.overwrite_partitions."
   egress.field.table:
-      support: unsupported
-      hint: "Bare table: addressing is unimplemented on DuckDB — see feature.table_addressing."
+      support: supported
+      hint: "Writes via CREATE OR REPLACE/CREATE/INSERT INTO against DuckDB's own catalog, mode-mapped onto DuckDB's own DDL guards — see feature.table_addressing for the defaulting rule and mutual exclusivity with path:."
   egress.field.value: supported
   egress.field.value_expr: supported
   egress_maintenance.field.clean:
@@ -856,8 +867,8 @@ leaves:
   ingress.field.path: supported
   ingress.field.schema_hint: supported
   ingress.field.table:
-      support: unsupported
-      hint: "Bare table: addressing is unimplemented on DuckDB — see feature.table_addressing."
+      support: supported
+      hint: "Reads via con.table() against DuckDB's own catalog — see feature.table_addressing for the defaulting rule and mutual exclusivity with path:."
   ingress.field.time_travel:
       support: unsupported
       hint: "Requires a delta-rs bridge to read a Delta table's transaction log at a version/timestamp. Not implemented — see feature.delta_time_travel."

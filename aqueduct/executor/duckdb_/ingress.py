@@ -13,6 +13,12 @@ DuckDB's ``read_parquet`` / ``read_csv`` / ``read_json`` return a
 ``DuckDBPyRelation`` — LAZY, same as a Spark DataFrame: no query executes
 until a downstream consumer (an Egress ``COPY``, or ``.fetchall()``/``.df()``)
 materializes it. No DuckDB action is triggered here.
+
+``table:`` (Pass G2 — ``feature.table_addressing``) reads an existing
+catalog table/view by name via ``con.table()`` instead of ``format:``+
+``path:`` — see ``_read_table``'s docstring for the catalog defaulting
+rule. Mutually exclusive with ``path:``, mirroring
+``executor/spark/ingress.py``'s own ``table:``/``path:`` contract.
 """
 
 from __future__ import annotations
@@ -58,33 +64,46 @@ def read_ingress(
     cfg = module.config
     fmt: str | None = cfg.get("format")
     path: str | None = cfg.get("path")
+    table: str | None = cfg.get("table")
 
-    if not fmt:
-        raise IngressError(f"[{module.id}] 'format' is required in Ingress config")
-    if fmt not in _SUPPORTED_FORMATS:
+    if table and path:
         raise IngressError(
-            f"[{module.id}] format={fmt!r} is not implemented for the DuckDB engine "
-            f"in Stage A. Supported: {sorted(_SUPPORTED_FORMATS)}. "
-            "See docs/compatibility.md for the full capability matrix."
+            f"[{module.id}] 'table' and 'path' are mutually exclusive. Set one or the other, not both."
         )
-    if not path:
-        raise IngressError(f"[{module.id}] 'path' is required in Ingress config for format={fmt!r}")
 
-    try:
-        if fmt == "parquet":
-            rel = con.read_parquet(path)
-        elif fmt == "csv":
-            header = bool(cfg.get("header", True))
-            options = dict(cfg.get("options", {}))
-            rel = con.read_csv(path, header=header, **_csv_kwargs(options))
-        else:  # json
-            rel = con.read_json(path)
-    except IngressError:
-        raise
-    except Exception as exc:
-        raise IngressError(
-            f"[{module.id}] source not found or unreadable at {path!r}: {exc}"
-        ) from exc
+    if table:
+        # Catalog-addressed read (Pass G2) — no format:/path: required. See
+        # `_read_table`'s docstring for the catalog defaulting rule.
+        rel = _read_table(module.id, con, table)
+    else:
+        if not fmt:
+            raise IngressError(f"[{module.id}] 'format' is required in Ingress config")
+        if fmt not in _SUPPORTED_FORMATS:
+            raise IngressError(
+                f"[{module.id}] format={fmt!r} is not implemented for the DuckDB engine "
+                f"in Stage A. Supported: {sorted(_SUPPORTED_FORMATS)}. "
+                "See docs/compatibility.md for the full capability matrix."
+            )
+        if not path:
+            raise IngressError(
+                f"[{module.id}] 'path' is required in Ingress config for format={fmt!r}"
+            )
+
+        try:
+            if fmt == "parquet":
+                rel = con.read_parquet(path)
+            elif fmt == "csv":
+                header = bool(cfg.get("header", True))
+                options = dict(cfg.get("options", {}))
+                rel = con.read_csv(path, header=header, **_csv_kwargs(options))
+            else:  # json
+                rel = con.read_json(path)
+        except IngressError:
+            raise
+        except Exception as exc:
+            raise IngressError(
+                f"[{module.id}] source not found or unreadable at {path!r}: {exc}"
+            ) from exc
 
     partition_filters: str | None = cfg.get("partition_filters")
     if partition_filters:
@@ -117,6 +136,47 @@ def read_ingress(
         _enforce_on_new_columns(module, rel, schema_hint)
 
     return rel
+
+
+# ── Catalog table addressing (Pass G2 — feature.table_addressing) ──────────
+#
+# DuckDB genuinely has a catalog — `memory` (the connection's own database,
+# home for every plain `CREATE TABLE`/`CREATE VIEW`), `system` (built-ins),
+# plus whatever `ATTACH` has added — so a `catalog.schema.table` three-part
+# namespace is real, not fictional (measured against a live
+# `DuckDBPyConnection`: `SELECT DISTINCT catalog_name FROM
+# duckdb_databases()` lists exactly those). What was previously missing was
+# an IMPLEMENTATION mapping a Blueprint's `table:` string onto it — not the
+# absence of a catalog to resolve against.
+#
+# Defaulting rule (mirrors DuckDB's own, un-managed, name resolution — this
+# module performs NO catalog bookkeeping of its own):
+#   - Unqualified name (`orders`)              -> resolves against the
+#     connection's CURRENT catalog+schema (`memory.main` for a plain
+#     `:memory:`/file connection, unless a prior step in the SAME session
+#     changed it with `USE`).
+#   - Two-part name (`schema.table`)           -> resolves `schema` within
+#     whichever catalog is CURRENT.
+#   - Three-part name (`catalog.schema.table`) -> addresses a specific
+#     catalog directly. That catalog must already exist — Aqueduct never
+#     performs an implicit `ATTACH`; a Blueprint that needs one ATTACHed
+#     arranges it itself (`engine.duckdb.attach`/session setup), the exact
+#     same division of responsibility Spark's `table:` has with
+#     `engine.spark.conf`'s `spark.sql.catalog.*` keys.
+# An unresolvable name (missing catalog/schema/table) is `con.table()`'s own
+# `CatalogException` — wrapped into `IngressError` (never left to propagate
+# as a raw duckdb exception, and never silently returning an empty/missing
+# result).
+def _read_table(
+    module_id: str, con: duckdb.DuckDBPyConnection, table: str
+) -> duckdb.DuckDBPyRelation:
+    """Read an existing catalog entity (table or view) by name — no query
+    executes yet (``con.table()`` returns a lazy relation, same laziness
+    guarantee as ``read_parquet``/``read_csv``)."""
+    try:
+        return con.table(table)
+    except Exception as exc:
+        raise IngressError(f"[{module_id}] table {table!r} not found or unreadable: {exc}") from exc
 
 
 def _csv_kwargs(options: dict) -> dict:

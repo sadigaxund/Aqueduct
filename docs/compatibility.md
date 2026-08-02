@@ -34,7 +34,7 @@ Each engine declares a verdict for every capability leaf in a YAML data file shi
 
 | Engine | Leaves declared | Supported | Version-gated | Ignored with warning | Unsupported |
 |---|---|---|---|---|---|
-| `duckdb` | 328 | 265 | 0 | 4 | 59 |
+| `duckdb` | 328 | 269 | 0 | 4 | 55 |
 | `spark` | 320 | 319 | 7 | 0 | 1 |
 
 ### Conditional and refused capabilities
@@ -67,10 +67,8 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 | `duckdb` | `egress.field.merge_key` | unsupported | — | mode: merge (upsert) requires a target table format with a transaction log (Delta). Not implemented — see egress.mode.merge. |
 | `duckdb` | `egress.field.merge_schema` | unsupported | — | Schema-evolution flags apply to Delta/Iceberg writers DuckDB does not have. Not implemented. |
 | `duckdb` | `egress.field.overwrite_schema` | unsupported | — | Schema-evolution flags apply to Delta/Iceberg writers DuckDB does not have. Not implemented. |
-| `duckdb` | `egress.field.register_as_table` | unsupported | — | Requires registering an external table in a catalog that persists across sessions the way Spark's does; no such registration path exists on this engine. Not implemented. |
 | `duckdb` | `egress.field.repartition` | unsupported | — | DuckDB's COPY has no shuffle/partition-count concept for a write target: PARTITION_BY groups rows by column VALUE, not by a target file count, and PER_THREAD_OUTPUT (the only file-count lever this engine has) cannot even combine with PARTITION_BY. This field has no effect. Use partition_by for a grouped file layout, or coalesce (this engine already writes the minimum file count for a given write shape). |
 | `duckdb` | `egress.field.replace_where` | unsupported | — | mode: overwrite_partitions is unimplemented on DuckDB — see egress.mode.overwrite_partitions. |
-| `duckdb` | `egress.field.table` | unsupported | — | Bare table: addressing is unimplemented on DuckDB — see feature.table_addressing. |
 | `duckdb` | `egress.format.custom` | unsupported | — | format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB. |
 | `duckdb` | `egress.format.delta` | unsupported | — | Requires a delta-rs bridge (the deltalake Python package writes a Delta log DuckDB has no writer for). Not implemented. |
 | `duckdb` | `egress.format.hudi` | unsupported | — | Hudi is not implemented for the DuckDB engine. |
@@ -91,11 +89,9 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 | `duckdb` | `feature.java_udf` | unsupported | — | lang: java UDFs require a JVM UDF registry (Spark-only). Not applicable to DuckDB. |
 | `duckdb` | `feature.metrics_boundary` | unsupported | — | metrics_boundary works around Spark's stage-fusion by forcing a shuffle boundary so SparkListener attributes metrics per module — a fix for a problem specific to that collection mechanism. DuckDB has no stage-fusion concept to work around, but this engine's executor does not yet collect per-module runtime metrics (rows/bytes) at all outside the Handoff module (see executor/models.py's module_metrics writer), so there is no per-module attribution for this flag to configure either way. |
 | `duckdb` | `feature.parallel_mode` | unsupported | — | Requires a Python ThreadPoolExecutor over independent DAG subtrees. Measured: a single DuckDBPyConnection object is NOT safe for concurrent queries from multiple threads — two threads calling .sql() on the SAME connection object concurrently raise 'Invalid Input Error: Attempting to execute an unsuccessful or closed pending query result'. Each thread needs its OWN cursor (con.cursor()), which IS safe for concurrent reads — a real but small additional wiring cost this engine has not built yet. Not implemented: the executor runs the topological order serially today. |
-| `duckdb` | `feature.table_addressing` | unsupported | — | DuckDB Ingress/Egress require format:+path: — measured: DuckDB DOES have a real catalog (memory.main, system.main/information_schema/pg_catalog, plus whatever ATTACH adds), so a three-part catalog.schema.table namespace genuinely exists. What is missing is an IMPLEMENTATION mapping a Blueprint's bare table: name onto it (which catalog/schema to default to, whether ATTACH is required first) — not the absence of a catalog. Use format:+path: instead of table: addressing on this engine until that mapping is built. |
 | `duckdb` | `ingress.field.class_` | unsupported | — | format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB. |
 | `duckdb` | `ingress.field.infer_schema` | ignored_with_warning | — | DuckDB's CSV reader always infers types; this flag is accepted but has no effect — there is no toggle to force a fixed/string schema. |
 | `duckdb` | `ingress.field.options` | ignored_with_warning | — | Only a small allowlist (sep, delimiter, quotechar, escapechar, encoding, compression, dtype, columns) is honored; other keys are silently dropped rather than forwarded. |
-| `duckdb` | `ingress.field.table` | unsupported | — | Bare table: addressing is unimplemented on DuckDB — see feature.table_addressing. |
 | `duckdb` | `ingress.field.time_travel` | unsupported | — | Requires a delta-rs bridge to read a Delta table's transaction log at a version/timestamp. Not implemented — see feature.delta_time_travel. |
 | `duckdb` | `ingress.format.custom` | unsupported | — | format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB. |
 | `duckdb` | `ingress.format.delta` | unsupported | — | Requires a delta-rs bridge (the deltalake Python package can read a Delta table's transaction log). Not implemented. |

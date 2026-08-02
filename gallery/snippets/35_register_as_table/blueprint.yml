@@ -14,8 +14,15 @@ modules:
       path: data/input/products.csv
       options: {header: "true", inferSchema: "true"}
 
-  # Filter to only in-stock products, then write to parquet AND
-  # register the output as a temporary catalog table for the session.
+  - id: filter_in_stock
+    label: "Filter to In-Stock"
+    type: Channel
+    config:
+      op: filter
+      condition: "in_stock = true"
+
+  # Write the filtered rows to parquet AND register the output as a
+  # temporary catalog table for the session.
   - id: in_stock_only
     label: "In-Stock Only"
     type: Egress
@@ -44,6 +51,8 @@ modules:
 
 edges:
   - from: raw_products
+    to: filter_in_stock
+  - from: filter_in_stock
     to: in_stock_only
   - from: in_stock_only
     to: readback

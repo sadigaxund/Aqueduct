@@ -89,6 +89,45 @@ def write_egress(
     """
     cfg = module.config
     fmt: str | None = cfg.get("format")
+    path: str | None = cfg.get("path")
+    table: str | None = cfg.get("table")
+
+    if table and path:
+        raise EgressError(
+            f"[{module.id}] 'table' and 'path' are mutually exclusive. Set one or the other, not both."
+        )
+
+    if table:
+        # Catalog-addressed write (Pass G2) — no format:/path: required. See
+        # `_write_table`'s docstring for the catalog defaulting rule (same
+        # rule `duckdb_/ingress.py::_read_table` documents).
+        mode = cfg.get("mode", "error")
+        if mode not in SUPPORTED_MODES:
+            raise EgressError(
+                f"[{module.id}] mode={mode!r} is not implemented for the DuckDB engine in "
+                f"Stage A. Supported: {sorted(SUPPORTED_MODES)}. See docs/compatibility.md."
+            )
+        _write_table(rel, module, con, str(table), mode)
+        register_as: str | None = cfg.get("register_as_table")
+        if register_as:
+            # Same "ignored, not silently dropped" treatment as Spark's
+            # egress.py — writing directly to a catalog table via `table:`
+            # already IS the registration; `register_as_table` has nothing
+            # further to do.
+            logger.warning(
+                "[runtime_egress_register_as_table_ignored] [%s] "
+                "register_as_table=%r ignored — module already writes to a "
+                "catalog table via 'table:'. Use 'table:' to write directly.",
+                module.id,
+                register_as,
+            )
+            _add_module_warning(
+                "runtime_egress_register_as_table_ignored",
+                f"register_as_table={register_as!r} ignored — module already writes to a "
+                "catalog table via 'table:'. Use 'table:' to write directly.",
+            )
+        return
+
     if not fmt:
         raise EgressError(f"[{module.id}] 'format' is required in Egress config")
 
@@ -103,7 +142,6 @@ def write_egress(
             f"Stage A. Supported: {sorted(SUPPORTED_FORMATS)}. See docs/compatibility.md."
         )
 
-    path: str | None = cfg.get("path")
     if not path:
         raise EgressError(f"[{module.id}] 'path' is required in Egress config for format={fmt!r}")
 
@@ -181,6 +219,10 @@ def write_egress(
             con.unregister(input_name)
         except Exception:
             pass
+
+    register_as: str | None = cfg.get("register_as_table")
+    if register_as:
+        _register_as_table(con, module.id, str(register_as), fmt, path)
 
 
 def _enforce_on_new_columns(
@@ -292,6 +334,127 @@ def _copy_options(fmt: str, cfg: dict, partition_by: list[str] | None) -> str:
     for key, value in options_cfg.items():
         parts.append(f"{str(key).upper()} '{_escape(str(value))}'")
     return ", ".join(parts)
+
+
+# ── Catalog table addressing (Pass G2 — feature.table_addressing) ──────────
+#
+# See `duckdb_/ingress.py::_read_table`'s docstring for the full catalog
+# defaulting rule (unqualified -> current catalog+schema; two-part ->
+# schema.table within the current catalog; three-part -> a specific,
+# already-existing catalog; no implicit ATTACH). This module writes INTO
+# that catalog directly — a Blueprint-managed table DuckDB itself owns,
+# the write-side mirror of Spark's `writer.saveAsTable(table)` (a
+# Spark-managed table, as opposed to `register_as_table`'s external-file
+# registration below).
+def _write_table(
+    rel: duckdb.DuckDBPyRelation,
+    module: Module,
+    con: duckdb.DuckDBPyConnection,
+    table: str,
+    mode: str,
+) -> None:
+    """Write ``rel`` into an existing-or-new catalog table named ``table``.
+
+    Mode semantics map onto DuckDB's own DDL guards rather than a manual
+    existence check (verified against a real ``DuckDBPyConnection`` —
+    each behavior below is DuckDB's own, not emulated):
+
+      - ``overwrite``            -> ``CREATE OR REPLACE TABLE`` (creates if
+        absent, replaces the entire contents if present).
+      - ``error``/``errorifexists`` -> plain ``CREATE TABLE`` — DuckDB
+        itself raises a ``CatalogException`` ("already exists") when the
+        table is already there; wrapped into ``EgressError``.
+      - ``ignore``               -> ``CREATE TABLE IF NOT EXISTS`` —
+        DuckDB skips the write silently (no error, no rows added) when the
+        table already exists; a create-and-populate when it does not.
+      - ``append``               -> ``CREATE TABLE ... AS`` when the table
+        does not exist yet (first write), else ``INSERT INTO ... BY NAME``
+        (column-name-aligned, same alignment discipline the path-based
+        append's ``UNION ALL BY NAME`` uses) into the existing one.
+
+    Raises:
+        EgressError: an unsupported ``mode``, or the underlying DuckDB
+            statement fails (table already exists under ``error``/
+            ``errorifexists``, an unresolvable multi-part catalog/schema
+            name, a column-count/type mismatch on ``append``, ...) — never
+            silently swallowed.
+    """
+    input_name = "__egress_table_input__"
+    con.register(input_name, rel)
+    try:
+        if mode == "overwrite":
+            stmt = f'CREATE OR REPLACE TABLE {table} AS SELECT * FROM "{input_name}"'
+        elif mode in ("error", "errorifexists"):
+            stmt = f'CREATE TABLE {table} AS SELECT * FROM "{input_name}"'
+        elif mode == "ignore":
+            stmt = f'CREATE TABLE IF NOT EXISTS {table} AS SELECT * FROM "{input_name}"'
+        elif mode == "append":
+            if _table_exists(con, table):
+                stmt = f'INSERT INTO {table} BY NAME SELECT * FROM "{input_name}"'
+            else:
+                stmt = f'CREATE TABLE {table} AS SELECT * FROM "{input_name}"'
+        else:
+            raise EgressError(
+                f"[{module.id}] mode={mode!r} is not implemented for table: addressing "
+                f"on the DuckDB engine. Supported: {sorted(SUPPORTED_MODES)}."
+            )
+        try:
+            con.execute(stmt)
+        except EgressError:
+            raise
+        except Exception as exc:
+            raise EgressError(f"[{module.id}] write to table {table!r} failed: {exc}") from exc
+    finally:
+        try:
+            con.unregister(input_name)
+        except Exception:
+            pass
+
+
+def _table_exists(con: duckdb.DuckDBPyConnection, table: str) -> bool:
+    """Best-effort existence check for ``append`` mode's create-vs-insert
+    branch. ``con.table()`` is the same resolver Ingress's ``table:`` read
+    uses — any failure (missing catalog/schema/table) means "does not
+    exist yet", the correct default for a first `append` write."""
+    try:
+        con.table(table)
+        return True
+    except Exception:
+        return False
+
+
+def _register_as_table(
+    con: duckdb.DuckDBPyConnection,
+    module_id: str,
+    table_name: str,
+    fmt: str,
+    path: str,
+) -> None:
+    """Register a catalog VIEW over the just-written external file — the
+    DuckDB analog of Spark's ``register_as_table``
+    (``CREATE EXTERNAL TABLE ... LOCATION``): a live pointer to the file,
+    not a copy, so a later read through the registered name sees the
+    file's CURRENT contents. Non-fatal — the write itself already
+    succeeded; a registration failure only means the read-back-by-name
+    convenience is unavailable, logged same as Spark's version.
+    """
+    try:
+        reader = "read_parquet" if fmt == "parquet" else "read_csv"
+        con.execute(
+            f"CREATE OR REPLACE VIEW {table_name} AS SELECT * FROM {reader}('{_escape(path)}')"
+        )
+        logger.info("Registered catalog view %r over %s", table_name, path)
+    except Exception as exc:
+        logger.warning(
+            "[runtime_egress_register_table_failed] [%s] register_as_table %r failed (non-fatal): %s",
+            module_id,
+            table_name,
+            exc,
+        )
+        _add_module_warning(
+            "runtime_egress_register_table_failed",
+            f"register_as_table {table_name!r} failed (non-fatal): {exc}",
+        )
 
 
 def _write_depot(rel: duckdb.DuckDBPyRelation, module: Module, depot: Any) -> None:
