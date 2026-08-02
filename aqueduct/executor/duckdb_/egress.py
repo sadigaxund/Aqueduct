@@ -15,6 +15,16 @@ store instead of data — a plain ``depot.put(key, value)`` Python call, never
 routed through DuckDB's own SQL/relation layer at all (mirrors
 ``aqueduct/executor/spark/egress.py``'s ``_write_depot`` exactly, including
 ``value_expr``'s single opt-in aggregate action).
+
+``on_new_columns`` (Pass F — previously ruled UNSUPPORTED with no examined
+reasoning behind it; see ``_enforce_on_new_columns``) is a genuinely small
+implementation on this engine: reading an existing target's column set is a
+zero-scan metadata read (``LIMIT 0`` on the same reader Ingress uses), so the
+schema-drift write contract (fail/alert/allow) needs no Delta/Iceberg
+transaction log the way Spark's version's ``mergeSchema`` framing suggests —
+DuckDB's ``COPY ... TO`` always writes a fresh file with whatever columns
+the incoming relation has, so "allow"/"alert" have nothing further to DO
+beyond deciding whether to warn.
 """
 
 from __future__ import annotations
@@ -27,6 +37,8 @@ if TYPE_CHECKING:
     import duckdb
 
 from aqueduct.errors import AqueductError
+from aqueduct.executor.duckdb_.ingress import ON_NEW_COLUMNS_POLICIES
+from aqueduct.executor.models import _add_module_warning
 from aqueduct.models import Module
 
 logger = logging.getLogger(__name__)
@@ -100,6 +112,9 @@ def write_egress(
         logger.info("[%s] write target %r already exists (mode=ignore); skipping write.", module.id, path)
         return
 
+    if cfg.get("on_new_columns") and exists:
+        _enforce_on_new_columns(module, rel, con, fmt, path, str(cfg["on_new_columns"]))
+
     target.parent.mkdir(parents=True, exist_ok=True)
 
     partition_by: list[str] | None = cfg.get("partition_by")
@@ -149,6 +164,67 @@ def write_egress(
             con.unregister(input_name)
         except Exception:
             pass
+
+
+def _enforce_on_new_columns(
+    module: Module,
+    rel: duckdb.DuckDBPyRelation,
+    con: duckdb.DuckDBPyConnection,
+    fmt: str,
+    path: str,
+    policy: str,
+) -> None:
+    """Apply the ``on_new_columns`` write contract (Pass F).
+
+    Compares the incoming relation's columns against the EXISTING target's
+    columns (a zero-scan ``LIMIT 0`` metadata read — same idiom
+    ``duckdb_/ingress.py``'s reader uses for its own read-side
+    ``on_new_columns``/``schema_hint`` checks). ``policy``:
+
+      * ``fail``  — raise if the relation introduces columns the target lacks.
+      * ``allow`` — absorb silently; the next ``COPY`` simply writes a fresh
+        file with whatever columns the relation has (no merge step needed —
+        unlike Spark's Delta ``mergeSchema``, there is no existing-file
+        schema to reconcile against, since ``COPY ... TO`` always replaces).
+      * ``alert`` — log + record a runtime warning naming them, then absorb.
+
+    Caller only invokes this when the target already exists (``exists=True``)
+    — a first write has nothing to drift against, same as Spark's version.
+    """
+    if policy not in ON_NEW_COLUMNS_POLICIES:
+        raise EgressError(
+            f"[{module.id}] on_new_columns={policy!r} is invalid; "
+            f"use one of {sorted(ON_NEW_COLUMNS_POLICIES)}"
+        )
+
+    reader = "read_parquet" if fmt == "parquet" else "read_csv"
+    try:
+        existing_cols = set(con.sql(f"SELECT * FROM {reader}('{_escape(path)}') LIMIT 0").columns)
+    except Exception as exc:
+        logger.debug("[%s] on_new_columns: could not read existing target %r schema: %s", module.id, path, exc)
+        return  # unreadable existing target — nothing to drift against, fail-open like Spark's
+
+    new_cols = [c for c in rel.columns if c not in existing_cols]
+    if not new_cols:
+        return
+
+    if policy == "fail":
+        raise EgressError(
+            f"[{module.id}] on_new_columns=fail: incoming data adds column(s) "
+            f"{new_cols} not present in the target schema. Set on_new_columns: "
+            "allow (or alert) to evolve the schema, or fix the upstream transform."
+        )
+    if policy == "alert":
+        logger.warning(
+            "[runtime_egress_new_columns] [%s] on_new_columns=alert: schema "
+            "drift — new column(s) %s added to the target. Absorbing.",
+            module.id, new_cols,
+        )
+        _add_module_warning(
+            "runtime_egress_new_columns",
+            f"on_new_columns=alert: schema drift — new column(s) {new_cols} added to the target. Absorbing.",
+        )
+    # policy == "allow": silent absorb — the COPY below just writes the wider relation.
 
 
 def _escape(path: str) -> str:

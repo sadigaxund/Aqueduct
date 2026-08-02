@@ -314,6 +314,22 @@ leaves:
     tests:
       - tests/test_executor_duckdb/test_executor.py::test_write_egress_parquet_overwrite
 
+  # ── on_new_columns (Pass F) — a zero-scan LIMIT 0 metadata read against the
+  # existing target's schema before write; see egress.py's
+  # _enforce_on_new_columns for the full write contract. ─────────────────────
+  egress.on_new_columns.alert:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_write_egress_on_new_columns_alert_warns_and_absorbs
+  egress.on_new_columns.allow:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_write_egress_on_new_columns_allow_absorbs_silently
+  egress.on_new_columns.fail:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_write_egress_on_new_columns_fail_raises_when_new_column_added
+
   # ── DEFERRED (Stage B candidates) — provisionally unsupported. DuckDB can
   # implement each of these; they were deliberately left out of Stage A scope
   # rather than rushed. Grouped here so the verdict flip is a one-line edit
@@ -321,15 +337,6 @@ leaves:
   egress.mode.overwrite_partitions:
     support: unsupported
     hint: "Requires COPY ... TO with PARTITION_BY plus pruning the target partition directories before write. Not implemented."
-  egress.on_new_columns.alert:
-    support: unsupported
-    hint: "Requires a schema diff against the existing file's columns (read_parquet/read_csv schema introspection) before write. Not implemented."
-  egress.on_new_columns.allow:
-    support: unsupported
-    hint: "Requires a schema diff against the existing file's columns (read_parquet/read_csv schema introspection) before write. Not implemented."
-  egress.on_new_columns.fail:
-    support: unsupported
-    hint: "Requires a schema diff against the existing file's columns (read_parquet/read_csv schema introspection) before write. Not implemented."
   egress.format.delta:
     support: unsupported
     hint: "Requires a delta-rs bridge (the deltalake Python package writes a Delta log DuckDB has no writer for). Not implemented."
@@ -787,9 +794,7 @@ leaves:
       support: unsupported
       hint: "Schema-evolution flags apply to Delta/Iceberg writers DuckDB does not have. Not implemented."
   egress.field.mode: supported
-  egress.field.on_new_columns:
-      support: unsupported
-      hint: "Requires a schema diff against the existing file's columns before write — see egress.on_new_columns.*. Not implemented."
+  egress.field.on_new_columns: supported
   egress.field.options: supported
   egress.field.overwrite_schema:
       support: unsupported

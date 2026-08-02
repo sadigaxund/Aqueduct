@@ -603,6 +603,75 @@ def test_write_egress_append_to_existing_target_unions_rows(duckdb_con, tmp_path
     assert sorted(r[0] for r in duckdb_con.read_parquet(out_path).fetchall()) == [1, 2]
 
 
+# ── Egress: on_new_columns (Pass F) ─────────────────────────────────────────
+
+def test_write_egress_on_new_columns_fail_raises_when_new_column_added(duckdb_con, tmp_path):
+    out_path = str(tmp_path / "out.parquet")
+    first = duckdb_con.sql("SELECT 1 AS a")
+    write_egress(first, _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}), duckdb_con)
+
+    second = duckdb_con.sql("SELECT 2 AS a, 'x' AS b")
+    module = _module("eg", "Egress", {
+        "format": "parquet", "path": out_path, "mode": "overwrite", "on_new_columns": "fail",
+    })
+    with pytest.raises(EgressError, match="on_new_columns=fail"):
+        write_egress(second, module, duckdb_con)
+    # Prevention semantics: the original file must be untouched after the raise.
+    assert duckdb_con.read_parquet(out_path).fetchall() == [(1,)]
+
+
+def test_write_egress_on_new_columns_allow_absorbs_silently(duckdb_con, tmp_path):
+    out_path = str(tmp_path / "out.parquet")
+    first = duckdb_con.sql("SELECT 1 AS a")
+    write_egress(first, _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}), duckdb_con)
+
+    second = duckdb_con.sql("SELECT 2 AS a, 'x' AS b")
+    module = _module("eg", "Egress", {
+        "format": "parquet", "path": out_path, "mode": "overwrite", "on_new_columns": "allow",
+    })
+    write_egress(second, module, duckdb_con)  # must not raise
+    assert duckdb_con.read_parquet(out_path).fetchall() == [(2, "x")]
+
+
+def test_write_egress_on_new_columns_alert_warns_and_absorbs(duckdb_con, tmp_path, caplog):
+    out_path = str(tmp_path / "out.parquet")
+    first = duckdb_con.sql("SELECT 1 AS a")
+    write_egress(first, _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}), duckdb_con)
+
+    second = duckdb_con.sql("SELECT 2 AS a, 'x' AS b")
+    module = _module("eg", "Egress", {
+        "format": "parquet", "path": out_path, "mode": "overwrite", "on_new_columns": "alert",
+    })
+    with caplog.at_level("WARNING"):
+        write_egress(second, module, duckdb_con)
+    assert any("runtime_egress_new_columns" in r.message for r in caplog.records)
+    assert duckdb_con.read_parquet(out_path).fetchall() == [(2, "x")]
+
+
+def test_write_egress_on_new_columns_no_new_columns_is_noop(duckdb_con, tmp_path):
+    out_path = str(tmp_path / "out.parquet")
+    first = duckdb_con.sql("SELECT 1 AS a")
+    write_egress(first, _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}), duckdb_con)
+
+    second = duckdb_con.sql("SELECT 2 AS a")  # same columns
+    module = _module("eg", "Egress", {
+        "format": "parquet", "path": out_path, "mode": "overwrite", "on_new_columns": "fail",
+    })
+    write_egress(second, module, duckdb_con)  # must not raise — no drift
+    assert duckdb_con.read_parquet(out_path).fetchall() == [(2,)]
+
+
+def test_write_egress_on_new_columns_first_write_is_noop(duckdb_con, tmp_path):
+    """No existing target — nothing to drift against, same as Spark's version."""
+    out_path = str(tmp_path / "out.parquet")
+    rel = duckdb_con.sql("SELECT 1 AS a, 'x' AS b")
+    module = _module("eg", "Egress", {
+        "format": "parquet", "path": out_path, "mode": "overwrite", "on_new_columns": "fail",
+    })
+    write_egress(rel, module, duckdb_con)  # must not raise
+    assert duckdb_con.read_parquet(out_path).fetchall() == [(1, "x")]
+
+
 # ── Egress: format=depot (Pass E item 1) ────────────────────────────────────
 # Mirrors tests/test_executor/test_executor_egress.py's depot coverage exactly
 # — same MockDepot shape, same four cases — proving the DuckDB dispatch branch
