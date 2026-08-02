@@ -46,6 +46,75 @@ edges:
         compiler_compile(bp, blueprint_path=bp_path)
 
 
+def test_schema_match_quarantine_with_no_spillway_edge_raises_compile_error(tmp_path):
+    """schema_match is a whole-relation structural check with no derivable
+    per-row predicate, same class as min_rows/max_rows/sql — on_fail=
+    quarantine must be rejected at compile time exactly like those types.
+    Before this fix, schema_match (and spillway_rate) were absent from BOTH
+    of the compiler's quarantine-classification sets, so this raised
+    nothing at compile time and quarantine silently degraded to a runtime
+    warning instead (aqueduct/executor/spark/assert_.py's
+    runtime_assert_quarantine_aggregate downgrade) — the advertised
+    compile-time guarantee didn't hold for either type."""
+    bp_path = tmp_path / "blueprint.yml"
+    bp_path.write_text("""
+aqueduct: "1.0"
+id: test_bp
+name: Test Blueprint
+modules:
+  - id: ing
+    type: Ingress
+    label: In
+    config: { format: parquet, path: data.parquet }
+  - id: check
+    type: Assert
+    label: Check
+    config:
+      rules:
+        - type: schema_match
+          expected: { a: string }
+          on_fail: quarantine
+edges:
+  - from: ing
+    to: check
+""")
+    bp = parse(str(bp_path))
+    with pytest.raises(CompileError, match=r"on_fail=quarantine.*no derivable row filter"):
+        compiler_compile(bp, blueprint_path=bp_path)
+
+
+def test_spillway_rate_quarantine_with_no_spillway_edge_raises_compile_error(tmp_path):
+    """spillway_rate is a population-level RATE, same reasoning as
+    null_rate's dedicated error branch — quarantining rows behind it
+    doesn't fix the signal it measures. Must be rejected at compile time,
+    not silently pass the gate (same regression as schema_match above)."""
+    bp_path = tmp_path / "blueprint.yml"
+    bp_path.write_text("""
+aqueduct: "1.0"
+id: test_bp
+name: Test Blueprint
+modules:
+  - id: ing
+    type: Ingress
+    label: In
+    config: { format: parquet, path: data.parquet }
+  - id: check
+    type: Assert
+    label: Check
+    config:
+      rules:
+        - type: spillway_rate
+          max: 0.1
+          on_fail: quarantine
+edges:
+  - from: ing
+    to: check
+""")
+    bp = parse(str(bp_path))
+    with pytest.raises(CompileError, match=r"on_fail=quarantine.*no derivable row filter"):
+        compiler_compile(bp, blueprint_path=bp_path)
+
+
 def test_base_dir_round_trips_from_parse_through_compile(tmp_path):
     """Blueprint.base_dir (the blueprint YAML's own directory) must survive
     into Manifest.base_dir — executor-side user-code import sites (custom

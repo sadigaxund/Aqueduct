@@ -298,18 +298,26 @@ def compile(  # noqa: A001
     # raw strings, so a renamed rule type cannot silently stop matching here
     # while the rest of the pipeline still compiles (Pass G1; see
     # AssertRuleType's docstring).
-    _AGG_NO_QUARANTINE = {
-        AssertRuleType.MIN_ROWS,
-        AssertRuleType.MAX_ROWS,
-        AssertRuleType.SQL,
-        AssertRuleType.NULL_RATE,
-    }
     _ROW_QUARANTINE_CAPABLE = {
         AssertRuleType.NOT_NULL,
         AssertRuleType.FRESHNESS,
         AssertRuleType.SQL_ROW,
         AssertRuleType.CUSTOM,
     }
+    # Every other rule type is aggregate/population-level: schema_match is a
+    # whole-relation structural check (no per-row predicate exists), min_rows/
+    # max_rows/sql are table-wide counts/predicates, and null_rate/
+    # spillway_rate are RATES — the rate itself is the signal, so quarantining
+    # the rows behind it doesn't fix anything (same reasoning the NULL_RATE
+    # branch below already states). Derived as the complement of the small,
+    # closed row-quarantine-capable set above rather than hand-listed, so a
+    # new AssertRuleType member defaults to the safe "not quarantine-capable"
+    # bucket and hits a loud CompileError instead of silently clearing this
+    # gate — schema_match and spillway_rate previously did exactly that: both
+    # were added to the enum without a matching entry in either hand-written
+    # set, so on_fail=quarantine on either type passed compile with no
+    # spillway-edge requirement (AGENTS.md: "classify by what you EXCLUDE").
+    _AGG_NO_QUARANTINE = set(AssertRuleType) - _ROW_QUARANTINE_CAPABLE
     _assert_spillway_ids = {e.from_id for e in edges if e.port == "spillway"}
     for m in modules:
         if m.type != ModuleType.Assert:
