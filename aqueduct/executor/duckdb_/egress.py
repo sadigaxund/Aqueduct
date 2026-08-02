@@ -25,6 +25,19 @@ transaction log the way Spark's version's ``mergeSchema`` framing suggests —
 DuckDB's ``COPY ... TO`` always writes a fresh file with whatever columns
 the incoming relation has, so "allow"/"alert" have nothing further to DO
 beyond deciding whether to warn.
+
+``coalesce``/``repartition`` (Pass G1 — previously declared ``supported``
+on both engines with zero readers anywhere, a dead knob the
+``file_format_no_repartition``/``perf_delta_append_no_partition`` compiler
+warnings wrongly promised would control Spark's output file count).
+``coalesce`` is genuinely honoured here — see ``_copy_options`` — because a
+non-partitioned ``COPY ... TO '<path>'`` already writes exactly one file by
+default; setting the option explicitly pins that guarantee rather than
+leaving it to an undocumented default. ``repartition`` stays honestly
+``unsupported``: DuckDB has no shuffle/partition-count concept for a
+``COPY`` target — ``PARTITION_BY`` groups by column VALUE, not by a target
+file count, and ``PER_THREAD_OUTPUT`` cannot even combine with
+``PARTITION_BY`` — so there is no lever this field could move.
 """
 
 from __future__ import annotations
@@ -107,9 +120,13 @@ def write_egress(
     if mode == "error" and exists:
         raise EgressError(f"[{module.id}] write target {path!r} already exists (mode=error)")
     if mode == "errorifexists" and exists:
-        raise EgressError(f"[{module.id}] write target {path!r} already exists (mode=errorifexists)")
+        raise EgressError(
+            f"[{module.id}] write target {path!r} already exists (mode=errorifexists)"
+        )
     if mode == "ignore" and exists:
-        logger.info("[%s] write target %r already exists (mode=ignore); skipping write.", module.id, path)
+        logger.info(
+            "[%s] write target %r already exists (mode=ignore); skipping write.", module.id, path
+        )
         return
 
     if cfg.get("on_new_columns") and exists:
@@ -201,7 +218,12 @@ def _enforce_on_new_columns(
     try:
         existing_cols = set(con.sql(f"SELECT * FROM {reader}('{_escape(path)}') LIMIT 0").columns)
     except Exception as exc:
-        logger.debug("[%s] on_new_columns: could not read existing target %r schema: %s", module.id, path, exc)
+        logger.debug(
+            "[%s] on_new_columns: could not read existing target %r schema: %s",
+            module.id,
+            path,
+            exc,
+        )
         return  # unreadable existing target — nothing to drift against, fail-open like Spark's
 
     new_cols = [c for c in rel.columns if c not in existing_cols]
@@ -218,7 +240,8 @@ def _enforce_on_new_columns(
         logger.warning(
             "[runtime_egress_new_columns] [%s] on_new_columns=alert: schema "
             "drift — new column(s) %s added to the target. Absorbing.",
-            module.id, new_cols,
+            module.id,
+            new_cols,
         )
         _add_module_warning(
             "runtime_egress_new_columns",
@@ -251,6 +274,21 @@ def _copy_options(fmt: str, cfg: dict, partition_by: list[str] | None) -> str:
         cols = ", ".join(partition_by)
         parts.append(f"PARTITION_BY ({cols})")
         parts.append("OVERWRITE_OR_IGNORE true")
+    elif cfg.get("coalesce") and "per_thread_output" not in options_keys_lower:
+        # `coalesce` maps onto "the fewest files this engine's COPY can
+        # produce for this write shape" (see egress.field.coalesce's
+        # capabilities.yml hint): a non-partitioned `COPY ... TO '<path>'`
+        # already writes exactly one file by default (measured against a
+        # real DuckDB connection — PER_THREAD_OUTPUT cannot even combine
+        # with PARTITION_BY, so there is nothing further to do in that
+        # branch above), but this pins it EXPLICITLY rather than relying on
+        # an undocumented default, so a future DuckDB default change cannot
+        # silently reintroduce multi-file output for an author who set
+        # `coalesce` expecting the single-file guarantee. Does not target
+        # an exact N (DuckDB has no such knob outside partition_by) —
+        # any truthy value collapses to the same single-file result, which
+        # never produces MORE files than requested.
+        parts.append("PER_THREAD_OUTPUT false")
     for key, value in options_cfg.items():
         parts.append(f"{str(key).upper()} '{_escape(str(value))}'")
     return ", ".join(parts)
@@ -289,17 +327,13 @@ def _write_depot(rel: duckdb.DuckDBPyRelation, module: Module, depot: Any) -> No
     else:
         raw_value: str | None = cfg.get("value")
         if raw_value is None:
-            raise EgressError(
-                f"[{module.id}] depot Egress requires 'value' or 'value_expr'"
-            )
+            raise EgressError(f"[{module.id}] depot Egress requires 'value' or 'value_expr'")
         value = str(raw_value)
 
     try:
         depot.put(key, value)
     except Exception as exc:
-        raise EgressError(
-            f"[{module.id}] depot.put({key!r}) failed: {exc}"
-        ) from exc
+        raise EgressError(f"[{module.id}] depot.put({key!r}) failed: {exc}") from exc
     logger.info("Depot write: %s = %r", key, value)
 
 

@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.45: Reference Document**
+**Version 2.46: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -470,6 +470,8 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
 | **table** | Catalog table identifier (`catalog.schema.table`): passthrough to an external catalog. When set, writes via `df.write.<mode>.saveAsTable(table)` instead of `.save(path)`. Supported for all write modes including `overwrite`, `append`, `error`, `overwrite_partitions`. Mutually exclusive with `path:`, if both are set the engine raises an error. For `mode: merge`, `table` is the Delta merge target (takes precedence over `path`, existing behaviour). `register_as_table` is meaningless when `table:` is set (the catalog table is already the direct write target). |
 | **path** | Output path or URL. Mutually exclusive with `table:`. For `mode: merge`, `table` may be used instead of `path`. |
 | **partition_by** | Columns to partition the output by. |
+| **repartition** | Optional. Full shuffle before the write: an integer targets exactly N output partitions/files (can raise or lower the file count, rebalances skew); `true` is shorthand for `1`. On Spark, applied via `df.repartition(n)` before the writer runs — the fix the `file_format_no_repartition`/`perf_delta_append_no_partition` compiler warnings' own suggested `repartition: N` now actually performs. On DuckDB, honestly `unsupported` — this engine has no shuffle/partition-count concept for a `COPY` target (see `coalesce` below). |
+| **coalesce** | Optional. Merge to N output partitions/files with no shuffle (cheaper than `repartition`, can leave skewed partitions); `true` is shorthand for `1`. On Spark, applied via `df.coalesce(n)`. On DuckDB, maps onto "the fewest files this engine's `COPY` can produce for the write shape" — a non-partitioned write already writes exactly one file, pinned explicitly via `PER_THREAD_OUTPUT false` rather than left to an undocumented default; does not target an exact N on this engine. |
 | **merge_key** | Required for `mode: merge`. Column name or list of columns for the upsert match. |
 | **class** | For `format: custom`. Fully-qualified `module.Class` pointing at a `pyspark.sql.datasource.DataSource` subclass (Spark 4.0+). |
 | **replace_where** | For `mode: overwrite_partitions` (Delta). A predicate that is atomically replaced (Delta `replaceWhere`). Resolved at compile time, so it may embed `@aq.date.*` / `${ctx.*}` for `--execution-date` backfills. |

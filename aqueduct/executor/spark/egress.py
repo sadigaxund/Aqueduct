@@ -43,7 +43,43 @@ class EgressError(AqueductError):
     """Raised when an Egress module fails to write."""
 
 
-def write_egress(df: DataFrame, module: Module, depot: Any = None, base_dir: str | None = None) -> None:
+def _apply_output_partitioning(df: DataFrame, module: Module) -> DataFrame:
+    """Apply Egress-level ``repartition``/``coalesce`` before the write action.
+
+    These are the levers the ``file_format_no_repartition`` /
+    ``perf_delta_append_no_partition`` compiler warnings advise setting
+    ("Add `coalesce: 1` or `repartition: N`") — this is what makes that
+    advice actually true; previously neither field was read anywhere in this
+    module (a documented, capability-declared-``supported`` dead knob).
+
+    ``repartition: N`` — full shuffle to exactly N partitions (``df.repartition(n)``;
+    rebalances skew, can raise or lower the output file count).
+    ``coalesce: N`` — merge to N partitions, no shuffle (``df.coalesce(n)``;
+    cheaper, can leave skewed partitions). Both accept ``true`` as shorthand
+    for a single output file/partition — the overwhelmingly common case the
+    warnings' own suggested fix (``coalesce: 1``) targets — via
+    ``.repartition(1)``/``.coalesce(1)`` respectively; the schema types both
+    fields ``int | bool``, never a column name (that is the Channel
+    ``op: repartition``/``op: coalesce`` contract, a different leaf).
+    ``false``/unset/``0`` is a no-op. Applying both (unusual) repartitions
+    first, then coalesces the shuffled result.
+    """
+    repartition = module.config.get("repartition")
+    if repartition:
+        n = 1 if isinstance(repartition, bool) else int(repartition)
+        df = df.repartition(n)
+
+    coalesce = module.config.get("coalesce")
+    if coalesce:
+        n = 1 if isinstance(coalesce, bool) else int(coalesce)
+        df = df.coalesce(n)
+
+    return df
+
+
+def write_egress(
+    df: DataFrame, module: Module, depot: Any = None, base_dir: str | None = None
+) -> None:
     """Write df to the target described by module.config.
 
     Args:
@@ -61,6 +97,8 @@ def write_egress(df: DataFrame, module: Module, depot: Any = None, base_dir: str
     fmt: str | None = cfg.get("format")
     if not fmt:
         raise EgressError(f"[{module.id}] 'format' is required in Egress config")
+
+    df = _apply_output_partitioning(df, module)
 
     # ── Depot pseudo-format ────────────────────────────────────────────────────
     if fmt == "depot":
@@ -106,7 +144,9 @@ def write_egress(df: DataFrame, module: Module, depot: Any = None, base_dir: str
         return
 
     if mode == "overwrite_partitions":
-        _write_overwrite_partitions(df, module, fmt, path or "", table, force_merge_schema=force_merge_schema)
+        _write_overwrite_partitions(
+            df, module, fmt, path or "", table, force_merge_schema=force_merge_schema
+        )
         return
 
     writer = df.write.format(fmt).mode(mode)
@@ -134,19 +174,18 @@ def write_egress(df: DataFrame, module: Module, depot: Any = None, base_dir: str
         raise
     except Exception as exc:
         loc = f"as {table!r}" if table else f"to {path!r}"
-        raise EgressError(
-            f"[{module.id}] write failed {loc}: {exc}"
-        ) from exc
+        raise EgressError(f"[{module.id}] write failed {loc}: {exc}") from exc
 
     register_as: str | None = cfg.get("register_as_table")
     if register_as:
         if table:
-                logger.warning(
-                    "[runtime_egress_register_as_table_ignored] [%s] "
-                    "register_as_table=%r ignored — module already writes to a "
-                    "catalog table via 'table:'. Use 'table:' to write directly.",
-                    module.id, register_as,
-                )
+            logger.warning(
+                "[runtime_egress_register_as_table_ignored] [%s] "
+                "register_as_table=%r ignored — module already writes to a "
+                "catalog table via 'table:'. Use 'table:' to write directly.",
+                module.id,
+                register_as,
+            )
         else:
             _register_external_table(df, module.id, register_as, fmt, path)
 
@@ -163,20 +202,23 @@ def _register_external_table(
         spark = df.sparkSession
         # Derive schema DDL from DataFrame — no Spark action, schema is always available
         schema_ddl = ", ".join(
-            f"`{field.name}` {field.dataType.simpleString()}"
-            for field in df.schema.fields
+            f"`{field.name}` {field.dataType.simpleString()}" for field in df.schema.fields
         )
-        spark.sql(f"""
+        spark.sql(
+            f"""
             CREATE EXTERNAL TABLE IF NOT EXISTS {table_name} ({schema_ddl})
             USING {fmt}
             LOCATION '{path}'
-        """)
+        """
+        )
         logger.info("Registered external table %r at %s", table_name, path)
     except Exception as exc:
         logger.warning(
             "[runtime_egress_register_table_failed] [%s] register_as_table %r "
             "failed (non-fatal): %s",
-            module_id, table_name, exc,
+            module_id,
+            table_name,
+            exc,
         )
 
 
@@ -192,9 +234,7 @@ def _write_merge(df: DataFrame, module: Module) -> None:
     cfg = module.config
     fmt = cfg.get("format")
     if fmt != "delta":
-        raise EgressError(
-            f"[{module.id}] mode=merge only supported with format=delta, got {fmt!r}"
-        )
+        raise EgressError(f"[{module.id}] mode=merge only supported with format=delta, got {fmt!r}")
 
     table: str | None = cfg.get("table")
     path: str | None = cfg.get("path")
@@ -225,9 +265,7 @@ def _write_merge(df: DataFrame, module: Module) -> None:
         pass  # view may not exist on first merge
     df.createTempView(view_name)
 
-    on_clause = " AND ".join(
-        f"_aq_target.{_bq(k)} = _aq_src.{_bq(k)}" for k in keys
-    )
+    on_clause = " AND ".join(f"_aq_target.{_bq(k)} = _aq_src.{_bq(k)}" for k in keys)
     merge_sql = (
         f"MERGE INTO {target} AS _aq_target "
         f"USING {view_name} AS _aq_src "
@@ -239,9 +277,7 @@ def _write_merge(df: DataFrame, module: Module) -> None:
     try:
         spark.sql(merge_sql)
     except Exception as exc:
-        raise EgressError(
-            f"[{module.id}] mode=merge failed against {target!r}: {exc}"
-        ) from exc
+        raise EgressError(f"[{module.id}] mode=merge failed against {target!r}: {exc}") from exc
     finally:
         try:
             spark.catalog.dropTempView(view_name)
@@ -252,7 +288,12 @@ def _write_merge(df: DataFrame, module: Module) -> None:
 
 
 def _write_overwrite_partitions(
-    df: DataFrame, module: Module, fmt: str, path: str, table: str | None = None, force_merge_schema: bool = False
+    df: DataFrame,
+    module: Module,
+    fmt: str,
+    path: str,
+    table: str | None = None,
+    force_merge_schema: bool = False,
 ) -> None:
     """Idempotent partition overwrite — replace only the touched partitions.
 
@@ -326,13 +367,12 @@ def _write_overwrite_partitions(
             writer.save(path)
     except Exception as exc:
         loc = f"as {table!r}" if table else f"to {path!r}"
-        raise EgressError(
-            f"[{module.id}] overwrite_partitions write failed {loc}: {exc}"
-        ) from exc
+        raise EgressError(f"[{module.id}] overwrite_partitions write failed {loc}: {exc}") from exc
 
     logger.info(
         "[%s] overwrite_partitions completed to %s (%s)",
-        module.id, table or path,
+        module.id,
+        table or path,
         f"replaceWhere={replace_where!r}" if replace_where else "dynamic partition overwrite",
     )
 
@@ -396,7 +436,8 @@ def _enforce_on_new_columns(
         logger.warning(
             "[runtime_egress_new_columns] [%s] on_new_columns=alert: schema "
             "drift — new column(s) %s added to the target. Absorbing (mergeSchema).",
-            module.id, new_cols,
+            module.id,
+            new_cols,
         )
     return True  # allow + alert both evolve the schema
 
@@ -431,7 +472,9 @@ def build_maintenance_ops(
             ops.append(("optimize", "OPTIMIZE", f"OPTIMIZE delta.`{path}`{zorder_clause}"))
         vacuum_hours = maintenance_cfg.get("vacuum")
         if vacuum_hours is not None:
-            ops.append(("vacuum", "VACUUM", f"VACUUM delta.`{path}` RETAIN {int(vacuum_hours)} HOURS"))
+            ops.append(
+                ("vacuum", "VACUUM", f"VACUUM delta.`{path}` RETAIN {int(vacuum_hours)} HOURS")
+            )
 
     elif fmt == "iceberg":
         # Iceberg procedures are catalog-scoped: CALL <catalog>.system.<proc>.
@@ -443,22 +486,31 @@ def build_maintenance_ops(
             )
         catalog, _, ident = table.partition(".")
         if maintenance_cfg.get("rewrite_data_files"):
-            ops.append((
-                "optimize", "rewrite_data_files",
-                f"CALL {catalog}.system.rewrite_data_files(table => '{ident}')",
-            ))
+            ops.append(
+                (
+                    "optimize",
+                    "rewrite_data_files",
+                    f"CALL {catalog}.system.rewrite_data_files(table => '{ident}')",
+                )
+            )
         if maintenance_cfg.get("expire_snapshots"):
-            ops.append((
-                "vacuum", "expire_snapshots",
-                f"CALL {catalog}.system.expire_snapshots(table => '{ident}')",
-            ))
+            ops.append(
+                (
+                    "vacuum",
+                    "expire_snapshots",
+                    f"CALL {catalog}.system.expire_snapshots(table => '{ident}')",
+                )
+            )
 
     elif fmt == "hudi":
         if maintenance_cfg.get("compaction"):
-            ops.append((
-                "optimize", "run_compaction",
-                f"CALL run_compaction(op => 'run', path => '{path}')",
-            ))
+            ops.append(
+                (
+                    "optimize",
+                    "run_compaction",
+                    f"CALL run_compaction(op => 'run', path => '{path}')",
+                )
+            )
         if maintenance_cfg.get("clean"):
             ops.append(("vacuum", "run_clean", f"CALL run_clean(path => '{path}')"))
 
@@ -486,7 +538,11 @@ def run_maintenance(
     try:
         ops = build_maintenance_ops(fmt, path, table, maintenance_cfg)
     except EgressError as exc:
-        logger.warning("[runtime_egress_maintenance_skipped] [%s] maintenance skipped (non-fatal): %s", module_id, exc)
+        logger.warning(
+            "[runtime_egress_maintenance_skipped] [%s] maintenance skipped (non-fatal): %s",
+            module_id,
+            exc,
+        )
         return result
 
     for slot, label, sql in ops:
@@ -496,7 +552,12 @@ def run_maintenance(
             result[f"{slot}_ms"] = int((time.monotonic() - t0) * 1000)
             logger.info("[%s] %s completed in %dms", module_id, label, result[f"{slot}_ms"])
         except Exception as exc:
-            logger.warning("[runtime_egress_maintenance_failed] [%s] %s failed (non-fatal): %s", module_id, label, exc)
+            logger.warning(
+                "[runtime_egress_maintenance_failed] [%s] %s failed (non-fatal): %s",
+                module_id,
+                label,
+                exc,
+            )
 
     return result
 
@@ -516,9 +577,7 @@ def _write_custom(df: DataFrame, module: Module, base_dir: str | None = None) ->
     try:
         name = register_custom_source(df.sparkSession, str(class_path), base_dir)
     except Exception as exc:
-        raise EgressError(
-            f"[{module.id}] custom DataSource {class_path!r}: {exc}"
-        ) from exc
+        raise EgressError(f"[{module.id}] custom DataSource {class_path!r}: {exc}") from exc
 
     writer = df.write.format(name).mode(cfg.get("mode", "error"))
     for key, value in cfg.get("options", {}).items():
@@ -528,9 +587,7 @@ def _write_custom(df: DataFrame, module: Module, base_dir: str | None = None) ->
     try:
         writer.save(path) if path else writer.save()
     except Exception as exc:
-        raise EgressError(
-            f"[{module.id}] custom DataSource write failed: {exc}"
-        ) from exc
+        raise EgressError(f"[{module.id}] custom DataSource write failed: {exc}") from exc
     logger.info("[%s] custom DataSource write completed via %s", module.id, name)
 
 
@@ -562,15 +619,11 @@ def _write_depot(df: DataFrame, module: Module, depot: Any) -> None:
     else:
         raw_value: str | None = cfg.get("value")
         if raw_value is None:
-            raise EgressError(
-                f"[{module.id}] depot Egress requires 'value' or 'value_expr'"
-            )
+            raise EgressError(f"[{module.id}] depot Egress requires 'value' or 'value_expr'")
         value = str(raw_value)
 
     try:
         depot.put(key, value)
     except Exception as exc:
-        raise EgressError(
-            f"[{module.id}] depot.put({key!r}) failed: {exc}"
-        ) from exc
+        raise EgressError(f"[{module.id}] depot.put({key!r}) failed: {exc}") from exc
     logger.info("Depot write: %s = %r", key, value)

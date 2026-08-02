@@ -804,7 +804,9 @@ leaves:
   egress.field.register_as_table:
       support: unsupported
       hint: "Requires registering an external table in a catalog that persists across sessions the way Spark's does; no such registration path exists on this engine. Not implemented."
-  egress.field.repartition: supported
+  egress.field.repartition:
+      support: unsupported
+      hint: "DuckDB's COPY has no shuffle/partition-count concept for a write target: PARTITION_BY groups rows by column VALUE, not by a target file count, and PER_THREAD_OUTPUT (the only file-count lever this engine has) cannot even combine with PARTITION_BY. This field has no effect. Use partition_by for a grouped file layout, or coalesce (this engine already writes the minimum file count for a given write shape)."
   egress.field.replace_where:
       support: unsupported
       hint: "mode: overwrite_partitions is unimplemented on DuckDB — see egress.mode.overwrite_partitions."

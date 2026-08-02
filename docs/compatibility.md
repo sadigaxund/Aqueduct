@@ -34,7 +34,7 @@ Each engine declares a verdict for every capability leaf in a YAML data file shi
 
 | Engine | Leaves declared | Supported | Version-gated | Ignored with warning | Unsupported |
 |---|---|---|---|---|---|
-| `duckdb` | 319 | 258 | 0 | 4 | 57 |
+| `duckdb` | 319 | 257 | 0 | 4 | 58 |
 | `spark` | 311 | 310 | 7 | 0 | 1 |
 
 ### Conditional and refused capabilities
@@ -68,6 +68,7 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 | `duckdb` | `egress.field.merge_schema` | unsupported | — | Schema-evolution flags apply to Delta/Iceberg writers DuckDB does not have. Not implemented. |
 | `duckdb` | `egress.field.overwrite_schema` | unsupported | — | Schema-evolution flags apply to Delta/Iceberg writers DuckDB does not have. Not implemented. |
 | `duckdb` | `egress.field.register_as_table` | unsupported | — | Requires registering an external table in a catalog that persists across sessions the way Spark's does; no such registration path exists on this engine. Not implemented. |
+| `duckdb` | `egress.field.repartition` | unsupported | — | DuckDB's COPY has no shuffle/partition-count concept for a write target: PARTITION_BY groups rows by column VALUE, not by a target file count, and PER_THREAD_OUTPUT (the only file-count lever this engine has) cannot even combine with PARTITION_BY. This field has no effect. Use partition_by for a grouped file layout, or coalesce (this engine already writes the minimum file count for a given write shape). |
 | `duckdb` | `egress.field.replace_where` | unsupported | — | mode: overwrite_partitions is unimplemented on DuckDB — see egress.mode.overwrite_partitions. |
 | `duckdb` | `egress.field.table` | unsupported | — | Bare table: addressing is unimplemented on DuckDB — see feature.table_addressing. |
 | `duckdb` | `egress.format.custom` | unsupported | — | format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB. |

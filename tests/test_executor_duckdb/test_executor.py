@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from aqueduct.executor.duckdb_.channel import ChannelError, execute_channel
-from aqueduct.executor.duckdb_.egress import EgressError, write_egress
+from aqueduct.executor.duckdb_.egress import EgressError, _copy_options, write_egress
 from aqueduct.executor.duckdb_.error_extraction import extract_duckdb_error
 from aqueduct.executor.duckdb_.executor import ExecuteError, execute
 from aqueduct.executor.duckdb_.funnel import FunnelError, execute_funnel
@@ -41,6 +41,7 @@ def _write_parquet(con, tmp_path, name, rows_sql):
 
 # ── Registration ─────────────────────────────────────────────────────────
 
+
 def test_duckdb_registered_via_entry_point():
     proto = get_protocol("duckdb")
     assert proto.engine == "duckdb"
@@ -51,8 +52,11 @@ def test_duckdb_registered_via_entry_point():
 
 # ── Ingress ──────────────────────────────────────────────────────────────
 
+
 def test_read_ingress_parquet(duckdb_con, tmp_path):
-    path = _write_parquet(duckdb_con, tmp_path, "src", "SELECT 1 AS a, 'x' AS b UNION ALL SELECT 2, 'y'")
+    path = _write_parquet(
+        duckdb_con, tmp_path, "src", "SELECT 1 AS a, 'x' AS b UNION ALL SELECT 2, 'y'"
+    )
     module = _module("ing", "Ingress", {"format": "parquet", "path": path})
     rel = read_ingress(module, duckdb_con)
     assert sorted(rel.columns) == ["a", "b"]
@@ -76,7 +80,8 @@ def test_read_ingress_unsupported_format_raises(duckdb_con):
 def test_read_ingress_schema_hint_mismatch(duckdb_con, tmp_path):
     path = _write_parquet(duckdb_con, tmp_path, "src", "SELECT 1 AS a")
     module = _module(
-        "ing", "Ingress",
+        "ing",
+        "Ingress",
         {"format": "parquet", "path": path, "schema_hint": {"a": "varchar"}},
     )
     with pytest.raises(IngressError, match="type mismatch"):
@@ -94,7 +99,8 @@ def test_read_ingress_schema_hint_mismatch(duckdb_con, tmp_path):
 def test_read_ingress_schema_hint_hub_array_matches(duckdb_con, tmp_path):
     path = _write_parquet(duckdb_con, tmp_path, "src", "SELECT [1,2,3] AS a")
     module = _module(
-        "ing", "Ingress",
+        "ing",
+        "Ingress",
         {"format": "parquet", "path": path, "schema_hint": {"a": "array<int>"}},
     )
     rel = read_ingress(module, duckdb_con)
@@ -104,7 +110,8 @@ def test_read_ingress_schema_hint_hub_array_matches(duckdb_con, tmp_path):
 def test_read_ingress_schema_hint_hub_decimal_matches(duckdb_con, tmp_path):
     path = _write_parquet(duckdb_con, tmp_path, "src", "SELECT CAST(1.5 AS DECIMAL(10,2)) AS a")
     module = _module(
-        "ing", "Ingress",
+        "ing",
+        "Ingress",
         {"format": "parquet", "path": path, "schema_hint": {"a": "decimal(10,2)"}},
     )
     rel = read_ingress(module, duckdb_con)  # no IngressError
@@ -116,14 +123,18 @@ def test_read_ingress_schema_hint_hub_decimal_matches(duckdb_con, tmp_path):
 
 
 def test_read_ingress_schema_hint_hub_timestamp_ntz_matches(duckdb_con, tmp_path):
-    path = _write_parquet(duckdb_con, tmp_path, "src", "SELECT CAST('2020-01-01' AS TIMESTAMP) AS a")
+    path = _write_parquet(
+        duckdb_con, tmp_path, "src", "SELECT CAST('2020-01-01' AS TIMESTAMP) AS a"
+    )
     module = _module(
-        "ing", "Ingress",
+        "ing",
+        "Ingress",
         {"format": "parquet", "path": path, "schema_hint": {"a": "timestamp_ntz"}},
     )
     rel = read_ingress(module, duckdb_con)  # no IngressError
     assert str(rel.types[rel.columns.index("a")]) == "TIMESTAMP"
     import datetime
+
     assert rel.fetchall() == [(datetime.datetime(2020, 1, 1),)]
 
 
@@ -132,7 +143,8 @@ def test_read_ingress_schema_hint_hub_array_mismatch_still_raises(duckdb_con, tm
     hub-aware normalization must not make the check permissive."""
     path = _write_parquet(duckdb_con, tmp_path, "src", "SELECT [1,2,3] AS a")
     module = _module(
-        "ing", "Ingress",
+        "ing",
+        "Ingress",
         {"format": "parquet", "path": path, "schema_hint": {"a": "array<string>"}},
     )
     with pytest.raises(IngressError, match="type mismatch"):
@@ -140,6 +152,7 @@ def test_read_ingress_schema_hint_hub_array_mismatch_still_raises(duckdb_con, tm
 
 
 # ── Channel ──────────────────────────────────────────────────────────────
+
 
 def test_channel_filter(duckdb_con):
     rel = duckdb_con.sql("SELECT * FROM (VALUES (1),(2),(3)) t(a)")
@@ -188,10 +201,14 @@ def test_channel_join(duckdb_con):
     customers = duckdb_con.sql("SELECT 1 AS id, 'a' AS name")
     orders = duckdb_con.sql("SELECT 1 AS id, 100 AS amount")
     module = _module(
-        "ch", "Channel",
+        "ch",
+        "Channel",
         {
-            "op": "join", "left": "customers", "right": "orders",
-            "join_type": "inner", "condition": "customers.id = orders.id",
+            "op": "join",
+            "left": "customers",
+            "right": "orders",
+            "join_type": "inner",
+            "condition": "customers.id = orders.id",
         },
     )
     out = execute_channel(module, {"customers": customers, "orders": orders}, duckdb_con)
@@ -271,7 +288,9 @@ _DUCKDB_TYPE_STR_OVERRIDES = {
 }
 
 
-@pytest.mark.parametrize("leaf,source_sql,target_type", _HUB_TYPE_CAST_CASES, ids=[c[0] for c in _HUB_TYPE_CAST_CASES])
+@pytest.mark.parametrize(
+    "leaf,source_sql,target_type", _HUB_TYPE_CAST_CASES, ids=[c[0] for c in _HUB_TYPE_CAST_CASES]
+)
 def test_channel_cast_hub_type_constructors(duckdb_con, leaf, source_sql, target_type):
     rel = duckdb_con.sql(source_sql)
     module = _module("ch", "Channel", {"op": "cast", "columns": {"a": target_type}})
@@ -346,7 +365,9 @@ _HUB_VOCABULARY_EXPECTED_TYPE_STR = {
 
 
 @pytest.mark.parametrize(
-    "leaf,source_sql,target_type", _HUB_VOCABULARY_CAST_CASES, ids=[c[0] for c in _HUB_VOCABULARY_CAST_CASES]
+    "leaf,source_sql,target_type",
+    _HUB_VOCABULARY_CAST_CASES,
+    ids=[c[0] for c in _HUB_VOCABULARY_CAST_CASES],
 )
 def test_channel_cast_hub_vocabulary_spellings(duckdb_con, leaf, source_sql, target_type):
     rel = duckdb_con.sql(source_sql)
@@ -380,9 +401,13 @@ _DELETED_ALIAS_DICT_CASES = [
 
 
 @pytest.mark.parametrize(
-    "target_type,source_sql,expected_type_str", _DELETED_ALIAS_DICT_CASES, ids=[c[0] for c in _DELETED_ALIAS_DICT_CASES]
+    "target_type,source_sql,expected_type_str",
+    _DELETED_ALIAS_DICT_CASES,
+    ids=[c[0] for c in _DELETED_ALIAS_DICT_CASES],
 )
-def test_channel_cast_deleted_alias_dict_spellings_still_work(duckdb_con, target_type, source_sql, expected_type_str):
+def test_channel_cast_deleted_alias_dict_spellings_still_work(
+    duckdb_con, target_type, source_sql, expected_type_str
+):
     rel = duckdb_con.sql(source_sql)
     module = _module("ch", "Channel", {"op": "cast", "columns": {"a": target_type}})
     out = execute_channel(module, {"up": rel}, duckdb_con)
@@ -437,13 +462,19 @@ def test_channel_union(duckdb_con):
 
 # ── Junction ─────────────────────────────────────────────────────────────
 
+
 def test_junction_conditional(duckdb_con):
     rel = duckdb_con.sql("SELECT * FROM (VALUES (1),(2),(3)) t(a)")
     module = _module(
-        "j", "Junction",
-        {"mode": "conditional", "branches": [
-            {"id": "hi", "condition": "a > 1"}, {"id": "lo", "condition": "_else_"},
-        ]},
+        "j",
+        "Junction",
+        {
+            "mode": "conditional",
+            "branches": [
+                {"id": "hi", "condition": "a > 1"},
+                {"id": "lo", "condition": "_else_"},
+            ],
+        },
     )
     branches = execute_junction(module, rel)
     assert sorted(r[0] for r in branches["hi"].fetchall()) == [2, 3]
@@ -460,8 +491,13 @@ def test_junction_broadcast(duckdb_con):
 def test_junction_partition(duckdb_con):
     rel = duckdb_con.sql("SELECT * FROM (VALUES ('EU'),('US'),('EU')) t(region)")
     module = _module(
-        "j", "Junction",
-        {"mode": "partition", "partition_key": "region", "branches": [{"id": "eu", "value": "EU"}, {"id": "us", "value": "US"}]},
+        "j",
+        "Junction",
+        {
+            "mode": "partition",
+            "partition_key": "region",
+            "branches": [{"id": "eu", "value": "EU"}, {"id": "us", "value": "US"}],
+        },
     )
     branches = execute_junction(module, rel)
     assert len(branches["eu"].fetchall()) == 2
@@ -476,6 +512,7 @@ def test_junction_unknown_mode_raises(duckdb_con):
 
 
 # ── Funnel ───────────────────────────────────────────────────────────────
+
 
 def test_funnel_union_all(duckdb_con):
     a = duckdb_con.sql("SELECT 1 AS x")
@@ -532,6 +569,7 @@ def test_funnel_zip_duplicate_column_names_rejected(duckdb_con):
 
 # ── Egress ───────────────────────────────────────────────────────────────
 
+
 def test_write_egress_parquet_overwrite(duckdb_con, tmp_path):
     rel = duckdb_con.sql("SELECT 1 AS a")
     out_path = str(tmp_path / "out.parquet")
@@ -548,7 +586,8 @@ def test_write_egress_csv_explicit_header_option_not_duplicated(duckdb_con, tmp_
     rel = duckdb_con.sql("SELECT 1 AS a")
     out_path = str(tmp_path / "out.csv")
     module = _module(
-        "eg", "Egress",
+        "eg",
+        "Egress",
         {"format": "csv", "path": out_path, "mode": "overwrite", "options": {"header": "true"}},
     )
     write_egress(rel, module, duckdb_con)  # must not raise a duplicate-option Parser Error
@@ -568,7 +607,9 @@ def test_write_egress_errorifexists_mode_existing_target_raises(duckdb_con, tmp_
     rel = duckdb_con.sql("SELECT 1 AS a")
     out_path = tmp_path / "out.parquet"
     out_path.write_bytes(b"not-really-parquet")
-    module = _module("eg", "Egress", {"format": "parquet", "path": str(out_path), "mode": "errorifexists"})
+    module = _module(
+        "eg", "Egress", {"format": "parquet", "path": str(out_path), "mode": "errorifexists"}
+    )
     with pytest.raises(EgressError, match="already exists"):
         write_egress(rel, module, duckdb_con)
 
@@ -590,6 +631,75 @@ def test_write_egress_append_to_new_target_writes_once(duckdb_con, tmp_path):
     assert duckdb_con.read_parquet(out_path).fetchall() == [(1,)]
 
 
+def test_copy_options_coalesce_adds_per_thread_output_false(duckdb_con):
+    """Regression (Pass G1): `coalesce` was a documented, capability-declared
+    `supported` Egress field with zero readers anywhere on this engine
+    either. `coalesce` truthy (no partition_by) must now explicitly pin
+    single-file output via PER_THREAD_OUTPUT false rather than relying on
+    DuckDB's undocumented default."""
+    opts = _copy_options("parquet", {"coalesce": True}, partition_by=None)
+    assert "PER_THREAD_OUTPUT false" in opts
+
+
+def test_copy_options_coalesce_falsy_omits_per_thread_output(duckdb_con):
+    opts = _copy_options("parquet", {"coalesce": False}, partition_by=None)
+    assert "PER_THREAD_OUTPUT" not in opts
+    opts_unset = _copy_options("parquet", {}, partition_by=None)
+    assert "PER_THREAD_OUTPUT" not in opts_unset
+
+
+def test_copy_options_coalesce_not_duplicated_with_explicit_option(duckdb_con):
+    """Same dedup convention as `header:` — user-supplied `options:` wins,
+    checked case-insensitively, so COPY never receives PER_THREAD_OUTPUT
+    twice."""
+    opts = _copy_options(
+        "parquet",
+        {"coalesce": True, "options": {"per_thread_output": "true"}},
+        partition_by=None,
+    )
+    assert opts.count("PER_THREAD_OUTPUT") == 1
+    assert "PER_THREAD_OUTPUT 'true'" in opts
+
+
+def test_copy_options_coalesce_inert_when_partition_by_set(duckdb_con):
+    """PER_THREAD_OUTPUT cannot combine with PARTITION_BY on this engine
+    (raises NotImplementedException) — coalesce must not add it in that
+    branch; DuckDB already writes one file per partition value by default."""
+    opts = _copy_options("parquet", {"coalesce": True}, partition_by=["grp"])
+    assert "PER_THREAD_OUTPUT" not in opts
+    assert "PARTITION_BY (grp)" in opts
+
+
+def test_write_egress_coalesce_true_writes_single_file_correctly(duckdb_con, tmp_path):
+    """End-to-end: coalesce: true still writes correct data as a single
+    file (real behavior, not just an option-string unit check)."""
+    rel = duckdb_con.sql("SELECT * FROM range(20) t(a)")
+    out_path = str(tmp_path / "coalesced.parquet")
+    module = _module(
+        "eg",
+        "Egress",
+        {"format": "parquet", "path": out_path, "mode": "overwrite", "coalesce": True},
+    )
+    write_egress(rel, module, duckdb_con)
+    assert duckdb_con.read_parquet(out_path).aggregate("COUNT(*) AS c").fetchone()[0] == 20
+    assert Path(out_path).is_file()
+
+
+def test_write_egress_repartition_has_no_effect_on_duckdb(duckdb_con, tmp_path):
+    """`repartition` stays honestly unsupported on this engine (no
+    shuffle/partition-count lever exists) — setting it must not raise and
+    must not change the written data."""
+    rel = duckdb_con.sql("SELECT * FROM range(10) t(a)")
+    out_path = str(tmp_path / "repart.parquet")
+    module = _module(
+        "eg",
+        "Egress",
+        {"format": "parquet", "path": out_path, "mode": "overwrite", "repartition": 4},
+    )
+    write_egress(rel, module, duckdb_con)
+    assert duckdb_con.read_parquet(out_path).aggregate("COUNT(*) AS c").fetchone()[0] == 10
+
+
 def test_write_egress_append_to_existing_target_unions_rows(duckdb_con, tmp_path):
     out_path = str(tmp_path / "out.parquet")
     first = duckdb_con.sql("SELECT 1 AS a")
@@ -597,7 +707,9 @@ def test_write_egress_append_to_existing_target_unions_rows(duckdb_con, tmp_path
     write_egress(first, module, duckdb_con)
 
     second = duckdb_con.sql("SELECT 2 AS a")
-    append_module = _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "append"})
+    append_module = _module(
+        "eg", "Egress", {"format": "parquet", "path": out_path, "mode": "append"}
+    )
     write_egress(second, append_module, duckdb_con)
 
     assert sorted(r[0] for r in duckdb_con.read_parquet(out_path).fetchall()) == [1, 2]
@@ -605,15 +717,27 @@ def test_write_egress_append_to_existing_target_unions_rows(duckdb_con, tmp_path
 
 # ── Egress: on_new_columns (Pass F) ─────────────────────────────────────────
 
+
 def test_write_egress_on_new_columns_fail_raises_when_new_column_added(duckdb_con, tmp_path):
     out_path = str(tmp_path / "out.parquet")
     first = duckdb_con.sql("SELECT 1 AS a")
-    write_egress(first, _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}), duckdb_con)
+    write_egress(
+        first,
+        _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}),
+        duckdb_con,
+    )
 
     second = duckdb_con.sql("SELECT 2 AS a, 'x' AS b")
-    module = _module("eg", "Egress", {
-        "format": "parquet", "path": out_path, "mode": "overwrite", "on_new_columns": "fail",
-    })
+    module = _module(
+        "eg",
+        "Egress",
+        {
+            "format": "parquet",
+            "path": out_path,
+            "mode": "overwrite",
+            "on_new_columns": "fail",
+        },
+    )
     with pytest.raises(EgressError, match="on_new_columns=fail"):
         write_egress(second, module, duckdb_con)
     # Prevention semantics: the original file must be untouched after the raise.
@@ -623,12 +747,23 @@ def test_write_egress_on_new_columns_fail_raises_when_new_column_added(duckdb_co
 def test_write_egress_on_new_columns_allow_absorbs_silently(duckdb_con, tmp_path):
     out_path = str(tmp_path / "out.parquet")
     first = duckdb_con.sql("SELECT 1 AS a")
-    write_egress(first, _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}), duckdb_con)
+    write_egress(
+        first,
+        _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}),
+        duckdb_con,
+    )
 
     second = duckdb_con.sql("SELECT 2 AS a, 'x' AS b")
-    module = _module("eg", "Egress", {
-        "format": "parquet", "path": out_path, "mode": "overwrite", "on_new_columns": "allow",
-    })
+    module = _module(
+        "eg",
+        "Egress",
+        {
+            "format": "parquet",
+            "path": out_path,
+            "mode": "overwrite",
+            "on_new_columns": "allow",
+        },
+    )
     write_egress(second, module, duckdb_con)  # must not raise
     assert duckdb_con.read_parquet(out_path).fetchall() == [(2, "x")]
 
@@ -636,12 +771,23 @@ def test_write_egress_on_new_columns_allow_absorbs_silently(duckdb_con, tmp_path
 def test_write_egress_on_new_columns_alert_warns_and_absorbs(duckdb_con, tmp_path, caplog):
     out_path = str(tmp_path / "out.parquet")
     first = duckdb_con.sql("SELECT 1 AS a")
-    write_egress(first, _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}), duckdb_con)
+    write_egress(
+        first,
+        _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}),
+        duckdb_con,
+    )
 
     second = duckdb_con.sql("SELECT 2 AS a, 'x' AS b")
-    module = _module("eg", "Egress", {
-        "format": "parquet", "path": out_path, "mode": "overwrite", "on_new_columns": "alert",
-    })
+    module = _module(
+        "eg",
+        "Egress",
+        {
+            "format": "parquet",
+            "path": out_path,
+            "mode": "overwrite",
+            "on_new_columns": "alert",
+        },
+    )
     with caplog.at_level("WARNING"):
         write_egress(second, module, duckdb_con)
     assert any("runtime_egress_new_columns" in r.message for r in caplog.records)
@@ -651,12 +797,23 @@ def test_write_egress_on_new_columns_alert_warns_and_absorbs(duckdb_con, tmp_pat
 def test_write_egress_on_new_columns_no_new_columns_is_noop(duckdb_con, tmp_path):
     out_path = str(tmp_path / "out.parquet")
     first = duckdb_con.sql("SELECT 1 AS a")
-    write_egress(first, _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}), duckdb_con)
+    write_egress(
+        first,
+        _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}),
+        duckdb_con,
+    )
 
     second = duckdb_con.sql("SELECT 2 AS a")  # same columns
-    module = _module("eg", "Egress", {
-        "format": "parquet", "path": out_path, "mode": "overwrite", "on_new_columns": "fail",
-    })
+    module = _module(
+        "eg",
+        "Egress",
+        {
+            "format": "parquet",
+            "path": out_path,
+            "mode": "overwrite",
+            "on_new_columns": "fail",
+        },
+    )
     write_egress(second, module, duckdb_con)  # must not raise — no drift
     assert duckdb_con.read_parquet(out_path).fetchall() == [(2,)]
 
@@ -665,9 +822,16 @@ def test_write_egress_on_new_columns_first_write_is_noop(duckdb_con, tmp_path):
     """No existing target — nothing to drift against, same as Spark's version."""
     out_path = str(tmp_path / "out.parquet")
     rel = duckdb_con.sql("SELECT 1 AS a, 'x' AS b")
-    module = _module("eg", "Egress", {
-        "format": "parquet", "path": out_path, "mode": "overwrite", "on_new_columns": "fail",
-    })
+    module = _module(
+        "eg",
+        "Egress",
+        {
+            "format": "parquet",
+            "path": out_path,
+            "mode": "overwrite",
+            "on_new_columns": "fail",
+        },
+    )
     write_egress(rel, module, duckdb_con)  # must not raise
     assert duckdb_con.read_parquet(out_path).fetchall() == [(1, "x")]
 
@@ -678,9 +842,11 @@ def test_write_egress_on_new_columns_first_write_is_noop(duckdb_con, tmp_path):
 # behaves identically to Spark's: a plain depot.put(key, value) Python call,
 # never routed through DuckDB's own relation/SQL layer.
 
+
 class MockDepot:
     def __init__(self):
         self.puts = {}
+
     def put(self, key, value):
         self.puts[key] = value
 
@@ -717,6 +883,7 @@ def test_write_egress_format_depot_value_expr(duckdb_con):
 
 # ── Error extraction ─────────────────────────────────────────────────────
 
+
 def test_extract_duckdb_error_binder_exception(duckdb_con):
     duckdb_con.execute("CREATE TABLE t(a INT)")
     try:
@@ -735,8 +902,11 @@ def test_extract_duckdb_error_none_input_returns_none():
 
 # ── Full pipeline (Ingress -> Channel -> Egress) ────────────────────────
 
+
 def test_full_pipeline_ingress_channel_egress(duckdb_con, tmp_path):
-    src_path = _write_parquet(duckdb_con, tmp_path, "src", "SELECT * FROM (VALUES (1,'a'),(2,'b'),(3,'c')) t(id, name)")
+    src_path = _write_parquet(
+        duckdb_con, tmp_path, "src", "SELECT * FROM (VALUES (1,'a'),(2,'b'),(3,'c')) t(id, name)"
+    )
     out_path = str(tmp_path / "out.parquet")
 
     modules = (
@@ -749,13 +919,19 @@ def test_full_pipeline_ingress_channel_egress(duckdb_con, tmp_path):
         Edge(from_id="ch", to_id="eg", port="main"),
     )
     manifest = Manifest(
-        blueprint_id="test_bp", context={}, modules=modules, edges=edges, spark_config={},
+        blueprint_id="test_bp",
+        context={},
+        modules=modules,
+        edges=edges,
+        spark_config={},
     )
 
     result = execute(manifest, duckdb_con, run_id="r1")
     assert result.status == ExecutionStatus.SUCCESS
     assert {r.module_id: r.status for r in result.module_results} == {
-        "ing": "success", "ch": "success", "eg": "success",
+        "ing": "success",
+        "ch": "success",
+        "eg": "success",
     }
     assert sorted(r[0] for r in duckdb_con.read_parquet(out_path).fetchall()) == [2, 3]
 
@@ -780,15 +956,26 @@ def test_unsupported_module_type_raises_execute_error(duckdb_con):
 # WHOLE module type, not just its handler function, actually runs through
 # the executor's dispatch loop.)
 
+
 def test_module_type_junction_driven_through_execute(duckdb_con, tmp_path):
-    src_path = _write_parquet(duckdb_con, tmp_path, "src", "SELECT * FROM (VALUES (1),(2),(3)) t(a)")
+    src_path = _write_parquet(
+        duckdb_con, tmp_path, "src", "SELECT * FROM (VALUES (1),(2),(3)) t(a)"
+    )
     out_hi = str(tmp_path / "hi.parquet")
     out_lo = str(tmp_path / "lo.parquet")
     modules = (
         _module("ing", "Ingress", {"format": "parquet", "path": src_path}),
-        _module("j", "Junction", {"mode": "conditional", "branches": [
-            {"id": "hi", "condition": "a > 1"}, {"id": "lo", "condition": "_else_"},
-        ]}),
+        _module(
+            "j",
+            "Junction",
+            {
+                "mode": "conditional",
+                "branches": [
+                    {"id": "hi", "condition": "a > 1"},
+                    {"id": "lo", "condition": "_else_"},
+                ],
+            },
+        ),
         _module("eg_hi", "Egress", {"format": "parquet", "path": out_hi, "mode": "overwrite"}),
         _module("eg_lo", "Egress", {"format": "parquet", "path": out_lo, "mode": "overwrite"}),
     )
@@ -797,7 +984,9 @@ def test_module_type_junction_driven_through_execute(duckdb_con, tmp_path):
         Edge(from_id="j", to_id="eg_hi", port="hi"),
         Edge(from_id="j", to_id="eg_lo", port="lo"),
     )
-    manifest = Manifest(blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={})
+    manifest = Manifest(
+        blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={}
+    )
     result = execute(manifest, duckdb_con, run_id="r_junction")
     assert result.status == ExecutionStatus.SUCCESS
     assert sorted(r[0] for r in duckdb_con.read_parquet(out_hi).fetchall()) == [2, 3]
@@ -819,7 +1008,9 @@ def test_module_type_funnel_driven_through_execute(duckdb_con, tmp_path):
         Edge(from_id="ing_b", to_id="f", port="main"),
         Edge(from_id="f", to_id="eg", port="main"),
     )
-    manifest = Manifest(blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={})
+    manifest = Manifest(
+        blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={}
+    )
     result = execute(manifest, duckdb_con, run_id="r_funnel")
     assert result.status == ExecutionStatus.SUCCESS
     assert sorted(r[0] for r in duckdb_con.read_parquet(out_path).fetchall()) == [1, 2]
@@ -838,7 +1029,9 @@ def test_module_type_regulator_driven_through_execute_gate_open(duckdb_con, tmp_
         Edge(from_id="ing", to_id="reg", port="main"),
         Edge(from_id="reg", to_id="eg", port="main"),
     )
-    manifest = Manifest(blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={})
+    manifest = Manifest(
+        blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={}
+    )
     result = execute(manifest, duckdb_con, run_id="r_reg_open")
     assert result.status == ExecutionStatus.SUCCESS
     assert {r.module_id: r.status for r in result.module_results}["reg"] == "success"
@@ -861,7 +1054,9 @@ def test_module_type_regulator_driven_through_execute_gate_closed_skips(duckdb_c
         Edge(from_id="ing", to_id="reg", port="main"),
         Edge(from_id="reg", to_id="eg", port="main"),
     )
-    manifest = Manifest(blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={})
+    manifest = Manifest(
+        blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={}
+    )
     surveyor = MagicMock()
     surveyor.evaluate_regulator.return_value = False
     result = execute(manifest, duckdb_con, run_id="r_reg_closed", surveyor=surveyor)
@@ -874,22 +1069,31 @@ def test_module_type_regulator_driven_through_execute_gate_closed_skips(duckdb_c
 
 # ── feature.spillway / feature.checkpoint driven through execute() ────────
 
+
 def test_feature_spillway_driven_through_execute(duckdb_con, tmp_path):
-    src_path = _write_parquet(duckdb_con, tmp_path, "src", "SELECT * FROM (VALUES (1),(-1),(2)) t(a)")
+    src_path = _write_parquet(
+        duckdb_con, tmp_path, "src", "SELECT * FROM (VALUES (1),(-1),(2)) t(a)"
+    )
     main_out = str(tmp_path / "main.parquet")
     spill_out = str(tmp_path / "spill.parquet")
     modules = (
         _module("ing", "Ingress", {"format": "parquet", "path": src_path}),
-        _module("ch", "Channel", {"op": "filter", "condition": "1=1", "spillway_condition": "a < 0"}),
+        _module(
+            "ch", "Channel", {"op": "filter", "condition": "1=1", "spillway_condition": "a < 0"}
+        ),
         _module("eg_main", "Egress", {"format": "parquet", "path": main_out, "mode": "overwrite"}),
-        _module("eg_spill", "Egress", {"format": "parquet", "path": spill_out, "mode": "overwrite"}),
+        _module(
+            "eg_spill", "Egress", {"format": "parquet", "path": spill_out, "mode": "overwrite"}
+        ),
     )
     edges = (
         Edge(from_id="ing", to_id="ch", port="main"),
         Edge(from_id="ch", to_id="eg_main", port="main"),
         Edge(from_id="ch", to_id="eg_spill", port="spillway"),
     )
-    manifest = Manifest(blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={})
+    manifest = Manifest(
+        blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={}
+    )
     result = execute(manifest, duckdb_con, run_id="r_spillway")
     assert result.status == ExecutionStatus.SUCCESS
     assert sorted(r[0] for r in duckdb_con.read_parquet(main_out).fetchall()) == [1, 2]
@@ -905,7 +1109,14 @@ def test_feature_checkpoint_driven_through_execute(duckdb_con, tmp_path):
         _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}),
     )
     edges = (Edge(from_id="ing", to_id="eg", port="main"),)
-    manifest = Manifest(blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={}, checkpoint=True)
+    manifest = Manifest(
+        blueprint_id="bp",
+        context={},
+        modules=modules,
+        edges=edges,
+        spark_config={},
+        checkpoint=True,
+    )
 
     result = execute(manifest, duckdb_con, run_id="r_ckpt", checkpoint_root=checkpoint_root)
     assert result.status == ExecutionStatus.SUCCESS
@@ -916,7 +1127,11 @@ def test_feature_checkpoint_driven_through_execute(duckdb_con, tmp_path):
 
     # Resume: Ingress reloads from the checkpoint file instead of re-reading src.
     resumed = execute(
-        manifest, duckdb_con, run_id="r_ckpt_2", checkpoint_root=checkpoint_root, resume_run_id="r_ckpt",
+        manifest,
+        duckdb_con,
+        run_id="r_ckpt_2",
+        checkpoint_root=checkpoint_root,
+        resume_run_id="r_ckpt",
     )
     assert resumed.status == ExecutionStatus.SUCCESS
     assert {r.module_id: r.status for r in resumed.module_results}["ing"] == "success"
@@ -925,6 +1140,7 @@ def test_feature_checkpoint_driven_through_execute(duckdb_con, tmp_path):
 
 # ── Engine-invariant proof: retry_policy / module retry driven through the
 # duckdb executor's own _with_retry, via a real execute() run ─────────────
+
 
 def test_module_retry_driven_through_execute(duckdb_con, tmp_path, monkeypatch):
     """A Channel module fails twice then succeeds; module.retry (max_attempts=3,
@@ -947,15 +1163,21 @@ def test_module_retry_driven_through_execute(duckdb_con, tmp_path, monkeypatch):
     monkeypatch.setattr(executor_mod, "execute_channel", flaky_execute_channel)
 
     retry_policy = RetryPolicy(
-        max_attempts=3, backoff_strategy="fixed", backoff_base_seconds=0,
-        backoff_max_seconds=0, jitter=False, on_exhaustion="abort",
+        max_attempts=3,
+        backoff_strategy="fixed",
+        backoff_base_seconds=0,
+        backoff_max_seconds=0,
+        jitter=False,
+        on_exhaustion="abort",
     )
     modules = (
         _module("ing", "Ingress", {"format": "csv", "path": "unused"}),
         _module("ch", "Channel", {"op": "filter", "condition": "1=1"}, retry=retry_policy),
     )
     edges = (Edge(from_id="ing", to_id="ch", port="main"),)
-    manifest = Manifest(blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={})
+    manifest = Manifest(
+        blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={}
+    )
 
     # Swap Ingress for a direct relation registration to avoid a real file read.
     monkeypatch.setattr(
@@ -965,7 +1187,10 @@ def test_module_retry_driven_through_execute(duckdb_con, tmp_path, monkeypatch):
     result = execute(manifest, duckdb_con, run_id="r_retry")
     assert result.status == ExecutionStatus.SUCCESS
     assert calls["n"] == 3
-    assert {r.module_id: r.status for r in result.module_results} == {"ing": "success", "ch": "success"}
+    assert {r.module_id: r.status for r in result.module_results} == {
+        "ing": "success",
+        "ch": "success",
+    }
 
 
 def test_module_retry_exhausted_fails_run(duckdb_con, monkeypatch):
@@ -988,15 +1213,21 @@ def test_module_retry_exhausted_fails_run(duckdb_con, monkeypatch):
     )
 
     retry_policy = RetryPolicy(
-        max_attempts=2, backoff_strategy="fixed", backoff_base_seconds=0,
-        backoff_max_seconds=0, jitter=False, on_exhaustion="abort",
+        max_attempts=2,
+        backoff_strategy="fixed",
+        backoff_base_seconds=0,
+        backoff_max_seconds=0,
+        jitter=False,
+        on_exhaustion="abort",
     )
     modules = (
         _module("ing", "Ingress", {"format": "csv", "path": "unused"}),
         _module("ch", "Channel", {"op": "filter", "condition": "1=1"}, retry=retry_policy),
     )
     edges = (Edge(from_id="ing", to_id="ch", port="main"),)
-    manifest = Manifest(blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={})
+    manifest = Manifest(
+        blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={}
+    )
 
     result = execute(manifest, duckdb_con, run_id="r_retry_exhausted")
     assert result.status == ExecutionStatus.ERROR
@@ -1005,6 +1236,7 @@ def test_module_retry_exhausted_fails_run(duckdb_con, monkeypatch):
 
 # ── module.type.Arcade — Arcades expand at compile time, so the executor
 # never dispatches one; the proof lives at the compile+run boundary. ──────
+
 
 def test_arcade_compiles_and_runs_on_duckdb(tmp_path):
     from aqueduct.compiler.compiler import compile as aq_compile
@@ -1040,16 +1272,23 @@ def test_arcade_compiles_and_runs_on_duckdb(tmp_path):
     assert "arc__ch" in module_ids
 
     import duckdb as duckdb_mod
+
     con = duckdb_mod.connect(":memory:")
     try:
         result = execute(manifest, con, run_id="r_arcade")
     finally:
         con.close()
     assert result.status == ExecutionStatus.SUCCESS
-    assert sorted(r[0] for r in duckdb_mod.connect(":memory:").sql(f"SELECT * FROM read_parquet('{out_path}')").fetchall()) == [2, 3]
+    assert sorted(
+        r[0]
+        for r in duckdb_mod.connect(":memory:")
+        .sql(f"SELECT * FROM read_parquet('{out_path}')")
+        .fetchall()
+    ) == [2, 3]
 
 
 # ── timezone: universal key (Phase 81/82) ────────────────────────────────────
+
 
 def test_duckdb_make_session_applies_universal_timezone():
     """``SessionSpec.timezone`` (aqueduct.yml's top-level ``timezone:``) is
@@ -1061,7 +1300,9 @@ def test_duckdb_make_session_applies_universal_timezone():
     protocol = get_protocol("duckdb")
     conn = protocol.make_session(SessionSpec(blueprint_id="tz-test", timezone="America/New_York"))
     try:
-        assert conn.execute("SELECT current_setting('TimeZone')").fetchone() == ("America/New_York",)
+        assert conn.execute("SELECT current_setting('TimeZone')").fetchone() == (
+            "America/New_York",
+        )
     finally:
         protocol.close_session(conn)
 

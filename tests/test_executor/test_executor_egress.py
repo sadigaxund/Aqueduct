@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import pytest
+
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
 from pyspark.sql import SparkSession
+
 from aqueduct.executor.spark.egress import EgressError, write_egress
 from aqueduct.parser.models import Module
 
@@ -25,11 +27,12 @@ def test_egress_missing_path(spark: SparkSession):
 
 def test_egress_unsupported_mode(spark: SparkSession):
     df = spark.range(1)
-    module = Module(id="m1", type="Egress", label="M1", config={
-        "format": "parquet", 
-        "path": "/foo",
-        "mode": "hacked"
-    })
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={"format": "parquet", "path": "/foo", "mode": "hacked"},
+    )
     with pytest.raises(EgressError, match="unsupported write mode 'hacked'"):
         write_egress(df, module)
 
@@ -37,32 +40,106 @@ def test_egress_unsupported_mode(spark: SparkSession):
 def test_egress_partition_by(spark: SparkSession, tmp_path):
     path = str(tmp_path / "partitioned")
     df = spark.range(10).selectExpr("id", "id % 2 as part")
-    
-    module = Module(id="m1", type="Egress", label="M1", config={
-        "format": "parquet",
-        "path": path,
-        "partition_by": ["part"]
-    })
+
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={"format": "parquet", "path": path, "partition_by": ["part"]},
+    )
     write_egress(df, module)
-    
+
     # Verify partitions exist
     parts = [p.name for p in (tmp_path / "partitioned").iterdir() if p.is_dir()]
     assert "part=0" in parts
     assert "part=1" in parts
 
 
+def _part_file_count(path) -> int:
+    return len([p for p in path.iterdir() if p.name.startswith("part-") and p.suffix == ".parquet"])
+
+
+def test_egress_coalesce_int_reduces_file_count(spark: SparkSession, tmp_path):
+    """Regression (Pass G1): `coalesce` was a documented, capability-declared
+    `supported` Egress field with zero readers anywhere — setting it changed
+    nothing. `coalesce: N` must now actually merge to N output files."""
+    path = tmp_path / "coalesced"
+    df = spark.range(20).repartition(8)
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={"format": "parquet", "path": str(path), "coalesce": 2},
+    )
+    write_egress(df, module)
+    assert _part_file_count(path) == 2
+    assert spark.read.parquet(str(path)).count() == 20
+
+
+def test_egress_coalesce_true_writes_single_file(spark: SparkSession, tmp_path):
+    """`coalesce: true` is shorthand for a single output file — the shape
+    the file_format_no_repartition/perf_delta_append_no_partition compiler
+    warnings' own suggested fix (`coalesce: 1`) targets."""
+    path = tmp_path / "coalesced_single"
+    df = spark.range(20).repartition(8)
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={"format": "parquet", "path": str(path), "coalesce": True},
+    )
+    write_egress(df, module)
+    assert _part_file_count(path) == 1
+
+
+def test_egress_repartition_int_sets_file_count(spark: SparkSession, tmp_path):
+    """`repartition: N` is a full shuffle to exactly N partitions — can
+    RAISE the output file count too, unlike coalesce."""
+    path = tmp_path / "repartitioned"
+    df = spark.range(20).repartition(1)
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={"format": "parquet", "path": str(path), "repartition": 4},
+    )
+    write_egress(df, module)
+    assert _part_file_count(path) == 4
+    assert spark.read.parquet(str(path)).count() == 20
+
+
+def test_egress_repartition_and_coalesce_unset_is_a_noop(spark: SparkSession, tmp_path):
+    """Neither field set: output file count is unaffected (existing
+    behavior, unchanged by this fix)."""
+    path = tmp_path / "unset"
+    df = spark.range(20).repartition(5)
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={"format": "parquet", "path": str(path)},
+    )
+    write_egress(df, module)
+    assert _part_file_count(path) == 5
+
+
 def test_egress_custom_options(spark: SparkSession, tmp_path):
     path = str(tmp_path / "options.csv")
     df = spark.range(5).selectExpr("id", "id * 10 as val")
-    
-    module = Module(id="m1", type="Egress", label="M1", config={
-        "format": "csv",
-        "path": path,
-        "header": True,  # This will be in the config but write_egress uses 'options' for it
-        "options": {"sep": "\t", "header": "true"}
-    })
+
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={
+            "format": "csv",
+            "path": path,
+            "header": True,  # This will be in the config but write_egress uses 'options' for it
+            "options": {"sep": "\t", "header": "true"},
+        },
+    )
     write_egress(df, module)
-    
+
     # Read back to verify
     check = spark.read.option("sep", "\t").option("header", "true").csv(path)
     assert check.count() == 5
@@ -72,16 +149,17 @@ def test_egress_custom_options(spark: SparkSession, tmp_path):
 def test_egress_mode_overwrite(spark: SparkSession, tmp_path):
     path = str(tmp_path / "overwrite.parquet")
     spark.range(5).write.parquet(path)
-    
+
     # Write again with overwrite
     df = spark.range(10)
-    module = Module(id="m1", type="Egress", label="M1", config={
-        "format": "parquet",
-        "path": path,
-        "mode": "overwrite"
-    })
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={"format": "parquet", "path": path, "mode": "overwrite"},
+    )
     write_egress(df, module)
-    
+
     assert spark.read.parquet(path).count() == 10
 
 
@@ -91,11 +169,16 @@ def test_egress_mode_error_raises_on_existing_target(spark: SparkSession, tmp_pa
     spark.range(3).write.parquet(path)
 
     df = spark.range(5)
-    module = Module(id="m1", type="Egress", label="M1", config={
-        "format": "parquet",
-        "path": path,
-        "mode": "error",
-    })
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={
+            "format": "parquet",
+            "path": path,
+            "mode": "error",
+        },
+    )
     with pytest.raises(EgressError, match="write failed"):
         write_egress(df, module)
     # Original data untouched
@@ -106,11 +189,16 @@ def test_egress_mode_error_writes_fresh_target(spark: SparkSession, tmp_path):
     """mode=error on a target that does not yet exist writes normally."""
     path = str(tmp_path / "err_fresh.parquet")
     df = spark.range(4)
-    module = Module(id="m1", type="Egress", label="M1", config={
-        "format": "parquet",
-        "path": path,
-        "mode": "error",
-    })
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={
+            "format": "parquet",
+            "path": path,
+            "mode": "error",
+        },
+    )
     write_egress(df, module)
     assert spark.read.parquet(path).count() == 4
 
@@ -121,11 +209,16 @@ def test_egress_mode_errorifexists_raises_on_existing_target(spark: SparkSession
     spark.range(2).write.parquet(path)
 
     df = spark.range(1)
-    module = Module(id="m1", type="Egress", label="M1", config={
-        "format": "parquet",
-        "path": path,
-        "mode": "errorifexists",
-    })
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={
+            "format": "parquet",
+            "path": path,
+            "mode": "errorifexists",
+        },
+    )
     with pytest.raises(EgressError, match="write failed"):
         write_egress(df, module)
     assert spark.read.parquet(path).count() == 2
@@ -137,11 +230,16 @@ def test_egress_mode_ignore_is_silent_noop_on_existing_target(spark: SparkSessio
     spark.range(3).write.parquet(path)
 
     df = spark.range(99)  # would overwrite/append if any other mode were used
-    module = Module(id="m1", type="Egress", label="M1", config={
-        "format": "parquet",
-        "path": path,
-        "mode": "ignore",
-    })
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={
+            "format": "parquet",
+            "path": path,
+            "mode": "ignore",
+        },
+    )
     write_egress(df, module)  # must not raise
     # Original 3 rows survive untouched — proves the write was skipped
     assert spark.read.parquet(path).count() == 3
@@ -151,16 +249,23 @@ def test_egress_mode_ignore_writes_fresh_target(spark: SparkSession, tmp_path):
     """mode=ignore on a target that does not yet exist writes normally."""
     path = str(tmp_path / "ign_fresh.parquet")
     df = spark.range(6)
-    module = Module(id="m1", type="Egress", label="M1", config={
-        "format": "parquet",
-        "path": path,
-        "mode": "ignore",
-    })
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={
+            "format": "parquet",
+            "path": path,
+            "mode": "ignore",
+        },
+    )
     write_egress(df, module)
     assert spark.read.parquet(path).count() == 6
 
 
-def test_egress_format_custom_dispatches_to_registered_datasource(spark: SparkSession, tmp_path, monkeypatch):
+def test_egress_format_custom_dispatches_to_registered_datasource(
+    spark: SparkSession, tmp_path, monkeypatch
+):
     """format: custom + class: imports and registers a real Spark 4.0+ Python
     DataSource (exercised for real, not mocked), then reaches the registered
     class's own name() and the configured write mode via DataFrameWriter.
@@ -191,6 +296,7 @@ def test_egress_format_custom_dispatches_to_registered_datasource(spark: SparkSe
     )
 
     import aqueduct.executor.spark.custom_source as custom_source_mod
+
     real_register = custom_source_mod.register_custom_source
     calls: list[tuple[str, str]] = []
 
@@ -202,6 +308,7 @@ def test_egress_format_custom_dispatches_to_registered_datasource(spark: SparkSe
     monkeypatch.setattr(custom_source_mod, "register_custom_source", spy_register)
 
     from pyspark.sql.readwriter import DataFrameWriter
+
     captured: dict = {}
 
     def fake_save(self, path=None):
@@ -211,11 +318,16 @@ def test_egress_format_custom_dispatches_to_registered_datasource(spark: SparkSe
     monkeypatch.setattr(DataFrameWriter, "save", fake_save)
 
     df = spark.range(3)
-    module = Module(id="m1", type="Egress", label="M1", config={
-        "format": "custom",
-        "class": "custom_egress_ds.CustomEgressDS",
-        "mode": "overwrite",
-    })
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={
+            "format": "custom",
+            "class": "custom_egress_ds.CustomEgressDS",
+            "mode": "overwrite",
+        },
+    )
     write_egress(df, module, base_dir=str(tmp_path))
 
     assert calls == [("custom_egress_ds.CustomEgressDS", "aq_test_custom_egress")]
@@ -225,8 +337,10 @@ def test_egress_format_custom_dispatches_to_registered_datasource(spark: SparkSe
 class MockDepot:
     def __init__(self):
         self.puts = {}
+
     def put(self, key, value):
         self.puts[key] = value
+
 
 def test_egress_missing_format(spark: SparkSession):
     df = spark.range(1)
@@ -234,11 +348,15 @@ def test_egress_missing_format(spark: SparkSession):
     with pytest.raises(EgressError, match="'format' is required"):
         write_egress(df, module)
 
+
 def test_egress_format_depot_no_depot(spark: SparkSession):
     df = spark.range(1)
-    module = Module(id="m1", type="Egress", label="M1", config={"format": "depot", "key": "k1", "value": "v1"})
+    module = Module(
+        id="m1", type="Egress", label="M1", config={"format": "depot", "key": "k1", "value": "v1"}
+    )
     with pytest.raises(EgressError, match="no DepotStore is wired"):
         write_egress(df, module, depot=None)
+
 
 def test_egress_format_depot_missing_key(spark: SparkSession):
     df = spark.range(1)
@@ -246,22 +364,32 @@ def test_egress_format_depot_missing_key(spark: SparkSession):
     with pytest.raises(EgressError, match="requires 'key'"):
         write_egress(df, module, depot=MockDepot())
 
+
 def test_egress_format_depot_value(spark: SparkSession):
     df = spark.range(1)
     depot = MockDepot()
-    module = Module(id="m1", type="Egress", label="M1", config={"format": "depot", "key": "k1", "value": "v1"})
+    module = Module(
+        id="m1", type="Egress", label="M1", config={"format": "depot", "key": "k1", "value": "v1"}
+    )
     write_egress(df, module, depot=depot)
     assert depot.puts["k1"] == "v1"
+
 
 def test_egress_format_depot_value_expr(spark: SparkSession):
     df = spark.range(5)
     depot = MockDepot()
-    module = Module(id="m1", type="Egress", label="M1", config={"format": "depot", "key": "k1", "value_expr": "max(id)"})
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={"format": "depot", "key": "k1", "value_expr": "max(id)"},
+    )
     write_egress(df, module, depot=depot)
     assert depot.puts["k1"] == "4"
 
 
 # ── register_as_table tests (⏳ → ✅) ─────────────────────────────────────────
+
 
 def test_egress_register_as_table_success(spark: SparkSession, tmp_path, caplog):
     """register_as_table set → CREATE EXTERNAL TABLE executed with correct name/format/location."""
@@ -354,6 +482,7 @@ def test_write_merge_sql_backticks_and_keys(spark: SparkSession, monkeypatch):
     up the `_aq_merge_src` temp view this test registers.
     """
     from pyspark.sql import functions as F
+
     # Create a DataFrame with a reserved-word column 'order'
     df = spark.range(1).withColumn("order", F.lit(1))
     # Module config using a table name and merge keys including the reserved word
@@ -365,12 +494,15 @@ def test_write_merge_sql_backticks_and_keys(spark: SparkSession, monkeypatch):
     )
     # Capture the SQL passed to spark.sql
     captured = {}
+
     def fake_sql(sql):
         captured["sql"] = sql
+
     monkeypatch.setattr(spark, "sql", fake_sql)
 
     # Execute the merge write
     from aqueduct.executor.spark.egress import _write_merge
+
     _write_merge(df, module)
 
     sql = captured.get("sql", "")
@@ -383,6 +515,7 @@ def test_write_merge_sql_backticks_and_keys(spark: SparkSession, monkeypatch):
 
 # ── Phase 61 — overwrite_partitions ─────────────────────────────────────────
 
+
 def test_overwrite_partitions_dynamic(spark: SparkSession, tmp_path):
     path = str(tmp_path / "dyn")
     # initial: two partitions
@@ -392,14 +525,21 @@ def test_overwrite_partitions_dynamic(spark: SparkSession, tmp_path):
     # dynamic overwrite touching only part=a
     df1 = spark.createDataFrame([(9, "a")], ["id", "part"])
     module = Module(
-        id="m1", type="Egress", label="M1",
-        config={"format": "parquet", "path": path, "mode": "overwrite_partitions", "partition_by": ["part"]},
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={
+            "format": "parquet",
+            "path": path,
+            "mode": "overwrite_partitions",
+            "partition_by": ["part"],
+        },
     )
     write_egress(df1, module)
 
     out = {(r.id, r.part) for r in spark.read.parquet(path).collect()}
-    assert (9, "a") in out      # part=a replaced
-    assert (2, "b") in out      # part=b preserved
+    assert (9, "a") in out  # part=a replaced
+    assert (2, "b") in out  # part=b preserved
     assert (1, "a") not in out  # old part=a gone
 
 
@@ -407,7 +547,9 @@ def test_overwrite_partitions_requires_partition_or_predicate(spark: SparkSessio
     path = str(tmp_path / "bad")
     df = spark.createDataFrame([(1, "a")], ["id", "part"])
     module = Module(
-        id="m1", type="Egress", label="M1",
+        id="m1",
+        type="Egress",
+        label="M1",
         config={"format": "parquet", "path": path, "mode": "overwrite_partitions"},
     )
     with pytest.raises(EgressError, match="requires either 'replace_where'"):
@@ -419,7 +561,9 @@ def test_egress_merge_schema_option_writes(spark: SparkSession, tmp_path):
     path = str(tmp_path / "ms")
     df = spark.createDataFrame([(1, "a")], ["id", "v"])
     module = Module(
-        id="m1", type="Egress", label="M1",
+        id="m1",
+        type="Egress",
+        label="M1",
         config={"format": "parquet", "path": path, "mode": "overwrite", "merge_schema": True},
     )
     write_egress(df, module)
@@ -428,16 +572,23 @@ def test_egress_merge_schema_option_writes(spark: SparkSession, tmp_path):
 
 # ── Phase 61 — on_new_columns (Egress write contract) ───────────────────────
 
+
 def _seed_target(spark, path):
-    spark.createDataFrame([(1, "a")], ["id", "v"]).write.format("parquet").mode("overwrite").save(path)
+    spark.createDataFrame([(1, "a")], ["id", "v"]).write.format("parquet").mode("overwrite").save(
+        path
+    )
 
 
 def test_on_new_columns_fail_raises(spark: SparkSession, tmp_path):
     path = str(tmp_path / "t")
     _seed_target(spark, path)
     df = spark.createDataFrame([(2, "b", "x")], ["id", "v", "extra"])
-    module = Module(id="m1", type="Egress", label="M1",
-                    config={"format": "parquet", "path": path, "mode": "append", "on_new_columns": "fail"})
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={"format": "parquet", "path": path, "mode": "append", "on_new_columns": "fail"},
+    )
     with pytest.raises(EgressError, match="on_new_columns=fail"):
         write_egress(df, module)
 
@@ -446,8 +597,12 @@ def test_on_new_columns_allow_writes(spark: SparkSession, tmp_path):
     path = str(tmp_path / "t")
     _seed_target(spark, path)
     df = spark.createDataFrame([(2, "b", "x")], ["id", "v", "extra"])
-    module = Module(id="m1", type="Egress", label="M1",
-                    config={"format": "parquet", "path": path, "mode": "append", "on_new_columns": "allow"})
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={"format": "parquet", "path": path, "mode": "append", "on_new_columns": "allow"},
+    )
     write_egress(df, module)
     assert spark.read.parquet(path).count() == 2
 
@@ -460,13 +615,20 @@ def test_on_new_columns_alert_logs_and_writes(spark: SparkSession, tmp_path, cap
     path = str(tmp_path / "t")
     _seed_target(spark, path)
     df = spark.createDataFrame([(2, "b", "x")], ["id", "v", "extra"])
-    module = Module(id="m1", type="Egress", label="M1",
-                    config={"format": "parquet", "path": path, "mode": "append", "on_new_columns": "alert"})
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={"format": "parquet", "path": path, "mode": "append", "on_new_columns": "alert"},
+    )
 
     with caplog.at_level(logging.WARNING, logger="aqueduct.executor.spark.egress"):
         write_egress(df, module)  # must NOT raise — alert absorbs, it doesn't block
 
-    assert any("on_new_columns=alert" in rec.getMessage() and "extra" in rec.getMessage() for rec in caplog.records)
+    assert any(
+        "on_new_columns=alert" in rec.getMessage() and "extra" in rec.getMessage()
+        for rec in caplog.records
+    )
     # New column absorbed via mergeSchema — write proceeded
     written = spark.read.option("mergeSchema", "true").parquet(path)
     assert written.count() == 2
@@ -476,8 +638,12 @@ def test_on_new_columns_alert_logs_and_writes(spark: SparkSession, tmp_path, cap
 def test_on_new_columns_fail_noop_on_first_write(spark: SparkSession, tmp_path):
     path = str(tmp_path / "fresh")
     df = spark.createDataFrame([(2, "b", "x")], ["id", "v", "extra"])
-    module = Module(id="m1", type="Egress", label="M1",
-                    config={"format": "parquet", "path": path, "mode": "overwrite", "on_new_columns": "fail"})
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={"format": "parquet", "path": path, "mode": "overwrite", "on_new_columns": "fail"},
+    )
     write_egress(df, module)  # no existing target → no drift → writes
     assert spark.read.parquet(path).count() == 1
 
@@ -486,20 +652,29 @@ def test_on_new_columns_invalid_policy(spark: SparkSession, tmp_path):
     path = str(tmp_path / "t")
     _seed_target(spark, path)
     df = spark.createDataFrame([(2, "b")], ["id", "v"])
-    module = Module(id="m1", type="Egress", label="M1",
-                    config={"format": "parquet", "path": path, "mode": "append", "on_new_columns": "bogus"})
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={"format": "parquet", "path": path, "mode": "append", "on_new_columns": "bogus"},
+    )
     with pytest.raises(EgressError, match="on_new_columns='bogus' is invalid"):
         write_egress(df, module)
 
 
 # ── Table-first addressing (catalog.schema.table) ──────────────────────────────
 
+
 def test_egress_table_overwrite(spark: SparkSession):
     """table: with mode=overwrite writes via saveAsTable."""
     spark.sql("DROP TABLE IF EXISTS _aq_test_tbl_ow")
     df = spark.range(5).toDF("num")
-    module = Module(id="m1", type="Egress", label="M1",
-                    config={"format": "parquet", "table": "_aq_test_tbl_ow", "mode": "overwrite"})
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={"format": "parquet", "table": "_aq_test_tbl_ow", "mode": "overwrite"},
+    )
     write_egress(df, module)
     check = spark.read.table("_aq_test_tbl_ow")
     assert check.count() == 5
@@ -512,8 +687,12 @@ def test_egress_table_append(spark: SparkSession):
     spark.sql("DROP TABLE IF EXISTS _aq_test_tbl_app")
     spark.range(3).toDF("num").write.saveAsTable("_aq_test_tbl_app")
     df = spark.range(2).toDF("num")
-    module = Module(id="m1", type="Egress", label="M1",
-                    config={"format": "parquet", "table": "_aq_test_tbl_app", "mode": "append"})
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={"format": "parquet", "table": "_aq_test_tbl_app", "mode": "append"},
+    )
     write_egress(df, module)
     check = spark.read.table("_aq_test_tbl_app")
     assert check.count() == 5
@@ -523,8 +702,9 @@ def test_egress_table_append(spark: SparkSession):
 def test_egress_table_and_path_mutually_exclusive(spark: SparkSession):
     """table: and path: together raise EgressError."""
     df = spark.range(1)
-    module = Module(id="m1", type="Egress", label="M1",
-                    config={"format": "parquet", "table": "t", "path": "/p"})
+    module = Module(
+        id="m1", type="Egress", label="M1", config={"format": "parquet", "table": "t", "path": "/p"}
+    )
     with pytest.raises(EgressError, match="mutually exclusive"):
         write_egress(df, module)
 
@@ -533,13 +713,17 @@ def test_egress_table_with_partition_by(spark: SparkSession):
     """table: with partition_by writes partitioned catalog table."""
     spark.sql("DROP TABLE IF EXISTS _aq_test_tbl_part")
     df = spark.range(10).selectExpr("id", "id % 2 AS part")
-    module = Module(id="m1", type="Egress", label="M1",
-                    config={
-                        "format": "parquet",
-                        "table": "_aq_test_tbl_part",
-                        "mode": "overwrite",
-                        "partition_by": ["part"],
-                    })
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={
+            "format": "parquet",
+            "table": "_aq_test_tbl_part",
+            "mode": "overwrite",
+            "partition_by": ["part"],
+        },
+    )
     write_egress(df, module)
     check = spark.read.table("_aq_test_tbl_part")
     assert check.count() == 10
@@ -554,17 +738,21 @@ def test_egress_table_overwrite_partitions(spark: SparkSession):
     df0.write.format("parquet").partitionBy("part").mode("overwrite").saveAsTable("_aq_test_tbl_op")
     # overwrite partitions touching only part=a
     df1 = spark.createDataFrame([(9, "a")], ["id", "part"])
-    module = Module(id="m1", type="Egress", label="M1",
-                    config={
-                        "format": "parquet",
-                        "table": "_aq_test_tbl_op",
-                        "mode": "overwrite_partitions",
-                        "partition_by": ["part"],
-                    })
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={
+            "format": "parquet",
+            "table": "_aq_test_tbl_op",
+            "mode": "overwrite_partitions",
+            "partition_by": ["part"],
+        },
+    )
     write_egress(df1, module)
     out = {(r.id, r.part) for r in spark.read.table("_aq_test_tbl_op").collect()}
-    assert (9, "a") in out      # part=a replaced
-    assert (2, "b") in out      # part=b preserved
+    assert (9, "a") in out  # part=a replaced
+    assert (2, "b") in out  # part=b preserved
     assert (1, "a") not in out  # old part=a gone
     spark.sql("DROP TABLE IF EXISTS _aq_test_tbl_op")
 
@@ -572,19 +760,23 @@ def test_egress_table_overwrite_partitions(spark: SparkSession):
 def test_egress_table_register_as_table_ignored(spark: SparkSession, caplog):
     """register_as_table is ignored (non-fatal warning) when table: is set."""
     import logging
+
     spark.sql("DROP TABLE IF EXISTS _aq_test_tbl_reg")
     df = spark.range(3).toDF("x")
-    module = Module(id="m1", type="Egress", label="M1",
-                    config={
-                        "format": "parquet",
-                        "table": "_aq_test_tbl_reg",
-                        "mode": "overwrite",
-                        "register_as_table": "ignored_table",
-                    })
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={
+            "format": "parquet",
+            "table": "_aq_test_tbl_reg",
+            "mode": "overwrite",
+            "register_as_table": "ignored_table",
+        },
+    )
     with caplog.at_level(logging.WARNING, logger="aqueduct.executor.spark.egress"):
         write_egress(df, module)
     # The actual write must have used the table: identifier, not register_as_table
     check = spark.read.table("_aq_test_tbl_reg")
     assert check.count() == 3
     spark.sql("DROP TABLE IF EXISTS _aq_test_tbl_reg")
-
