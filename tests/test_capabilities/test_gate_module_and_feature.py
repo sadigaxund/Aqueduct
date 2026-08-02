@@ -2,15 +2,17 @@
 
 Before this, ``capability_check.leaves_for_module()`` only emitted
 channel.op / egress.* / ingress.format / junction.mode / funnel.mode, so a
-verdict like ``module.type.Probe: unsupported`` or ``feature.java_udf:
-unsupported`` was DECORATIVE — compile passed and the failure surfaced as a raw
-runtime error (a DuckDB ``Catalog Error`` for a missing UDF; an ``ExecuteError``
-for an unhandled module type) instead of a clean ``CompileError``. These tests
-pin that the gate now FIRES on those leaves for an engine that declares them
-unsupported (DuckDB Stage A), and stays a no-op for Spark (all supported).
-Assert (Pass D) moved from the "gated unsupported" side to the "clean" side —
-see ``test_assert_module_supported_on_duckdb``. ``feature.python_udf`` moved
-the same way in Pass E — see ``test_python_udf_clean_on_both_engines``.
+verdict like ``feature.java_udf: unsupported`` was DECORATIVE — compile passed
+and the failure surfaced as a raw runtime error (a DuckDB ``Catalog Error``
+for a missing UDF; an ``ExecuteError`` for an unhandled module type) instead
+of a clean ``CompileError``. These tests pin that the gate now FIRES on a
+leaf an engine declares unsupported (``feature.java_udf`` on DuckDB — a
+genuine, permanent cross-engine gap), and stays a no-op for Spark (all
+supported). Assert (Pass D) and Probe (Pass F) both moved from the "gated
+unsupported" side to the "clean" side — see
+``test_assert_module_supported_on_duckdb`` /
+``test_probe_module_supported_on_duckdb``. ``feature.python_udf`` moved the
+same way in Pass E — see ``test_python_udf_clean_on_both_engines``.
 """
 
 from __future__ import annotations
@@ -100,12 +102,12 @@ def test_feature_leaves_empty_when_no_udfs():
 # ── The gate FIRES on DuckDB, stays a no-op on Spark ────────────────────────
 
 
-def test_probe_module_gated_unsupported_on_duckdb_not_spark():
+def test_probe_module_supported_on_duckdb():
+    # Pass F — Probe moved from "gated unsupported" to genuinely implemented
+    # on DuckDB (aqueduct/executor/duckdb_/probe.py); the gate must stay
+    # silent for it on both engines now, same pattern as Assert (Pass D).
     m = _manifest([_module("q", "Probe", {})])
-    problems = check_capabilities(m, engine="duckdb")
-    leaf_ids = {p.leaf_id for p in problems}
-    assert "module.type.Probe" in leaf_ids
-    # Spark supports every module type → no problem for the same manifest.
+    assert check_capabilities(m, engine="duckdb") == []
     assert check_capabilities(m, engine="spark") == []
 
 

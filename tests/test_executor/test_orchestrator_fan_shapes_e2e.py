@@ -21,12 +21,14 @@ success) rather than "it compiled":
 3. Diamond crossing twice — split via two parallel same-engine Channels,
    BOTH cross the boundary independently, rejoin at one Funnel: two
    handoffs feeding one downstream module.
-4. Probe near a boundary — attached to whichever side of the boundary is
-   the `spark` engine (Probe/Assert are `unsupported` on DuckDB, so a
-   Probe can only ever legally attach to the Spark-side module of a
-   boundary); covers both that it reports correctly AND that the
-   Probe/Assert-colocation compile-time rule actually holds near a
-   boundary (a mismatched explicit `engine:` pin is a CompileError).
+4. Probe near a boundary — attached to the Spark-side module of the
+   boundary (an arbitrary but fixed choice for this test; `module.type.Probe`
+   is `supported` on BOTH engines as of Pass F, so a duckdb-side attachment
+   would be equally legal — not exercised here, this shape only needs ONE
+   real cross-engine attachment point to prove the colocation rule);
+   covers both that it reports correctly AND that the Probe/Assert-
+   colocation compile-time rule actually holds near a boundary (a
+   mismatched explicit `engine:` pin is a CompileError).
 
 Needs a real SparkSession (``local[1]``, Java 17) and DuckDB's bare
 ``:memory:`` connection — both engines auto-register via
@@ -327,10 +329,10 @@ def test_diamond_crosses_the_boundary_twice(spark, tmp_path, engine_a, engine_b)
 @pytest.mark.parametrize("engine_a,engine_b", ENGINE_PAIRS, ids=PAIR_IDS)
 def test_probe_near_a_boundary_colocates_and_reports(spark, tmp_path, engine_a, engine_b):
     """Probe/Assert must colocate with their target's island (§4.3 /
-    islands.py::validate_colocation). Probe is `unsupported` on DuckDB (see
-    docs/specs.md §10.9), so the only legal attachment point near a
-    spark<->duckdb boundary is whichever side actually IS spark — attach
-    there and confirm it still reports a correct signal.
+    islands.py::validate_colocation). This test fixes the attachment point to
+    the Spark side of the boundary (an arbitrary but stable choice — Probe is
+    `supported` on both engines as of Pass F, so a duckdb-side attachment
+    would be equally legal) and confirms it still reports a correct signal.
 
     An Egress never populates `frame_store` under its own id (it only
     writes; there is nothing downstream of it to read from), so a Probe

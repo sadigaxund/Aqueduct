@@ -66,14 +66,24 @@
 #             vectorized and semantically different from Spark's row UDFs —
 #             not implemented/tested this stage, so unsupported honestly
 #             rather than silently wrong.
+#   Probe (Pass F): 8 of Spark's 9 built-in signals plus custom — each a SQL
+#             aggregate/sample query or metadata read (see duckdb_/probe.py).
+#             row_count_estimate is EXACT here (parquet footer for a direct
+#             Ingress tap, COUNT(*) otherwise), never an estimate — the
+#             Spark rationale for sampling it does not transfer to a
+#             single-node exact count. partition_stats stays unsupported —
+#             no partition concept on a single-process engine.
+#   Egress on_new_columns (Pass F): allow/alert/fail, implemented as a
+#             zero-scan LIMIT 0 metadata read against the existing target
+#             before write — see egress.py's _enforce_on_new_columns.
 #   Iceberg / Hudi / Kafka / custom DataSource / Databricks deployment: all
 #   Spark-specific, not applicable to DuckDB at all.
 #   Delta / JDBC / Depot ingress+egress, egress.mode.overwrite_partitions,
-#   egress.on_new_columns.*, feature.{delta_write,delta_time_travel,
-#   parallel_mode}: DEFERRED — implementable on DuckDB (delta-rs / postgres
-#   scanner / httpfs / etc, see each leaf's hint) but deliberately left out
-#   of Stage A scope. Grouped in their own comment blocks below so the
-#   verdict flip is a one-line edit per leaf once a later stage picks one up.
+#   feature.{delta_write,delta_time_travel,parallel_mode}: DEFERRED —
+#   implementable on DuckDB (delta-rs / postgres scanner / httpfs /
+#   per-thread cursor, see each leaf's hint) but deliberately left out of
+#   Stage A scope. Grouped in their own comment blocks below so the verdict
+#   flip is a one-line edit per leaf once a later stage picks one up.
 
 engine: duckdb
 
@@ -187,8 +197,12 @@ leaves:
     hint: "sandbox_master_url pins a Spark master URL for the patch-preview sandbox session; DuckDB has no cluster master to pin (single-process, always local)."
   config.checkpoint_root: supported
   config.danger.allow_full_probe_actions:
-    support: ignored_with_warning
-    hint: "Probe (module.type.Probe) is not implemented on DuckDB, so the full-vs-sampled probe-action gate it would configure is inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
+    support: supported
+    hint: "Inverted into block_full_actions and threaded into the DuckDB executor's Probe dispatch (Pass F) — genuinely gates null_rates/value_distribution/distinct_count/data_freshness (unless allow_sample). row_count_estimate and threshold are NOT gated on this engine — see duckdb_/probe.py's module docstring for why an exact single-node count and the Regulator-gate signal are never blocked."
+    tests:
+      - tests/test_executor_duckdb/test_probe.py::test_config_danger_allow_full_probe_actions_gates_via_block_full_actions
+      - tests/test_executor_duckdb/test_probe.py::test_row_count_estimate_not_gated_by_block_full_actions
+      - tests/test_executor_duckdb/test_probe.py::test_threshold_not_gated_by_block_full_actions
   config.deployment.databricks.cluster_id:
     support: unsupported
     hint: "single-node engine — schedule the container on one node. Databricks is a Spark deployment target."
@@ -246,11 +260,16 @@ leaves:
     support: unsupported
     hint: "use_observe toggles Spark's Observation API (a SparkListener-driven zero-cost row-count mechanism); DuckDB has no equivalent listener hook. This engine does not yet collect per-module runtime metrics (rows/bytes) outside the Handoff module at all (see executor/models.py's module_metrics writer), so there is no existing collection path for this flag to toggle either way — the key is inert here, not superseded by an always-on alternative."
   config.probes.default_sample_fraction:
-    support: ignored_with_warning
-    hint: "Probe (module.type.Probe) is not implemented on DuckDB, so the sample-fraction knob it would configure is inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
+    support: supported
+    hint: "Genuinely consumed by the DuckDB Probe implementation (Pass F, duckdb_/probe.py's ProbeSampling) — the default fraction for null_rates/value_distribution/distinct_count/data_freshness sampled queries when a signal omits its own fraction:."
+    tests:
+      - tests/test_executor_duckdb/test_probe.py::test_config_probes_sampling_knobs_threaded_through_execute
   config.probes.max_sample_rows:
-    support: ignored_with_warning
-    hint: "Probe (module.type.Probe) is not implemented on DuckDB, so the sample-row cap it would configure is inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
+    support: supported
+    hint: "Genuinely consumed by the DuckDB Probe implementation (Pass F) — caps sample_rows' n: regardless of what a signal requests."
+    tests:
+      - tests/test_executor_duckdb/test_probe.py::test_config_probes_sampling_knobs_threaded_through_execute
+      - tests/test_executor_duckdb/test_probe.py::test_sample_rows_capped_by_max_sample_rows
   config.timezone: supported
 
   # ── Edges / spillway routing — pure filters, engine-independent ─────────
@@ -516,8 +535,12 @@ leaves:
     tests:
       - tests/test_executor_duckdb/test_executor.py::test_module_type_junction_driven_through_execute
   module.type.Probe:
-    support: unsupported
-    hint: "Probe (signal sampling for Regulator gates) is not implemented on DuckDB. The DuckDB handlers cover Ingress/Channel/Junction/Funnel/Egress/Assert only."
+    support: supported
+    hint: "Pass F — 8 of Spark's 9 built-in signals (schema_snapshot, row_count_estimate, null_rates, sample_rows, value_distribution, distinct_count, data_freshness, threshold) plus custom, each a SQL aggregate/sample query or metadata read on the DuckDB relation (see duckdb_/probe.py). row_count_estimate is EXACT here, not an estimate. partition_stats stays unsupported — no partition concept on this engine (see feature parity note in duckdb_/probe.py); it emits its own dedicated runtime warning rather than silently doing nothing."
+    tests:
+      - tests/test_executor_duckdb/test_probe.py::test_module_type_probe_driven_through_execute
+      - tests/test_executor_duckdb/test_probe.py::test_regulator_gated_by_probe_threshold_end_to_end
+      - tests/test_executor_duckdb/test_probe.py::test_regulator_gated_by_probe_threshold_open_end_to_end
   module.type.Regulator:
     support: supported
     tests:
@@ -843,61 +866,27 @@ leaves:
   junction_branch.field.condition: supported
   junction_branch.field.id: supported
   junction_branch.field.value: supported
-  probe.field.attach_to:
-      support: unsupported
-      hint: "Probe (signal sampling for Regulator gates) is not implemented on DuckDB — see module.type.Probe."
-  probe.field.report:
-      support: unsupported
-      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
-  probe.field.signals:
-      support: unsupported
-      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
-  probe_signal.field.allow_sample:
-      support: unsupported
-      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
-  probe_signal.field.column:
-      support: unsupported
-      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
-  probe_signal.field.columns:
-      support: unsupported
-      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
-  probe_signal.field.entry:
-      support: unsupported
-      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
-  probe_signal.field.expr:
-      support: unsupported
-      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
-  probe_signal.field.fraction:
-      support: unsupported
-      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
+  probe.field.attach_to: supported
+  probe.field.report: supported
+  probe.field.signals: supported
+  probe_signal.field.allow_sample: supported
+  probe_signal.field.column: supported
+  probe_signal.field.columns: supported
+  probe_signal.field.entry: supported
+  probe_signal.field.expr: supported
+  probe_signal.field.fraction: supported
   probe_signal.field.method:
-      support: unsupported
-      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
-  probe_signal.field.module:
-      support: unsupported
-      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
-  probe_signal.field.n:
-      support: unsupported
-      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
-  probe_signal.field.passed_when:
-      support: unsupported
-      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
-  probe_signal.field.percentiles:
-      support: unsupported
-      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
-  probe_signal.field.plugin:
-      support: unsupported
-      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
-  probe_signal.field.sql:
-      support: unsupported
-      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
-  probe_signal.field.type:
-      support: unsupported
-      hint: "Probe is not implemented on DuckDB — see module.type.Probe."
+      support: ignored_with_warning
+      hint: "Accepted but never inspected — row_count_estimate is always an exact count on this engine regardless of method: sample/spark_listener (see module.type.Probe's hint); the field is authoring-parity only."
+  probe_signal.field.module: supported
+  probe_signal.field.n: supported
+  probe_signal.field.passed_when: supported
+  probe_signal.field.percentiles: supported
+  probe_signal.field.plugin: supported
+  probe_signal.field.sql: supported
+  probe_signal.field.type: supported
   regulator.field.on_block: supported
   regulator.field.poll_seconds: supported
   regulator.field.timeout_seconds: supported
   assert_rule.field.id: supported
-  probe_signal.field.id:
-    support: unsupported
-    hint: "Probe is not implemented on DuckDB — see module.type.Probe."
+  probe_signal.field.id: supported

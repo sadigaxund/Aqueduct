@@ -1,23 +1,28 @@
 """Engine-gating for Spark-physical compiler warnings (Phase 78 duckdb-engine).
 
 `aqueduct/compiler/warnings/*` rules give advice that is sometimes physical to
-one engine (Spark task partitions, JDBC read parallelism, Kafka micro-batches,
-driver-side custom-probe cost). Those rules must fire only when
-``engine == "spark"`` and stay silent on any other engine — the advice itself
-is correct for Spark and must not be reworded, only gated on emission.
+one engine (Spark task partitions, JDBC read parallelism, Kafka micro-batches).
+Those rules must fire only when ``engine == "spark"`` and stay silent on any
+other engine — the advice itself is correct for Spark and must not be
+reworded, only gated on emission.
 
-Three of the four gated rules (JDBC ingress, Kafka ingress, Probe module) key
-off a manifest shape that the DuckDB capability declaration already rejects at
-compile time (``ingress.format.jdbc`` / ``ingress.format.kafka`` /
-``module.type.Probe`` are all ``unsupported`` in
+Two of those (JDBC ingress, Kafka ingress) key off a manifest shape that the
+DuckDB capability declaration already rejects at compile time
+(``ingress.format.jdbc`` / ``ingress.format.kafka`` are ``unsupported`` in
 ``aqueduct/executor/duckdb_/capabilities.yml``), so a full end-to-end
 ``compile(..., engine="duckdb")`` for those shapes raises ``CompileError``
 before ever reaching the warnings pass — there is no warning to observe
-because the pipeline never gets that far. Those three rules are therefore
+because the pipeline never gets that far. Those two rules are therefore
 tested by calling ``check(manifest, engine)`` directly against a Manifest
 built via a normal Spark compile (Spark accepts every one of these shapes),
 proving the gate itself works independent of today's capability table (which
 could legitimately change to `ignored_with_warning` later).
+
+`custom_probe_driver_code` (driver-side custom-probe cost) is NO LONGER in
+this gated group as of Pass F: `module.type.Probe` is `supported` on DuckDB
+now, and the rule's wording was reworded engine-neutral rather than gated —
+see `TestCustomProbeDriverCodeEngineGate` below, which now proves it fires on
+BOTH engines via a real end-to-end DuckDB compile.
 
 `file_format_no_repartition` (Egress format=parquet/json/csv without
 repartition/coalesce/partition_by) is NOT capability-gated on DuckDB
@@ -167,12 +172,12 @@ edges:
 
 
 class TestCustomProbeDriverCodeEngineGate:
-    """HALF-true rule (see module docstring): the underlying risk is not
-    Spark-exclusive, but the wording ('driver', '.collect()/.count()') is —
-    gated whole-hog on Spark per the brief rather than inventing unverified
-    DuckDB advice. `module.type.Probe` is `unsupported` on DuckDB today, so
-    the manifest is built via a Spark compile and the rule exercised
-    directly."""
+    """Pass F: `custom_probe_driver_code`'s wording was reworded engine-neutral
+    once DuckDB grew a real Probe implementation (`module.type.Probe` is
+    `supported` on DuckDB now) — the rule is NO LONGER gated to Spark only,
+    it fires identically on both. Kept in this module (rather than moved to
+    `TestEngineAgnosticWarningsFireOnBothEngines` below) to keep its own
+    history/docstring next to the rule it documents."""
 
     _YAML = """
 aqueduct: "1.0"
@@ -209,9 +214,12 @@ edges:
         manifest = _compile_yaml(self._YAML, tmp_path, engine="spark")
         assert custom_probe_driver_code.check(manifest, "spark")
 
-    def test_does_not_warn_on_duckdb(self, tmp_path):
-        manifest = _compile_yaml(self._YAML, tmp_path, engine="spark")
-        assert custom_probe_driver_code.check(manifest, "duckdb") == []
+    def test_warns_on_duckdb_too(self, tmp_path):
+        # module.type.Probe is `supported` on DuckDB now (Pass F), so this
+        # compiles end to end on that engine too — not just a direct
+        # check(manifest, "duckdb") call against a Spark-built manifest.
+        manifest = _compile_yaml(self._YAML, tmp_path, engine="duckdb")
+        assert custom_probe_driver_code.check(manifest, "duckdb")
 
 
 class TestEngineAgnosticWarningsFireOnBothEngines:
