@@ -332,45 +332,47 @@ def _handle_fail(
 # canonical DuckDB spelling ("BIGINT", "VARCHAR", ...). ``expected``'s values
 # are Blueprint-authored hub spellings ("int", "string", "decimal(18,4)", the
 # same vocabulary Spark's ``simpleString()`` output happens to share aliases
-# with) — rendered through the SAME Arrow type-hub translation
-# ``duckdb_/ingress.py``'s ``schema_hint`` validation already uses for
-# exactly this cross-engine comparison (see that module's
-# ``_normalize_actual_type``/``_normalize_hint_type``), so a Blueprint
-# authored once against Spark's type vocabulary validates unmodified here.
+# with) — compared through the SAME Arrow type-hub translation
+# ``duckdb_/ingress.py``'s ``schema_hint`` validation uses (Phase 80 work
+# package 3; widening added Pass G2), via ``duckdb_/type_render.py``'s
+# ``schema_type_matches``, so a Blueprint authored once against Spark's type
+# vocabulary validates unmodified here — including a fixed-width numeric
+# expectation (e.g. "int") satisfied by DuckDB's own wider inferred type,
+# since DuckDB's CSV sniffer only ever infers BIGINT/DOUBLE for whole/decimal
+# numbers regardless of value range (see ``schema_type_matches``'s
+# docstring).
 def _normalize_actual_type(t: object) -> str:
     return str(t).strip().lower()
 
 
-def _normalize_expected_type(module_id: str, t: str) -> str:
-    from aqueduct.errors import EnginePluginError
-    from aqueduct.executor.duckdb_.type_render import normalize_type_spelling
-
-    try:
-        return normalize_type_spelling(str(t)).lower()
-    except EnginePluginError as exc:
-        raise AssertError(
-            f"[{module_id}] schema_match expected type {str(t)!r}: {exc}",
-            rule_id=AssertRuleType.SCHEMA_MATCH,
-        ) from exc
-
-
 def _check_schema_match(module_id: str, rel: duckdb.DuckDBPyRelation, rule: dict[str, Any]) -> None:
     """Zero query execution. Checks rel.columns/rel.types against an expected field map."""
+    from aqueduct.errors import EnginePluginError
+    from aqueduct.executor.duckdb_.type_render import schema_type_matches
+
     expected: dict[str, str] = rule.get("expected", {}) or {}
     on_fail = rule.get("on_fail", AssertOnFailAction.ABORT)
 
-    actual_fields = {
-        name: _normalize_actual_type(dtype)
-        for name, dtype in zip(rel.columns, rel.types, strict=True)
-    }
+    actual_raw: dict[str, str] = dict(
+        zip(rel.columns, (str(dtype) for dtype in rel.types), strict=True)
+    )
 
-    missing = [name for name in expected if name not in actual_fields]
-    type_mismatches = [
-        f"{name}: expected {etype}, got {actual_fields[name]}"
-        for name, etype in expected.items()
-        if name in actual_fields
-        and actual_fields[name] != _normalize_expected_type(module_id, etype)
-    ]
+    missing = [name for name in expected if name not in actual_raw]
+    type_mismatches: list[str] = []
+    for name, etype in expected.items():
+        if name not in actual_raw:
+            continue
+        try:
+            matched = schema_type_matches(str(etype), actual_raw[name])
+        except EnginePluginError as exc:
+            raise AssertError(
+                f"[{module_id}] schema_match expected type {str(etype)!r}: {exc}",
+                rule_id=AssertRuleType.SCHEMA_MATCH,
+            ) from exc
+        if not matched:
+            type_mismatches.append(
+                f"{name}: expected {etype}, got {_normalize_actual_type(actual_raw[name])}"
+            )
 
     error_type = rule.get("error_type")
     if missing:

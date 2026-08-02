@@ -19,15 +19,7 @@ modules:
     type: Channel
     config:
       op: sql
-      # order_id is explicitly CAST rather than left to each engine's own CSV
-      # type-inference default: Spark's inferSchema picks IntegerType for
-      # values this small, DuckDB's CSV sniffer always picks BIGINT for any
-      # integer column — an engine difference upstream of Assert, not
-      # something schema_match should paper over. Casting once here makes
-      # order_id's type deterministic (and identical) on both engines, so
-      # quality_gate's schema_match rule below checks a real, portable
-      # contract instead of an inference accident.
-      query: "SELECT CAST(order_id AS BIGINT) AS order_id, customer, amount, status, region, order_ts, amount * 0.2 AS tax FROM raw_orders"
+      query: "SELECT *, amount * 0.2 AS tax FROM raw_orders"
 
   - id: quality_gate
     label: "Quality Gate"
@@ -52,8 +44,17 @@ modules:
           max: 100
         - id: schema_check
           type: schema_match
+          # order_id's own inferred type differs by engine — Spark's CSV
+          # inferSchema picks IntegerType for values this small, DuckDB's
+          # sniffer always picks BIGINT for any whole-number column,
+          # regardless of value range. schema_match resolves the expected
+          # type through the same type hub schema_hint uses: a fixed-width
+          # numeric expectation ("int") is satisfied by an actual column at
+          # least as wide in the same family, so "int" here validates on
+          # both engines without an explicit CAST to force one engine's
+          # inference to match the other's.
           expected:
-            order_id: bigint
+            order_id: int
             customer: string
             amount: double
             status: string

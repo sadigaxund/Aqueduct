@@ -36,6 +36,7 @@ from aqueduct.typehub import (
     TinyInt,
     parse_type,
     render,
+    widens_to,
 )
 
 pytestmark = pytest.mark.unit
@@ -48,6 +49,7 @@ def _ensure_warnings_caught():
 
 
 # ── Scalar canonicalization ────────────────────────────────────────────────
+
 
 @pytest.mark.parametrize(
     "spelling,expected",
@@ -99,6 +101,7 @@ def test_decimal_invalid_precision_scale_rejected():
 
 # ── Duration (integer-backed, Phase 81/82) ──────────────────────────────────
 
+
 @pytest.mark.parametrize(
     "spelling,unit",
     [("duration(s)", "s"), ("duration(ms)", "ms"), ("duration(us)", "us"), ("duration(ns)", "ns")],
@@ -122,6 +125,7 @@ def test_duration_render():
 
 
 # ── Composite types ─────────────────────────────────────────────────────────
+
 
 def test_array():
     assert parse_type("array<int>") == Array(Int())
@@ -160,6 +164,7 @@ def test_map_wrong_arity_rejected():
 
 # ── Native namespace ─────────────────────────────────────────────────────────
 
+
 def test_native_namespace():
     assert parse_type("duckdb:HUGEINT") == NativeType("duckdb", "HUGEINT")
     assert parse_type("spark:interval day to second") == NativeType(
@@ -181,6 +186,7 @@ def test_native_namespace_empty_spelling_rejected():
 
 
 # ── Rejection / unknown spellings ────────────────────────────────────────────
+
 
 def test_unknown_spelling_rejected():
     with pytest.raises(TypeSpellingError, match="Unknown type spelling"):
@@ -209,6 +215,7 @@ def test_non_string_spelling_rejected():
 # INSTANT, DuckDB's `TIMESTAMP` is NAIVE wall-clock — there is no safe default
 # to silently fall back on, so this raises unconditionally.
 
+
 def test_bare_timestamp_raises_type_spelling_error():
     with pytest.raises(TypeSpellingError, match="timestamp_tz"):
         parse_type("timestamp")
@@ -232,14 +239,30 @@ def test_timestamp_tz_and_ntz_do_not_warn():
 
 # ── render() round-trip ──────────────────────────────────────────────────────
 
+
 @pytest.mark.parametrize(
     "spelling",
     [
-        "boolean", "tinyint", "smallint", "int", "bigint", "float", "double",
-        "string", "binary", "date", "timestamp_tz", "timestamp_ntz",
-        "decimal(10,2)", "duration(us)", "array<int>", "map<string,int>",
-        "struct<a:int,b:string>", "array<map<string,struct<a:int>>>",
-        "duckdb:HUGEINT", "spark:interval day to second",
+        "boolean",
+        "tinyint",
+        "smallint",
+        "int",
+        "bigint",
+        "float",
+        "double",
+        "string",
+        "binary",
+        "date",
+        "timestamp_tz",
+        "timestamp_ntz",
+        "decimal(10,2)",
+        "duration(us)",
+        "array<int>",
+        "map<string,int>",
+        "struct<a:int,b:string>",
+        "array<map<string,struct<a:int>>>",
+        "duckdb:HUGEINT",
+        "spark:interval day to second",
     ],
 )
 def test_round_trip_stable(spelling):
@@ -260,3 +283,51 @@ def test_render_unrecognized_type_raises():
 
     with pytest.raises(TypeError):
         render(NotAHubType())  # type: ignore[arg-type]
+
+
+# ── widens_to() — numeric-family widening (Pass G2) ─────────────────────────
+#
+# Backs schema_hint/schema_match validation: DuckDB's CSV sniffer only ever
+# infers BIGINT/DOUBLE for whole/decimal numbers (never a narrower width),
+# while Spark's inference picks the narrowest candidate that fits. A hint
+# narrower than or equal to the actual inferred type, in the SAME family,
+# is satisfied; the reverse (hint wider than actual, or a different family
+# entirely) is not.
+
+
+@pytest.mark.parametrize(
+    "hint,actual",
+    [
+        (TinyInt(), TinyInt()),
+        (TinyInt(), SmallInt()),
+        (TinyInt(), Int()),
+        (TinyInt(), BigInt()),
+        (SmallInt(), Int()),
+        (SmallInt(), BigInt()),
+        (Int(), Int()),
+        (Int(), BigInt()),
+        (BigInt(), BigInt()),
+        (FloatT(), FloatT()),
+        (FloatT(), DoubleT()),
+        (DoubleT(), DoubleT()),
+    ],
+)
+def test_widens_to_same_family_actual_at_least_as_wide(hint, actual):
+    assert widens_to(hint, actual) is True
+
+
+@pytest.mark.parametrize(
+    "hint,actual",
+    [
+        (BigInt(), Int()),  # hint WIDER than actual — not satisfied
+        (Int(), SmallInt()),
+        (DoubleT(), FloatT()),
+        (Int(), FloatT()),  # different family entirely
+        (Int(), StringT()),
+        (StringT(), Int()),
+        (Int(), NativeType("duckdb", "HUGEINT")),
+        (NativeType("duckdb", "HUGEINT"), Int()),
+    ],
+)
+def test_widens_to_rejects_narrower_or_different_family(hint, actual):
+    assert widens_to(hint, actual) is False

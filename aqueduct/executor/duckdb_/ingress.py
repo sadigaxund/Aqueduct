@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import duckdb
 
-from aqueduct.errors import AqueductError
+from aqueduct.errors import AqueductError, EnginePluginError
 from aqueduct.models import Module
 
 logger = logging.getLogger(__name__)
@@ -38,7 +38,9 @@ class IngressError(AqueductError):
     """Raised when an Ingress module fails to read."""
 
 
-def read_ingress(module: Module, con: duckdb.DuckDBPyConnection, base_dir: str | None = None) -> duckdb.DuckDBPyRelation:
+def read_ingress(
+    module: Module, con: duckdb.DuckDBPyConnection, base_dir: str | None = None
+) -> duckdb.DuckDBPyRelation:
     """Read source data described by module.config into a lazy relation.
 
     Args:
@@ -80,7 +82,9 @@ def read_ingress(module: Module, con: duckdb.DuckDBPyConnection, base_dir: str |
     except IngressError:
         raise
     except Exception as exc:
-        raise IngressError(f"[{module.id}] source not found or unreadable at {path!r}: {exc}") from exc
+        raise IngressError(
+            f"[{module.id}] source not found or unreadable at {path!r}: {exc}"
+        ) from exc
 
     partition_filters: str | None = cfg.get("partition_filters")
     if partition_filters:
@@ -123,7 +127,16 @@ def _csv_kwargs(options: dict) -> dict:
     CSV options are intentionally minimal (header + a small pass-through set),
     not the full Spark CSV reader option surface.
     """
-    allowed = {"sep", "delimiter", "quotechar", "escapechar", "encoding", "compression", "dtype", "columns"}
+    allowed = {
+        "sep",
+        "delimiter",
+        "quotechar",
+        "escapechar",
+        "encoding",
+        "compression",
+        "dtype",
+        "columns",
+    }
     out = {}
     for k, v in options.items():
         key = str(k)
@@ -132,7 +145,9 @@ def _csv_kwargs(options: dict) -> dict:
         elif key == "infer_schema":
             continue  # duckdb infers by default; no direct off-switch needed for Stage A
         else:
-            logger.debug("Ingress CSV option %r not recognised by DuckDB Stage A reader; ignored.", key)
+            logger.debug(
+                "Ingress CSV option %r not recognised by DuckDB Stage A reader; ignored.", key
+            )
     return out
 
 
@@ -183,41 +198,29 @@ def _enforce_on_new_columns(
         logger.warning(
             "[runtime_ingress_new_columns] [%s] on_new_columns=alert: source "
             "added undeclared column(s) %s.",
-            module.id, new_cols,
+            module.id,
+            new_cols,
         )
 
 
 # DuckDB relation column types (rel.types) are duckdb.typing.DuckDBPyType
 # objects; str() gives the canonical DuckDB type name (e.g. "BIGINT",
 # "VARCHAR", "INTEGER[]", "STRUCT(x INTEGER)"). schema_hint field types are
-# rendered through the Arrow type hub (Phase 80 work package 3) to DuckDB's
-# own spelling before comparison, so a schema_hint written against the hub
-# vocabulary (e.g. "array<int>", "timestamp_ntz") — or against Spark's
-# simpleString() vocabulary via the hub's own familiar aliases ("string",
-# "long") — validates on DuckDB without the author needing two Blueprints.
-# Replaces the old ``_TYPE_ALIASES`` 9-entry scalar-only dict. Only the
-# HINT's expected type goes through the hub — ``rel.types``' own ``str(dtype)``
-# representation is ALREADY an unambiguous, concrete DuckDB spelling (never a
-# Blueprint-authored spelling), so it is only lower-cased, never re-parsed
-# through the hub: parsing it would route a genuinely-native ``"TIMESTAMP"``
-# through the hub's bare-``timestamp`` AMBIGUITY resolution (see
-# ``typehub.py``'s ``timestamp`` branch), silently reinterpreting a real,
-# concrete DuckDB column type as ``timestamp_tz`` instead of comparing it
-# as what it already, unambiguously, is.
-def _normalize_actual_type(t: str) -> str:
-    return str(t).strip().lower()
-
-
-def _normalize_hint_type(module_id: str, t: str) -> str:
-    from aqueduct.errors import EnginePluginError
-    from aqueduct.executor.duckdb_.type_render import normalize_type_spelling
-
-    try:
-        return normalize_type_spelling(str(t)).lower()
-    except EnginePluginError as exc:
-        raise IngressError(f"[{module_id}] schema_hint type {str(t)!r}: {exc}") from exc
-
-
+# compared through the Arrow type hub (Phase 80 work package 3;
+# widening added Pass G2) via ``duckdb_/type_render.py``'s
+# ``schema_type_matches`` — a schema_hint written against the hub vocabulary
+# (e.g. "array<int>", "timestamp_ntz") — or against Spark's simpleString()
+# vocabulary via the hub's own familiar aliases ("string", "long") — validates
+# on DuckDB without the author needing two Blueprints, AND a fixed-width
+# numeric hint (e.g. "integer") is satisfied by DuckDB's own wider inferred
+# type (DuckDB's CSV sniffer only ever infers BIGINT/DOUBLE, never a narrower
+# width) — see ``schema_type_matches``'s docstring for the full reasoning.
+# The actual side's ``str(dtype)`` is never independently re-parsed through
+# the hub (only ``schema_type_matches``'s internal, narrow reverse table is
+# used for widening) — parsing a genuinely-native ``"TIMESTAMP"`` through
+# ``parse_type`` would hit the hub's bare-``timestamp`` AMBIGUITY resolution,
+# silently reinterpreting a real, concrete DuckDB column type instead of
+# comparing it as what it already, unambiguously, is.
 def _validate_schema_hint(
     module_id: str,
     rel: duckdb.DuckDBPyRelation,
@@ -230,12 +233,16 @@ def _validate_schema_hint(
     match), additive (same, extra live columns allowed), subset (missing
     hinted fields are OK; only present ones are type-checked).
     """
-    actual: dict[str, str] = {
-        name: _normalize_actual_type(str(dtype)) for name, dtype in zip(rel.columns, rel.types, strict=True)
-    }
+    from aqueduct.executor.duckdb_.type_render import schema_type_matches
+
+    actual: dict[str, str] = dict(
+        zip(rel.columns, (str(dtype) for dtype in rel.types), strict=True)
+    )
 
     if mode not in ("strict", "additive", "subset"):
-        raise IngressError(f"[{module_id}] Unknown schema_hint mode: {mode!r}. Use strict, additive, or subset.")
+        raise IngressError(
+            f"[{module_id}] Unknown schema_hint mode: {mode!r}. Use strict, additive, or subset."
+        )
 
     for hint in schema_hint:
         name = hint.get("name")
@@ -249,10 +256,18 @@ def _validate_schema_hint(
                 f"Available columns: {sorted(actual)}"
             )
         expected_type = hint.get("type")
-        if expected_type and actual[name] != _normalize_hint_type(module_id, expected_type):
+        if not expected_type:
+            continue
+        try:
+            matched = schema_type_matches(str(expected_type), actual[name])
+        except EnginePluginError as exc:
+            raise IngressError(
+                f"[{module_id}] schema_hint type {str(expected_type)!r}: {exc}"
+            ) from exc
+        if not matched:
             raise IngressError(
                 f"[{module_id}] schema_hint type mismatch on {name!r}: "
-                f"expected {expected_type!r}, actual {actual[name]!r}"
+                f"expected {expected_type!r}, actual {actual[name].lower()!r}"
             )
 
 

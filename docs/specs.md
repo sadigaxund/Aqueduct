@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.47: Reference Document**
+**Version 2.48: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -372,6 +372,8 @@ Every spillway row carries the system columns `_aq_error_module`, `_aq_error_typ
 | **known_columns** | Optional explicit baseline column list for `on_new_columns`. |
 | **options** | Passed directly to Spark DataFrameReader.option(k,v). |
 
+**`schema_hint` type comparison goes through the type hub (§9), with numeric widening.** A hinted type is resolved as a hub type and compared against the engine's own inferred type for that column, not compared as a literal string. For the fixed-width numeric families (`tinyint`/`smallint`/`int`/`bigint`, `float`/`double`), a hint SATISFIES an actual column at least as wide in the same family — `quantity: integer` validates against a DuckDB-inferred `BIGINT` column, because DuckDB's CSV sniffer only ever infers `BIGINT` for whole numbers regardless of value range, while Spark's own inference picks the narrowest candidate that fits the data. The reverse (a hint wider than the actual type, e.g. `bigint` against an actual `int`) is NOT satisfied — widening is one-directional. This is a type-name resolution rule, not a value cast: no data is coerced, and a non-numeric mismatch (a string column hinted as an int) still raises exactly as before.
+
 **Cloud credentials:** There is no per-Ingress `credentials:` field. Credentials live at the engine level in `engine.spark.conf:`, keyed by standard Hadoop/Spark property names. Use `@aq.secret('KEY')` or `${ENV_VAR}` inside those values.
 
 ### Channel
@@ -666,6 +668,8 @@ Regulators are passive: they compile away entirely if no signal edge is wired to
 ```
 
 Assert rules are batched into 1-2 Spark actions (on DuckDB: one `rel.aggregate()` query plus one sampled query for `null_rate`). Rule types: `schema_match` (zero action), `not_null`, `min_rows`, `max_rows`, `null_rate`, `freshness`, `sql`, `sql_row`, `spillway_rate`, `custom`. Every rule accepts an optional `id:` — a human-readable label carried through for authoring clarity; no rule-type handler reads it.
+
+**`schema_match`'s `expected` types resolve through the type hub (§9), with the same numeric widening `schema_hint` uses** (§4.4 Ingress): `order_id: int` validates against an engine-inferred `bigint` column, since a narrower expectation is satisfied by an actual column at least as wide in the same fixed-width family — see the Ingress `schema_hint` note above for the full reasoning and the one-directional caveat (an expectation wider than the actual type still fails).
 
 **`sql_row`'s `min_pass_rate`** (optional) additionally fails the rule when the fraction of rows satisfying `expr` drops below the given threshold — one extra aggregate action (`count(*)` + `count_if(expr)`) beyond the row-level filter itself.
 

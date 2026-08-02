@@ -151,6 +151,45 @@ def test_read_ingress_schema_hint_hub_array_mismatch_still_raises(duckdb_con, tm
         read_ingress(module, duckdb_con)
 
 
+# ── Pass G2 — numeric-family widening ───────────────────────────────────────
+#
+# The real, measured defect: DuckDB's CSV sniffer always infers BIGINT for a
+# whole-number column, regardless of value range, while Spark's own CSV
+# inference picks IntegerType for small values — an author who writes
+# `quantity: integer` (matching what Spark infers) previously got a
+# `schema_hint type mismatch` on the DuckDB lane even though the column is
+# genuinely integer-valued on both engines. 30_ingress_schema_hints hits this
+# exact case.
+
+
+def test_read_ingress_schema_hint_integer_widens_to_bigint_actual(duckdb_con, tmp_path):
+    path = _write_parquet(duckdb_con, tmp_path, "src", "SELECT CAST(150 AS BIGINT) AS quantity")
+    module = _module(
+        "ing",
+        "Ingress",
+        {"format": "parquet", "path": path, "schema_hint": {"quantity": "integer"}},
+    )
+    rel = read_ingress(module, duckdb_con)  # no IngressError
+    assert str(rel.types[rel.columns.index("quantity")]) == "BIGINT"
+    assert rel.fetchall() == [(150,)]
+
+
+def test_read_ingress_schema_hint_bigint_hint_does_not_widen_from_integer_actual(
+    duckdb_con, tmp_path
+):
+    """The reverse direction (hint WIDER than the actual column) must still
+    raise — widening only ever accepts an actual type at least as wide as
+    the hint, never the other way around."""
+    path = _write_parquet(duckdb_con, tmp_path, "src", "SELECT CAST(150 AS INTEGER) AS quantity")
+    module = _module(
+        "ing",
+        "Ingress",
+        {"format": "parquet", "path": path, "schema_hint": {"quantity": "bigint"}},
+    )
+    with pytest.raises(IngressError, match="type mismatch"):
+        read_ingress(module, duckdb_con)
+
+
 # ── Channel ──────────────────────────────────────────────────────────────
 
 

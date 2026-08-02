@@ -56,6 +56,32 @@ def test_schema_match_type_mismatch_aborts(duckdb_con):
         execute_assert(mod, rel, duckdb_con, "r1", "bp")
 
 
+# ── Pass G2 — numeric-family widening ───────────────────────────────────────
+#
+# DuckDB's CSV sniffer only ever infers BIGINT for whole-number columns
+# (never the narrower TINYINT/SMALLINT/INTEGER Spark's own inference can
+# pick for the same small values) — schema_match must accept a narrower
+# hub-authored expectation against DuckDB's genuinely wider actual type, the
+# same "portable across engines" contract 24_assert_types_full documents.
+
+
+def test_schema_match_int_expected_widens_to_bigint_actual(duckdb_con):
+    rel = duckdb_con.sql("SELECT CAST(1001 AS BIGINT) AS order_id")
+    mod = _assert_module([{"type": "schema_match", "expected": {"order_id": "int"}}])
+    passing, quarantine = execute_assert(mod, rel, duckdb_con, "r1", "bp")
+    assert passing is rel
+    assert quarantine is None
+
+
+def test_schema_match_bigint_expected_does_not_widen_from_int_actual(duckdb_con):
+    """The reverse direction (expected WIDER than actual) must still fail —
+    widening is one-directional, not a blanket "same family" pass."""
+    rel = duckdb_con.sql("SELECT CAST(1001 AS INTEGER) AS order_id")
+    mod = _assert_module([{"type": "schema_match", "expected": {"order_id": "bigint"}}])
+    with pytest.raises(AssertError, match="type mismatches"):
+        execute_assert(mod, rel, duckdb_con, "r1", "bp")
+
+
 # ── min_rows / max_rows ──────────────────────────────────────────────────
 
 

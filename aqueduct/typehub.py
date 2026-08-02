@@ -498,7 +498,13 @@ def constructor_names() -> frozenset[str]:
     passthrough escape hatch (see ``type.native.<engine>`` leaves, derived
     separately from the registered engine list).
     """
-    return frozenset(_CANONICAL_SPELLING.values()) | {"decimal", "array", "map", "struct", "duration"}
+    return frozenset(_CANONICAL_SPELLING.values()) | {
+        "decimal",
+        "array",
+        "map",
+        "struct",
+        "duration",
+    }
 
 
 def render(t: "HubType | NativeType") -> str:
@@ -522,6 +528,55 @@ def render(t: "HubType | NativeType") -> str:
     if spelling is None:
         raise TypeError(f"render() received an unrecognized hub type: {t!r}")
     return spelling
+
+
+# ── Numeric-family widening (Pass G2 — schema_hint/schema_match validation) ─
+#
+# Fixed-width scalar families ordered narrowest-to-widest. Used ONLY by
+# `widens_to()` below, never by `parse_type`/`render` — a Blueprint author
+# who writes `cast: {col: int}` still gets an EXACT int cast; widening only
+# ever applies to VALIDATING an already-inferred column's type against a
+# declared minimum, never to casting or otherwise touching a value.
+_INTEGER_WIDENING: tuple[type, ...] = (TinyInt, SmallInt, Int, BigInt)
+_FLOAT_WIDENING: tuple[type, ...] = (FloatT, DoubleT)
+_WIDENING_FAMILIES: tuple[tuple[type, ...], ...] = (_INTEGER_WIDENING, _FLOAT_WIDENING)
+
+
+def widens_to(hint: "HubType | NativeType", actual: "HubType | NativeType") -> bool:
+    """True when ``actual`` is the SAME fixed-width numeric family as
+    ``hint`` and at least as wide — every value ``hint``'s width can
+    represent, ``actual``'s width can also represent.
+
+    This is a validation-time COMPATIBILITY rule, not a cast: no value is
+    read or touched, only whether an already-inferred column's actual type
+    should satisfy a Blueprint author's declared type. It exists because
+    Spark's and DuckDB's own CSV type inference genuinely disagree on how
+    narrow a numeric column can be for the SAME source data — DuckDB's CSV
+    sniffer only ever proposes ``BIGINT``/``DOUBLE`` for whole/decimal
+    numbers (verified against a real ``DuckDBPyConnection``: it never infers
+    ``TINYINT``/``SMALLINT``/``INTEGER``/``FLOAT`` from CSV text, regardless
+    of the sampled values' actual range), while Spark's inference picks the
+    narrowest candidate that fits. An author who wrote ``quantity: integer``
+    because Spark inferred ``IntegerType`` for that column is not making a
+    claim DuckDB's wider ``BIGINT`` contradicts — the data is integer-valued
+    on both engines; only the ENGINE's own inference granularity differs.
+
+    Deliberately narrow: reserved for `schema_hint`/`schema_match`
+    VALIDATION call sites only (see ``aqueduct/executor/duckdb_/ingress.py``
+    and ``duckdb_/assert_.py``). A Channel ``cast`` still casts to the EXACT
+    type requested — widening there would silently ignore what the author
+    asked for, which is the anti-pattern this function's callers must not
+    reproduce (see AGENTS.md: never auto-coerce a value under the banner of
+    "resolving a type name").
+
+    Returns ``False`` for ``NativeType`` on either side (an explicit
+    ``<engine>:<spelling>`` escape hatch carries no hub family to compare)
+    and for any non-numeric hub type (``StringT``, ``DateT``, ...).
+    """
+    for family in _WIDENING_FAMILIES:
+        if type(hint) in family and type(actual) in family:
+            return family.index(type(actual)) >= family.index(type(hint))
+    return False
 
 
 __all__ = [
@@ -549,4 +604,5 @@ __all__ = [
     "constructor_names",
     "parse_type",
     "render",
+    "widens_to",
 ]
