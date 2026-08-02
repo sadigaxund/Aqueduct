@@ -273,11 +273,15 @@ def test_duckdb_execute_kwargs_excludes_every_spark_only_capability():
       the DuckDB side of every handoff.
     - `observability_store` — DuckDB writes `module_metrics` rows for a
       Handoff module (bytes transferred, duration), so it needs the store.
+    - `sampling` (Pass F) — Probe on DuckDB genuinely consumes
+      `config.probes.*` (row-sampling governance for signal collection); see
+      `aqueduct/executor/duckdb_/probe.py`. It moved out of the excluded set
+      once that implementation landed, same as the two above.
 
     A new name added to OPTIONAL_EXECUTE_KWARGS belongs on the excluded side
     of this assertion unless DuckDB actually implements it.
     """
-    duckdb_implements = {"handoff_spill_uris", "observability_store"}
+    duckdb_implements = {"handoff_spill_uris", "observability_store", "sampling"}
     accepted = get_protocol("duckdb").execute_kwargs
     assert accepted is not None
     spark_only = OPTIONAL_EXECUTE_KWARGS - duckdb_implements
