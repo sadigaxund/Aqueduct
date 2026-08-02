@@ -88,6 +88,36 @@ def test_agent_config_to_dict_includes_progressive(tmp_path):
     assert d["max_chain"] == 4
 
 
+def test_agent_config_to_dict_includes_all_guardrails_fields(tmp_path):
+    """AgentConfig.to_dict()'s own docstring warns "forgetting to add
+    [a field] here means the LLM won't see the field" — but its
+    "guardrails" sub-dict serialized only forbidden_ops/allowed_paths and
+    silently dropped heal_on_errors/never_heal_errors, even though
+    GuardrailsConfig carries all four. The live agent PROMPT is unaffected
+    (agent/loop.py reads agent_cfg.guardrails, the raw dataclass, not this
+    dict) — but Manifest.to_dict() (compiler/models.py) calls THIS method
+    for the manifest JSON snapshot used by report --json / manifest
+    hashing / storage, where the two fields were invisible."""
+    bp_file = tmp_path / "bp.yml"
+    bp_file.write_text(
+        "aqueduct: '1.0'\nid: test\nname: Test\n"
+        "agent:\n"
+        "  guardrails:\n"
+        "    forbidden_ops: [remove_module]\n"
+        "    allowed_paths: ['modules.*.config.*']\n"
+        "    heal_on_errors: [AnalysisException]\n"
+        "    never_heal_errors: [OutOfMemoryError]\n"
+        "modules:\n  - id: m\n    type: Channel\n    label: M\n"
+        "edges: []\n"
+    )
+    bp = parse(bp_file)
+    d = bp.agent.to_dict()
+    assert d["guardrails"]["forbidden_ops"] == ["remove_module"]
+    assert d["guardrails"]["allowed_paths"] == ["modules.*.config.*"]
+    assert d["guardrails"]["heal_on_errors"] == ["AnalysisException"]
+    assert d["guardrails"]["never_heal_errors"] == ["OutOfMemoryError"]
+
+
 def test_resolve_agent_connection_inherits_progressive(tmp_path):
     from aqueduct.cli import resolve_agent_connection
 

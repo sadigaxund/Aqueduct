@@ -175,6 +175,8 @@ class AgentConfig:
             "guardrails": {
                 "forbidden_ops": list(self.guardrails.forbidden_ops),
                 "allowed_paths": list(self.guardrails.allowed_paths),
+                "heal_on_errors": list(self.guardrails.heal_on_errors),
+                "never_heal_errors": list(self.guardrails.never_heal_errors),
             },
         }
 
