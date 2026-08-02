@@ -225,6 +225,71 @@ def test_parameterized_udf_factory(duckdb_con):
     assert [r[0] for r in rows] == [11, 12]
 
 
+def test_missing_numpy_gives_actionable_message(monkeypatch):
+    """A base install (`pip install aqueduct-core`, no `[duckdb]` extra) lacks
+    numpy, which `con.create_function()` requires internally for argument/
+    result marshalling on every Python UDF, regardless of return type. The
+    raw DuckDB error text ("'numpy' is required for this operation, but it
+    wasn't installed") gives no indication this is a packaging gap rather
+    than a bug in the user's UDF. When numpy is genuinely absent, the error
+    must name the fix (`pip install aqueduct-core[duckdb]`) while still
+    chaining the underlying DuckDB error."""
+    import aqueduct.executor.duckdb_.udf as udf_mod
+
+    monkeypatch.setattr(udf_mod.importlib.util, "find_spec", lambda name: None)
+
+    class _FakeConn:
+        def create_function(self, *args, **kwargs):
+            raise RuntimeError(
+                "Invalid Input Error: 'numpy' is required for this operation, "
+                "but it wasn't installed"
+            )
+
+    with pytest.raises(UDFError, match=r"pip install 'aqueduct-core\[duckdb\]'") as excinfo:
+        register_udfs(
+            (
+                {
+                    "id": "my_udf",
+                    "lang": "python",
+                    "module": "math",
+                    "entry": "sqrt",
+                    "return_type": "double",
+                },
+            ),
+            _FakeConn(),
+        )
+    assert excinfo.value.__cause__ is not None
+    assert "wasn't installed" in str(excinfo.value.__cause__)
+
+
+def test_generic_create_function_failure_unchanged_when_numpy_present(monkeypatch):
+    """When numpy IS installed, an unrelated create_function() failure keeps
+    the plain (non-numpy-specific) message — the detection must not fire on
+    every failure, only the numpy-missing one."""
+    import aqueduct.executor.duckdb_.udf as udf_mod
+
+    monkeypatch.setattr(udf_mod.importlib.util, "find_spec", lambda name: object())
+
+    class _FakeConn:
+        def create_function(self, *args, **kwargs):
+            raise RuntimeError("some unrelated duckdb failure")
+
+    with pytest.raises(UDFError, match=r"con\.create_function\(\) failed: some unrelated") as excinfo:
+        register_udfs(
+            (
+                {
+                    "id": "my_udf",
+                    "lang": "python",
+                    "module": "math",
+                    "entry": "sqrt",
+                    "return_type": "double",
+                },
+            ),
+            _FakeConn(),
+        )
+    assert "pip install" not in str(excinfo.value)
+
+
 def test_deterministic_false_sets_side_effects(duckdb_con):
     """deterministic: false must not raise and must still register a working
     UDF — proves the side_effects inversion doesn't break registration."""

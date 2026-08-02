@@ -57,6 +57,7 @@ dead. Both engines now honour it for real.
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -211,6 +212,22 @@ def _register_python_udf(
             side_effects=not deterministic,
         )
     except Exception as exc:
+        # `create_function()` requires numpy internally for argument/result
+        # marshalling, unconditionally (see module docstring) — but numpy is
+        # only pulled in by the `[duckdb]` extra, not the base install. A
+        # plain `pip install aqueduct-core` user hits this as raw DuckDB
+        # text ("'numpy' is required for this operation, but it wasn't
+        # installed") with no indication it's a packaging gap rather than a
+        # bug in their UDF. Detect the specific cause and name the fix,
+        # while still chaining the original error.
+        if importlib.util.find_spec("numpy") is None:
+            raise UDFError(
+                f"UDF {udf_id!r}: con.create_function() failed because 'numpy' is not "
+                "installed. DuckDB's create_function() requires numpy internally for "
+                "argument/result marshalling on every Python UDF, regardless of return "
+                "type. Fix: pip install 'aqueduct-core[duckdb]' (or `pip install numpy` "
+                f"directly). Underlying error: {exc}"
+            ) from exc
         raise UDFError(f"UDF {udf_id!r}: con.create_function() failed: {exc}") from exc
 
 
