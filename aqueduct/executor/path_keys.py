@@ -45,6 +45,15 @@ from __future__ import annotations
 # compiler's expander (`aqueduct/compiler/expander.py`), not this
 # mechanism — it is a module-top-level field, not a `config:` entry, so it
 # is out of `_anchor_paths`' scope (which only ever walks `config:`).
+#
+# The "UDF" row is NOT a module type (there is no `ModuleType.UDF`) — it
+# keys `udf_registry:` entries (top-level list, not a `config:` block),
+# anchored by parser.py's own `udf_registry=` dump step, which looks up
+# this row by literal string "UDF" rather than by iterating module types.
+# Both `jar` and `path` are listed because `UdfSchema` accepts either as
+# the JAR location ("java / scala: load `class` from `jar` (or `path`)");
+# either one is a relative path a `_register_java_udf` caller resolves
+# against the CWD unless anchored here first.
 _PATH_KEYS: dict[str, tuple[str, ...]] = {
     "Ingress":  ("path",),
     "Channel":  (),
@@ -55,7 +64,7 @@ _PATH_KEYS: dict[str, tuple[str, ...]] = {
     "Regulator": (),
     "Arcade":   (),
     "Assert":   (),
-    "UDF":      ("jar",),
+    "UDF":      ("jar", "path"),
 }
 
 # Module types not in ``_PATH_KEYS`` fall back to this union. Empty now

@@ -320,14 +320,28 @@ def _register_java_udf(
     from pyspark.sql.types import _parse_datatype_string
 
     jar_path: str | None = entry.get("jar") or entry.get("path")
-    class_name: str | None = entry.get("entry") or entry.get("class_name")
+    # `class:` is the documented key (specs.md, SKILL.md, capabilities.yml's
+    # udf.field.class_name leaf) — parser/schema.py's UDFRegistrySchema field
+    # is `class_name` aliased to `class`, and `by_alias=True` dumps it back
+    # to the ALIAS ("class"), never the Python attribute name
+    # ("class_name"). Reading `entry.get("class_name")` here checked a key
+    # the dump never produces, so the documented contract failed at runtime
+    # end-to-end: a `class:`-declared java/scala UDF always hit the
+    # "'entry' is required" error below. `entry:` also works and is kept —
+    # it is the schema's OTHER field (documented for python UDFs' module
+    # import name) and happens to already be exercised by real blueprints/
+    # tests for java/scala too; dropping it would be an actual behavior
+    # break for anything relying on the one path that already worked.
+    class_name: str | None = (
+        entry.get("entry") or entry.get("class") or entry.get("class_name")
+    )
     return_type_str: str | None = entry.get("return_type", "string")
 
     if not jar_path:
         raise UDFError(f"UDF {udf_id!r}: 'jar' is required for java/scala UDFs")
     if not class_name:
         raise UDFError(
-            f"UDF {udf_id!r}: 'entry' (fully-qualified class name) is required for java/scala UDFs"
+            f"UDF {udf_id!r}: 'class' (fully-qualified class name) is required for java/scala UDFs"
         )
 
     jar_abs = str(Path(jar_path).resolve())

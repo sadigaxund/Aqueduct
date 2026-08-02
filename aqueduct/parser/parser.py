@@ -151,6 +151,21 @@ def parse(
         raw: Any = yaml.safe_load(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         raise ParseError(f"Blueprint file not found: {path}")
+    except IsADirectoryError:
+        raise ParseError(f"Blueprint path is a directory, not a file: {path}")
+    except PermissionError as exc:
+        raise ParseError(f"Permission denied reading Blueprint file {path}: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise ParseError(f"Blueprint file {path} is not valid UTF-8 text: {exc}") from exc
+    except OSError as exc:
+        # Any other filesystem-level failure (e.g. a broken symlink, an I/O
+        # error from a network mount) — user-reachable via a bad --blueprint
+        # path, so it must surface as ParseError rather than escape raw
+        # (AGENTS.md: "User-reachable errors raise an AqueductError
+        # subclass, never a bare builtin"). FileNotFoundError/
+        # IsADirectoryError/PermissionError are caught more specifically
+        # above for a clearer message; this is the catch-all sibling.
+        raise ParseError(f"Cannot read Blueprint file {path}: {exc}") from exc
     except yaml.YAMLError as exc:
         raise ParseError(f"Invalid YAML in {path.name}: {exc}") from exc
     if not isinstance(raw, dict):
@@ -251,6 +266,19 @@ def parse_dict(
             return cfg
         out = dict(cfg)
         for k in _get_path_keys(module_type):
+            if k in out:
+                out[k] = _anchor_path_value(out[k])
+        return out
+
+    def _anchor_udf_entry(entry: dict[str, Any]) -> dict[str, Any]:
+        """Anchor a udf_registry entry's `jar`/`path` keys to base_dir.
+
+        udf_registry is a top-level list (not a module's `config:` block),
+        so `_anchor_paths` above never walks it — this is the "UDF" row's
+        own anchoring call site.
+        """
+        out = dict(entry)
+        for k in _get_path_keys("UDF"):
             if k in out:
                 out[k] = _anchor_path_value(out[k])
         return out
@@ -443,8 +471,15 @@ def parse_dict(
         # UdfSchema → plain dicts (the compiler/executor consume dicts via .get()).
         # by_alias dumps `class_name` back to `class`; exclude_none keeps the dict
         # shape the executor expects (it applies its own field defaults).
+        # `jar`/`path` are anchored to base_dir here — udf_registry entries are
+        # a top-level list, not a `config:` block, so `_anchor_paths` (which
+        # only ever walks a module's `config:` dict) never reached them
+        # despite the "UDF" row already existing in path_keys.py; specs.md
+        # documents relative `jar:` paths as anchoring to the Blueprint dir,
+        # which was false at HEAD before this fix (a blueprint run from any
+        # CWD other than its own directory got "JAR not found").
         udf_registry=tuple(
-            resolve_value(u.model_dump(by_alias=True, exclude_none=True), ctx_map)
+            _anchor_udf_entry(resolve_value(u.model_dump(by_alias=True, exclude_none=True), ctx_map))
             for u in validated.udf_registry
         ),
         macros=resolved_macros,

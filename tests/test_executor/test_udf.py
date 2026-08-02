@@ -174,7 +174,7 @@ class TestUdfRegistration:
         jar = tmp_path / "geo.jar"
         jar.write_bytes(b"")
         mock_spark = MagicMock()
-        with pytest.raises(UDFError, match="'entry' .* is required"):
+        with pytest.raises(UDFError, match="'class' .* is required"):
             register_udfs(({"id": "geo", "lang": "java", "jar": str(jar)},), mock_spark)
 
     def test_java_udf_registers_via_session_add_jar(self, tmp_path):
@@ -205,6 +205,42 @@ class TestUdfRegistration:
             "geo", "com.example.GeoUDF", StringType()
         )
         mock_spark.sparkContext.addJar.assert_not_called()
+
+    def test_java_udf_documented_class_key_works_end_to_end(self, tmp_path):
+        """The DOCUMENTED java/scala contract (specs.md, SKILL.md,
+        capabilities.yml's udf.field.class_name leaf) declares `class:`,
+        not `entry:`. parser/schema.py's field is `class_name` aliased to
+        `class`; `model_dump(by_alias=True)` — what parser.py actually
+        calls — dumps it back to the ALIAS "class", never the Python
+        attribute name "class_name". Reproduce that exact dump shape
+        (rather than hand-writing a dict) and prove the executor now reads
+        it — before this fix, every class:-declared java/scala UDF hit
+        "'entry' (fully-qualified class name) is required" because the
+        executor checked for a "class_name" key the dump never produces."""
+        from pyspark.sql.types import StringType
+
+        from aqueduct.executor.spark.udf import register_udfs
+        from aqueduct.parser.schema import UdfSchema
+
+        jar = tmp_path / "geo.jar"
+        jar.write_bytes(b"")
+        entry_model = UdfSchema.model_validate(
+            {
+                "id": "geo",
+                "lang": "java",
+                "jar": str(jar),
+                "class": "com.example.GeoUDF",
+                "return_type": "string",
+            }
+        )
+        dumped = entry_model.model_dump(by_alias=True, exclude_none=True)
+        assert "class" in dumped and "class_name" not in dumped
+
+        mock_spark = MagicMock()
+        register_udfs((dumped,), mock_spark)
+        mock_spark.udf.registerJavaFunction.assert_called_once_with(
+            "geo", "com.example.GeoUDF", StringType()
+        )
 
     def test_java_udf_add_jar_failure_raises(self, tmp_path):
         from aqueduct.executor.spark.udf import UDFError, register_udfs

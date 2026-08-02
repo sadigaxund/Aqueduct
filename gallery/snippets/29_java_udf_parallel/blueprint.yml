@@ -8,6 +8,15 @@ aqueduct: "1.0"
 id: java_udf_parallel
 name: "Java UDF & Parallel Mode"
 
+# udf_registry:
+#   - id: category_label
+#     lang: java
+#     jar: udf/jars/aqueduct-udfs.jar
+#     class: com.aqueduct.udfs.CategoryLabel
+#     return_type: string
+#     # Provide your compiled JAR implementing
+#     # org.apache.spark.sql.api.java.UDF1[String, String].
+
 modules:
   # Parallel component A: Product processing
   - id: raw_products
@@ -24,19 +33,16 @@ modules:
     config:
       op: sql
       # Without the JAR, use a simple alias.  To use the Java UDF, uncomment
-      # the udfs block below and change the query to:
+      # the udf_registry block above (top of file) and change the query to:
       #   category_label(category) AS label
+      # UDFs are called by name directly in SQL — a Channel does not
+      # declare which UDFs it uses; every entry in udf_registry: is
+      # registered once, up front, and any module's SQL may call any of
+      # them by name.
       query: >
         SELECT id, name, category,
                category AS label
         FROM raw_products
-      # udfs:
-      #   - name: category_label
-      #     lang: java
-      #     class_name: com.aqueduct.udfs.CategoryLabel
-      #     jar_path: udf/jars/aqueduct-udfs.jar
-      #     # Provide your compiled JAR implementing
-      #     # org.apache.spark.sql.api.java.UDF1[String, String].
 
   - id: product_output
     label: "Product Output"

@@ -201,22 +201,67 @@ def test_parse_dict_rejects_non_mapping(tmp_path):
         parse_dict([], base_dir=tmp_path)  # type: ignore[arg-type]
 
 
+# ── parse() file-level error taxonomy ─────────────────────────────────────
+# Audit triage (2026-08): parse() caught only FileNotFoundError and
+# yaml.YAMLError; a directory path, an unreadable file, or a non-UTF8 file
+# raised the raw builtin (IsADirectoryError / PermissionError /
+# UnicodeDecodeError) instead of ParseError — a user-reachable error (a bad
+# --blueprint CLI argument) escaping without an AqueductError subclass or
+# exit-code mapping.
+
+
+def test_parse_directory_path_raises_parse_error(tmp_path):
+    from aqueduct.parser.parser import ParseError
+
+    with pytest.raises(ParseError, match="directory"):
+        parse(tmp_path)
+
+
+def test_parse_non_utf8_file_raises_parse_error(tmp_path):
+    from aqueduct.parser.parser import ParseError
+
+    bad_file = tmp_path / "binary.yml"
+    bad_file.write_bytes(b"\xff\xfe\x00\x01not utf-8")
+    with pytest.raises(ParseError, match="not valid UTF-8"):
+        parse(bad_file)
+
+
+def test_parse_unreadable_file_raises_parse_error(tmp_path):
+    import os
+
+    from aqueduct.parser.parser import ParseError
+
+    unreadable = tmp_path / "no_perms.yml"
+    unreadable.write_text("aqueduct: '1.0'\nid: t\nname: T\n")
+    unreadable.chmod(0o000)
+    try:
+        if os.access(unreadable, os.R_OK):
+            pytest.skip("running as a user that bypasses file permissions (e.g. root)")
+        with pytest.raises(ParseError, match="Permission denied"):
+            parse(unreadable)
+    finally:
+        unreadable.chmod(0o644)
+
+
 # ── Phase 36 Part B — schema-driven anchoring via path_keys registry ─────────
 
 
 def test_path_keys_registry_per_module_type():
     """Registry returns a strict tuple for every module type — Pass C
     (2026-08) audited all 9 types' real config-key readers and found only
-    Ingress/Egress `path` and UDF `jar` are genuine filesystem-path keys;
-    `data_dir`/`input_dir`/`output_dir` (previously registered on
+    Ingress/Egress `path` and UDF `jar`/`path` are genuine filesystem-path
+    keys; `data_dir`/`input_dir`/`output_dir` (previously registered on
     Ingress/Egress) and `jar` on Ingress/Egress specifically were dead
     entries nothing ever read — dropped. The legacy blanket-tuple fallback
-    is now empty; every type has an explicit row."""
+    is now empty; every type has an explicit row. UDF's `path` was added
+    2026-08 (audit triage) alongside actually wiring the anchoring call
+    site — `UdfSchema` accepts `path` as an alternate to `jar` for the same
+    JAR location, and both need anchoring for the same reason."""
     pytest.importorskip("pyspark")
     from aqueduct.executor.path_keys import get_path_keys
     assert get_path_keys("Ingress") == ("path",)
     assert get_path_keys("Egress") == ("path",)
-    assert get_path_keys("UDF") == ("jar",)
+    assert get_path_keys("UDF") == ("jar", "path")
     assert get_path_keys("Channel") == ()
     assert get_path_keys("Junction") == ()
     assert get_path_keys("Funnel") == ()
