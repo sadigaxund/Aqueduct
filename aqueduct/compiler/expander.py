@@ -318,10 +318,24 @@ def _expand_recursive(
                 return {k: _replace_ids(v) for k, v in val.items()}
             return val
 
-        # Update references in all modules (processed and pending)
-        for other_m in (result_modules + modules):
-            if other_m.config and "inputs" in other_m.config and m.id in other_m.config["inputs"]:
-                other_m.config["inputs"] = _replace_ids(other_m.config["inputs"])
+        # Update references in all modules (processed and pending). Replaced
+        # by INDEX with a new Module (dataclasses.replace) rather than
+        # mutating `other_m.config["inputs"]` in place — the latter "works"
+        # (Python dataclasses aren't truly immutable) but breaks the
+        # provenance chain, since every other compile step returns a new
+        # object on change (AGENTS.md Immutability rule / Common Pitfalls).
+        # Mutating by index (not by rebinding `result_modules`/`modules`)
+        # keeps the same "visible to later iterations of the outer `for m in
+        # modules:` loop" behavior the in-place dict mutation relied on —
+        # a later Arcade whose own `inputs` references THIS arcade's id must
+        # still see the rewritten value when its turn comes.
+        for lst in (result_modules, modules):
+            for i, other_m in enumerate(lst):
+                if other_m.config and "inputs" in other_m.config and m.id in other_m.config["inputs"]:
+                    lst[i] = dataclasses.replace(
+                        other_m,
+                        config={**other_m.config, "inputs": _replace_ids(other_m.config["inputs"])},
+                    )
 
         # Replace edges touching this Arcade with rewired ones
         edges = [

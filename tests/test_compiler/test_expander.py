@@ -67,6 +67,27 @@ class TestArcadeExpansion:
         with pytest.raises(CompileError, match="blueprint_path"):
             compile(bp)
 
+    def test_funnel_inputs_referencing_arcade_id_rewired_to_exit_module(self):
+        """A Funnel's config.inputs list may reference an Arcade's id
+        directly (not just via edges) — expansion must rewrite that entry
+        to the arcade's exit-module id. Also proves the rewrite goes
+        through dataclasses.replace() rather than mutating another frozen
+        Module's config dict in place: the original parsed Blueprint's
+        Module objects (bp.modules) must be untouched after compile."""
+        path = FIXTURES / "valid_with_arcade_funnel.yml"
+        bp = parse(path)
+        original_funnel = next(m for m in bp.modules if m.id == "combined")
+        original_inputs_snapshot = list(original_funnel.config["inputs"])
+
+        manifest = compile(bp, blueprint_path=path)
+
+        funnel = next(m for m in manifest.modules if m.id == "combined")
+        assert funnel.config["inputs"] == ["source_a", "enricher__step_two"]
+        # The pre-compile Blueprint's own Module object must be unchanged —
+        # proves the fix does not mutate a shared/aliased config dict that
+        # could leak the rewrite backward into the parsed Blueprint.
+        assert original_funnel.config["inputs"] == original_inputs_snapshot
+
     def test_arcade_missing_required_context_raises(self, tmp_path):
         arcade_file = tmp_path / "req_arcade.yml"
         arcade_file.write_text(

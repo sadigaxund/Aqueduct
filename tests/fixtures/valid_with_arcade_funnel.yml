@@ -1,0 +1,48 @@
+aqueduct: "1.0"
+id: blueprint.arcade.funnel.test
+name: "Arcade + Funnel Inputs Rewiring Test"
+description: >
+  Regression fixture: a Funnel's config.inputs list references an Arcade's
+  id directly. Expansion must rewrite that id to the arcade's exit-module
+  id(s) WITHOUT mutating any other frozen Module in place (audit triage,
+  compiler report, finding 6).
+
+context:
+  env: dev
+
+modules:
+  - id: source_a
+    type: Ingress
+    label: "Source A"
+    config:
+      format: parquet
+      path: data/a.parquet
+
+  - id: enricher
+    type: Arcade
+    label: "Enrichment Arcade"
+    ref: arcades/simple_enrich.yml
+    context_override: {}
+
+  - id: combined
+    type: Funnel
+    label: "Combined"
+    config:
+      mode: union_all
+      inputs: [source_a, enricher]
+
+  - id: sink
+    type: Egress
+    label: "Sink"
+    config:
+      format: parquet
+      path: data/output.parquet
+      mode: overwrite
+
+edges:
+  - from: source_a
+    to: combined
+  - from: enricher
+    to: combined
+  - from: combined
+    to: sink
