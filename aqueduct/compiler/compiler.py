@@ -168,8 +168,7 @@ def compile(  # noqa: A001
     # ── 1. Resolve Tier 1 in context values ───────────────────────────────────
     try:
         resolved_ctx: dict[str, str] = {
-            k: resolve_tier1(v, registry)
-            for k, v in blueprint.context.values.items()
+            k: resolve_tier1(v, registry) for k, v in blueprint.context.values.items()
         }
     except (ValueError, RuntimeError, CompileError) as exc:
         raise CompileError(f"Tier 1 context resolution failed: {exc}") from exc
@@ -186,9 +185,7 @@ def compile(  # noqa: A001
 
     # ── 3. Resolve Tier 1 in module configs ───────────────────────────────────
     try:
-        modules: list[Module] = [
-            _resolve_module_tier1(m, registry) for m in blueprint.modules
-        ]
+        modules: list[Module] = [_resolve_module_tier1(m, registry) for m in blueprint.modules]
     except (ValueError, RuntimeError, CompileError) as exc:
         raise CompileError(f"Tier 1 module config resolution failed: {exc}") from exc
 
@@ -218,8 +215,10 @@ def compile(  # noqa: A001
         except Exception:
             logger.warning("Failed to load raw YAML for provenance from %s", blueprint_path)
 
-    context_provenance: dict[str, ValueProvenance] = build_config_provenance(raw_context, resolved_ctx)
-    
+    context_provenance: dict[str, ValueProvenance] = build_config_provenance(
+        raw_context, resolved_ctx
+    )
+
     module_provenance: dict[str, ModuleProvenance] = {}
     for m in modules:
         if m.type == ModuleType.Arcade:
@@ -240,9 +239,14 @@ def compile(  # noqa: A001
     # need explicit wiring (their ports are ambiguous in a flat chain), so a
     # Blueprint that omits edges while using them is a hard error rather than a
     # silent miswire. Injected edges carry `injected=True` for provenance.
-    _LINEAR_CHAIN_TYPES: frozenset[str] = frozenset({
-        ModuleType.Ingress, ModuleType.Channel, ModuleType.Egress, ModuleType.Assert,
-    })
+    _LINEAR_CHAIN_TYPES: frozenset[str] = frozenset(
+        {
+            ModuleType.Ingress,
+            ModuleType.Channel,
+            ModuleType.Egress,
+            ModuleType.Assert,
+        }
+    )
     edges = list(blueprint.edges)
     if not edges and len(modules) > 1:
         _nonlinear = [m for m in modules if m.type not in _LINEAR_CHAIN_TYPES]
@@ -295,14 +299,18 @@ def compile(  # noqa: A001
     # while the rest of the pipeline still compiles (Pass G1; see
     # AssertRuleType's docstring).
     _AGG_NO_QUARANTINE = {
-        AssertRuleType.MIN_ROWS, AssertRuleType.MAX_ROWS, AssertRuleType.SQL, AssertRuleType.NULL_RATE,
+        AssertRuleType.MIN_ROWS,
+        AssertRuleType.MAX_ROWS,
+        AssertRuleType.SQL,
+        AssertRuleType.NULL_RATE,
     }
     _ROW_QUARANTINE_CAPABLE = {
-        AssertRuleType.NOT_NULL, AssertRuleType.FRESHNESS, AssertRuleType.SQL_ROW, AssertRuleType.CUSTOM,
+        AssertRuleType.NOT_NULL,
+        AssertRuleType.FRESHNESS,
+        AssertRuleType.SQL_ROW,
+        AssertRuleType.CUSTOM,
     }
-    _assert_spillway_ids = {
-        e.from_id for e in edges if e.port == "spillway"
-    }
+    _assert_spillway_ids = {e.from_id for e in edges if e.port == "spillway"}
     for m in modules:
         if m.type != ModuleType.Assert:
             continue
@@ -356,7 +364,11 @@ def compile(  # noqa: A001
             # file metadata to stat.
             inputs_fingerprint[m.id] = {"table": table, "size_bytes": None, "last_modified": None}
             continue
-        if not path or fmt in PATHLESS_INGRESS_FORMATS or any(path.startswith(s) for s in CLOUD_SCHEMES):
+        if (
+            not path
+            or fmt in PATHLESS_INGRESS_FORMATS
+            or any(path.startswith(s) for s in CLOUD_SCHEMES)
+        ):
             inputs_fingerprint[m.id] = {"path": path, "size_bytes": None, "last_modified": None}
             continue
         try:
@@ -408,9 +420,13 @@ def compile(  # noqa: A001
                 "least one root module (check the active context profile)."
             )
         import dataclasses as _dc
+
         modules = [
-            _dc.replace(m, enabled=False, disabled_reason=_disabled[m.id])
-            if m.id in _disabled else m
+            (
+                _dc.replace(m, enabled=False, disabled_reason=_disabled[m.id])
+                if m.id in _disabled
+                else m
+            )
             for m in modules
         ]
 
@@ -445,6 +461,7 @@ def compile(  # noqa: A001
     # up is a pure reorder, not a behavior change for the checks below.
     from aqueduct.warnings import _DEFAULT_SUPPRESS
     from aqueduct.warnings import emit as _aq_emit
+
     # Per-Blueprint suppression (`blueprint.warning_suppress`, from the
     # Blueprint's own `warnings:` block) is unioned with the engine-level
     # suppress set HERE, scoped to this one compile pass only — it never
@@ -453,8 +470,7 @@ def compile(  # noqa: A001
     # Covers 6.9, sections 7/8, and the modular registry pass (Phase 30a
     # tier 1) further down.
     _supp = (
-        set(warnings_suppress) if warnings_suppress is not None
-        else set(_DEFAULT_SUPPRESS)
+        set(warnings_suppress) if warnings_suppress is not None else set(_DEFAULT_SUPPRESS)
     ) | set(blueprint.warning_suppress)
     if warnings_silence_all:
         _supp = {"*"}  # universal suppress sentinel — emit() short-circuits on "*"
@@ -512,7 +528,12 @@ def compile(  # noqa: A001
     # ── 8. Performance diagnostics ────────────────────────────────────────────
 
     # 8a. Probe sample() signals — full dataset scan despite the name
-    _SAMPLE_SCAN_SIGNALS = {"null_rates", "row_count_estimate", "value_distribution", "distinct_count"}
+    _SAMPLE_SCAN_SIGNALS = {
+        "null_rates",
+        "row_count_estimate",
+        "value_distribution",
+        "distinct_count",
+    }
     for m in modules:
         if m.type != ModuleType.Probe:
             continue
@@ -577,9 +598,10 @@ def compile(  # noqa: A001
     # Skipped when the Blueprint enables Arrow-optimized Python UDFs
     # (spark.sql.execution.pythonUDF.arrow.enabled, Spark 3.5+) — then the
     # claim simply isn't true and the warning would be noise.
-    _arrow_udf_enabled = str(
-        blueprint.spark_config.get("spark.sql.execution.pythonUDF.arrow.enabled", "")
-    ).lower() == "true"
+    _arrow_udf_enabled = (
+        str(blueprint.spark_config.get("spark.sql.execution.pythonUDF.arrow.enabled", "")).lower()
+        == "true"
+    )
     if not _arrow_udf_enabled:
         for udf_entry in blueprint.udf_registry:
             if udf_entry.get("lang", "python") == "python":
@@ -642,7 +664,8 @@ def compile(  # noqa: A001
         if m.type != ModuleType.Ingress:
             continue
         bad_keys = [
-            k for k in m.config.get("options", {})
+            k
+            for k in m.config.get("options", {})
             if any(str(k).startswith(p) for p in _HADOOP_FS_PREFIXES)
         ]
         if bad_keys:
@@ -778,20 +801,26 @@ def compile(  # noqa: A001
     for _isl in _islands:
         _island_modules = tuple(m for m in manifest.modules if m.id in _isl.module_ids)
         _island_udf_registry = tuple(
-            u for u in manifest.udf_registry
+            u
+            for u in manifest.udf_registry
             if isinstance(u, dict) and _isl in _udf_islands.get(u.get("id"), set())
         )
         _island_manifest = dataclasses.replace(
-            manifest, modules=_island_modules, udf_registry=_island_udf_registry,
+            manifest,
+            modules=_island_modules,
+            udf_registry=_island_udf_registry,
         )
         _cap_problems = check_capabilities(_island_manifest, engine=_isl.engine)
         _unsupported = [p for p in _cap_problems if p.support == Support.UNSUPPORTED]
         _unsupported_msgs.extend(format_unsupported_error(p, _isl.engine) for p in _unsupported)
         if not warnings_silence_all:
             from aqueduct.warnings import emit as _emit_cap
+
             for _p in _cap_problems:
                 if _p.support == Support.IGNORED_WITH_WARNING:
-                    _emit_cap(RULE_ID_IGNORED, format_ignored_warning(_p, _isl.engine), suppress=_supp)
+                    _emit_cap(
+                        RULE_ID_IGNORED, format_ignored_warning(_p, _isl.engine), suppress=_supp
+                    )
     if _unsupported_msgs:
         raise CompileError(f"Engine capability gate failed: {'; '.join(_unsupported_msgs)}")
 
@@ -815,6 +844,7 @@ def compile(  # noqa: A001
     # per DISTINCT island engine, de-duplicated so two islands sharing an
     # engine don't double-report the same record.
     from aqueduct.warnings import _DEFAULT_STRICT
+
     _strict = set(warnings_strict) if warnings_strict is not None else set(_DEFAULT_STRICT)
     _cross_engine_problems: list = []
     for _isl_engine in sorted({isl.engine for isl in _islands}) or [engine]:
@@ -825,8 +855,11 @@ def compile(  # noqa: A001
             raise CompileError(f"Cross-engine heal-patch gate failed (warnings.strict): {_msgs}")
         if not warnings_silence_all:
             from aqueduct.warnings import emit as _emit_xh
+
             for _p in _cross_engine_problems:
-                _emit_xh(RULE_ID_CROSS_ENGINE_HEAL, format_cross_engine_heal_warning(_p), suppress=_supp)
+                _emit_xh(
+                    RULE_ID_CROSS_ENGINE_HEAL, format_cross_engine_heal_warning(_p), suppress=_supp
+                )
 
     # ── Phase 30a tier 1 — extended Spark warnings (modular registry) ─────────
     # `_supp` (section 7) already carries engine-level ∪ per-Blueprint suppress.
@@ -834,9 +867,11 @@ def compile(  # noqa: A001
         try:
             from aqueduct.compiler.warnings import run_all as _run_compile_warnings
             from aqueduct.warnings import emit as _emit
+
             _warn_manifest = manifest
             if any(not m.enabled for m in manifest.modules):
                 import dataclasses as _dc3
+
                 _warn_manifest = _dc3.replace(
                     manifest,
                     modules=tuple(m for m in manifest.modules if m.enabled),

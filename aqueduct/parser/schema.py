@@ -21,7 +21,9 @@ from aqueduct.parser.models import ModuleType
 # below gives it a dedicated, clearer rejection message than the generic
 # "unknown module type" one.
 _COMPILER_SYNTHESIZED_TYPES: frozenset[str] = frozenset({ModuleType.Handoff})
-VALID_MODULE_TYPES: frozenset[str] = frozenset(m.value for m in ModuleType) - _COMPILER_SYNTHESIZED_TYPES
+VALID_MODULE_TYPES: frozenset[str] = (
+    frozenset(m.value for m in ModuleType) - _COMPILER_SYNTHESIZED_TYPES
+)
 
 # Note: edge `port` is NOT constrained to a fixed set at schema level — Junction
 # branch ids are valid dynamic port names, so membership is validated downstream
@@ -33,7 +35,9 @@ class BackoffSchema(BaseModel):
 
     strategy: Literal["linear", "exponential", "fixed"] = "exponential"
     base_seconds: int = Field(default=30, ge=1, description="Base backoff delay in seconds (>= 1)")
-    max_seconds: int = Field(default=600, ge=1, description="Maximum backoff delay in seconds (>= 1)")
+    max_seconds: int = Field(
+        default=600, ge=1, description="Maximum backoff delay in seconds (>= 1)"
+    )
     jitter: bool = True
 
 
@@ -45,7 +49,9 @@ class RetryPolicySchema(BaseModel):
     transient_errors: list[Any] = Field(default_factory=list)
     non_transient_errors: list[str] = Field(default_factory=list)
     on_exhaustion: Literal["trigger_agent", "abort", "alert_only"] = "trigger_agent"
-    deadline_seconds: int | None = Field(default=None, gt=0, description="Retry deadline in seconds (> 0 if set)")
+    deadline_seconds: int | None = Field(
+        default=None, gt=0, description="Retry deadline in seconds (> 0 if set)"
+    )
 
 
 class ModuleRetrySchema(BaseModel):
@@ -58,14 +64,32 @@ class ModuleRetrySchema(BaseModel):
     ``backoff`` overrides as a whole block (not merged field-by-field) —
     set it entirely or omit it entirely.
     """
+
     model_config = ConfigDict(extra="forbid")
 
-    max_attempts: int | None = Field(default=None, ge=1, description="Maximum retry attempts (>= 1); inherits blueprint retry_policy when unset")
-    backoff: BackoffSchema | None = Field(default=None, description="Whole-block override; inherits blueprint retry_policy.backoff when unset")
-    transient_errors: list[Any] | None = Field(default=None, description="Inherits blueprint retry_policy.transient_errors when unset")
-    non_transient_errors: list[str] | None = Field(default=None, description="Inherits blueprint retry_policy.non_transient_errors when unset")
-    on_exhaustion: Literal["trigger_agent", "abort", "alert_only"] | None = Field(default=None, description="Inherits blueprint retry_policy.on_exhaustion when unset")
-    deadline_seconds: int | None = Field(default=None, gt=0, description="Inherits blueprint retry_policy.deadline_seconds when unset (no module-level way to explicitly clear an inherited deadline)")
+    max_attempts: int | None = Field(
+        default=None,
+        ge=1,
+        description="Maximum retry attempts (>= 1); inherits blueprint retry_policy when unset",
+    )
+    backoff: BackoffSchema | None = Field(
+        default=None,
+        description="Whole-block override; inherits blueprint retry_policy.backoff when unset",
+    )
+    transient_errors: list[Any] | None = Field(
+        default=None, description="Inherits blueprint retry_policy.transient_errors when unset"
+    )
+    non_transient_errors: list[str] | None = Field(
+        default=None, description="Inherits blueprint retry_policy.non_transient_errors when unset"
+    )
+    on_exhaustion: Literal["trigger_agent", "abort", "alert_only"] | None = Field(
+        default=None, description="Inherits blueprint retry_policy.on_exhaustion when unset"
+    )
+    deadline_seconds: int | None = Field(
+        default=None,
+        gt=0,
+        description="Inherits blueprint retry_policy.deadline_seconds when unset (no module-level way to explicitly clear an inherited deadline)",
+    )
 
 
 class GuardrailsSchema(BaseModel):
@@ -87,6 +111,7 @@ class CascadeTierSchema(BaseModel):
     Every field is optional. Missing fields inherit from the top-level
     ``agent.*`` defaults.
     """
+
     model_config = ConfigDict(extra="forbid")
 
     model: str
@@ -273,6 +298,7 @@ class ModuleCommonSchema(BaseModel):
     ``module.field.<name>`` capability-leaf ids (they didn't move; only the
     type-specific surface did).
     """
+
     model_config = ConfigDict(extra="forbid")
 
     id: str
@@ -326,9 +352,11 @@ class ModuleCommonSchema(BaseModel):
 
 # ── Nested / list-item blocks (own capability-leaf prefix each) ────────────
 
+
 class IngressTimeTravelSchema(BaseModel):
     """Ingress ``time_travel:`` — pin a Delta/Iceberg historical snapshot.
     Exactly one of ``version``/``timestamp`` (enforced at read time)."""
+
     model_config = ConfigDict(extra="forbid")
 
     version: int | None = None
@@ -340,6 +368,7 @@ class EgressMaintenanceSchema(BaseModel):
     Field applicability is format-specific (see ``spark/egress.py::build_maintenance_ops``):
     delta uses optimize/zorder_by/vacuum; iceberg uses rewrite_data_files/
     expire_snapshots; hudi uses compaction/clean."""
+
     model_config = ConfigDict(extra="forbid")
 
     optimize: bool | None = None
@@ -355,6 +384,7 @@ class JunctionBranchSchema(BaseModel):
     """One Junction fan-out branch. ``condition`` required for `mode:
     conditional` (the sentinel ``"_else_"`` catches unmatched rows);
     ``value`` optional for `mode: partition` (falls back to ``id``)."""
+
     model_config = ConfigDict(extra="forbid")
 
     id: str
@@ -369,6 +399,7 @@ class ProbeSignalSchema(BaseModel):
     ``CascadeTierSchema``) rather than a second-level discriminated union,
     since most fields are shared across several signal types (``fraction``,
     ``columns``) and the type set only grows by hand-curated additions."""
+
     model_config = ConfigDict(extra="forbid")
 
     type: str
@@ -405,6 +436,7 @@ class ProbeSignalSchema(BaseModel):
 class AssertOnFailBlockSchema(BaseModel):
     """Assert rule ``on_fail:`` as a block (vs. the bare-string shorthand) —
     only ``action: webhook`` uses ``url``."""
+
     model_config = ConfigDict(extra="forbid")
 
     action: Literal["abort", "warn", "webhook", "quarantine", "trigger_agent"]
@@ -446,6 +478,7 @@ class AssertRuleSchema(BaseModel):
     """One Assert rule. Field applicability is rule-``type``-specific — see
     ``spark/assert_.py`` module docstring for the full per-type contract.
     Flat and mostly-optional (same rationale as ``ProbeSignalSchema``)."""
+
     model_config = ConfigDict(extra="forbid")
 
     type: Literal[*(m.value for m in AssertRuleType)]
@@ -458,7 +491,11 @@ class AssertRuleSchema(BaseModel):
     # `24_assert_types_full` during Pass C — those WERE synonyms silently
     # no-oping the rule).
     id: str | None = None
-    on_fail: Literal["abort", "warn", "webhook", "quarantine", "trigger_agent"] | AssertOnFailBlockSchema | None = None
+    on_fail: (
+        Literal["abort", "warn", "webhook", "quarantine", "trigger_agent"]
+        | AssertOnFailBlockSchema
+        | None
+    ) = None
     # generic across every rule type
     error_type: str | None = None
     # schema_match (required there)
@@ -483,6 +520,7 @@ class AssertRuleSchema(BaseModel):
 
 
 # ── Per-type `config:` sub-models ───────────────────────────────────────────
+
 
 class IngressConfigSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -552,10 +590,18 @@ class ChannelConfigSchema(BaseModel):
     column: str | None = None
     col: str | None = None
     # op: cache
-    storage_level: Literal[
-        "MEMORY_AND_DISK", "MEMORY_AND_DISK_SER", "MEMORY_ONLY", "MEMORY_ONLY_SER",
-        "DISK_ONLY", "DISK_ONLY_2", "OFF_HEAP",
-    ] | None = None
+    storage_level: (
+        Literal[
+            "MEMORY_AND_DISK",
+            "MEMORY_AND_DISK_SER",
+            "MEMORY_ONLY",
+            "MEMORY_ONLY_SER",
+            "DISK_ONLY",
+            "DISK_ONLY_2",
+            "OFF_HEAP",
+        ]
+        | None
+    ) = None
     # op: union
     allow_missing_columns: bool | None = None
     # applies to any op — forces a Spark stage-cut for accurate per-module metrics
@@ -569,9 +615,18 @@ class EgressConfigSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     format: str | None = None
-    mode: Literal[
-        "overwrite", "append", "error", "errorifexists", "ignore", "merge", "overwrite_partitions",
-    ] | None = None
+    mode: (
+        Literal[
+            "overwrite",
+            "append",
+            "error",
+            "errorifexists",
+            "ignore",
+            "merge",
+            "overwrite_partitions",
+        ]
+        | None
+    ) = None
     table: str | None = None
     path: Annotated[str, FsPath()] | None = None
     partition_by: list[str] | None = None
@@ -643,6 +698,7 @@ class ArcadeConfigSchema(BaseModel):
     module-top-level fields (see `ArcadeSchema`), not `config:` entries.
     Zero fields + `extra="forbid"` so a stray `config:` block on an Arcade
     module is a structural rejection, not a silent freeform accept."""
+
     model_config = ConfigDict(extra="forbid")
 
 
@@ -653,6 +709,7 @@ class AssertConfigSchema(BaseModel):
 
 
 # ── Per-type module schemas (the discriminated union members) ──────────────
+
 
 class IngressSchema(ModuleCommonSchema):
     type: Literal["Ingress"]
@@ -745,8 +802,15 @@ MODULE_NESTED_SCHEMA_BLOCKS: tuple[tuple[str, type[BaseModel]], ...] = (
 # (mode="before") to give the Handoff-rejection and unknown-type messages
 # their pre-Pass-C wording instead of pydantic's generic discriminator error.
 ModuleSchema = Annotated[
-    IngressSchema | ChannelSchema | EgressSchema | JunctionSchema | FunnelSchema
-    | ProbeSchema | RegulatorSchema | ArcadeSchema | AssertSchema,
+    IngressSchema
+    | ChannelSchema
+    | EgressSchema
+    | JunctionSchema
+    | FunnelSchema
+    | ProbeSchema
+    | RegulatorSchema
+    | ArcadeSchema
+    | AssertSchema,
     Field(discriminator="type"),
 ]
 
@@ -771,11 +835,12 @@ class UdfSchema(BaseModel):
     """A UDF registry entry. Matches the executor's registration contract:
     python UDFs import ``module``/``entry``; java/scala UDFs load ``jar``/``class``.
     """
+
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     id: str
     lang: Literal["python", "java", "scala"] = "python"
-    return_type: str | None = None      # executor defaults to "string" when absent
+    return_type: str | None = None  # executor defaults to "string" when absent
     label: str | None = None
     deterministic: bool = True
     # python: import `entry` (defaults to `id`) from `module`
@@ -807,6 +872,7 @@ class SparkEngineBlockSchema(BaseModel):
     a Blueprint doesn't pick a cluster to run on, that's a deployment
     concern; only the engine-level `engine.spark:` block has one.
     """
+
     model_config = ConfigDict(extra="forbid")
 
     conf: dict[str, Any] = Field(
@@ -825,6 +891,7 @@ class DuckDBEngineBlockSchema(BaseModel):
     Empty today — see ``aqueduct.config.DuckDBEngineConfig`` for why no
     field is declared until something actually reads it.
     """
+
     model_config = ConfigDict(extra="forbid")
 
 
@@ -841,6 +908,7 @@ class EngineBlockSchema(BaseModel):
     configures an engine's session behaviour; the module field picks which
     engine a module runs on. Never confuse the two in error messages.
     """
+
     model_config = ConfigDict(extra="forbid")
 
     spark: SparkEngineBlockSchema = Field(default_factory=SparkEngineBlockSchema)
@@ -858,6 +926,7 @@ class WarningsSchema(BaseModel):
     NOT touch engine/session warnings, runtime (probe/assert) warnings, or the
     process-global `set_default_suppress` default — those stay engine-wide.
     """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     suppress: list[str] = Field(
@@ -866,7 +935,7 @@ class WarningsSchema(BaseModel):
             "List of compile-warning `rule_id` strings to silence for this "
             "Blueprint only. Merged (union) with the engine-level "
             "`warnings.suppress` from aqueduct.yml / `--suppress-warning`. "
-            "The single entry `\"*\"` silences every compile warning for "
+            'The single entry `"*"` silences every compile warning for '
             "this Blueprint."
         ),
     )
@@ -885,6 +954,7 @@ class HookEntrySchema(BaseModel):
       requires `danger.allow_command_hooks: true` in aqueduct.yml; entries
       are skipped with a warning otherwise.
     """
+
     model_config = ConfigDict(extra="forbid")
 
     blueprint: str | None = None
@@ -931,6 +1001,7 @@ class HooksSchema(BaseModel):
     `webhooks:` block in aqueduct.yml (ops-owned alerting that fires
     regardless of what the Blueprint declares).
     """
+
     model_config = ConfigDict(extra="forbid")
 
     on_success: list[HookEntrySchema] = Field(default_factory=list)
@@ -962,6 +1033,7 @@ class HealedByRecordSchema(BaseModel):
     and ``docs/specs.md`` §8). Purely compiler-consumed metadata — no engine
     reads or executes this block at runtime.
     """
+
     model_config = ConfigDict(extra="forbid")
 
     patch_id: str
