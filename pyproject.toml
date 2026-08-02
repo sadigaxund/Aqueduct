@@ -45,7 +45,17 @@ spark = ["pyspark>=4.0,<5.0", "delta-spark>=4.0,<5.0"]
 # `pip install aqueduct-core[duckdb]` documents the engine as an explicit
 # install target — matching the `[spark]` extra's shape — and pins the
 # floor the duckdb_ engine package is written against.
-duckdb = ["duckdb>=0.10.0", "sqlglot>=23.0.0"]
+# numpy is a REAL new dependency this extra adds (not documentation-only
+# like the two lines above): DuckDB's `conn.create_function()` — the only
+# way `duckdb_/udf.py` registers a Python UDF — requires numpy internally
+# for its own argument/result marshalling, unconditionally, regardless of
+# the declared return type or `type="native"`/`type="arrow"` mode (measured
+# against the installed duckdb build, not assumed from docs). There is no
+# type mapping that avoids it, so it is declared here rather than raised as
+# a surprise mid-run. `pyspark` does not reliably pull numpy in either (it
+# is behind pyspark's own `ml`/`mllib`/`sql` extras, not a base dependency),
+# so this cannot ride in on the `spark` extra.
+duckdb = ["duckdb>=0.10.0", "sqlglot>=23.0.0", "numpy>=1.21"]
 aws = ["boto3>=1.34"]
 gcp = ["google-cloud-secret-manager>=2.20"]
 azure = ["azure-keyvault-secrets>=4.8", "azure-identity>=1.17"]

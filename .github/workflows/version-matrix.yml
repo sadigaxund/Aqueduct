@@ -37,7 +37,12 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-      - run: pip install -e ".[dev,spark,postgres,redis]"
+      # `duckdb` extra pulls numpy — required unconditionally by DuckDB's
+      # own conn.create_function() for Python UDF registration (see
+      # pyproject.toml's [duckdb] extra comment). This job's marker
+      # ("not spark and not integration and not agent") does not exclude
+      # duckdb-marked tests, so tests/test_executor_duckdb/ runs here too.
+      - run: pip install -e ".[dev,spark,postgres,redis,duckdb]"
       - run: |
           set +e
           pytest -m "not spark and not integration and not agent" --no-cov -q --junitxml=results.xml
@@ -90,7 +95,11 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-      - run: pip install -e ".[dev,spark,llm]"
+      # `duckdb` extra pulls numpy — the matrix includes engine: duckdb, and
+      # snippet 05_channel_sql_udf's Python UDF hits DuckDB's
+      # conn.create_function(), which requires numpy unconditionally (see
+      # pyproject.toml's [duckdb] extra comment).
+      - run: pip install -e ".[dev,spark,llm,duckdb]"
       - run: bash scripts/run_snippets.sh -e ${{ matrix.engine }}
 
   # BLOCKING snippet lane (Phase 78) — the PROMISE-lane counterpart to the
@@ -145,7 +154,9 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-      - run: pip install -e ".[dev,spark,llm]"
+      # duckdb extra pulls numpy — see the snippets canary job's identical
+      # comment above; this BLOCKING lane runs the same engine matrix.
+      - run: pip install -e ".[dev,spark,llm,duckdb]"
       - run: bash scripts/run_snippets.sh -e ${{ matrix.engine }}
 
   # PROMISE LANES (Phase 78): the 3 pinned combos below (LTS / Latest / Legacy)
@@ -243,7 +254,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -e ".[dev,postgres,redis]"
+          # duckdb extra pulls numpy — this job's test run below explicitly
+          # includes tests/test_executor_duckdb/ with -m "spark or duckdb",
+          # and DuckDB's conn.create_function() requires numpy
+          # unconditionally (see pyproject.toml's [duckdb] extra comment).
+          pip install -e ".[dev,postgres,redis,duckdb]"
           if [ "${{ matrix.pyspark }}" = "3.5.8" ]; then
             pip install pyspark==${{ matrix.pyspark }} delta-spark==${{ matrix.delta }}
           else

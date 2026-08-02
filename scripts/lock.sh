@@ -41,6 +41,7 @@ uv pip compile pyproject.toml \
   --extra mcp \
   --extra tui \
   --extra dashboard \
+  --extra duckdb \
   --output-file requirements/ci-py311.txt
 
 # ── 2. requirements/compat-py3XX.txt ──────────────────────────────────────────
@@ -55,6 +56,7 @@ for PY in 3.11 3.12 3.13; do
     --extra dev \
     --extra postgres \
     --extra redis \
+    --extra duckdb \
     --output-file "requirements/compat-py${PY}.txt"
 done
 

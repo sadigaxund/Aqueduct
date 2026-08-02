@@ -517,7 +517,13 @@ jobs:
           key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
           restore-keys: |
             pip-${{ runner.os }}-py3.11-
-      - run: pip install -e ".[dev,llm,redis]"
+      # `duckdb` extra pulls numpy — DuckDB's own conn.create_function()
+      # requires it unconditionally for Python UDF registration (see
+      # pyproject.toml's [duckdb] extra comment). Without it this job's
+      # tests/test_executor_duckdb/test_udf.py fails with a raw DuckDB
+      # "'numpy' is required" error, only masked locally by numpy already
+      # being present in a dev environment.
+      - run: pip install -e ".[dev,llm,redis,duckdb]"
       - run: |
           set +e
           pytest tests/test_executor_duckdb/ -m "not spark" --junitxml=results.xml
@@ -783,7 +789,11 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-      - run: pip install -e ".[dev,spark,llm,redis,stores]"
+      # `duckdb` extra pulls numpy, required by tests/test_executor_duckdb/
+      # (conn.create_function() — see pyproject.toml's [duckdb] extra
+      # comment). This job scans the whole suite with no path filter, so it
+      # hits those tests too.
+      - run: pip install -e ".[dev,spark,llm,redis,stores,duckdb]"
       - run: |
           set +e
           pytest --cov=aqueduct --cov-report=term-missing --cov-fail-under=68 -m "not spark" --junitxml=results.xml

@@ -182,6 +182,10 @@ pip freeze > requirements.txt
 
 Python ecosystem doesn't lock by default: that's a `pip` reality, not an Aqueduct constraint.
 
+### The `duckdb` extra pulls numpy
+
+`aqueduct-core[duckdb]` (`pyproject.toml`) declares `numpy` alongside its `duckdb`/`sqlglot` pins. DuckDB's own `conn.create_function()` — how `aqueduct/executor/duckdb_/udf.py` registers a Python UDF — requires numpy internally, unconditionally, regardless of the UDF's declared `return_type` or execution mode; there is no type mapping that avoids it. `duckdb` and `sqlglot` are already base dependencies (the observability/depot/benchmark stores need `duckdb` regardless of execution engine), so numpy is the first dependency the `[duckdb]` extra actually adds rather than just documents. `pyspark` does not reliably pull numpy in either — it sits behind pyspark's own `ml`/`mllib`/`sql` extras, not a base dependency — so a plain `aqueduct-core[spark]` install cannot be relied on to supply it.
+
 ## Out of scope
 
 - **Spark 3.x**: tested via the Legacy CI combo (PySpark 3.5.8 + Delta 3.3.0) but not officially supported. The `pyproject.toml` pin remains `>=4.0,<5.0`; the Legacy lane is a compatibility signal only.
