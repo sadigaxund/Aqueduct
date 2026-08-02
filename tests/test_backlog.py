@@ -61,3 +61,33 @@ def test_unparseable_dialect_construct_does_not_over_reject_a_valid_polyglot_blu
         leaving it untested and undocumented).
     """
 
+
+@pytest.mark.todo(
+    "aqueduct.compiler.runtime._java_to_strftime only maps yyyy/MM/dd/yy/"
+    "HH/mm/ss — Java SimpleDateFormat's month-name (MMM), day-name (EEE), "
+    "and millisecond (SSS) patterns still pass through as literal text"
+)
+def test_java_to_strftime_month_day_name_and_millis_patterns():
+    """
+    intended: tests/test_compiler/test_runtime.py
+
+    context: `_java_to_strftime` (aqueduct/compiler/runtime.py) is a naive
+        ordered string-replace, not a real SimpleDateFormat tokenizer.
+        Audit triage (2026-08) confirmed and fixed the HH/mm/ss gap (a
+        `date`, having no time component, rendered "00:00:00" instead of
+        the previous literal-text passthrough). MMM (month abbreviation,
+        e.g. "Aug"), EEE (day-of-week abbreviation, e.g. "Sun"), and SSS
+        (milliseconds — meaningless on a bare `date` object, which is all
+        every @aq.date.* function here operates on) were deliberately left
+        out of this pass: MMM/EEE need a locale-aware name table (Python's
+        %b/%a exist but Java's default locale for SimpleDateFormat may not
+        match the process locale %b/%a resolve against — verify before
+        wiring), and SSS has no meaningful value on a date-only type at
+        all (worth a compile-time warning or CompileError rather than a
+        silent "000"). Write the case (`@aq.date.today(format='MMM yyyy')`
+        etc.) and decide: extend the map with %b/%a (verifying locale
+        parity), or reject those three patterns at compile time with a
+        clear "not supported, requires a time-of-day value" CompileError
+        rather than leaving them as silent literal passthrough.
+    """
+

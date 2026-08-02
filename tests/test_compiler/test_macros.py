@@ -37,6 +37,38 @@ class TestSqlMacros:
         with pytest.raises(MacroError, match="parameter 'y' not supplied"):
             resolve_macros("{{ macros.p(x=1) }}", macros)
 
+    def test_resolve_macros_quoted_value_containing_comma_not_truncated(self):
+        """A quoted arg value containing a comma must survive whole —
+        previously `_parse_call_args` split on every comma regardless of
+        quoting, so cols="a,b" silently kept only "a" and dropped ",b" with
+        no error at all."""
+        macros = {"sel": "SELECT {{ cols }}"}
+        text = '{{ macros.sel(cols="a,b") }}'
+        assert resolve_macros(text, macros) == "SELECT a,b"
+
+    def test_resolve_macros_quoted_value_with_comma_single_quotes(self):
+        macros = {"sel": "SELECT {{ cols }}"}
+        text = "{{ macros.sel(cols='a,b,c') }}"
+        assert resolve_macros(text, macros) == "SELECT a,b,c"
+
+    def test_resolve_macros_multiple_args_after_quoted_comma_value(self):
+        """A comma inside a quoted value must not be mistaken for the
+        separator before the NEXT argument either."""
+        macros = {"m": "{{ a }}|{{ b }}"}
+        text = "{{ macros.m(a=\"x,y\", b=2) }}"
+        assert resolve_macros(text, macros) == "x,y|2"
+
+    def test_resolve_macros_call_with_no_args_and_body_placeholder_raises(self):
+        """Calling a parameterized macro with NO args ({{ macros.name }},
+        not {{ macros.name() }}) must raise the same 'parameter not
+        supplied' MacroError as calling it with some-but-not-all params —
+        previously the substitution pass was skipped entirely whenever
+        args_str was empty, so the literal "{{ key }}" text silently
+        reached the output SQL instead of erroring."""
+        macros = {"p": "WHERE id = {{ id_val }}"}
+        with pytest.raises(MacroError, match="parameter 'id_val' not supplied"):
+            resolve_macros("SELECT * FROM t {{ macros.p }}", macros)
+
     def test_resolve_macros_in_config_recursion(self):
         macros = {"v": "123"}
         config = {

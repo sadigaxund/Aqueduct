@@ -28,12 +28,24 @@ _INNER_CALL_RE = re.compile(r"@aq\.([\w.]+)\(([^@)]*)\)")
 # Detects any remaining @aq. token
 _ANY_TIER1_RE = re.compile(r"@aq\.")
 
-# Java SimpleDateFormat → Python strftime mapping (ordered: longer patterns first)
+# Java SimpleDateFormat → Python strftime mapping (ordered: longer patterns
+# first within a letter family). HH/mm/ss cover the common date+time pattern
+# authors reach for (e.g. 'yyyy-MM-dd HH:mm:ss'); on a plain `date` (no time
+# component, which every @aq.date.* function here operates on) they render
+# as 00:00:00 rather than passing through as the literal, unresolved-looking
+# text "HH:mm:ss" — the previous behavior silently embedded that literal into
+# paths/partitions. Month-name (MMM), day-name (EEE), and millisecond (SSS)
+# patterns are NOT covered — those need locale-aware name tables / sub-second
+# handling, a bigger change than a 1:1 string replace; see
+# tests/test_backlog.py for the deferred stub.
 _DATE_FMT_MAP = [
     ("yyyy", "%Y"),
     ("MM", "%m"),
     ("dd", "%d"),
     ("yy", "%y"),
+    ("HH", "%H"),
+    ("mm", "%M"),
+    ("ss", "%S"),
 ]
 
 
@@ -259,7 +271,10 @@ def _call(registry: AqFunctions, func_path: str, args_str: str) -> str:
             raise CompileError(f"Unknown @aq function: {func_path!r}")
 
     if not args_str.strip():
-        return str(method())
+        try:
+            return str(method())
+        except TypeError as exc:
+            raise CompileError(f"@aq.{func_path}(): {exc}") from exc
 
     # Use Python's ast to safely parse the argument list
     try:
@@ -272,7 +287,17 @@ def _call(registry: AqFunctions, func_path: str, args_str: str) -> str:
             f"Cannot parse arguments for {func_path}({args_str!r}): {exc}"
         ) from exc
 
-    result = method(*args, **kwargs)
+    # A user-supplied arg count/type mismatch against the registered method's
+    # signature (e.g. @aq.date.offset() with no args, or the wrong number of
+    # positional args) raises a bare TypeError from the call below — this is
+    # a user-reachable error (a malformed Blueprint), so it must surface as
+    # CompileError (AGENTS.md: "User-reachable errors raise an AqueductError
+    # subclass, never a bare builtin"), not escape as a raw TypeError with no
+    # exit-code mapping.
+    try:
+        result = method(*args, **kwargs)
+    except TypeError as exc:
+        raise CompileError(f"@aq.{func_path}({args_str}): {exc}") from exc
     return "" if result is None else str(result)
 
 

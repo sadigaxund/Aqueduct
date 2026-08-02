@@ -33,18 +33,48 @@ _MACRO_RE = re.compile(
 # Matches {{ param_name }} inside a macro body
 _PARAM_RE = re.compile(r"\{\{\s*(\w+)\s*\}\}")
 
+# Quote-aware single-argument matcher for `_parse_call_args`: a quoted value
+# (single or double) may contain a comma without ending the argument; only
+# an unquoted (bare) value stops at the next comma.
+_ARG_RE = re.compile(
+    r"""
+    \s*(?P<key>\w+)\s*=\s*
+    (?:
+        '(?P<sq>[^']*)'
+      | "(?P<dq>[^"]*)"
+      | (?P<bare>[^,]*)
+    )
+    """,
+    re.VERBOSE,
+)
+
 
 def _parse_call_args(args_str: str) -> dict[str, str]:
-    """Parse 'key=value, key2=\'val\'' into {key: value} dict."""
+    """Parse 'key=value, key2=\'val, with a comma\'' into {key: value}.
+
+    Quote-aware: a comma inside a quoted value must not split the argument
+    list. The previous implementation was `args_str.split(",")`, which
+    truncated any quoted value containing a comma — {{ macros.sel(cols=
+    "a,b") }} silently kept only "a" and dropped the "b" (the second
+    fragment, `b"`, has no "=" so the naive parser's `continue` guard
+    dropped it with no error, no warning)."""
     result: dict[str, str] = {}
-    for part in args_str.split(","):
-        part = part.strip()
-        if not part or "=" not in part:
-            continue
-        k, _, v = part.partition("=")
-        k = k.strip()
-        v = v.strip().strip("'\"")
-        result[k] = v
+    pos = 0
+    length = len(args_str)
+    while pos < length:
+        m = _ARG_RE.match(args_str, pos)
+        if not m or m.end() == pos:
+            break
+        key = m.group("key")
+        value = m.group("sq")
+        if value is None:
+            value = m.group("dq")
+        if value is None:
+            value = (m.group("bare") or "").strip()
+        result[key] = value
+        pos = m.end()
+        while pos < length and args_str[pos] in ", ":
+            pos += 1
     return result
 
 
@@ -76,19 +106,29 @@ def resolve_macros(text: str, macros: dict[str, str]) -> str:
 
         body = macros[name]
 
-        if args_str.strip():
-            args = _parse_call_args(args_str)
-            # Substitute {{ param }} placeholders in body
-            def _sub_param(pm: re.Match) -> str:
-                param = pm.group(1)
-                if param not in args:
-                    raise MacroError(
-                        f"Macro {name!r} parameter {param!r} not supplied in call. "
-                        f"Supplied: {sorted(args)}"
-                    )
-                return args[param]
+        # Always attempt placeholder substitution, even when called with no
+        # args ({{ macros.name }}, args_str == ""). The previous code gated
+        # this behind `if args_str.strip():`, so a macro body with {{ key }}
+        # placeholders called WITHOUT parens/args skipped substitution
+        # entirely and the literal, unresolved "{{ key }}" text reached the
+        # output SQL — silently contradicting this module's own documented
+        # contract ("All {{ key }} placeholders in a parameterized macro
+        # must be supplied"). Running the substitution unconditionally means
+        # a body with no placeholders is an inexpensive no-op (the regex
+        # matches nothing) and a body WITH placeholders correctly raises the
+        # existing "parameter not supplied" MacroError below.
+        args = _parse_call_args(args_str) if args_str.strip() else {}
 
-            body = _PARAM_RE.sub(_sub_param, body)
+        def _sub_param(pm: re.Match) -> str:
+            param = pm.group(1)
+            if param not in args:
+                raise MacroError(
+                    f"Macro {name!r} parameter {param!r} not supplied in call. "
+                    f"Supplied: {sorted(args)}"
+                )
+            return args[param]
+
+        body = _PARAM_RE.sub(_sub_param, body)
 
         return body
 

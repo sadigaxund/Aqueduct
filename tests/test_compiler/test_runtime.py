@@ -25,6 +25,19 @@ class TestTier1Resolution:
         result = resolve_tier1_str("@aq.date.today(format='yyyy/MM/dd')", self.reg)
         assert result == date.today().strftime("%Y/%m/%d")
 
+    def test_date_today_time_pattern_letters_not_left_as_literal_text(self):
+        """HH/mm/ss were unmapped in _java_to_strftime, so a common
+        'yyyy-MM-dd HH:mm:ss' format string left the literal, unresolved-
+        looking text "HH:mm:ss" glued onto the date instead of rendering
+        (00:00:00, since a bare `date` has no time component). Proves the
+        gap is closed — this must never again silently embed literal Java
+        pattern letters into a value used for paths/partitions."""
+        result = resolve_tier1_str("@aq.date.today(format='yyyy-MM-dd HH:mm:ss')", self.reg)
+        assert result == date.today().strftime("%Y-%m-%d 00:00:00")
+        assert "HH" not in result
+        assert "mm" not in result
+        assert "ss" not in result
+
     def test_date_yesterday(self):
         from datetime import timedelta
         result = resolve_tier1_str("@aq.date.yesterday()", self.reg)
@@ -97,6 +110,24 @@ class TestTier1Resolution:
     def test_unknown_function_raises(self):
         with pytest.raises(CompileError, match="Unknown @aq function"):
             resolve_tier1_str("@aq.does.not.exist()", self.reg)
+
+    def test_missing_required_arg_raises_compile_error_not_type_error(self):
+        """A registered @aq.* function called with too few args raises a bare
+        Python TypeError from the underlying method call — a user-reachable
+        error (malformed Blueprint) that must surface as CompileError per
+        AGENTS.md's "User-reachable errors raise an AqueductError subclass,
+        never a bare builtin" rule, not escape uncaught with no exit-code
+        mapping."""
+        with pytest.raises(CompileError, match="date.offset"):
+            resolve_tier1_str("@aq.date.offset()", self.reg)
+
+    def test_wrong_arg_count_zero_arg_function_raises_compile_error(self):
+        """Same TypeError->CompileError conversion, exercised on the
+        zero-args call path (`method()`, no parens content) rather than the
+        ast-parsed-args path — e.g. a zero-arg registered function invoked
+        with unexpected positional args via the parsed-args branch."""
+        with pytest.raises(CompileError, match="engine_version"):
+            resolve_tier1_str("@aq.version(1)", self.reg)
 
     def test_tier1_resolved_in_manifest_context(self, tmp_path):
         bp_file = tmp_path / "tier1_ctx.yml"
