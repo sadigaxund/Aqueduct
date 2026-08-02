@@ -20,7 +20,7 @@ modules:
     attach_to: raw_data
     config:
       signals:
-        - type: sql
+        - type: threshold
           # This signal is always False, which closes the gate.
           # In a real system, this would be a check for a manual approval record.
           expr: "1 = 2"
