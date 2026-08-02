@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.44: Reference Document**
+**Version 2.45: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -668,6 +668,8 @@ Assert rules are batched into 1-2 Spark actions (on DuckDB: one `rel.aggregate()
 **`sql_row`'s `min_pass_rate`** (optional) additionally fails the rule when the fraction of rows satisfying `expr` drops below the given threshold — one extra aggregate action (`count(*)` + `count_if(expr)`) beyond the row-level filter itself.
 
 **`type: custom`** points `fn:` at an importable `module.callable`, `fn(df) -> {"passed": bool, "message"?: str, "quarantine_df"?: DataFrame}`. Same pointer-only rule as UDFs/custom probes: no inline code body. `fn`'s module resolves against the Manifest's `base_dir` first (a sibling `.py` file next to the Blueprint, see **§3, `base_dir`**), falling back to a normal import.
+
+**A `custom` rule that cannot be evaluated is a failure of that rule, on both engines.** Two situations — no `fn:` configured, or `fn(df)` itself raising (a bug, a bad import, an API from the wrong engine) — are routed through the rule's own `on_fail`, exactly like a rule that evaluated and failed: `abort` aborts, `warn` warns and continues, `webhook` fires the webhook, `trigger_agent` defers to the healing loop, and `quarantine` falls back to the same "aggregate rule, no row filter available" warn behavior a genuinely-failed `custom` rule with no `quarantine_df` already gets (there is nothing to quarantine when the rule never ran). A quality gate whose own code is broken must not silently let the data through — this was previously the case regardless of `on_fail`, unconditionally logging a warning and passing the data through.
 
 #### Quarantine eligibility
 

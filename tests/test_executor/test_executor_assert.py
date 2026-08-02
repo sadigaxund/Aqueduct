@@ -1,6 +1,7 @@
 """Tests for the Assert executor."""
 
 import pytest
+
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
 from unittest.mock import patch
 from pyspark.sql import SparkSession
@@ -13,8 +14,12 @@ from aqueduct.parser.models import Module
 def test_schema_match_passes(spark: SparkSession):
     df = spark.range(5).withColumn("name", F.lit("test"))
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "schema_match", "expected": {"id": "bigint", "name": "string"}}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={
+            "rules": [{"type": "schema_match", "expected": {"id": "bigint", "name": "string"}}]
+        },
     )
     # Zero Spark action
     passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
@@ -25,8 +30,18 @@ def test_schema_match_passes(spark: SparkSession):
 def test_schema_match_fails_missing_column(spark: SparkSession):
     df = spark.range(5)
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "schema_match", "expected": {"id": "bigint", "name": "string"}, "on_fail": "abort"}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={
+            "rules": [
+                {
+                    "type": "schema_match",
+                    "expected": {"id": "bigint", "name": "string"},
+                    "on_fail": "abort",
+                }
+            ]
+        },
     )
     with pytest.raises(AssertError, match=r"schema_match: missing columns \['name'\]"):
         execute_assert(module, df, spark, "run-1", "blueprint-1")
@@ -35,18 +50,29 @@ def test_schema_match_fails_missing_column(spark: SparkSession):
 def test_schema_match_fails_wrong_type(spark: SparkSession):
     df = spark.range(5).withColumn("name", F.lit(123))
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "schema_match", "expected": {"id": "bigint", "name": "string"}, "on_fail": "abort"}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={
+            "rules": [
+                {
+                    "type": "schema_match",
+                    "expected": {"id": "bigint", "name": "string"},
+                    "on_fail": "abort",
+                }
+            ]
+        },
     )
-    with pytest.raises(AssertError, match=r"schema_match: type mismatches \['name: expected string, got int'\]"):
+    with pytest.raises(
+        AssertError, match=r"schema_match: type mismatches \['name: expected string, got int'\]"
+    ):
         execute_assert(module, df, spark, "run-1", "blueprint-1")
 
 
 def test_min_rows_passes(spark: SparkSession):
     df = spark.range(10)
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "min_rows", "min": 5}]}
+        id="a1", type="Assert", label="A1", config={"rules": [{"type": "min_rows", "min": 5}]}
     )
     passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
     assert quarantine is None
@@ -55,8 +81,10 @@ def test_min_rows_passes(spark: SparkSession):
 def test_min_rows_fails(spark: SparkSession):
     df = spark.range(3)
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "min_rows", "min": 5, "on_fail": "abort"}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={"rules": [{"type": "min_rows", "min": 5, "on_fail": "abort"}]},
     )
     with pytest.raises(AssertError, match=r"min_rows: got 3, expected >= 5"):
         execute_assert(module, df, spark, "run-1", "blueprint-1")
@@ -65,8 +93,10 @@ def test_min_rows_fails(spark: SparkSession):
 def test_max_rows_fails_warn(spark: SparkSession, caplog):
     df = spark.range(10)
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "max_rows", "max": 5, "on_fail": "warn"}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={"rules": [{"type": "max_rows", "max": 5, "on_fail": "warn"}]},
     )
     passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
     assert quarantine is None
@@ -76,8 +106,10 @@ def test_max_rows_fails_warn(spark: SparkSession, caplog):
 def test_null_rate_passes(spark: SparkSession):
     df = spark.range(10).withColumn("val", F.when(F.col("id") < 2, None).otherwise(1))
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "null_rate", "column": "val", "max": 0.5, "fraction": 1.0}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={"rules": [{"type": "null_rate", "column": "val", "max": 0.5, "fraction": 1.0}]},
     )
     passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
     assert quarantine is None
@@ -87,9 +119,21 @@ def test_null_rate_fails(spark: SparkSession):
     # Create deterministic nulls to ensure the sample failure
     df = spark.range(100).withColumn("val", F.lit(None).cast("int"))
     module = Module(
-        id="a1", type="Assert", label="A1",
+        id="a1",
+        type="Assert",
+        label="A1",
         # Set fraction=1.0 to ensure deterministic sample
-        config={"rules": [{"type": "null_rate", "column": "val", "max": 0.1, "fraction": 1.0, "on_fail": "abort"}]}
+        config={
+            "rules": [
+                {
+                    "type": "null_rate",
+                    "column": "val",
+                    "max": 0.1,
+                    "fraction": 1.0,
+                    "on_fail": "abort",
+                }
+            ]
+        },
     )
     with pytest.raises(AssertError, match=r"null_rate\[val\]: 100.0000% > allowed 10.0000%"):
         execute_assert(module, df, spark, "run-1", "blueprint-1")
@@ -98,8 +142,20 @@ def test_null_rate_fails(spark: SparkSession):
 def test_null_rate_on_fail_quarantine_warns(spark: SparkSession, caplog):
     df = spark.range(100).withColumn("val", F.lit(None).cast("int"))
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "null_rate", "column": "val", "max": 0.1, "fraction": 1.0, "on_fail": "quarantine"}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={
+            "rules": [
+                {
+                    "type": "null_rate",
+                    "column": "val",
+                    "max": 0.1,
+                    "fraction": 1.0,
+                    "on_fail": "quarantine",
+                }
+            ]
+        },
     )
     passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
     assert quarantine is None
@@ -110,8 +166,10 @@ def test_null_rate_on_fail_quarantine_warns(spark: SparkSession, caplog):
 def test_freshness_passes(spark: SparkSession):
     df = spark.range(10).withColumn("ts", F.current_timestamp())
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "freshness", "column": "ts", "max_age_hours": 24}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={"rules": [{"type": "freshness", "column": "ts", "max_age_hours": 24}]},
     )
     passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
     assert quarantine is None
@@ -120,8 +178,12 @@ def test_freshness_passes(spark: SparkSession):
 def test_freshness_fails_warn(spark: SparkSession, caplog):
     df = spark.range(10).withColumn("ts", F.current_timestamp() - F.expr("INTERVAL 48 HOURS"))
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "freshness", "column": "ts", "max_age_hours": 24, "on_fail": "warn"}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={
+            "rules": [{"type": "freshness", "column": "ts", "max_age_hours": 24, "on_fail": "warn"}]
+        },
     )
     passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
     assert quarantine is None
@@ -132,8 +194,14 @@ def test_freshness_fails_warn(spark: SparkSession, caplog):
 def test_freshness_all_nulls(spark: SparkSession):
     df = spark.range(10).withColumn("ts", F.lit(None).cast("timestamp"))
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "freshness", "column": "ts", "max_age_hours": 24, "on_fail": "abort"}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={
+            "rules": [
+                {"type": "freshness", "column": "ts", "max_age_hours": 24, "on_fail": "abort"}
+            ]
+        },
     )
     with pytest.raises(AssertError, match=r"freshness: column has no non-null values"):
         execute_assert(module, df, spark, "run-1", "blueprint-1")
@@ -143,8 +211,10 @@ def test_freshness_numeric_unix_timestamp_passes(spark: SparkSession):
     """A long-typed column holding Unix seconds (not a datetime) still works."""
     df = spark.range(10).withColumn("ts", F.unix_timestamp(F.current_timestamp()))
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "freshness", "column": "ts", "max_age_hours": 24}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={"rules": [{"type": "freshness", "column": "ts", "max_age_hours": 24}]},
     )
     passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
     assert quarantine is None
@@ -156,8 +226,14 @@ def test_freshness_non_numeric_string_fails_cleanly(spark: SparkSession):
     from `float(max_ts)`."""
     df = spark.range(10).withColumn("ts", F.lit("{{ yesterday }}"))
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "freshness", "column": "ts", "max_age_hours": 24, "on_fail": "abort"}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={
+            "rules": [
+                {"type": "freshness", "column": "ts", "max_age_hours": 24, "on_fail": "abort"}
+            ]
+        },
     )
     with pytest.raises(AssertError, match=r"freshness: column 'ts' has non-numeric value"):
         execute_assert(module, df, spark, "run-1", "blueprint-1")
@@ -167,8 +243,12 @@ def test_freshness_non_numeric_string_warns_no_crash(spark: SparkSession, caplog
     """Same bad-data scenario, but on_fail=warn must complete without raising."""
     df = spark.range(10).withColumn("ts", F.lit("not-a-timestamp"))
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "freshness", "column": "ts", "max_age_hours": 24, "on_fail": "warn"}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={
+            "rules": [{"type": "freshness", "column": "ts", "max_age_hours": 24, "on_fail": "warn"}]
+        },
     )
     passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
     assert quarantine is None
@@ -178,8 +258,10 @@ def test_freshness_non_numeric_string_warns_no_crash(spark: SparkSession, caplog
 def test_sql_rule_passes(spark: SparkSession):
     df = spark.range(10).withColumn("amt", F.col("id") * 10)
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "sql", "expr": "sum(amt) == 450"}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={"rules": [{"type": "sql", "expr": "sum(amt) == 450"}]},
     )
     passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
     assert quarantine is None
@@ -189,8 +271,18 @@ def test_sql_rule_passes(spark: SparkSession):
 def test_sql_rule_fails_webhook(mock_fire, spark: SparkSession):
     df = spark.range(10).withColumn("amt", F.col("id") * 10)
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "sql", "expr": "sum(amt) > 1000", "on_fail": {"action": "webhook", "url": "http://test"}}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={
+            "rules": [
+                {
+                    "type": "sql",
+                    "expr": "sum(amt) > 1000",
+                    "on_fail": {"action": "webhook", "url": "http://test"},
+                }
+            ]
+        },
     )
     passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
     assert quarantine is None
@@ -202,8 +294,10 @@ def test_sql_rule_fails_webhook(mock_fire, spark: SparkSession):
 def test_sql_row_rule_quarantine(spark: SparkSession):
     df = spark.range(10)
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "sql_row", "expr": "id % 2 == 0", "on_fail": "quarantine"}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={"rules": [{"type": "sql_row", "expr": "id % 2 == 0", "on_fail": "quarantine"}]},
     )
     passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
     assert passing.count() == 5
@@ -215,8 +309,10 @@ def test_sql_row_rule_quarantine(spark: SparkSession):
 def test_sql_row_rule_abort(spark: SparkSession):
     df = spark.range(10)
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "sql_row", "expr": "id > 20", "on_fail": "abort"}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={"rules": [{"type": "sql_row", "expr": "id > 20", "on_fail": "abort"}]},
     )
     with pytest.raises(AssertError, match=r"failed: id > 20 \(10 rows\)"):
         execute_assert(module, df, spark, "run-1", "blueprint-1")
@@ -226,8 +322,10 @@ def test_sql_row_min_pass_rate_fails(spark: SparkSession):
     """sql_row rule with min_pass_rate below actual pass rate aborts."""
     df = spark.range(10)  # ids 0-9, even ids pass expr=id % 2 == 0 (5/10=0.5)
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "sql_row", "expr": "id % 2 == 0", "min_pass_rate": 0.6}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={"rules": [{"type": "sql_row", "expr": "id % 2 == 0", "min_pass_rate": 0.6}]},
     )
     # Default on_fail is quarantine; min_pass_rate should force abort
     with pytest.raises(AssertError, match=r"sql_row pass_rate"):
@@ -238,8 +336,10 @@ def test_sql_row_min_pass_rate_passes(spark: SparkSession):
     """sql_row rule with min_pass_rate satisfied passes and quarantines failing rows."""
     df = spark.range(10)
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "sql_row", "expr": "id < 8", "min_pass_rate": 0.6}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={"rules": [{"type": "sql_row", "expr": "id < 8", "min_pass_rate": 0.6}]},
     )
     passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
     # Expected: passing rows are id 0-7 (8 rows), failing rows id 8-9 (2 rows)
@@ -254,18 +354,21 @@ def test_sql_row_min_pass_rate_passes(spark: SparkSession):
 def test_custom_rule_passes(spark: SparkSession, tmp_path):
     fn_path = tmp_path / "my_custom.py"
     fn_path.write_text("def my_check(df):\n    return {'passed': True}\n")
-    
+
     import sys
+
     sys.path.insert(0, str(tmp_path))
-    
+
     df = spark.range(10)
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "custom", "fn": "my_custom.my_check"}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={"rules": [{"type": "custom", "fn": "my_custom.my_check"}]},
     )
     passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
     assert quarantine is None
-    
+
     sys.path.remove(str(tmp_path))
 
 
@@ -275,63 +378,135 @@ def test_custom_rule_quarantine(spark: SparkSession, tmp_path):
         "def my_check(df):\n"
         "    return {'passed': False, 'message': 'test failed', 'quarantine_df': df.filter('id < 2')}\n"
     )
-    
+
     import sys
+
     sys.path.insert(0, str(tmp_path))
-    
+
     df = spark.range(5)
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "custom", "fn": "my_custom2.my_check", "on_fail": "quarantine"}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={
+            "rules": [{"type": "custom", "fn": "my_custom2.my_check", "on_fail": "quarantine"}]
+        },
     )
     passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
     assert quarantine.count() == 2
     assert "_aq_error_module" in quarantine.columns
     assert quarantine.select("_aq_error_msg").first()[0] == "test failed"
-    
+
     sys.path.remove(str(tmp_path))
 
 
 def test_custom_rule_raises_exception(spark: SparkSession, tmp_path, caplog):
     fn_path = tmp_path / "my_custom3.py"
     fn_path.write_text("def my_check(df):\n    raise ValueError('boom')\n")
-    
+
     import sys
+
     sys.path.insert(0, str(tmp_path))
-    
+
     df = spark.range(5)
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "custom", "fn": "my_custom3.my_check"}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={"rules": [{"type": "custom", "fn": "my_custom3.my_check"}]},
     )
     passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
     assert quarantine is None
     assert "custom rule 'my_custom3.my_check' raised: boom" in caplog.text
-    
+
     sys.path.remove(str(tmp_path))
 
 
 def test_custom_rule_bad_fn_path(spark: SparkSession):
     df = spark.range(5)
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "custom", "fn": "nonexistent.my_check", "on_fail": "abort"}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={"rules": [{"type": "custom", "fn": "nonexistent.my_check", "on_fail": "abort"}]},
     )
     with pytest.raises(AssertError, match=r"cannot import 'nonexistent'"):
         execute_assert(module, df, spark, "run-1", "blueprint-1")
+
+
+def test_custom_rule_raises_exception_aborts_when_on_fail_abort(spark: SparkSession, tmp_path):
+    """Regression (Pass G1): a custom rule whose own CODE broke used to fail
+    OPEN — log a warning and let the data through — regardless of the
+    author's on_fail. It must now be routed through on_fail like any other
+    rule failure: on_fail=abort aborts."""
+    fn_path = tmp_path / "my_custom_boom.py"
+    fn_path.write_text("def my_check(df):\n    raise ValueError('boom')\n")
+
+    import sys
+
+    sys.path.insert(0, str(tmp_path))
+
+    df = spark.range(5)
+    module = Module(
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={"rules": [{"type": "custom", "fn": "my_custom_boom.my_check", "on_fail": "abort"}]},
+    )
+    try:
+        with pytest.raises(
+            AssertError, match=r"custom rule 'my_custom_boom\.my_check' raised: boom"
+        ) as excinfo:
+            execute_assert(module, df, spark, "run-1", "blueprint-1")
+        assert excinfo.value.rule_id == "custom_error"
+    finally:
+        sys.path.remove(str(tmp_path))
+
+
+def test_custom_rule_missing_fn_aborts_when_on_fail_abort(spark: SparkSession):
+    """Regression (Pass G1): a custom rule with no `fn:` used to be silently
+    skipped (pass-through) regardless of on_fail. Must now respect
+    on_fail=abort."""
+    df = spark.range(5)
+    module = Module(
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={"rules": [{"type": "custom", "on_fail": "abort"}]},
+    )
+    with pytest.raises(AssertError, match=r"custom rule missing fn path") as excinfo:
+        execute_assert(module, df, spark, "run-1", "blueprint-1")
+    assert excinfo.value.rule_id == "custom_missing_fn"
+
+
+def test_custom_rule_missing_fn_warns_when_on_fail_warn(spark: SparkSession, caplog):
+    """on_fail=warn still lets the pipeline continue, but must log — the
+    'skipped, no note' fail-open behavior is gone."""
+    df = spark.range(5)
+    module = Module(
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={"rules": [{"type": "custom", "on_fail": "warn"}]},
+    )
+    passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
+    assert quarantine is None
+    assert passing is df
+    assert "custom_missing_fn" in caplog.text
+    assert "custom rule missing fn path" in caplog.text
 
 
 def test_custom_rule_resolves_via_base_dir_without_sys_path(spark: SparkSession, tmp_path):
     """Manifest.base_dir resolves a sibling rules.py next to the blueprint —
     no sys.path mutation needed (the console-script bug this field fixes:
     the ``aqueduct`` entry point never puts the blueprint's dir on sys.path)."""
-    (tmp_path / "rules.py").write_text(
-        "def my_check(df):\n    return {'passed': True}\n"
-    )
+    (tmp_path / "rules.py").write_text("def my_check(df):\n    return {'passed': True}\n")
     df = spark.range(10)
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "custom", "fn": "rules.my_check"}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={"rules": [{"type": "custom", "fn": "rules.my_check"}]},
     )
     passing, quarantine = execute_assert(
         module, df, spark, "run-1", "blueprint-1", base_dir=str(tmp_path)
@@ -348,14 +523,14 @@ def test_custom_rule_survives_stdlib_name_collision(spark: SparkSession, tmp_pat
     pkg_dir = tmp_path / "json"
     pkg_dir.mkdir()
     (pkg_dir / "__init__.py").write_text("")
-    (pkg_dir / "rules.py").write_text(
-        "def my_check(df):\n    return {'passed': True}\n"
-    )
+    (pkg_dir / "rules.py").write_text("def my_check(df):\n    return {'passed': True}\n")
     sentinel = sys.modules["json"]
     df = spark.range(5)
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "custom", "fn": "json.rules.my_check"}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={"rules": [{"type": "custom", "fn": "json.rules.my_check"}]},
     )
     try:
         passing, quarantine = execute_assert(
@@ -372,12 +547,16 @@ def test_multiple_aggregate_rules_batched(spark: SparkSession):
     # but we can verify it doesn't fail.
     df = spark.range(10).withColumn("ts", F.current_timestamp()).withColumn("amt", F.col("id") * 10)
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [
-            {"type": "min_rows", "min": 5},
-            {"type": "freshness", "column": "ts", "max_age_hours": 24},
-            {"type": "sql", "expr": "sum(amt) == 450"}
-        ]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={
+            "rules": [
+                {"type": "min_rows", "min": 5},
+                {"type": "freshness", "column": "ts", "max_age_hours": 24},
+                {"type": "sql", "expr": "sum(amt) == 450"},
+            ]
+        },
     )
     passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
     assert quarantine is None
@@ -386,11 +565,15 @@ def test_multiple_aggregate_rules_batched(spark: SparkSession):
 def test_mixed_aggregate_null_rate(spark: SparkSession):
     df = spark.range(10).withColumn("val", F.lit(1))
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [
-            {"type": "min_rows", "min": 5},
-            {"type": "null_rate", "column": "val", "max": 0.5, "fraction": 1.0}
-        ]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={
+            "rules": [
+                {"type": "min_rows", "min": 5},
+                {"type": "null_rate", "column": "val", "max": 0.5, "fraction": 1.0},
+            ]
+        },
     )
     passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
     assert quarantine is None
@@ -399,8 +582,10 @@ def test_mixed_aggregate_null_rate(spark: SparkSession):
 def test_on_fail_trigger_agent(spark: SparkSession):
     df = spark.range(3)
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "min_rows", "min": 5, "on_fail": "trigger_agent"}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={"rules": [{"type": "min_rows", "min": 5, "on_fail": "trigger_agent"}]},
     )
     with pytest.raises(AssertError, match=r"min_rows: got 3, expected >= 5") as exc_info:
         execute_assert(module, df, spark, "run-1", "blueprint-1")
@@ -409,10 +594,7 @@ def test_on_fail_trigger_agent(spark: SparkSession):
 
 def test_no_rules_configured(spark: SparkSession):
     df = spark.range(5)
-    module = Module(
-        id="a1", type="Assert", label="A1",
-        config={}
-    )
+    module = Module(id="a1", type="Assert", label="A1", config={})
     passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
     assert quarantine is None
     assert passing is df
@@ -428,8 +610,10 @@ class TestAssertTriggerAgentPropagation:
         # 3 rows, but min_rows=5 → fail
         df = spark.range(3)
         module = Module(
-            id="a1", type="Assert", label="A1",
-            config={"rules": [{"type": "min_rows", "min": 5, "on_fail": "trigger_agent"}]}
+            id="a1",
+            type="Assert",
+            label="A1",
+            config={"rules": [{"type": "min_rows", "min": 5, "on_fail": "trigger_agent"}]},
         )
         with pytest.raises(AssertError) as exc:
             execute_assert(module, df, spark, "run-1", "pipe.1")
@@ -438,15 +622,20 @@ class TestAssertTriggerAgentPropagation:
 
 # ── spillway_rate ──────────────────────────────────────────────────────────────
 
+
 def test_spillway_rate_no_quarantine_rules_passes(spark: SparkSession):
     """no quarantine rules → spillway_rate gets count=0, passes when max>0."""
     df = spark.range(10)
     # Only a spillway_rate rule, no sql_row rules — quarantine_df will be None
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [
-            {"type": "spillway_rate", "max": 0.3, "on_fail": "abort"},
-        ]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={
+            "rules": [
+                {"type": "spillway_rate", "max": 0.3, "on_fail": "abort"},
+            ]
+        },
     )
     # quarantine_count=0, total=10, rate=0.0 → 0.0 <= 0.3 → passes
     passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
@@ -458,11 +647,15 @@ def test_spillway_rate_passes_within_threshold(spark: SparkSession):
     # 10 rows; id >= 8 is quarantined (2 rows = 20%)
     df = spark.range(10)
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [
-            {"type": "sql_row", "expr": "id < 8", "on_fail": "quarantine"},
-            {"type": "spillway_rate", "max": 0.3, "on_fail": "abort"},
-        ]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={
+            "rules": [
+                {"type": "sql_row", "expr": "id < 8", "on_fail": "quarantine"},
+                {"type": "spillway_rate", "max": 0.3, "on_fail": "abort"},
+            ]
+        },
     )
     passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
     assert quarantine is not None
@@ -474,11 +667,15 @@ def test_spillway_rate_fires_on_fail_when_exceeded(spark: SparkSession):
     # 10 rows; id >= 8 quarantined (2 rows = 20%)
     df = spark.range(10)
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [
-            {"type": "sql_row", "expr": "id < 8", "on_fail": "quarantine"},
-            {"type": "spillway_rate", "max": 0.1, "on_fail": "abort"},
-        ]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={
+            "rules": [
+                {"type": "sql_row", "expr": "id < 8", "on_fail": "quarantine"},
+                {"type": "spillway_rate", "max": 0.1, "on_fail": "abort"},
+            ]
+        },
     )
     with pytest.raises(AssertError, match=r"spillway_rate:.*quarantined"):
         execute_assert(module, df, spark, "run-1", "blueprint-1")
@@ -489,13 +686,17 @@ def test_spillway_rate_evaluated_after_row_level_rules(spark: SparkSession):
     # Confirm row-level result feeds into spillway_rate
     df = spark.range(10)  # rows 0-9
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [
-            # quarantine rows where id >= 5 (5 rows)
-            {"type": "sql_row", "expr": "id < 5", "on_fail": "quarantine"},
-            # spillway_rate max=0.4 — 5/10=50% > 40% → should abort
-            {"type": "spillway_rate", "max": 0.4, "on_fail": "abort"},
-        ]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={
+            "rules": [
+                # quarantine rows where id >= 5 (5 rows)
+                {"type": "sql_row", "expr": "id < 5", "on_fail": "quarantine"},
+                # spillway_rate max=0.4 — 5/10=50% > 40% → should abort
+                {"type": "spillway_rate", "max": 0.4, "on_fail": "abort"},
+            ]
+        },
     )
     with pytest.raises(AssertError, match=r"spillway_rate"):
         execute_assert(module, df, spark, "run-1", "blueprint-1")
@@ -503,16 +704,24 @@ def test_spillway_rate_evaluated_after_row_level_rules(spark: SparkSession):
 
 # ── error_type propagation ────────────────────────────────────────────────────
 
+
 def test_error_type_set_on_assert_error(spark):
     """error_type from rule propagates to AssertError.error_type."""
     df = spark.range(0)  # empty → min_rows fails
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{
-            "type": "min_rows", "min": 1,
-            "on_fail": "abort",
-            "error_type": "EmptyDataset",
-        }]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={
+            "rules": [
+                {
+                    "type": "min_rows",
+                    "min": 1,
+                    "on_fail": "abort",
+                    "error_type": "EmptyDataset",
+                }
+            ]
+        },
     )
     with pytest.raises(AssertError) as exc_info:
         execute_assert(module, df, spark, "run-1", "bp1")
@@ -523,8 +732,10 @@ def test_error_type_none_when_not_set(spark):
     """Rule without error_type → AssertError.error_type is None."""
     df = spark.range(0)
     module = Module(
-        id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "min_rows", "min": 1, "on_fail": "abort"}]}
+        id="a1",
+        type="Assert",
+        label="A1",
+        config={"rules": [{"type": "min_rows", "min": 1, "on_fail": "abort"}]},
     )
     with pytest.raises(AssertError) as exc_info:
         execute_assert(module, df, spark, "run-1", "bp1")

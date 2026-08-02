@@ -138,6 +138,7 @@ class AssertOnFailAction(StrEnum):
 
 # ── Public error type ─────────────────────────────────────────────────────────
 
+
 class AssertError(AqueductError):
     """Raised when an Assert rule fires with on_fail=abort or on_fail=trigger_agent."""
 
@@ -155,6 +156,7 @@ class AssertError(AqueductError):
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
 
 def execute_assert(
     module: Module,
@@ -211,13 +213,21 @@ def execute_assert(
                 quarantine_parts.append(q_rel)
         elif rtype == AssertRuleType.FRESHNESS:
             on_fail = rule.get("on_fail", AssertOnFailAction.ABORT)
-            action = on_fail if isinstance(on_fail, str) else on_fail.get("action", AssertOnFailAction.ABORT)
+            action = (
+                on_fail
+                if isinstance(on_fail, str)
+                else on_fail.get("action", AssertOnFailAction.ABORT)
+            )
             if action == AssertOnFailAction.QUARANTINE:
                 passing_rel, q_rel = _freshness_row_quarantine(module.id, passing_rel, rule)
                 quarantine_parts.append(q_rel)
         elif rtype == AssertRuleType.NOT_NULL:
             on_fail = rule.get("on_fail", AssertOnFailAction.ABORT)
-            action = on_fail if isinstance(on_fail, str) else on_fail.get("action", AssertOnFailAction.ABORT)
+            action = (
+                on_fail
+                if isinstance(on_fail, str)
+                else on_fail.get("action", AssertOnFailAction.ABORT)
+            )
             if action == AssertOnFailAction.QUARANTINE:
                 passing_rel, q_rel = _not_null_row_quarantine(module.id, passing_rel, rule)
                 quarantine_parts.append(q_rel)
@@ -234,7 +244,9 @@ def execute_assert(
                 ) from exc
 
     # ── Phase 4: spillway_rate (post-row-level; needs quarantine count) ──────
-    spillway_rules = [(i, r) for i, r in enumerate(rules) if r.get("type") == AssertRuleType.SPILLWAY_RATE]
+    spillway_rules = [
+        (i, r) for i, r in enumerate(rules) if r.get("type") == AssertRuleType.SPILLWAY_RATE
+    ]
     if spillway_rules:
         _check_spillway_rate(module.id, rel, quarantine_rel, spillway_rules, blueprint_id, run_id)
 
@@ -242,6 +254,7 @@ def execute_assert(
 
 
 # ── on_fail dispatch ──────────────────────────────────────────────────────────
+
 
 def _handle_fail(
     on_fail: Any,
@@ -273,7 +286,8 @@ def _handle_fail(
         else:
             logger.warning(
                 "[runtime_assert_webhook] [%s] Assert [%s] on_fail=webhook but no url specified.",
-                module_id, rule_type,
+                module_id,
+                rule_type,
             )
             _add_module_warning(
                 "runtime_assert_webhook",
@@ -286,7 +300,8 @@ def _handle_fail(
         logger.warning(
             "[runtime_assert_quarantine_aggregate] [%s] Assert [%s] on_fail=quarantine used "
             "on aggregate rule; treated as warn.",
-            module_id, rule_type,
+            module_id,
+            rule_type,
         )
         _add_module_warning(
             "runtime_assert_quarantine_aggregate",
@@ -298,7 +313,9 @@ def _handle_fail(
         logger.warning(
             "[runtime_assert_unknown_action] [%s] Assert [%s] unknown on_fail action %r; "
             "treating as warn.",
-            module_id, rule_type, action,
+            module_id,
+            rule_type,
+            action,
         )
         _add_module_warning(
             "runtime_assert_unknown_action",
@@ -309,6 +326,7 @@ def _handle_fail(
 
 
 # ── Phase 1: schema_match ─────────────────────────────────────────────────────
+
 
 # ``rel.types`` items are ``duckdb.typing.DuckDBPyType``; ``str()`` gives the
 # canonical DuckDB spelling ("BIGINT", "VARCHAR", ...). ``expected``'s values
@@ -342,14 +360,16 @@ def _check_schema_match(module_id: str, rel: duckdb.DuckDBPyRelation, rule: dict
     on_fail = rule.get("on_fail", AssertOnFailAction.ABORT)
 
     actual_fields = {
-        name: _normalize_actual_type(dtype) for name, dtype in zip(rel.columns, rel.types, strict=True)
+        name: _normalize_actual_type(dtype)
+        for name, dtype in zip(rel.columns, rel.types, strict=True)
     }
 
     missing = [name for name in expected if name not in actual_fields]
     type_mismatches = [
         f"{name}: expected {etype}, got {actual_fields[name]}"
         for name, etype in expected.items()
-        if name in actual_fields and actual_fields[name] != _normalize_expected_type(module_id, etype)
+        if name in actual_fields
+        and actual_fields[name] != _normalize_expected_type(module_id, etype)
     ]
 
     error_type = rule.get("error_type")
@@ -362,6 +382,7 @@ def _check_schema_match(module_id: str, rel: duckdb.DuckDBPyRelation, rule: dict
 
 
 # ── SQL expression transpile (Spark SQL -> DuckDB SQL) ────────────────────────
+
 
 def _transpile_expr(module_id: str, rule_type: str, expr: str) -> str:
     """Transpile a Spark-SQL scalar expression to DuckDB SQL via sqlglot.
@@ -388,6 +409,7 @@ def _transpile_expr(module_id: str, rule_type: str, expr: str) -> str:
 
 
 # ── Phase 2: aggregate rules (batched) + null_rate (sampled) ─────────────────
+
 
 def _batch_aggregate_rules(
     module_id: str,
@@ -439,9 +461,13 @@ def _batch_aggregate_rules(
                 min_val = int(rule.get("min", 0))
                 if count < min_val:
                     _handle_fail(
-                        on_fail, module_id, AssertRuleType.MIN_ROWS,
+                        on_fail,
+                        module_id,
+                        AssertRuleType.MIN_ROWS,
                         f"min_rows: got {count}, expected >= {min_val}",
-                        blueprint_id, run_id, error_type=rule.get("error_type"),
+                        blueprint_id,
+                        run_id,
+                        error_type=rule.get("error_type"),
                     )
 
             elif rtype == AssertRuleType.MAX_ROWS and f"_cnt_{i}" in agg_row:
@@ -449,9 +475,13 @@ def _batch_aggregate_rules(
                 max_val = int(rule.get("max", 2**63))
                 if count > max_val:
                     _handle_fail(
-                        on_fail, module_id, AssertRuleType.MAX_ROWS,
+                        on_fail,
+                        module_id,
+                        AssertRuleType.MAX_ROWS,
                         f"max_rows: got {count}, expected <= {max_val}",
-                        blueprint_id, run_id, error_type=rule.get("error_type"),
+                        blueprint_id,
+                        run_id,
+                        error_type=rule.get("error_type"),
                     )
 
             elif rtype == AssertRuleType.FRESHNESS and f"_max_{i}" in agg_row:
@@ -459,9 +489,13 @@ def _batch_aggregate_rules(
                 max_age_hours = float(rule.get("max_age_hours", 24))
                 if max_ts is None:
                     _handle_fail(
-                        on_fail, module_id, AssertRuleType.FRESHNESS,
+                        on_fail,
+                        module_id,
+                        AssertRuleType.FRESHNESS,
                         "freshness: column has no non-null values",
-                        blueprint_id, run_id, error_type=rule.get("error_type"),
+                        blueprint_id,
+                        run_id,
+                        error_type=rule.get("error_type"),
                     )
                 else:
                     if hasattr(max_ts, "timestamp"):
@@ -472,26 +506,38 @@ def _batch_aggregate_rules(
                         except (ValueError, TypeError):
                             col = rule.get("column", "?")
                             _handle_fail(
-                                on_fail, module_id, AssertRuleType.FRESHNESS,
+                                on_fail,
+                                module_id,
+                                AssertRuleType.FRESHNESS,
                                 f"freshness: column '{col}' has non-numeric value {max_ts!r}",
-                                blueprint_id, run_id, error_type=rule.get("error_type"),
+                                blueprint_id,
+                                run_id,
+                                error_type=rule.get("error_type"),
                             )
                             continue
                     age_hours = (datetime.now(tz=UTC) - ts_utc).total_seconds() / 3600
                     if age_hours > max_age_hours:
                         _handle_fail(
-                            on_fail, module_id, AssertRuleType.FRESHNESS,
+                            on_fail,
+                            module_id,
+                            AssertRuleType.FRESHNESS,
                             f"freshness: data is {age_hours:.1f}h old, max allowed {max_age_hours}h",
-                            blueprint_id, run_id, error_type=rule.get("error_type"),
+                            blueprint_id,
+                            run_id,
+                            error_type=rule.get("error_type"),
                         )
 
             elif rtype == AssertRuleType.SQL and f"_sql_{i}" in agg_row:
                 result = agg_row[f"_sql_{i}"]
                 if not result:
                     _handle_fail(
-                        on_fail, module_id, AssertRuleType.SQL,
+                        on_fail,
+                        module_id,
+                        AssertRuleType.SQL,
                         f"sql assertion failed: {rule.get('expr', '')!r} evaluated to {result!r}",
-                        blueprint_id, run_id, error_type=rule.get("error_type"),
+                        blueprint_id,
+                        run_id,
+                        error_type=rule.get("error_type"),
                     )
 
             elif rtype == AssertRuleType.NOT_NULL and f"_notnull_{i}" in agg_row:
@@ -499,9 +545,13 @@ def _batch_aggregate_rules(
                 col = rule.get("column", "?")
                 if null_count > 0:
                     _handle_fail(
-                        on_fail, module_id, AssertRuleType.NOT_NULL,
+                        on_fail,
+                        module_id,
+                        AssertRuleType.NOT_NULL,
                         f"not_null[{col!r}]: {null_count} null value(s) found",
-                        blueprint_id, run_id, error_type=rule.get("error_type"),
+                        blueprint_id,
+                        run_id,
+                        error_type=rule.get("error_type"),
                     )
 
     # ── null_rate rules — one shared sampled query (needs USING SAMPLE,
@@ -544,14 +594,19 @@ def _batch_aggregate_rules(
             max_rate = float(rule.get("max", 0.0))
             if rate > max_rate:
                 _handle_fail(
-                    on_fail, module_id, AssertRuleType.NULL_RATE,
+                    on_fail,
+                    module_id,
+                    AssertRuleType.NULL_RATE,
                     f"null_rate[{col}]: {rate:.4%} > allowed {max_rate:.4%} "
                     f"(sample_size={total}, fraction={fraction})",
-                    blueprint_id, run_id, error_type=rule.get("error_type"),
+                    blueprint_id,
+                    run_id,
+                    error_type=rule.get("error_type"),
                 )
 
 
 # ── Phase 4: spillway_rate ────────────────────────────────────────────────────
+
 
 def _rel_count(rel: duckdb.DuckDBPyRelation) -> int:
     return rel.aggregate("COUNT(*) AS c").fetchone()[0]
@@ -579,14 +634,19 @@ def _check_spillway_rate(
         on_fail = rule.get("on_fail", AssertOnFailAction.ABORT)
         if actual_rate > max_rate:
             _handle_fail(
-                on_fail, module_id, AssertRuleType.SPILLWAY_RATE,
+                on_fail,
+                module_id,
+                AssertRuleType.SPILLWAY_RATE,
                 f"spillway_rate: {actual_rate:.4%} of rows quarantined "
                 f"({quarantine_count}/{total}), max allowed {max_rate:.4%}",
-                blueprint_id, run_id, error_type=rule.get("error_type"),
+                blueprint_id,
+                run_id,
+                error_type=rule.get("error_type"),
             )
 
 
 # ── Quarantine row-stamping ────────────────────────────────────────────────────
+
 
 def _sql_literal(s: str) -> str:
     return "'" + str(s).replace("'", "''") + "'"
@@ -614,6 +674,7 @@ def _stamp_error_columns(
 
 
 # ── Phase 3: row-level rules (sql_row, custom) ────────────────────────────────
+
 
 def _apply_row_rule(
     module_id: str,
@@ -651,32 +712,60 @@ def _apply_row_rule(
                     f"COUNT(*) AS _total, count_if({duckdb_expr}) AS _pass"
                 ).fetchone()
             except Exception as exc:
-                raise AssertError(f"[{module_id}] sql_row min_pass_rate evaluation failed: {exc}") from exc
+                raise AssertError(
+                    f"[{module_id}] sql_row min_pass_rate evaluation failed: {exc}"
+                ) from exc
             total, pass_count = counts[0], counts[1] or 0
             actual_rate = pass_count / total if total > 0 else 1.0
             if actual_rate < float(min_pass_rate):
                 _handle_fail(
-                    on_fail if not isinstance(on_fail, str) or on_fail != AssertOnFailAction.QUARANTINE else AssertOnFailAction.ABORT,
-                    module_id, AssertRuleType.SQL_ROW,
+                    (
+                        on_fail
+                        if not isinstance(on_fail, str) or on_fail != AssertOnFailAction.QUARANTINE
+                        else AssertOnFailAction.ABORT
+                    ),
+                    module_id,
+                    AssertRuleType.SQL_ROW,
                     f"sql_row pass_rate {actual_rate:.4%} < min {float(min_pass_rate):.4%}",
                 )
 
         if isinstance(on_fail, str) and on_fail == AssertOnFailAction.QUARANTINE:
             quarantine_rel = _stamp_error_columns(
-                module_id, failing, AssertRuleType.SQL_ROW.value,
+                module_id,
+                failing,
+                AssertRuleType.SQL_ROW.value,
                 rule.get("error_type") or AssertRuleType.SQL_ROW.value,
                 f"failed: {expr_str}",
             )
             return passing, quarantine_rel
 
-        _handle_fail_if_any(module_id, failing, on_fail, AssertRuleType.SQL_ROW, f"failed: {expr_str}", error_type=rule.get("error_type"))
+        _handle_fail_if_any(
+            module_id,
+            failing,
+            on_fail,
+            AssertRuleType.SQL_ROW,
+            f"failed: {expr_str}",
+            error_type=rule.get("error_type"),
+        )
         return passing, None
 
     elif rtype == AssertRuleType.CUSTOM:
         fn_path = rule.get("fn", "")
         if not fn_path:
-            logger.warning("[runtime_assert_custom_missing_fn] [%s] custom rule missing fn path; skipped.", module_id)
-            _add_module_warning("runtime_assert_custom_missing_fn", "custom rule missing fn path; skipped.")
+            # A rule that cannot even be evaluated is a FAILURE of that rule,
+            # not a pass-through — route through the author's own on_fail so
+            # a broken quality gate does not silently let data through (see
+            # AGENTS.md "No silent no-ops"; mirrors spark/assert_.py exactly).
+            # "custom_missing_fn" (rather than the generic
+            # AssertRuleType.CUSTOM) keeps the reason distinct from a genuine
+            # fn(rel) failure in messages/AssertError.rule_id.
+            _handle_fail(
+                on_fail,
+                module_id,
+                "custom_missing_fn",
+                "custom rule missing fn path; treated as rule failure.",
+                error_type=rule.get("error_type"),
+            )
             return rel, None
 
         try:
@@ -685,25 +774,46 @@ def _apply_row_rule(
         except AssertError:
             raise
         except Exception as exc:
-            logger.warning("[runtime_assert_custom_error] [%s] custom rule %r raised: %s", module_id, fn_path, exc)
-            _add_module_warning("runtime_assert_custom_error", f"custom rule {fn_path!r} raised: {exc}")
+            # The rule's own CODE broke (bug, bad import, wrong engine's
+            # API) — same "failure of the rule" treatment as above, not a
+            # silent pass. See AGENTS.md "No silent no-ops".
+            _handle_fail(
+                on_fail,
+                module_id,
+                "custom_error",
+                f"custom rule {fn_path!r} raised: {exc}",
+                error_type=rule.get("error_type"),
+            )
             return rel, None
 
         if not result.get("passed", True):
             msg = result.get("message", f"custom rule {fn_path!r} failed")
             q_rel = result.get("quarantine_df")
 
-            if isinstance(on_fail, str) and on_fail == AssertOnFailAction.QUARANTINE and q_rel is not None:
+            if (
+                isinstance(on_fail, str)
+                and on_fail == AssertOnFailAction.QUARANTINE
+                and q_rel is not None
+            ):
                 q_rel = _stamp_error_columns(
-                    module_id, q_rel, AssertRuleType.CUSTOM.value,
-                    rule.get("error_type") or AssertRuleType.CUSTOM.value, msg,
+                    module_id,
+                    q_rel,
+                    AssertRuleType.CUSTOM.value,
+                    rule.get("error_type") or AssertRuleType.CUSTOM.value,
+                    msg,
                 )
                 # passing = rel minus quarantine rows (caller's responsibility
                 # to exclude) — trust fn to return the right quarantine_df,
                 # same contract as Spark's.
                 return rel, q_rel
             else:
-                _handle_fail(on_fail, module_id, AssertRuleType.CUSTOM, msg, error_type=rule.get("error_type"))
+                _handle_fail(
+                    on_fail,
+                    module_id,
+                    AssertRuleType.CUSTOM,
+                    msg,
+                    error_type=rule.get("error_type"),
+                )
 
     return rel, None
 
@@ -717,55 +827,82 @@ def _handle_fail_if_any(
     error_type: str | None = None,
 ) -> None:
     """Fire on_fail if failing_rel has any rows. Triggers one count query."""
-    stamped = _stamp_error_columns(module_id, failing_rel, rule_type, error_type or rule_type, message)
+    stamped = _stamp_error_columns(
+        module_id, failing_rel, rule_type, error_type or rule_type, message
+    )
     try:
         count = _rel_count(stamped)
     except Exception as exc:
         raise AssertError(f"[{module_id}] row-count evaluation failed: {exc}") from exc
     if count > 0:
-        _handle_fail(on_fail, module_id, rule_type, f"{message} ({count} rows)", error_type=error_type)
+        _handle_fail(
+            on_fail, module_id, rule_type, f"{message} ({count} rows)", error_type=error_type
+        )
 
 
 # ── freshness / not_null row-level quarantine (Phase 3 continuation) ─────────
 
-_NUMERIC_TYPE_PREFIXES: frozenset[str] = frozenset({
-    "TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT",
-    "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT",
-    "FLOAT", "DOUBLE", "DECIMAL",
-})
+_NUMERIC_TYPE_PREFIXES: frozenset[str] = frozenset(
+    {
+        "TINYINT",
+        "SMALLINT",
+        "INTEGER",
+        "BIGINT",
+        "HUGEINT",
+        "UTINYINT",
+        "USMALLINT",
+        "UINTEGER",
+        "UBIGINT",
+        "UHUGEINT",
+        "FLOAT",
+        "DOUBLE",
+        "DECIMAL",
+    }
+)
 
 
 def _column_type(module_id: str, rel: duckdb.DuckDBPyRelation, col: str, rule_type: str) -> str:
     if col not in rel.columns:
-        raise AssertError(f"[{module_id}] {rule_type} rule column {col!r} not found in relation", rule_id=rule_type)
+        raise AssertError(
+            f"[{module_id}] {rule_type} rule column {col!r} not found in relation",
+            rule_id=rule_type,
+        )
     return str(rel.types[rel.columns.index(col)]).upper()
 
 
 def _freshness_row_quarantine(
-    module_id: str, rel: duckdb.DuckDBPyRelation, rule: dict[str, Any],
+    module_id: str,
+    rel: duckdb.DuckDBPyRelation,
+    rule: dict[str, Any],
 ) -> tuple[duckdb.DuckDBPyRelation, duckdb.DuckDBPyRelation]:
     col = rule.get("column")
     if not col:
-        raise AssertError(f"[{module_id}] freshness rule requires 'column'", rule_id=AssertRuleType.FRESHNESS)
+        raise AssertError(
+            f"[{module_id}] freshness rule requires 'column'", rule_id=AssertRuleType.FRESHNESS
+        )
     max_age_hours = float(rule.get("max_age_hours", 24))
     hours_int = int(max_age_hours)
     minutes_int = round((max_age_hours - hours_int) * 60)
     interval_sql = (
-        f"INTERVAL '{hours_int} hours {minutes_int} minutes'" if minutes_int
+        f"INTERVAL '{hours_int} hours {minutes_int} minutes'"
+        if minutes_int
         else f"INTERVAL '{hours_int} hours'"
     )
     col_type = _column_type(module_id, rel, col, AssertRuleType.FRESHNESS)
     is_numeric = any(col_type.startswith(p) for p in _NUMERIC_TYPE_PREFIXES)
     col_expr_sql = f'to_timestamp(CAST("{col}" AS BIGINT))' if is_numeric else f'"{col}"'
-    fresh_sql = f'({col_expr_sql} >= (current_timestamp - {interval_sql}))'
+    fresh_sql = f"({col_expr_sql} >= (current_timestamp - {interval_sql}))"
     # NULLs fail freshness — route to quarantine (mirrors ISSUE-015, same as Spark's).
     passing_filter = f'{fresh_sql} AND "{col}" IS NOT NULL'
     failing_filter = f'NOT ({fresh_sql} AND "{col}" IS NOT NULL)'
     try:
         failing_rel = rel.filter(failing_filter)
         q_rel = _stamp_error_columns(
-            module_id, failing_rel, AssertRuleType.FRESHNESS.value,
-            rule.get("error_type") or "freshness", f"column {col!r} failed freshness check",
+            module_id,
+            failing_rel,
+            AssertRuleType.FRESHNESS.value,
+            rule.get("error_type") or "freshness",
+            f"column {col!r} failed freshness check",
         )
         passing_rel = rel.filter(passing_filter)
     except AssertError:
@@ -776,16 +913,23 @@ def _freshness_row_quarantine(
 
 
 def _not_null_row_quarantine(
-    module_id: str, rel: duckdb.DuckDBPyRelation, rule: dict[str, Any],
+    module_id: str,
+    rel: duckdb.DuckDBPyRelation,
+    rule: dict[str, Any],
 ) -> tuple[duckdb.DuckDBPyRelation, duckdb.DuckDBPyRelation]:
     col = rule.get("column")
     if not col:
-        raise AssertError(f"[{module_id}] not_null rule requires 'column'", rule_id=AssertRuleType.NOT_NULL)
+        raise AssertError(
+            f"[{module_id}] not_null rule requires 'column'", rule_id=AssertRuleType.NOT_NULL
+        )
     try:
         failing_rel = rel.filter(f'"{col}" IS NULL')
         q_rel = _stamp_error_columns(
-            module_id, failing_rel, AssertRuleType.NOT_NULL.value,
-            rule.get("error_type") or "not_null", f"column {col!r} contains null",
+            module_id,
+            failing_rel,
+            AssertRuleType.NOT_NULL.value,
+            rule.get("error_type") or "not_null",
+            f"column {col!r} contains null",
         )
         passing_rel = rel.filter(f'"{col}" IS NOT NULL')
     except AssertError:
@@ -796,6 +940,7 @@ def _not_null_row_quarantine(
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _load_custom_callable(fn_path: str, base_dir: str = "") -> Any:
     """Load a Python callable from a dotted path (e.g. 'my_pkg.rules.check_orders').
@@ -841,6 +986,7 @@ def _fire_rule_webhook(
     already uses on this engine."""
     try:
         from aqueduct.infra.http import _deliver_webhook_payload
+
         full_payload = {
             "event": "assert_rule_failed",
             "module_id": module_id,
@@ -852,8 +998,14 @@ def _fire_rule_webhook(
         }
         _deliver_webhook_payload(url, full_payload)
     except Exception as exc:
-        logger.warning("[runtime_assert_webhook_fire_failed] [%s] Assert webhook fire failed: %s", module_id, exc)
-        _add_module_warning("runtime_assert_webhook_fire_failed", f"Assert webhook fire failed: {exc}")
+        logger.warning(
+            "[runtime_assert_webhook_fire_failed] [%s] Assert webhook fire failed: %s",
+            module_id,
+            exc,
+        )
+        _add_module_warning(
+            "runtime_assert_webhook_fire_failed", f"Assert webhook fire failed: {exc}"
+        )
 
 
 __all__ = ["AssertError", "AssertOnFailAction", "AssertRuleType", "execute_assert"]
