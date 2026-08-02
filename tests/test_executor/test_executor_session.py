@@ -9,6 +9,57 @@ from pyspark.sql import SparkSession
 from aqueduct.executor.spark.session import make_spark_session
 
 
+@pytest.fixture(autouse=True)
+def _restore_shared_session_conf(spark):
+    """Every test below calls ``make_spark_session()`` directly to exercise
+    the factory's OWN config-application behavior against a fresh app name —
+    but Spark's ``builder.getOrCreate()`` only creates a new SparkContext
+    once per JVM; once the session-scoped ``spark`` fixture has created the
+    shared session, a later ``make_spark_session(other_name, ...)`` call
+    reuses that SAME session and Spark applies the ``spark.sql.*`` runtime
+    confs from it directly ("Using an existing Spark session; only runtime
+    SQL configurations will take effect" — a real Spark warning, not
+    speculation). So ``spark.sql.session.timeZone``,
+    ``spark.sql.parquet.outputTimestampType``, etc. set by one test here
+    permanently change the ONE shared session every other test in the suite
+    reads from, not an independent session of its own.
+
+    Left unrestored, this was an order-dependent flake: whichever test set
+    ``spark.sql.session.timeZone`` last determined the wall-clock string
+    every later test saw when formatting a TIMESTAMP — including
+    ``tests/test_executor/test_incremental.py``'s watermark assertions,
+    which compare ``MAX(ts)`` against a literal string and only pass when
+    the session timezone is whatever it happened to default to. Snapshot
+    every conf key before the test and restore it exactly afterward —
+    restoring the prior value, or unsetting a key this test newly
+    introduced — so nothing here can shift a global default for a test
+    running later, regardless of which key a future test in this file
+    mutates.
+    """
+    before = dict(spark.conf.getAll)
+    yield
+    after = dict(spark.conf.getAll)
+    for key, value in after.items():
+        if key in before and before[key] == value:
+            continue
+        try:
+            if key not in before:
+                spark.conf.unset(key)
+            else:
+                spark.conf.set(key, before[key])
+        except Exception:
+            # A handful of static Spark configs (spark.driver.memory,
+            # spark.executor.memory, ...) are on Spark's own "cannot modify
+            # at runtime" denylist — SQLConf raises CANNOT_MODIFY_CONFIG for
+            # both `.set()` and `.unset()` once the session has started.
+            # Such a key was, by that same rule, never actually mutable
+            # after the shared session started, so the test that "set" it
+            # could not have changed live behavior for anything reading it
+            # either — there is nothing real to restore, and no later test
+            # can be poisoned by a value that can never change again.
+            pass
+
+
 def test_make_spark_session_returns_active_session():
     spark = make_spark_session("test-app", {})
     assert isinstance(spark, SparkSession)
