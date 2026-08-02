@@ -583,8 +583,11 @@ modules: []
   #     signals:
   #       - type: schema_snapshot         # zero Spark action — metadata only
 
-  #       - type: row_count_estimate      # method: spark_listener = zero cost (from stage metrics)
-  #         method: spark_listener        # method: sample = count() on a fraction
+  #       - type: row_count_estimate      # Spark: method: spark_listener = zero cost (stage metrics);
+  #         method: spark_listener        #   method: sample = count() on a fraction.
+  #                                       # DuckDB: always an EXACT count (parquet footer for a
+  #                                       #   direct Ingress tap, COUNT(*) otherwise) — method:/
+  #                                       #   fraction: below are accepted but not consulted.
 
   #       - type: null_rates              # one action on sample
   #         columns: [order_id, amount]
@@ -607,7 +610,9 @@ modules: []
   #         # allow_sample: true         # trades accuracy for speed in production
   #         # fraction: 0.1
 
-  #       - type: partition_stats         # df.rdd.getNumPartitions() — zero Spark action
+  #       - type: partition_stats         # Spark: df.rdd.getNumPartitions() — zero action.
+  #                                       # DuckDB: no equivalent (single-process, no partition
+  #                                       #   concept) — skipped with a runtime warning, not implemented.
 
 
   # ── REGULATOR — gate that blocks downstream on false signal ──────────────────

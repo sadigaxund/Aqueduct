@@ -323,10 +323,12 @@ probes:
   max_sample_rows: 100
   default_sample_fraction: 0.1
 
-  # Probe signals that trigger a Spark action on a sample
-  # (row_count_estimate/sample, null_rates, value_distribution, distinct_count)
-  # are GATED by `danger.allow_full_probe_actions` — default false. Zero-cost
-  # signals (schema_snapshot, partition_stats, sample_rows) always run.
+  # Probe signals that read a sample of the data (null_rates,
+  # value_distribution, distinct_count, and row_count_estimate's sample
+  # method on Spark) are GATED by `danger.allow_full_probe_actions` — default
+  # false. Zero-cost signals (schema_snapshot, sample_rows; partition_stats
+  # on Spark) always run. row_count_estimate is NOT gated on DuckDB — it is
+  # an exact, sub-millisecond count on that engine, not a sampled estimate.
   # data_freshness is also suppressed unless allow_sample: true is set per-signal.
 
 
@@ -865,8 +867,10 @@ agent:
 #   allow_multi_patch: false          # if true, max_patches > 1 is allowed
 #                                     # (multi-patch reprompt loop auto-applies patches
 #                                     # without human review).
-#   allow_full_probe_actions: false   # if true, Probes may run full Spark actions
-#                                     # (null_rates, value_distribution, distinct_count)
+#   allow_full_probe_actions: false   # if true, Probes may run full-scan sampled actions
+#                                     # (null_rates, value_distribution, distinct_count —
+#                                     # same gate on both engines; DuckDB's row_count_estimate
+#                                     # is exempt, it's an exact count regardless of this flag)
 #                                     # adds latency; leave false in production
 #   allow_full_preflight: false       # if true, agent.sandbox_mode: preflight is allowed
 #                                     # (full-dataset sandbox replay, no Egress; slow but conclusive)
