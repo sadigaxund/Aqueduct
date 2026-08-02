@@ -128,15 +128,14 @@ def leaves_for_module(module: Any) -> list[str]:
     Two kinds of leaf are checked:
 
       - ``module.type.<Type>`` — WHICH module kind this is. An engine may not
-        implement a whole module type (DuckDB Stage A does not run ``Assert``
-        or ``Probe``), and that verdict must fire at compile time. Emitted for
-        every module. (The ``module.field.*`` / ``<block>.field.*`` leaves are
-        NOT checked — they describe grammar SHAPE, already enforced by pydantic
-        at parse time; every parseable Blueprint necessarily uses only fields
-        that exist.)
-      - config-derived dispatch leaves — op names, write modes, fan modes, and
-        the curated formats: the parts of the grammar an engine can plausibly
-        refuse per-configuration.
+        implement a whole module type, and that verdict must fire at compile
+        time. Emitted for every module. (The ``module.field.*`` /
+        ``<block>.field.*`` leaves are NOT checked — they describe grammar
+        SHAPE, already enforced by pydantic at parse time; every parseable
+        Blueprint necessarily uses only fields that exist.)
+      - config-derived dispatch leaves — op names, write modes, fan modes,
+        Probe signal types, and the curated formats: the parts of the grammar
+        an engine can plausibly refuse per-configuration.
 
     Most ``feature.*`` leaves are NOT per-module (a Python UDF is declared
     once in the manifest's ``udf_registry`` and referenced from SQL, not owned
@@ -157,6 +156,7 @@ def leaves_for_module(module: Any) -> list[str]:
     # time; deferring it to call time (well after all modules have finished
     # loading) breaks the cycle without restructuring the layer boundary.
     from aqueduct.executor.capability_leaves import EGRESS_FORMATS, INGRESS_FORMATS
+    from aqueduct.executor.probe_plugins import BUILTIN_SIGNAL_TYPES
 
     leaves: list[str] = []
     mtype = str(getattr(module, "type", ""))
@@ -205,6 +205,22 @@ def leaves_for_module(module: Any) -> list[str]:
         mode = cfg.get("mode")
         if mode:
             leaves.append(f"funnel.mode.{mode}")
+    elif mtype == "Probe":
+        # One `probe.signal.<type>` leaf per governed built-in signal type
+        # (Pass G2) — same per-value-in-a-typed-field shape as `channel.op.*`
+        # above. `custom` is not in BUILTIN_SIGNAL_TYPES (see its docstring)
+        # so a `type: custom` signal never emits a leaf here — it has its own
+        # compile-time shape check (`wirer._validate_custom_signals`). An
+        # unrecognised/typo `type:` also emits nothing (it fails at RUNTIME
+        # with `runtime_probe_unknown_signal`, a distinct state from "a real
+        # signal type this engine doesn't implement" — the gate below only
+        # fires for names the framework actually governs).
+        for sig in cfg.get("signals", []) or []:
+            if not isinstance(sig, dict):
+                continue
+            sig_type = sig.get("type")
+            if sig_type in BUILTIN_SIGNAL_TYPES:
+                leaves.append(f"probe.signal.{sig_type}")
 
     # type.* — Phase 80 work package 2: every hub type constructor / native
     # escape hatch this module's cast columns / schema_hint fields actually
@@ -390,6 +406,7 @@ def format_ignored_warning(problem: CapabilityProblem, engine: str) -> str:
 # the healing feature would otherwise silently manufacture a production
 # defect. `dialect_neutral`-only records (retry/timeout/structural patches)
 # never trigger this — they carry no dialect content to be wrong about.
+
 
 @dataclass(frozen=True)
 class CrossEngineHealProblem:

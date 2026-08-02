@@ -110,11 +110,23 @@ CREATE INDEX IF NOT EXISTS idx_probe_signals_probe
     ON probe_signals (probe_id, signal_type);
 """
 
-_NUMERIC_TYPE_PREFIXES: frozenset[str] = frozenset({
-    "TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT",
-    "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT",
-    "FLOAT", "DOUBLE", "DECIMAL",
-})
+_NUMERIC_TYPE_PREFIXES: frozenset[str] = frozenset(
+    {
+        "TINYINT",
+        "SMALLINT",
+        "INTEGER",
+        "BIGINT",
+        "HUGEINT",
+        "UTINYINT",
+        "USMALLINT",
+        "UINTEGER",
+        "UBIGINT",
+        "UHUGEINT",
+        "FLOAT",
+        "DOUBLE",
+        "DECIMAL",
+    }
+)
 
 
 def _utcnow_iso() -> str:
@@ -123,6 +135,7 @@ def _utcnow_iso() -> str:
 
 def _json_dumps(obj: Any) -> str:
     """json.dumps that coerces DuckDB-native types (datetime, Decimal, bytes)."""
+
     def _default(o: Any) -> Any:
         if isinstance(o, (datetime, date)):
             return o.isoformat()
@@ -131,6 +144,7 @@ def _json_dumps(obj: Any) -> str:
         if isinstance(o, bytes):
             return o.hex()
         return str(o)
+
     return json.dumps(obj, default=_default)
 
 
@@ -184,6 +198,7 @@ def _sampled_fetchone(
 
 
 # ── Signal implementations ────────────────────────────────────────────────────
+
 
 def _schema_snapshot(rel: duckdb.DuckDBPyRelation) -> dict[str, Any]:
     """Capture rel.columns/rel.types — zero query execution.
@@ -250,7 +265,10 @@ def _row_count_estimate(
                 if row is not None and row[0] is not None:
                     return {"method": "parquet_footer", "estimate": int(row[0])}
             except Exception as exc:
-                logger.debug("row_count_estimate: parquet_file_metadata failed, falling back to COUNT(*): %s", exc)
+                logger.debug(
+                    "row_count_estimate: parquet_file_metadata failed, falling back to COUNT(*): %s",
+                    exc,
+                )
 
     count = rel.aggregate("COUNT(*) AS c").fetchone()[0]
     return {"method": "exact_count", "estimate": int(count or 0)}
@@ -269,14 +287,23 @@ def _null_rates(
     fraction = float(signal_cfg.get("fraction", sampling.default_sample_fraction))
 
     if block_full_actions:
-        logger.warning("[runtime_probe_blocked] Probe: block_full_actions=True; skipping null_rates sample.")
-        _add_module_warning("runtime_probe_blocked", "block_full_actions=True; skipping null_rates sample.")
+        logger.warning(
+            "[runtime_probe_blocked] Probe: block_full_actions=True; skipping null_rates sample."
+        )
+        _add_module_warning(
+            "runtime_probe_blocked", "block_full_actions=True; skipping null_rates sample."
+        )
         return {"fraction": fraction, "blocked": True, "null_rates": {c: None for c in columns}}
 
     select_sql = "COUNT(*) AS _total, " + ", ".join(
-        f'SUM(CASE WHEN "{c}" IS NULL THEN 1 ELSE 0 END) AS "_null_{i}"' for i, c in enumerate(columns)
+        f'SUM(CASE WHEN "{c}" IS NULL THEN 1 ELSE 0 END) AS "_null_{i}"'
+        for i, c in enumerate(columns)
     )
-    row = _sampled_fetchone(con, rel, fraction, select_sql) if fraction > 0 else rel.aggregate(select_sql).fetchone()
+    row = (
+        _sampled_fetchone(con, rel, fraction, select_sql)
+        if fraction > 0
+        else rel.aggregate(select_sql).fetchone()
+    )
 
     total = row[0] or 0
     if total == 0:
@@ -318,14 +345,24 @@ def _value_distribution(
     percentiles: list[float] = signal_cfg.get("percentiles", [0.25, 0.5, 0.75])
 
     if block_full_actions:
-        logger.warning("[runtime_probe_blocked] Probe: block_full_actions=True; skipping value_distribution.")
-        _add_module_warning("runtime_probe_blocked", "block_full_actions=True; skipping value_distribution.")
+        logger.warning(
+            "[runtime_probe_blocked] Probe: block_full_actions=True; skipping value_distribution."
+        )
+        _add_module_warning(
+            "runtime_probe_blocked", "block_full_actions=True; skipping value_distribution."
+        )
         return {"blocked": True, "fraction": fraction, "stats": {}}
 
     requested: list[str] | None = signal_cfg.get("columns")
-    columns = requested if requested else [
-        name for name, dtype in zip(rel.columns, rel.types, strict=True) if _is_numeric_type(dtype)
-    ]
+    columns = (
+        requested
+        if requested
+        else [
+            name
+            for name, dtype in zip(rel.columns, rel.types, strict=True)
+            if _is_numeric_type(dtype)
+        ]
+    )
     if not columns:
         return {"fraction": fraction, "stats": {}}
 
@@ -343,16 +380,23 @@ def _value_distribution(
             parts.append(f'approx_quantile("{c}", {pct_literal}) AS "_pct_{i}"')
     select_sql = ", ".join(parts)
 
-    row = _sampled_fetchone(con, rel, fraction, select_sql) if fraction > 0 else rel.aggregate(select_sql).fetchone()
+    row = (
+        _sampled_fetchone(con, rel, fraction, select_sql)
+        if fraction > 0
+        else rel.aggregate(select_sql).fetchone()
+    )
 
     stats: dict[str, Any] = {}
     stride = 6 if pct_literal else 5
     for i, c in enumerate(columns):
         base = i * stride
-        min_v, max_v, mean_v, std_v, cnt_v = row[base:base + 5]
+        min_v, max_v, mean_v, std_v, cnt_v = row[base : base + 5]
         pct_v = row[base + 5] if pct_literal else []
         stats[c] = {
-            "min": min_v, "max": max_v, "mean": mean_v, "stddev": std_v,
+            "min": min_v,
+            "max": max_v,
+            "mean": mean_v,
+            "stddev": std_v,
             "count_non_null": cnt_v,
             "percentiles": dict(zip([str(p) for p in percentiles], pct_v or [], strict=False)),
         }
@@ -372,12 +416,26 @@ def _distinct_count(
     columns: list[str] = signal_cfg.get("columns") or rel.columns
 
     if block_full_actions:
-        logger.warning("[runtime_probe_blocked] Probe: block_full_actions=True; skipping distinct_count.")
-        _add_module_warning("runtime_probe_blocked", "block_full_actions=True; skipping distinct_count.")
-        return {"blocked": True, "fraction": fraction, "distinct_counts": {c: None for c in columns}}
+        logger.warning(
+            "[runtime_probe_blocked] Probe: block_full_actions=True; skipping distinct_count."
+        )
+        _add_module_warning(
+            "runtime_probe_blocked", "block_full_actions=True; skipping distinct_count."
+        )
+        return {
+            "blocked": True,
+            "fraction": fraction,
+            "distinct_counts": {c: None for c in columns},
+        }
 
-    select_sql = ", ".join(f'approx_count_distinct("{c}") AS "_dc_{i}"' for i, c in enumerate(columns))
-    row = _sampled_fetchone(con, rel, fraction, select_sql) if fraction > 0 else rel.aggregate(select_sql).fetchone()
+    select_sql = ", ".join(
+        f'approx_count_distinct("{c}") AS "_dc_{i}"' for i, c in enumerate(columns)
+    )
+    row = (
+        _sampled_fetchone(con, rel, fraction, select_sql)
+        if fraction > 0
+        else rel.aggregate(select_sql).fetchone()
+    )
     return {"fraction": fraction, "distinct_counts": {c: row[i] for i, c in enumerate(columns)}}
 
 
@@ -412,7 +470,11 @@ def _data_freshness(
 
     select_sql = f'max("{column}") AS mx'
     sampled = allow_sample and fraction > 0
-    row = _sampled_fetchone(con, rel, fraction, select_sql) if sampled else rel.aggregate(select_sql).fetchone()
+    row = (
+        _sampled_fetchone(con, rel, fraction, select_sql)
+        if sampled
+        else rel.aggregate(select_sql).fetchone()
+    )
     return {
         "column": column,
         "max_value": row[0],
@@ -476,13 +538,12 @@ def _custom(
     call_cfg = {**sig_cfg, "block_full_actions": block_full_actions}
     result = fn(rel, call_cfg)
     if not isinstance(result, dict):
-        raise ConfigError(
-            f"custom probe callable must return a dict, got {type(result).__name__}"
-        )
+        raise ConfigError(f"custom probe callable must return a dict, got {type(result).__name__}")
     return {"custom": True, **result}
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
 
 def _stdout_report_lines(sig_type: str, payload: Any) -> list[str]:
     """Human-readable lines for `report: stdout` (per signal). Duplicated
@@ -563,6 +624,7 @@ def execute_probe(
 
         if observability_store is None:
             from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+
             observability_store = DuckDBObservabilityStore(store_dir / "observability.db")
 
         with observability_store.connect() as cur:
@@ -574,18 +636,58 @@ def execute_probe(
                     if sig_type == "schema_snapshot":
                         payload = _schema_snapshot(rel)
                     elif sig_type == "row_count_estimate":
-                        payload = _row_count_estimate(rel, sig_cfg, con, target_module=target_module)
+                        payload = _row_count_estimate(
+                            rel, sig_cfg, con, target_module=target_module
+                        )
                     elif sig_type == "null_rates":
-                        payload = _null_rates(rel, con, sig_cfg, block_full_actions=block_full_actions, sampling=sampling)
+                        payload = _null_rates(
+                            rel,
+                            con,
+                            sig_cfg,
+                            block_full_actions=block_full_actions,
+                            sampling=sampling,
+                        )
                     elif sig_type == "sample_rows":
                         payload = _sample_rows(rel, sig_cfg, sampling=sampling)
                     elif sig_type == "value_distribution":
-                        payload = _value_distribution(rel, con, sig_cfg, block_full_actions=block_full_actions, sampling=sampling)
+                        payload = _value_distribution(
+                            rel,
+                            con,
+                            sig_cfg,
+                            block_full_actions=block_full_actions,
+                            sampling=sampling,
+                        )
                     elif sig_type == "distinct_count":
-                        payload = _distinct_count(rel, con, sig_cfg, block_full_actions=block_full_actions, sampling=sampling)
+                        payload = _distinct_count(
+                            rel,
+                            con,
+                            sig_cfg,
+                            block_full_actions=block_full_actions,
+                            sampling=sampling,
+                        )
                     elif sig_type == "data_freshness":
-                        payload = _data_freshness(rel, con, sig_cfg, block_full_actions=block_full_actions, sampling=sampling)
+                        payload = _data_freshness(
+                            rel,
+                            con,
+                            sig_cfg,
+                            block_full_actions=block_full_actions,
+                            sampling=sampling,
+                        )
                     elif sig_type == "partition_stats":
+                        # Deliberate backstop, not the primary guard (Pass G2):
+                        # `probe.signal.partition_stats` is now a governed
+                        # `unsupported` capability leaf on this engine
+                        # (capabilities.yml), so a Blueprint compiled through
+                        # the normal `compile()` path is refused at COMPILE
+                        # time (`aqueduct/compiler/capability_check.py`)
+                        # before this code ever runs. This branch stays for
+                        # a programmatic caller that builds a Manifest/Module
+                        # and calls `execute_probe` directly, bypassing the
+                        # capability gate — same reasoning as
+                        # `validate_probes`'s missing-`attach_to` case (see
+                        # AGENTS.md's Common Pitfalls). Never remove without
+                        # confirming every `execute_probe` call site is
+                        # gate-checked first.
                         logger.warning(
                             "[runtime_probe_signal_unsupported] Probe %r: partition_stats has no "
                             "DuckDB equivalent (single-process engine, no partition concept); skipping.",
@@ -600,10 +702,19 @@ def execute_probe(
                     elif sig_type == "threshold":
                         payload = _threshold(rel, sig_cfg)
                     elif sig_type == "custom":
-                        payload = _custom(rel, sig_cfg, block_full_actions=block_full_actions, base_dir=base_dir)
+                        payload = _custom(
+                            rel, sig_cfg, block_full_actions=block_full_actions, base_dir=base_dir
+                        )
                     else:
-                        logger.warning("[runtime_probe_unknown_signal] Probe %r: unknown signal type %r; skipping.", module.id, sig_type)
-                        _add_module_warning("runtime_probe_unknown_signal", f"Probe {module.id!r}: unknown signal type {sig_type!r}; skipping.")
+                        logger.warning(
+                            "[runtime_probe_unknown_signal] Probe %r: unknown signal type %r; skipping.",
+                            module.id,
+                            sig_type,
+                        )
+                        _add_module_warning(
+                            "runtime_probe_unknown_signal",
+                            f"Probe {module.id!r}: unknown signal type {sig_type!r}; skipping.",
+                        )
                         continue
 
                     cur.execute(
@@ -617,17 +728,28 @@ def execute_probe(
                     if _report_stdout:
                         try:
                             _notes.extend(_stdout_report_lines(sig_type, payload))
-                        except Exception:  # noqa: BLE001 — report formatting must never fail the probe
+                        except (
+                            Exception
+                        ):  # noqa: BLE001 — report formatting must never fail the probe
                             pass
                 except Exception as exc:
                     logger.warning(
                         "[runtime_probe_signal_error] Probe %r signal %r failed: %s",
-                        module.id, sig_type, exc,
+                        module.id,
+                        sig_type,
+                        exc,
                     )
-                    _add_module_warning("runtime_probe_signal_error", f"Probe {module.id!r} signal {sig_type!r} failed: {exc}")
+                    _add_module_warning(
+                        "runtime_probe_signal_error",
+                        f"Probe {module.id!r} signal {sig_type!r} failed: {exc}",
+                    )
     except Exception as exc:
-        logger.warning("[runtime_probe_error] execute_probe %r: unexpected error: %s", module.id, exc)
-        _add_module_warning("runtime_probe_error", f"execute_probe {module.id!r}: unexpected error: {exc}")
+        logger.warning(
+            "[runtime_probe_error] execute_probe %r: unexpected error: %s", module.id, exc
+        )
+        _add_module_warning(
+            "runtime_probe_error", f"execute_probe {module.id!r}: unexpected error: {exc}"
+        )
     return tuple(_notes)
 
 

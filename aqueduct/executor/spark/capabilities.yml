@@ -656,3 +656,40 @@ leaves:
   regulator.field.timeout_seconds: supported
   assert_rule.field.id: supported
   probe_signal.field.id: supported
+  probe.signal.data_freshness:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_probe.py::test_data_freshness_max_value
+  probe.signal.distinct_count:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_probe.py::test_distinct_count_approx
+  probe.signal.null_rates:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_probe.py::test_null_rates_computes_per_column_rate
+  probe.signal.partition_stats:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_probe.py::test_partition_stats_zero_action
+  probe.signal.row_count_estimate:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_probe.py::test_row_count_estimate_sample_method
+  probe.signal.sample_rows:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_probe.py::test_sample_rows_limits_to_n
+  probe.signal.schema_snapshot:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_probe.py::test_schema_snapshot_writes_probe_signals_only_no_sidecar
+  probe.signal.threshold:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_probe.py::test_threshold_passed
+      - tests/test_executor/test_executor_probe.py::test_threshold_failed
+  probe.signal.value_distribution:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_probe.py::test_value_distribution_numeric_columns

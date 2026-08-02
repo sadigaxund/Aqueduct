@@ -34,8 +34,8 @@ Each engine declares a verdict for every capability leaf in a YAML data file shi
 
 | Engine | Leaves declared | Supported | Version-gated | Ignored with warning | Unsupported |
 |---|---|---|---|---|---|
-| `duckdb` | 319 | 257 | 0 | 4 | 58 |
-| `spark` | 311 | 310 | 7 | 0 | 1 |
+| `duckdb` | 328 | 265 | 0 | 4 | 59 |
+| `spark` | 320 | 319 | 7 | 0 | 1 |
 
 ### Conditional and refused capabilities
 
@@ -103,6 +103,7 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 | `duckdb` | `ingress.format.kafka` | unsupported | — | Kafka streaming ingress has no DuckDB equivalent — DuckDB is a batch, single-process engine. |
 | `duckdb` | `ingress_time_travel.field.timestamp` | unsupported | — | time_travel is unimplemented on DuckDB — see feature.delta_time_travel. |
 | `duckdb` | `ingress_time_travel.field.version` | unsupported | — | time_travel is unimplemented on DuckDB — see feature.delta_time_travel. |
+| `duckdb` | `probe.signal.partition_stats` | unsupported | — | DuckDB is a single-process, single-node engine with no partition concept to report — there is no analog to Spark's df.rdd.getNumPartitions(). A Probe declaring this signal against a DuckDB-executed Ingress/Channel is rejected at compile time instead of silently writing an empty/missing probe_signals row. |
 | `duckdb` | `probe_signal.field.method` | ignored_with_warning | — | Accepted but never inspected — row_count_estimate is always an exact count on this engine regardless of method: sample/spark_listener (see module.type.Probe's hint); the field is authoring-parity only. |
 | `duckdb` | `type.native.spark` | unsupported | — | 'spark:<spelling>' names a type in Spark's native type system, which DuckDB's SQL parser does not understand. Use the hub vocabulary (bigint, array<T>, ...) or 'duckdb:<spelling>' for a DuckDB-native escape hatch. |
 | `spark` | `egress.format.custom` | supported | `pyspark>=4.0` | format: custom requires pyspark>=4.0 (the spark.dataSource registry). See docs/compatibility.md. |

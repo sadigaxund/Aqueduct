@@ -10,10 +10,10 @@
 # A `supported` verdict answers one question: "if a Blueprint uses this leaf
 # on engine=duckdb, what happens?" Two honest senses of `supported`, both
 # requiring proof, not a guess:
-#   - EXECUTION leaves (channel.op.*, ingress.format.*, egress.format.*,
-#     egress.mode.*, egress.on_new_columns.*, junction.mode.*, funnel.mode.*,
-#     module.type.*, feature.*): `supported` only with a real handler AND a
-#     test exercising it on DuckDB.
+#   - EXECUTION leaves (channel.op.*, probe.signal.*, ingress.format.*,
+#     egress.format.*, egress.mode.*, egress.on_new_columns.*,
+#     junction.mode.*, funnel.mode.*, module.type.*, feature.*): `supported`
+#     only with a real handler AND a test exercising it on DuckDB.
 #   - ENGINE-INVARIANT grammar leaves (agent.*, hooks.*, retry_policy.*,
 #     backoff.*, edge.*, udf.field.*, module.field.*, warnings.*): `supported`
 #     because core orchestration handles them identically regardless of
@@ -897,3 +897,47 @@ leaves:
   regulator.field.timeout_seconds: supported
   assert_rule.field.id: supported
   probe_signal.field.id: supported
+  probe.signal.data_freshness:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_probe.py::test_data_freshness_full_scan
+      - tests/test_executor_duckdb/test_probe.py::test_data_freshness_blocked_unless_allow_sample
+  probe.signal.distinct_count:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_probe.py::test_distinct_count_full_scan
+      - tests/test_executor_duckdb/test_probe.py::test_distinct_count_blocked_by_block_full_actions
+  probe.signal.null_rates:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_probe.py::test_null_rates_full_scan
+      - tests/test_executor_duckdb/test_probe.py::test_null_rates_blocked_by_block_full_actions
+  probe.signal.partition_stats:
+    support: unsupported
+    hint: "DuckDB is a single-process, single-node engine with no partition concept to report — there is no analog to Spark's df.rdd.getNumPartitions(). A Probe declaring this signal against a DuckDB-executed Ingress/Channel is rejected at compile time instead of silently writing an empty/missing probe_signals row."
+  probe.signal.row_count_estimate:
+    support: supported
+    hint: "EXACT on this engine (parquet-footer read for a direct Ingress tap, COUNT(*) otherwise) rather than a sampled estimate — see duckdb_/probe.py's module docstring; the field name and probe_signals schema stay identical to Spark's."
+    tests:
+      - tests/test_executor_duckdb/test_probe.py::test_row_count_estimate_parquet_footer_when_attached_directly_to_ingress
+      - tests/test_executor_duckdb/test_probe.py::test_row_count_estimate_exact_count_when_no_target_module
+      - tests/test_executor_duckdb/test_probe.py::test_row_count_estimate_exact_count_for_csv_ingress
+  probe.signal.sample_rows:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_probe.py::test_sample_rows_limit
+      - tests/test_executor_duckdb/test_probe.py::test_sample_rows_capped_by_max_sample_rows
+  probe.signal.schema_snapshot:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_probe.py::test_schema_snapshot_zero_query_metadata
+  probe.signal.threshold:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_probe.py::test_threshold_passes
+      - tests/test_executor_duckdb/test_probe.py::test_threshold_fails
+  probe.signal.value_distribution:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_probe.py::test_value_distribution_full_scan_numeric_default
+      - tests/test_executor_duckdb/test_probe.py::test_value_distribution_blocked_by_block_full_actions

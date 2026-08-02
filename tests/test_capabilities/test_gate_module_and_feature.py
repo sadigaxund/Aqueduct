@@ -38,8 +38,12 @@ def _module(id_, type_, config=None):
 
 def _manifest(modules, udf_registry=()):
     return Manifest(
-        blueprint_id="bp", context={}, modules=tuple(modules), edges=(),
-        spark_config={}, udf_registry=tuple(udf_registry),
+        blueprint_id="bp",
+        context={},
+        modules=tuple(modules),
+        edges=(),
+        spark_config={},
+        udf_registry=tuple(udf_registry),
     )
 
 
@@ -80,16 +84,22 @@ def test_decimal_cast_emits_type_decimal_not_the_parametrized_spelling():
 
 
 def test_feature_leaves_from_udf_registry_python():
-    m = _manifest([_module("ch", "Channel", {"op": "sql", "query": "SELECT f(x) FROM up"})],
-                  udf_registry=[{"id": "f", "lang": "python"}])
+    m = _manifest(
+        [_module("ch", "Channel", {"op": "sql", "query": "SELECT f(x) FROM up"})],
+        udf_registry=[{"id": "f", "lang": "python"}],
+    )
     pairs = feature_leaves_for_manifest(m)
     assert ("feature.python_udf", "f") in pairs
 
 
 def test_feature_leaves_from_udf_registry_java_and_scala_map_to_java_udf():
-    m = _manifest([], udf_registry=[
-        {"id": "j", "lang": "java"}, {"id": "s", "lang": "scala"},
-    ])
+    m = _manifest(
+        [],
+        udf_registry=[
+            {"id": "j", "lang": "java"},
+            {"id": "s", "lang": "scala"},
+        ],
+    )
     leaves = {leaf for leaf, _ in feature_leaves_for_manifest(m)}
     assert leaves == {"feature.java_udf"}
 
@@ -137,7 +147,9 @@ def test_java_udf_gated_unsupported_on_duckdb_not_spark():
     genuine, permanent cross-engine gap, not a Pass E gap."""
     m = _manifest(
         [_module("ch", "Channel", {"op": "sql", "query": "SELECT mask(x) FROM up"})],
-        udf_registry=[{"id": "mask", "lang": "java", "jar": "geo.jar", "class": "com.example.Mask"}],
+        udf_registry=[
+            {"id": "mask", "lang": "java", "jar": "geo.jar", "class": "com.example.Mask"}
+        ],
     )
     problems = check_capabilities(m, engine="duckdb")
     hit = [p for p in problems if p.leaf_id == "feature.java_udf"]
@@ -147,11 +159,63 @@ def test_java_udf_gated_unsupported_on_duckdb_not_spark():
     assert check_capabilities(m, engine="spark") == []
 
 
+# ── probe.signal.* (Pass G2) — per-signal-type leaves ───────────────────────
+
+
+def test_leaves_for_module_emits_probe_signal_types_but_not_custom():
+    m = _module(
+        "p",
+        "Probe",
+        {
+            "signals": [
+                {"type": "threshold", "expr": "COUNT(*) > 0"},
+                {"type": "null_rates"},
+                {"type": "custom", "sql": "MAX(x)"},
+            ]
+        },
+    )
+    leaves = leaves_for_module(m)
+    assert "probe.signal.threshold" in leaves
+    assert "probe.signal.null_rates" in leaves
+    # `custom` is a user-code escape valve, not a governed per-engine
+    # capability — see BUILTIN_SIGNAL_TYPES's docstring — so it never emits a
+    # probe.signal.* leaf.
+    assert "probe.signal.custom" not in leaves
+
+
+def test_partition_stats_gated_unsupported_on_duckdb_not_spark():
+    """DuckDB has no partition concept (single-process engine) — this is the
+    compile-time counterpart to duckdb_/probe.py's dedicated
+    `runtime_probe_signal_unsupported` warning: the same gap must now be
+    caught BEFORE a run starts, like every other unsupported leaf, rather
+    than only being discovered mid-execution."""
+    m = _manifest([_module("p", "Probe", {"signals": [{"type": "partition_stats"}]})])
+    problems = check_capabilities(m, engine="duckdb")
+    hit = [p for p in problems if p.leaf_id == "probe.signal.partition_stats"]
+    assert hit, f"probe.signal.partition_stats not gated on duckdb: {[p.leaf_id for p in problems]}"
+    assert hit[0].module_id == "p"
+    assert check_capabilities(m, engine="spark") == []
+
+
+def test_all_other_built_in_signal_types_clean_on_both_engines():
+    from aqueduct.executor.probe_plugins import BUILTIN_SIGNAL_TYPES
+
+    non_partition = sorted(BUILTIN_SIGNAL_TYPES - {"partition_stats"})
+    signals = [{"type": t} for t in non_partition]
+    # threshold/data_freshness need a config key to be realistic, but the
+    # capability gate only looks at `type:` — an empty/minimal config is
+    # enough to prove the leaf itself is clean on both engines.
+    m = _manifest([_module("p", "Probe", {"signals": signals})])
+    assert check_capabilities(m, engine="duckdb") == []
+    assert check_capabilities(m, engine="spark") == []
+
+
 def test_supported_module_and_no_udf_is_clean_on_duckdb():
     # Ingress(csv) -> Channel(filter) -> Egress(parquet/overwrite): all within
     # DuckDB Stage A support, no UDFs. The gate must stay silent.
     m = Manifest(
-        blueprint_id="bp", context={},
+        blueprint_id="bp",
+        context={},
         modules=(
             _module("i", "Ingress", {"format": "csv", "path": "x.csv"}),
             _module("c", "Channel", {"op": "filter", "condition": "a > 1"}),

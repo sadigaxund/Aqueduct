@@ -51,6 +51,13 @@ same as compiler warning ``rule_id``s):
                                            assert_on_fail, assert_rule — see
                                            ``parser.schema.MODULE_NESTED_SCHEMA_BLOCKS``)
   channel.op.<op>                       — Channel op names
+  probe.signal.<type>                   — Probe built-in signal types (Pass
+                                           G2) — one leaf per entry in
+                                           ``probe_plugins.BUILTIN_SIGNAL_TYPES``,
+                                           same derivation shape as
+                                           ``channel.op.*``. ``custom`` is
+                                           excluded (see that constant's
+                                           docstring for why).
   egress.mode.<mode>                    — Egress write modes
   egress.on_new_columns.<policy>        — Egress schema-drift policy
   egress.format.<fmt>                   — Egress formats with dedicated code
@@ -99,6 +106,13 @@ Derivation sources, by leaf category:
     runtime, not by ``schema.py``), but the constants are still the single
     source of truth the dispatch code itself reads, so adding an op without
     updating the constant is impossible by construction.
+  - probe.signal.* is derived the same way, from
+    ``executor/probe_plugins.py::BUILTIN_SIGNAL_TYPES`` — the vocabulary a
+    Probe signal's ``type:`` field is dispatched against in both engines'
+    ``probe.py``. ``ProbeSignalSchema.type`` (``parser/schema.py``) stays a
+    bare ``str`` rather than a closed ``Literal`` for the same
+    parser-must-not-import-executor reason ``ChannelConfigSchema.op`` does
+    (see ``BUILTIN_SIGNAL_TYPES``'s own docstring for the full reasoning).
   - ingress.format.* / egress.format.* are a SMALL CURATED subset: Ingress
     and Egress accept "any format string the active SparkSession supports"
     (see their module docstrings) — there is no closed enumerable set. The
@@ -137,6 +151,7 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from aqueduct.executor.channel_ops import ALL_OPS as _CHANNEL_OPS
+from aqueduct.executor.probe_plugins import BUILTIN_SIGNAL_TYPES as _PROBE_SIGNAL_TYPES
 from aqueduct.executor.spark.egress import ON_NEW_COLUMNS_POLICIES as _EGRESS_ON_NEW_COLUMNS
 from aqueduct.executor.spark.egress import SUPPORTED_MODES as _EGRESS_MODES
 from aqueduct.executor.spark.funnel import VALID_MODES as _FUNNEL_MODES
@@ -183,19 +198,21 @@ EGRESS_FORMATS: frozenset[str] = frozenset({"custom", "delta", "iceberg", "hudi"
 # whether the engine can run a given kind of UDF, write format, or runtime
 # behavior at all. Hand-maintained; add a line here when a new cross-cutting
 # engine capability is introduced.
-FEATURE_FLAGS: frozenset[str] = frozenset({
-    "java_udf",
-    "python_udf",
-    "delta_write",
-    "delta_time_travel",
-    "spillway",
-    "metrics_boundary",
-    "broadcast_junction",
-    "custom_datasource",
-    "checkpoint",
-    "parallel_mode",
-    "table_addressing",
-})
+FEATURE_FLAGS: frozenset[str] = frozenset(
+    {
+        "java_udf",
+        "python_udf",
+        "delta_write",
+        "delta_time_travel",
+        "spillway",
+        "metrics_boundary",
+        "broadcast_junction",
+        "custom_datasource",
+        "checkpoint",
+        "parallel_mode",
+        "table_addressing",
+    }
+)
 
 # Nested schema blocks walked for their own field-name leaves. Each entry is
 # (leaf-prefix, pydantic model). Keep in sync with schema.py's actual nested
@@ -268,6 +285,10 @@ def _channel_op_leaves() -> set[str]:
     return {f"channel.op.{op}" for op in _CHANNEL_OPS}
 
 
+def _probe_signal_leaves() -> set[str]:
+    return {f"probe.signal.{t}" for t in _PROBE_SIGNAL_TYPES}
+
+
 def _egress_leaves() -> set[str]:
     leaves = {f"egress.mode.{m}" for m in _EGRESS_MODES}
     leaves |= {f"egress.on_new_columns.{p}" for p in _EGRESS_ON_NEW_COLUMNS}
@@ -332,6 +353,7 @@ def all_leaves() -> frozenset[str]:
     leaves |= _module_type_field_leaves()
     leaves |= _schema_block_leaves()
     leaves |= _channel_op_leaves()
+    leaves |= _probe_signal_leaves()
     leaves |= _egress_leaves()
     leaves |= _ingress_leaves()
     leaves |= _junction_leaves()
@@ -344,9 +366,10 @@ def all_leaves() -> frozenset[str]:
 def execution_leaves() -> frozenset[str]:
     """The EXECUTION-leaf subset of ``all_leaves()`` — leaves with an actual
     per-engine runtime dispatch path: ``module.type.*``, ``channel.op.*``,
-    ``ingress.format.*``, ``egress.format.*`` / ``egress.mode.*`` /
-    ``egress.on_new_columns.*``, ``junction.mode.*``, ``funnel.mode.*``,
-    ``feature.*``, and ``type.*`` (a type constructor / native escape hatch
+    ``probe.signal.*``, ``ingress.format.*``, ``egress.format.*`` /
+    ``egress.mode.*`` / ``egress.on_new_columns.*``, ``junction.mode.*``,
+    ``funnel.mode.*``, ``feature.*``, and ``type.*`` (a type constructor /
+    native escape hatch
     is a real per-engine runtime dispatch point — DuckDB genuinely cannot
     execute a cast to a type it has no native representation for — so it
     carries the same verdict->test link obligation as any other execution
@@ -372,6 +395,7 @@ def execution_leaves() -> frozenset[str]:
     leaves: set[str] = set()
     leaves |= _module_type_leaves()
     leaves |= _channel_op_leaves()
+    leaves |= _probe_signal_leaves()
     leaves |= _egress_leaves()
     leaves |= _ingress_leaves()
     leaves |= _junction_leaves()

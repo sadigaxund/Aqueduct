@@ -36,6 +36,40 @@ AQ_PROBE_ENTRYPOINT_GROUP = "aqueduct.probe_signals"
 
 CustomSignalFn = Callable[..., dict]
 
+# Built-in Probe signal types — the closed vocabulary behind the
+# `probe.signal.*` capability-leaf family (see `executor/capability_leaves.py`).
+# Kept HERE rather than as a pydantic `Literal` on `ProbeSignalSchema.type`
+# (`parser/schema.py`) for the exact reason `ChannelConfigSchema.op` stays a
+# bare `str` instead of a `Literal` sourced from `channel_ops.py::ALL_OPS`:
+# the parser layer must not reach into the executor layer (4-layer boundary,
+# AGENTS.md), so a schema-level Literal would need its own hand-maintained
+# copy of this same list — one source of truth here beats two lists that can
+# drift apart. This module is the existing engine-agnostic, pyspark-free home
+# for Probe-signal machinery (see module docstring) — already imported by
+# both the compiler (`wirer.py`, for `type: custom` shape validation) and
+# both engines' `probe.py` — same precedent as `channel_ops.py` being
+# imported by `spark/channel.py` and the capability-leaf walker.
+#
+# `custom` (Phase 60) is deliberately EXCLUDED: it is a user-code escape
+# valve with its own compile-time shape check (`custom_signal_source` above),
+# not an enumerable per-engine capability. Gating it here would force a
+# `probe.signal.custom` capabilities.yml row on every engine for something
+# that dispatches through the identical code path on any engine that
+# implements the Probe module type at all.
+BUILTIN_SIGNAL_TYPES: frozenset[str] = frozenset(
+    {
+        "schema_snapshot",
+        "row_count_estimate",
+        "null_rates",
+        "sample_rows",
+        "value_distribution",
+        "distinct_count",
+        "data_freshness",
+        "partition_stats",
+        "threshold",
+    }
+)
+
 
 def custom_signal_source(sig_cfg: dict[str, Any]) -> str:
     """Classify a ``custom`` signal's resolution form.
@@ -69,9 +103,7 @@ def custom_signal_source(sig_cfg: dict[str, Any]) -> str:
             "'sql'/'passed_when', 'module'+'entry', or 'plugin'"
         )
     if forms[0] == "pointer" and not (sig_cfg.get("module") and sig_cfg.get("entry")):
-        raise ConfigError(
-            "custom probe signal pointer form requires BOTH 'module' and 'entry'"
-        )
+        raise ConfigError("custom probe signal pointer form requires BOTH 'module' and 'entry'")
     return forms[0]
 
 
@@ -97,9 +129,7 @@ def resolve_callable(sig_cfg: dict[str, Any], base_dir: str | None = None) -> Cu
         mod = load_module(module_name, base_dir)
         fn = getattr(mod, entry, None)
         if not callable(fn):
-            raise ConfigError(
-                f"custom probe: {module_name}:{entry} is not a callable"
-            )
+            raise ConfigError(f"custom probe: {module_name}:{entry} is not a callable")
         return fn
     if source == "plugin":
         name = sig_cfg["plugin"]
@@ -110,9 +140,7 @@ def resolve_callable(sig_cfg: dict[str, Any], base_dir: str | None = None) -> Cu
                 f"{AQ_PROBE_ENTRYPOINT_GROUP!r}"
             )
         return fn
-    raise ConfigError(
-        "resolve_callable() called for an inline-SQL custom signal (no callable)"
-    )
+    raise ConfigError("resolve_callable() called for an inline-SQL custom signal (no callable)")
 
 
 def _load_entry_point(name: str) -> CustomSignalFn | None:
