@@ -205,6 +205,47 @@ def test_apply_set_spark_config_auto_creates_block(base_bp):
     assert "engine" in patched
     assert patched["engine"]["spark"]["conf"]["spark.sql.shuffle.partitions"] == 200
 
+
+@pytest.mark.parametrize("keyword_value", ["on", "off", "yes", "no", "true", "false"])
+def test_apply_set_spark_config_string_value_survives_yaml_roundtrip(base_bp, keyword_value):
+    """A YAML-1.1-reserved-word-shaped string ("on"/"off"/"yes"/"no", also
+    "true"/"false") must round-trip as the SAME string through the real
+    dump-then-reparse cycle apply.py's step 5 performs — dump via ruamel
+    (YAML 1.2, which does NOT treat on/yes/off/no as booleans and would
+    write them unquoted) and re-parse via the parser (PyYAML, YAML 1.1,
+    which DOES read unquoted on/yes/off/no — and true/false — as bool).
+    `conf` is dict[str, Any], so an unquoted round-trip silently turns
+    e.g. spark.eventLog.enabled: "on" into a Python bool with no error
+    anywhere in the pipeline. Exercises the exact apply.py dump path via
+    _yaml_dumps, not a hand-rolled dumper."""
+    import yaml as pyyaml
+
+    from aqueduct.patch.apply import _yaml_dumps
+
+    op = SetSparkConfigOp(op="set_spark_config", key="spark.eventLog.enabled", value=keyword_value)
+    patched = apply_operation(base_bp, op)
+    dumped = _yaml_dumps(patched)
+    reloaded = pyyaml.safe_load(dumped)
+    assert reloaded["engine"]["spark"]["conf"]["spark.eventLog.enabled"] == keyword_value
+    assert isinstance(reloaded["engine"]["spark"]["conf"]["spark.eventLog.enabled"], str)
+
+
+@pytest.mark.parametrize("keyword_value", ["on", "off", "yes", "no", "true", "false"])
+def test_apply_replace_context_value_string_survives_yaml_roundtrip(base_bp, keyword_value):
+    """Same regression as set_spark_config above, for replace_context_value
+    (`context` is also dict[str, Any])."""
+    import yaml as pyyaml
+
+    from aqueduct.patch.apply import _yaml_dumps
+
+    op = ReplaceContextValueOp(op="replace_context_value", key="env", value=keyword_value)
+    patched = apply_operation(base_bp, op)
+    dumped = _yaml_dumps(patched)
+    reloaded = pyyaml.safe_load(dumped)
+    assert reloaded["context"]["env"] == keyword_value
+    assert isinstance(reloaded["context"]["env"], str)
+
+
 # ── Phase 47: replace_macro ────────────────────────────────────────────────
 
 

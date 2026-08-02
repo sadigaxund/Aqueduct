@@ -233,7 +233,19 @@ def apply_replace_context_value(bp: dict, op: ReplaceContextValueOp) -> dict:
             "Example: {'op': 'set_module_config_key', 'module_id': '<failing_module>', "
             "'key': 'path', 'value': '<corrected_value>'}."
         )
-    _set_nested(context, op.key, op.value)
+    # String values are force-quoted, same as apply_set_module_config_key —
+    # ruamel dumps under YAML 1.2 (its own default), which does NOT treat
+    # "on"/"yes"/"off"/"no" as reserved words, so an unquoted string value
+    # equal to one of those round-trips fine through ruamel itself but
+    # becomes a bool the moment step 5's re-parse (parser.py's
+    # yaml.safe_load, PyYAML — YAML 1.1 semantics) reads it back. `context`
+    # is `dict[str, Any]` (schema.py), so verification passes silently:
+    # bool is still a valid Any. Without this, a heal that sets
+    # context.some_flag: "on" applies cleanly and every subsequent parse
+    # reads True — a permanent, silent value change contradicting the
+    # applied patch.
+    value = _DQ(op.value) if isinstance(op.value, str) else op.value
+    _set_nested(context, op.key, value)
     return bp
 
 
@@ -354,7 +366,15 @@ def apply_set_spark_config(bp: dict, op: SetSparkConfigOp) -> dict:
     bp.setdefault("engine", {})
     bp["engine"].setdefault("spark", {})
     bp["engine"]["spark"].setdefault("conf", {})
-    bp["engine"]["spark"]["conf"][op.key] = op.value
+    # Force-quote string values — see apply_replace_context_value's comment
+    # for the exact mechanism (ruamel/YAML-1.2 dump vs. PyYAML/YAML-1.1
+    # re-parse at step 5 of apply.py). `conf` is `dict[str, Any]`
+    # (schema.py), so a Spark conf value like "on"/"off" (many Spark
+    # boolean-shaped confs accept either spelling) silently became a
+    # Python bool on the next parse, which session.py then renders back
+    # via `str(value)` as "True"/"False" — not a valid Spark conf value at
+    # all, and not what the patch applied.
+    bp["engine"]["spark"]["conf"][op.key] = _DQ(op.value) if isinstance(op.value, str) else op.value
     return bp
 
 
