@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.46: Reference Document**
+**Version 2.47: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -871,6 +871,7 @@ udf_registry:
 | `module` | python | Importable module path. Required for python. |
 | `entry` | python | Function name in `module` (defaults to `id`). With `params`, treated as a factory `entry(**params) -> callable`. |
 | `params` | python | Optional keyword map passed to the `entry` factory. Values resolve `${ctx.*}`/`${ENV}` and `@aq.*` (incl. `@aq.secret()`) at compile time. |
+| `deterministic` | python | Default `true`. `false` marks the UDF nondeterministic on both engines: Spark builds it via `asNondeterministic()` before registration, so the optimiser does not constant-fold, cache, or re-order calls; DuckDB inverts it onto `side_effects` (`side_effects = not deterministic`) for the same optimizer-safety reason. |
 | `jar` | java/scala | JAR file path (relative paths anchor to the Blueprint dir). |
 | `class` | java/scala | Fully-qualified class name. |
 

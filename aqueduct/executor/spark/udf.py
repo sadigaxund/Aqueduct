@@ -17,6 +17,12 @@ UDF registry entry shape (from Blueprint / Manifest):
   module:      dotted Python module path (python only, e.g. "my_pkg.udfs")
   entry:       callable name within the module (python only, e.g. "validate_email_fn")
   return_type: Spark SQL type string (python only, e.g. "boolean", "StringType()")
+  deterministic: bool, default True (python only). False builds the UDF via
+               ``asNondeterministic()`` before registration so Spark's
+               optimiser does not constant-fold, cache, or re-order calls —
+               DuckDB's own executor honours the same field via
+               ``side_effects`` (``duckdb_/udf.py``). Pass G1: previously
+               unread on this engine.
 """
 
 from __future__ import annotations
@@ -61,6 +67,7 @@ def _ensure_project_root_on_path() -> None:
     cwd = str(Path.cwd())
     if cwd not in sys.path:
         sys.path.insert(0, cwd)
+
 
 _shipped_packages: set[str] = set()
 
@@ -202,7 +209,9 @@ def _patch_pyspark_cloudpickle() -> None:
             "cloudpickle — Python UDFs may fail with recursion errors. Likely "
             "a future PySpark restructured the module; report this with the "
             "installed pyspark version.",
-            py_label, bundled_path, missing,
+            py_label,
+            bundled_path,
+            missing,
         )
         return
 
@@ -215,8 +224,10 @@ def _patch_pyspark_cloudpickle() -> None:
             "[runtime_udf_cloudpickle_version_mismatch] %s detected; could not "
             "compare cloudpickle versions (system=%r, bundled=%r): %s. "
             "Skipping patch.",
-            py_label, getattr(system_cp, "__version__", "?"),
-            getattr(bundled_cp, "__version__", "?"), exc,
+            py_label,
+            getattr(system_cp, "__version__", "?"),
+            getattr(bundled_cp, "__version__", "?"),
+            exc,
         )
         return
 
@@ -230,7 +241,9 @@ def _patch_pyspark_cloudpickle() -> None:
     bundled_cp.CloudPickler = system_cp.CloudPickler
     logger.info(
         "Patched %s %s.%s → system cloudpickle %s.%s",
-        bundled_path, *bundled_ver, *system_ver,
+        bundled_path,
+        *bundled_ver,
+        *system_ver,
     )
 
 
@@ -313,7 +326,9 @@ def _register_java_udf(
     if not jar_path:
         raise UDFError(f"UDF {udf_id!r}: 'jar' is required for java/scala UDFs")
     if not class_name:
-        raise UDFError(f"UDF {udf_id!r}: 'entry' (fully-qualified class name) is required for java/scala UDFs")
+        raise UDFError(
+            f"UDF {udf_id!r}: 'entry' (fully-qualified class name) is required for java/scala UDFs"
+        )
 
     jar_abs = str(Path(jar_path).resolve())
     if not Path(jar_abs).exists():
@@ -370,9 +385,7 @@ def _apply_udf_params(
     try:
         produced = fn(**params)
     except Exception as exc:
-        raise UDFError(
-            f"UDF {udf_id!r}: factory {entry_name}(**params) raised: {exc}"
-        ) from exc
+        raise UDFError(f"UDF {udf_id!r}: factory {entry_name}(**params) raised: {exc}") from exc
     if not (callable(produced) or _is_spark_udf(produced)):
         raise UDFError(
             f"UDF {udf_id!r}: factory {entry_name!r} must return a callable "
@@ -400,43 +413,64 @@ def _register_python_udf(
     try:
         mod = load_module(module_path, base_dir)
     except ImportError as exc:
-        raise UDFError(
-            f"UDF {udf_id!r}: cannot import module {module_path!r}: {exc}"
-        ) from exc
+        raise UDFError(f"UDF {udf_id!r}: cannot import module {module_path!r}: {exc}") from exc
 
     _ship_module_to_executors(mod, spark)
 
     fn = getattr(mod, entry_name, None)
     if fn is None:
-        raise UDFError(
-            f"UDF {udf_id!r}: function {entry_name!r} not found in {module_path!r}"
-        )
+        raise UDFError(f"UDF {udf_id!r}: function {entry_name!r} not found in {module_path!r}")
 
     # Parameterized UDF: `entry` is a factory — call it with the resolved params
     # to obtain the actual callable (or Spark UDF object) to register. Params are
     # already context/secret-resolved by the compiler before they reach here.
     fn = _apply_udf_params(udf_id, entry_name, module_path, fn, entry.get("params") or {})
 
+    # `deterministic` (default True) — a UDF marked nondeterministic must not
+    # be constant-folded, cached, or re-ordered by Spark's optimiser (see
+    # `pyspark.sql.udf.UserDefinedFunction.asNondeterministic`). Previously
+    # unread anywhere on this engine (a documented Blueprint field with zero
+    # consumers — see CHANGELOG); DuckDB honours it via `side_effects`.
+    deterministic = bool(entry.get("deterministic", True))
+
     try:
         # If fn is already a Spark UDF object (class-based or duck-typed with returnType),
         # don't pass the redundant return_type string.
         if _is_spark_udf(fn):
+            if not deterministic and hasattr(fn, "asNondeterministic"):
+                fn = fn.asNondeterministic()
+            spark.udf.register(udf_id, fn)
+        elif not deterministic:
+            # Build the UserDefinedFunction explicitly so asNondeterministic()
+            # can be applied before registration — spark.udf.register()
+            # rejects a return_type argument once `fn` already carries one
+            # (it duck-types on `hasattr(f, "asNondeterministic")`).
+            from pyspark.sql.functions import udf as _spark_udf
+
+            fn = _spark_udf(fn, return_type).asNondeterministic()
             spark.udf.register(udf_id, fn)
         else:
             spark.udf.register(udf_id, fn, return_type)
     except Exception as exc:
         msg = str(exc)
-        if "serialize" in msg.lower() or "recursion" in msg.lower() or "stack overflow" in msg.lower():
+        if (
+            "serialize" in msg.lower()
+            or "recursion" in msg.lower()
+            or "stack overflow" in msg.lower()
+        ):
             import sys as _sys
+
             v = _sys.version_info
             hint = (
-                f" Python {v.major}.{v.minor} detected — cloudpickle bundled with PySpark 3.5 "
-                "does not support Python 3.14+. Use Python ≤ 3.12, or replace the UDF with a "
-                "native Spark SQL expression."
-            ) if v >= (3, 14) else ""
+                (
+                    f" Python {v.major}.{v.minor} detected — cloudpickle bundled with PySpark 3.5 "
+                    "does not support Python 3.14+. Use Python ≤ 3.12, or replace the UDF with a "
+                    "native Spark SQL expression."
+                )
+                if v >= (3, 14)
+                else ""
+            )
             raise UDFError(
                 f"UDF {udf_id!r}: spark.udf.register() failed — could not serialize the function.{hint}"
             ) from exc
-        raise UDFError(
-            f"UDF {udf_id!r}: spark.udf.register() failed: {exc}"
-        ) from exc
+        raise UDFError(f"UDF {udf_id!r}: spark.udf.register() failed: {exc}") from exc

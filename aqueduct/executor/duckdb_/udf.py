@@ -45,15 +45,14 @@ this module's own tests):
     body, matching the un-hinted style every existing gallery UDF (e.g.
     ``logic.py::mask_email``) is already written in.
 
-What is honestly NOT honoured — declared here rather than shipped as a
-silent divergence (see this engine's ``capabilities.yml`` hint):
-  * ``deterministic`` maps to DuckDB's ``side_effects`` (inverted:
-    ``side_effects = not deterministic``) so a UDF marked
-    ``deterministic: false`` is not incorrectly constant-folded/cached by
-    DuckDB's optimizer. Spark's own ``udf.py`` does not read this field at
-    all (a pre-existing, cross-engine gap — see CHANGELOG), so DuckDB
-    reading it is a strict improvement, never a divergence from what Spark
-    actually does with it today.
+``deterministic`` (default ``true``) maps onto DuckDB's ``side_effects``
+(inverted: ``side_effects = not deterministic``) so a UDF marked
+``deterministic: false`` is not incorrectly constant-folded/cached by
+DuckDB's optimizer — the engine-native equivalent of Spark's own
+``UserDefinedFunction.asNondeterministic()`` (``spark/udf.py``, Pass G1;
+before that pass Spark's ``udf.py`` did not read this field at all, so the
+same Blueprint field behaved differently per engine — worse than uniformly
+dead. Both engines now honour it for real.
 """
 
 from __future__ import annotations

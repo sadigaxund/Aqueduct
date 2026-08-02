@@ -4,7 +4,9 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 import pytest
+
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
+
 
 class TestUdfRegistration:
     def test_unsupported_lang_raises(self):
@@ -35,7 +37,9 @@ class TestUdfRegistration:
 
         mock_spark = MagicMock()
         with pytest.raises(UDFError, match="cannot import module"):
-            register_udfs(({"id": "my_udf", "lang": "python", "module": "no.such.module"},), mock_spark)
+            register_udfs(
+                ({"id": "my_udf", "lang": "python", "module": "no.such.module"},), mock_spark
+            )
 
     def test_missing_entry_raises(self):
         from aqueduct.executor.spark.udf import UDFError, register_udfs
@@ -53,7 +57,15 @@ class TestUdfRegistration:
         mock_spark = MagicMock()
         # json.loads is a real importable callable
         register_udfs(
-            ({"id": "parse_json", "lang": "python", "module": "json", "entry": "loads", "return_type": "string"},),
+            (
+                {
+                    "id": "parse_json",
+                    "lang": "python",
+                    "module": "json",
+                    "entry": "loads",
+                    "return_type": "string",
+                },
+            ),
             mock_spark,
         )
         mock_spark.udf.register.assert_called_once_with("parse_json", json.loads, "string")
@@ -68,6 +80,93 @@ class TestUdfRegistration:
             mock_spark,
         )
         mock_spark.udf.register.assert_called_once()
+
+    def test_deterministic_default_true_registers_plain_callable(self):
+        """Regression (Pass G1): the default path must stay byte-identical
+        to before this field was wired — a plain callable + return_type,
+        no UDF-object wrapping."""
+        from aqueduct.executor.spark.udf import register_udfs
+
+        mock_spark = MagicMock()
+        register_udfs(
+            (
+                {
+                    "id": "parse_json2",
+                    "lang": "python",
+                    "module": "json",
+                    "entry": "loads",
+                    "return_type": "string",
+                },
+            ),
+            mock_spark,
+        )
+        mock_spark.udf.register.assert_called_once_with("parse_json2", json.loads, "string")
+
+    def test_deterministic_false_marks_plain_callable_nondeterministic(self):
+        """Pass G1: `deterministic: false` must build the UDF via
+        asNondeterministic() before registration — a documented field that
+        was previously read by NO engine (see CHANGELOG)."""
+        from aqueduct.executor.spark.udf import register_udfs
+
+        mock_spark = MagicMock()
+        register_udfs(
+            (
+                {
+                    "id": "rand_ish",
+                    "lang": "python",
+                    "module": "json",
+                    "entry": "loads",
+                    "return_type": "string",
+                    "deterministic": False,
+                },
+            ),
+            mock_spark,
+        )
+        mock_spark.udf.register.assert_called_once()
+        call_args = mock_spark.udf.register.call_args
+        assert call_args.args[0] == "rand_ish"
+        registered_udf = call_args.args[1]
+        assert registered_udf.deterministic is False
+        # `hasattr(f, "asNondeterministic")` is real pyspark's own signal that
+        # a return_type argument would be redundant/rejected — same rule
+        # `_is_spark_udf` already applies for a pre-built UDF object.
+        assert len(call_args.args) == 2
+
+    def test_deterministic_false_forces_asnondeterministic_on_existing_udf_object(self):
+        """`entry` may already resolve to a Spark UDF object (a factory /
+        class-based UDF) built WITHOUT asNondeterministic() — deterministic:
+        false must still force it nondeterministic before registration."""
+        import sys
+        import types
+
+        from pyspark.sql.functions import udf as spark_udf
+        from pyspark.sql.types import StringType
+
+        from aqueduct.executor.spark.udf import register_udfs
+
+        mod = types.ModuleType("_aq_test_udf_existing_obj_mod")
+        mod.my_udf = spark_udf(lambda x: x, StringType())  # built deterministic (default)
+        sys.modules["_aq_test_udf_existing_obj_mod"] = mod
+        try:
+            mock_spark = MagicMock()
+            register_udfs(
+                (
+                    {
+                        "id": "my_udf",
+                        "lang": "python",
+                        "module": "_aq_test_udf_existing_obj_mod",
+                        "entry": "my_udf",
+                        "deterministic": False,
+                    },
+                ),
+                mock_spark,
+            )
+        finally:
+            del sys.modules["_aq_test_udf_existing_obj_mod"]
+
+        mock_spark.udf.register.assert_called_once()
+        registered_udf = mock_spark.udf.register.call_args.args[1]
+        assert registered_udf.deterministic is False
 
     def test_java_udf_missing_class_raises(self, tmp_path):
         from aqueduct.executor.spark.udf import UDFError, register_udfs
@@ -90,8 +189,15 @@ class TestUdfRegistration:
         jar.write_bytes(b"")
         mock_spark = MagicMock()
         register_udfs(
-            ({"id": "geo", "lang": "java", "jar": str(jar),
-              "entry": "com.example.GeoUDF", "return_type": "string"},),
+            (
+                {
+                    "id": "geo",
+                    "lang": "java",
+                    "jar": str(jar),
+                    "entry": "com.example.GeoUDF",
+                    "return_type": "string",
+                },
+            ),
             mock_spark,
         )
         mock_spark.sql.assert_called_once_with(f'ADD JAR "{jar.resolve()}"')
@@ -109,8 +215,15 @@ class TestUdfRegistration:
         mock_spark.sql.side_effect = Exception("cluster refused")
         with pytest.raises(UDFError, match="failed to add JAR"):
             register_udfs(
-                ({"id": "geo", "lang": "java", "jar": str(jar),
-                  "entry": "com.example.GeoUDF", "return_type": "string"},),
+                (
+                    {
+                        "id": "geo",
+                        "lang": "java",
+                        "jar": str(jar),
+                        "entry": "com.example.GeoUDF",
+                        "return_type": "string",
+                    },
+                ),
                 mock_spark,
             )
 
@@ -163,8 +276,15 @@ class TestUdfRegistration:
         jar.write_bytes(b"")
         mock_spark = MagicMock()
         register_udfs(
-            ({"id": "geo", "lang": "java", "jar": str(jar),
-              "entry": "com.example.GeoUDF", "return_type": "array<int>"},),
+            (
+                {
+                    "id": "geo",
+                    "lang": "java",
+                    "jar": str(jar),
+                    "entry": "com.example.GeoUDF",
+                    "return_type": "array<int>",
+                },
+            ),
             mock_spark,
         )
         mock_spark.udf.registerJavaFunction.assert_called_once_with(
@@ -176,9 +296,7 @@ class TestUdfRegistration:
         blueprint — no sys.path mutation needed."""
         from aqueduct.executor.spark.udf import register_udfs
 
-        (tmp_path / "my_udfs.py").write_text(
-            "def double(x):\n    return x * 2\n"
-        )
+        (tmp_path / "my_udfs.py").write_text("def double(x):\n    return x * 2\n")
         mock_spark = MagicMock()
         register_udfs(
             ({"id": "double", "lang": "python", "module": "my_udfs", "return_type": "bigint"},),
@@ -197,14 +315,19 @@ class TestUdfRegistration:
         pkg_dir = tmp_path / "string"
         pkg_dir.mkdir()
         (pkg_dir / "__init__.py").write_text("")
-        (pkg_dir / "my_udfs.py").write_text(
-            "def shout(s):\n    return s.upper()\n"
-        )
+        (pkg_dir / "my_udfs.py").write_text("def shout(s):\n    return s.upper()\n")
         sentinel = sys.modules["string"]
         mock_spark = MagicMock()
         try:
             register_udfs(
-                ({"id": "shout", "lang": "python", "module": "string.my_udfs", "return_type": "string"},),
+                (
+                    {
+                        "id": "shout",
+                        "lang": "python",
+                        "module": "string.my_udfs",
+                        "return_type": "string",
+                    },
+                ),
                 mock_spark,
                 base_dir=str(tmp_path),
             )
