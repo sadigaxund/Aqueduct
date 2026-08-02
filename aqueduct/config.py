@@ -529,24 +529,33 @@ class StoresConfig(BaseModel):
         explicit `local` choice) so users who deliberately keep blobs local are
         never nagged, and unrelated features never trigger it.
         """
-        import warnings as _warnings
-
-        from aqueduct import AqueductWarning
-
         obs_remote = self.observability.backend != "duckdb"
         blob_defaulted_local = (
             self.blob.backend == "local" and "backend" not in self.blob.model_fields_set
         )
         if obs_remote and blob_defaulted_local:
-            _warnings.warn(
+            # Routed through aqueduct.warnings.emit (not a raw warnings.warn)
+            # so the message carries a real rule_id and is suppressible via
+            # `--suppress-warning stores_blob_local_under_remote_obs` (only
+            # `emit()`'s AQ-WARN machinery checks the suppress set — a raw
+            # warnings.warn call was invisible to it). This validator runs
+            # on StoresConfig alone, before the enclosing AqueductConfig's
+            # sibling `warnings:` block exists to read a per-file suppress
+            # list from, so the CLI-flag / process-global suppress path is
+            # what this rule_id actually gets — setting stores.blob.backend
+            # explicitly to "local" remains the direct way to silence this
+            # validator's own precondition, independent of rule_id
+            # suppression.
+            from aqueduct.warnings import emit as _emit
+
+            _emit(
+                "stores_blob_local_under_remote_obs",
                 f"stores.observability.backend is {self.observability.backend!r} but "
                 "stores.blob.backend is unset and defaults to 'local' — externalised "
                 "blobs (manifests/stack traces/provenance) will be written to the "
                 "DRIVER's local disk, not your remote backend. Set stores.blob.backend "
                 "(e.g. s3/gcs/adls) to keep them remote, or set it explicitly to 'local' "
-                "to acknowledge and silence this.",
-                AqueductWarning,
-                stacklevel=2,
+                "to acknowledge this and stop the warning.",
             )
         return self
 
@@ -1583,10 +1592,23 @@ def _validate_store_backends(stores_cfg: StoresConfig) -> None:
     import importlib.util as _import_util
 
     seen: set[str] = set()
-    for store_label, backend in (
+    # Every named depot mount (not just the "default" one) and the
+    # benchmark store's own backend need the same fail-fast check as
+    # observability — audit-fixed 2026-08: `depots.<name>: {backend:
+    # postgres}` without [postgres], or `stores.benchmark.backend:
+    # postgres` without it, previously loaded cleanly and only died with a
+    # bare ImportError at first real use (`@aq.depot.<name>.get()` /
+    # `aqueduct benchmark`), mid-run, instead of the ConfigError every
+    # other store backend gets at load time.
+    _checks: list[tuple[str, str]] = [
         ("observability", stores_cfg.observability.backend),
-        ("depot",         stores_cfg.default_depot().backend),
-    ):
+        ("benchmark", stores_cfg.benchmark.backend),
+    ]
+    _checks.extend(
+        (f"depots.{name}", mount.backend)
+        for name, mount in stores_cfg.effective_depots().items()
+    )
+    for store_label, backend in _checks:
         if backend == "duckdb":
             continue
         if backend in seen:
@@ -1791,6 +1813,30 @@ def _format_config_error(resolved: Path, exc: ValidationError) -> str:
     return "\n".join(lines)
 
 
+def _register_agent_api_key_for_redaction(cfg: AqueductConfig) -> None:
+    """Register `agent.api_key`'s final resolved value with `aqueduct.redaction`.
+
+    Audit-fixed 2026-08: only `@aq.secret()`-resolved values were ever
+    registered (`_expand_secrets` above) — a `${ENV_VAR}` value or a
+    plaintext literal never entered the redaction registry at all, despite
+    the field's own docstring AND the `insecure_api_key` warning message
+    both stating the value "is redacted from logs and LLM payloads" as a
+    fact. By config-load time all three forms (literal / ${ENV} / @aq.
+    secret) have already collapsed to the same plain string on
+    `cfg.agent.api_key`, so one unconditional registration here — a
+    superset of what `_expand_secrets` already covers for this specific
+    field — makes that claim true instead of narrowing the docstring.
+    """
+    try:
+        api_key = getattr(getattr(cfg, "agent", None), "api_key", None)
+        if api_key:
+            from aqueduct import redaction
+
+            redaction.register(api_key, key_hint="agent.api_key")
+    except Exception:
+        pass  # redaction registration must never block config load
+
+
 def load_config(path: Path | None = None) -> AqueductConfig:
     """Load and validate engine configuration.
 
@@ -1850,16 +1896,22 @@ def load_config(path: Path | None = None) -> AqueductConfig:
             _raw_agent = _raw_data.get("agent") or {}
             _raw_key = _raw_agent.get("api_key") if isinstance(_raw_agent, dict) else None
             if isinstance(_raw_key, str) and _raw_key.strip() and not _raw_key.startswith("@aq.secret(") and "${" not in _raw_key:
-                import warnings as _warnings
+                # Routed through emit() (not a raw warnings.warn) so
+                # `warnings.suppress: [insecure_api_key]` /
+                # `--suppress-warning insecure_api_key` actually does
+                # something — the old code hand-embedded the
+                # "[aqueduct:insecure_api_key]" text but called
+                # warnings.warn() directly, which emit()'s suppress-set
+                # check never saw (a raw warnings.warn is invisible to it).
+                from aqueduct.warnings import emit as _emit
 
-                from aqueduct.warnings import AqueductWarning
-                _warnings.warn(
-                    f"[aqueduct:insecure_api_key] agent.api_key is a plaintext literal in "
-                    f"{resolved} — prefer @aq.secret('NAME') or ${{ENV_VAR}}. The value is "
-                    "redacted from logs and LLM payloads, but a literal in a committed config "
-                    "is a credential leak risk.",
-                    AqueductWarning,
-                    stacklevel=2,
+                _emit(
+                    "insecure_api_key",
+                    f"agent.api_key is a plaintext literal in {resolved} — prefer "
+                    "@aq.secret('NAME') or ${ENV_VAR}. The value is registered for "
+                    "redaction from logs and LLM payloads once config-load finishes, "
+                    "but a literal in a committed config is still a credential leak "
+                    "risk.",
                 )
     except Exception:
         pass  # best-effort; real parse errors surface later
@@ -1907,6 +1959,7 @@ def load_config(path: Path | None = None) -> AqueductConfig:
     if not _AQ_SECRET_RE.search(pass1_text):
         _validate_store_backends(cfg_pass1.stores)
         _warn_ignored_config_keys(cfg_pass1)
+        _register_agent_api_key_for_redaction(cfg_pass1)
         return cfg_pass1
 
     pass2_text, missing_secrets = _expand_secrets(pass1_text, cfg_pass1.secrets, base_dir=str(_cfg_dir))
@@ -1936,4 +1989,5 @@ def load_config(path: Path | None = None) -> AqueductConfig:
 
     _validate_store_backends(cfg.stores)
     _warn_ignored_config_keys(cfg)
+    _register_agent_api_key_for_redaction(cfg)
     return cfg

@@ -289,3 +289,48 @@ class TestDuckDBEngineConfig:
         }
         assert new_leaves <= duckdb_leaves
         assert not (new_leaves & spark_leaves)
+
+
+class TestValidateStoreBackendsCoverage:
+    """Audit triage (2026-08): `_validate_store_backends` fail-fast only
+    checked observability + the DEFAULT depot mount — an extra named depot
+    mount (`depots.<name>`) or the benchmark store's own backend loaded
+    cleanly with a missing SDK and only died with a bare ImportError at
+    first real use, mid-run, instead of the ConfigError every other store
+    backend gets at load. Covers both previously-unchecked surfaces."""
+
+    def test_extra_depot_mount_missing_backend_sdk_raises_config_error(self, monkeypatch):
+        import importlib.util as importlib_util
+
+        from aqueduct.config import DepotMountConfig, StoresConfig, _validate_store_backends
+
+        monkeypatch.setattr(
+            importlib_util, "find_spec", lambda name: None if name == "psycopg2" else object()
+        )
+        stores_cfg = StoresConfig(
+            depots={
+                "default": DepotMountConfig(backend="duckdb", path=".aqueduct/depot.db"),
+                "fleet": DepotMountConfig(backend="postgres", path="postgresql://x/y"),
+            }
+        )
+        with pytest.raises(Exception, match=r"depots\.fleet.*psycopg2"):
+            _validate_store_backends(stores_cfg)
+
+    def test_benchmark_store_missing_backend_sdk_raises_config_error(self, monkeypatch):
+        import importlib.util as importlib_util
+
+        from aqueduct.config import BenchmarkStoreConfig, StoresConfig, _validate_store_backends
+
+        monkeypatch.setattr(
+            importlib_util, "find_spec", lambda name: None if name == "psycopg2" else object()
+        )
+        stores_cfg = StoresConfig(benchmark=BenchmarkStoreConfig(backend="postgres"))
+        with pytest.raises(Exception, match=r"benchmark.*psycopg2"):
+            _validate_store_backends(stores_cfg)
+
+    def test_default_depot_only_still_passes_with_no_sdk_needed(self):
+        """Regression guard: the common case (duckdb-only, no extra
+        depots/benchmark backend) must still load with zero SDK checks."""
+        from aqueduct.config import StoresConfig, _validate_store_backends
+
+        _validate_store_backends(StoresConfig())  # must not raise

@@ -495,6 +495,51 @@ def test_load_config_pass2_registers_redaction(monkeypatch, tmp_path):
     assert redaction.is_registered("reg-secret-999999")
 
 
+def test_load_config_registers_plaintext_literal_api_key_for_redaction(tmp_path):
+    """Audit triage (2026-08): agent.api_key's docstring and the
+    insecure_api_key warning both claim the value "is redacted from logs
+    and LLM payloads" — but only @aq.secret()-resolved values were ever
+    registered with aqueduct.redaction. A plaintext literal (no
+    @aq.secret(), no ${ENV_VAR}) never entered the registry at all. Must
+    now be registered regardless of how the value was expressed."""
+    from aqueduct import redaction
+    redaction.clear()
+
+    path = tmp_path / "literal_api_key.yml"
+    path.write_text("agent:\n  api_key: plaintext-literal-key-777888\n")
+    load_config(path)
+    assert redaction.is_registered("plaintext-literal-key-777888")
+
+
+def test_load_config_registers_env_resolved_api_key_for_redaction(monkeypatch, tmp_path):
+    """Same fix, ${ENV_VAR} form — the docstring explicitly names this form."""
+    from aqueduct import redaction
+    redaction.clear()
+    monkeypatch.setenv("MY_LLM_KEY", "env-resolved-key-555444")
+
+    path = tmp_path / "env_api_key.yml"
+    path.write_text("agent:\n  api_key: ${MY_LLM_KEY}\n")
+    load_config(path)
+    assert redaction.is_registered("env-resolved-key-555444")
+
+
+def test_insecure_api_key_warning_is_suppressible_via_rule_id(monkeypatch, tmp_path):
+    """insecure_api_key must be a real, checkable rule_id — the previous
+    implementation hand-embedded "[aqueduct:insecure_api_key]" into a raw
+    warnings.warn() call, which emit()'s suppress-set check never saw."""
+    import warnings
+
+    import aqueduct.warnings as aq_warnings
+
+    monkeypatch.setattr(aq_warnings, "_DEFAULT_SUPPRESS", {"insecure_api_key"})
+
+    path = tmp_path / "literal_api_key.yml"
+    path.write_text("agent:\n  api_key: another-plaintext-key-333222\n")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        load_config(path)
+    assert not any("insecure_api_key" in str(w.message) for w in caught)
+
 
 def test_legacy_stores_lineage_block_rejected(tmp_path):
     """2.0: a removed `stores.lineage:` block is no longer tolerated — it raises
