@@ -125,7 +125,7 @@ def execute_funnel(
             try:
                 con.unregister(name)
             except Exception:
-                pass
+                pass  # best-effort cleanup
 
 
 def _row_aligned_query(

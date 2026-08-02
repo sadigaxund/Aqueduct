@@ -61,7 +61,15 @@ if TYPE_CHECKING:
     import duckdb
 
 from aqueduct.errors import AqueductError
-from aqueduct.executor.duckdb_.assert_ import AssertError, execute_assert
+from aqueduct.executor.duckdb_.assert_ import (
+    _AQ_ERROR_MODULE,
+    _AQ_ERROR_MSG,
+    _AQ_ERROR_TS,
+    _AQ_ERROR_TYPE,
+    AssertError,
+    _sql_literal,
+    execute_assert,
+)
 from aqueduct.executor.duckdb_.channel import ChannelError, execute_channel
 from aqueduct.executor.duckdb_.egress import EgressError, _escape, write_egress
 from aqueduct.executor.duckdb_.funnel import FunnelError, execute_funnel
@@ -638,7 +646,18 @@ def execute(
             has_spillway_edge = any(e.from_id == module.id and e.port == "spillway" for e in manifest.edges)
             if spillway_condition and has_spillway_edge:
                 frame_store[module.id] = rel.filter(f"NOT ({spillway_condition})")
-                frame_store[f"{module.id}.spillway"] = rel.filter(spillway_condition)
+                # Stamp the same error columns Spark's Channel spillway
+                # branch does (executor/spark/executor.py's
+                # SpillwayCondition path) so a typed spillway edge
+                # (edge.error_types) filtering on _aq_error_type finds the
+                # column on either engine instead of hitting a DuckDB
+                # Binder error against a relation that never had it.
+                frame_store[f"{module.id}.spillway"] = rel.filter(spillway_condition).project(
+                    f"*, {_sql_literal(module.id)} AS {_AQ_ERROR_MODULE}, "
+                    f"{_sql_literal('spillway_condition matched')} AS {_AQ_ERROR_MSG}, "
+                    f"{_sql_literal('SpillwayCondition')} AS {_AQ_ERROR_TYPE}, "
+                    f"current_timestamp AS {_AQ_ERROR_TS}"
+                )
             elif spillway_condition and not has_spillway_edge:
                 frame_store[module.id] = rel
             elif has_spillway_edge and not spillway_condition:
@@ -710,7 +729,7 @@ def execute(
                     return _fail(manifest.blueprint_id, run_id, module_results)
                 if edge.port == "spillway" and edge.error_types:
                     val = val.filter(
-                        "_aq_error_type IN (" + ",".join(f"'{t}'" for t in edge.error_types) + ")"
+                        f"{_AQ_ERROR_TYPE} IN (" + ",".join(f"'{t}'" for t in edge.error_types) + ")"
                     )
                 funnel_upstream[_effective_frame_key(edge, modules_by_id)] = val
             if skipped:
@@ -837,7 +856,7 @@ def execute(
                 module_results.append(_mr(module_id=module.id, status=ExecutionStatus.ERROR, error=f"[{module.id}] upstream {edge.from_id!r} produced no relation."))
                 return _fail(manifest.blueprint_id, run_id, module_results)
             if edge.port == "spillway" and edge.error_types:
-                val = val.filter("_aq_error_type IN (" + ",".join(f"'{t}'" for t in edge.error_types) + ")")
+                val = val.filter(f"{_AQ_ERROR_TYPE} IN (" + ",".join(f"'{t}'" for t in edge.error_types) + ")")
 
             mod_policy = _module_retry_policy(module, manifest.retry_policy)
             try:

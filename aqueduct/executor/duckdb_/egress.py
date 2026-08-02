@@ -2,10 +2,13 @@
 
 Stage A scope: ``format: parquet`` / ``format: csv`` only (the two ungated
 formats, same as the Ingress reader — see that module's docstring). Write
-modes are limited to what ``COPY ... TO`` can express natively: DuckDB has no
-append semantics in a single ``COPY`` statement, so ``overwrite`` / ``error``
-/ ``errorifexists`` / ``ignore`` are implemented and ``append`` / ``merge`` /
-``overwrite_partitions`` are honestly UNSUPPORTED (see ``capabilities.yml``).
+modes are limited to what ``COPY ... TO`` can express natively plus one
+emulated mode: DuckDB has no append semantics in a single ``COPY``
+statement, so ``overwrite`` / ``error`` / ``errorifexists`` / ``ignore`` are
+implemented directly; ``append`` is implemented as a non-atomic
+read-existing + ``UNION ALL BY NAME`` + rewrite (see the append branch below
+and its ``capabilities.yml`` hint); ``merge`` / ``overwrite_partitions`` are
+honestly UNSUPPORTED (see ``capabilities.yml``).
 
 The ``COPY`` execution is the sanctioned DuckDB action in this layer —
 mirrors Spark egress's ``.save()`` being the one sanctioned action there.
@@ -214,11 +217,11 @@ def write_egress(
             try:
                 con.execute(f'DROP TABLE IF EXISTS "{combined_name}"')
             except Exception:
-                pass
+                pass  # best-effort cleanup
         try:
             con.unregister(input_name)
         except Exception:
-            pass
+            pass  # best-effort cleanup
 
     register_as: str | None = cfg.get("register_as_table")
     if register_as:
@@ -408,7 +411,7 @@ def _write_table(
         try:
             con.unregister(input_name)
         except Exception:
-            pass
+            pass  # best-effort cleanup
 
 
 def _table_exists(con: duckdb.DuckDBPyConnection, table: str) -> bool:

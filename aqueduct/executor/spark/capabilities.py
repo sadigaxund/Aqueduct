@@ -1,12 +1,13 @@
 """Spark engine capability declaration (Phase 78) — loader only.
 
 The declaration itself is DATA: ``capabilities.yml`` next to this file, one
-explicit row per capability leaf (206 today — 189 Blueprint-grammar leaves +
-17 ENGINE-SCOPED config leaves; Q4 step 2 narrowed the config checklist from
-105 to the leaves that actually dispatch through an engine — see
+explicit row per capability leaf (320 as of 2026-08-02 — 303 Blueprint-grammar
+leaves + 17 ENGINE-SCOPED config leaves; Q4 step 2 narrowed the config checklist
+from 105 to the leaves that actually dispatch through an engine — see
 ``aqueduct/executor/config_leaves.py`` and ``docs/specs.md`` §10.9. The other
-~88 config leaves are CORE — no engine declares a verdict for them at all).
-This module only loads and registers it. It makes
+~88 config leaves are CORE — no engine declares a verdict for them at all). The
+count is a snapshot, not a contract — it drifts as leaves are added; read the
+YAML itself for the current total. This module only loads and registers it. It makes
 NO changes to any Spark executor module and must stay importable without
 ``pyspark`` installed (it is read by the compile-time capability gate, which
 runs before any Spark session exists, and by the closure test).

@@ -1139,6 +1139,46 @@ def test_feature_spillway_driven_through_execute(duckdb_con, tmp_path):
     assert sorted(r[0] for r in duckdb_con.read_parquet(spill_out).fetchall()) == [-1]
 
 
+def test_typed_spillway_edge_from_channel_does_not_raise_binder_error(duckdb_con, tmp_path):
+    """A typed spillway edge (``error_types``) filters on ``_aq_error_type``
+    (executor.py's Egress/Funnel branches). Before this fix, a Channel's
+    spillway_condition branch produced a relation with NO error columns at
+    all (unlike Spark's, which stamps 4 via withColumn), so a typed edge
+    fed from a Channel hit a DuckDB Binder error referencing a column that
+    never existed — a blueprint that runs fine on Spark. This proves the
+    DuckDB Channel spillway branch now stamps the same columns and the
+    typed filter resolves them without error, keeping only the
+    matching-type rows."""
+    src_path = _write_parquet(
+        duckdb_con, tmp_path, "src", "SELECT * FROM (VALUES (1),(-1),(2)) t(a)"
+    )
+    spill_out = str(tmp_path / "spill.parquet")
+    modules = (
+        _module("ing", "Ingress", {"format": "parquet", "path": src_path}),
+        _module(
+            "ch", "Channel", {"op": "filter", "condition": "1=1", "spillway_condition": "a < 0"}
+        ),
+        _module(
+            "eg_spill", "Egress", {"format": "parquet", "path": spill_out, "mode": "overwrite"}
+        ),
+    )
+    edges = (
+        Edge(from_id="ing", to_id="ch", port="main"),
+        Edge(
+            from_id="ch",
+            to_id="eg_spill",
+            port="spillway",
+            error_types=("SpillwayCondition",),
+        ),
+    )
+    manifest = Manifest(
+        blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={}
+    )
+    result = execute(manifest, duckdb_con, run_id="r_typed_spillway")
+    assert result.status == ExecutionStatus.SUCCESS
+    assert sorted(r[0] for r in duckdb_con.read_parquet(spill_out).fetchall()) == [-1]
+
+
 def test_feature_checkpoint_driven_through_execute(duckdb_con, tmp_path):
     src_path = _write_parquet(duckdb_con, tmp_path, "src", "SELECT 1 AS a")
     out_path = str(tmp_path / "out.parquet")
