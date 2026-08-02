@@ -35,13 +35,15 @@ if TYPE_CHECKING:
 # Execution kwargs the DuckDB engine's `execute()` genuinely accepts. The
 # shared run path (`aqueduct/cli/run.py`) calls through
 # `aqueduct.executor.protocol.call_execute()` with a superset that also
-# carries Spark-only run options — `parallel`, `use_observe`, `sampling`,
+# carries Spark-only run options — `parallel`, `use_observe`,
 # `observability_store`, `explain_capture`. Those are the "clearly optional
 # capabilities an engine may ignore" half of the ExecutorProtocol contract
 # (`OPTIONAL_EXECUTE_KWARGS` in `protocol.py`): DuckDB does not implement them
 # (see capabilities.yml — `feature.parallel_mode`, `config.metrics.use_observe`,
-# Probe sampling, and the Spark explain-gate are all UNSUPPORTED/unimplemented
-# this stage). This set is handed to `ExecutorProtocol.execute_kwargs` below,
+# and the Spark explain-gate are all UNSUPPORTED/unimplemented this stage).
+# `sampling` (Pass F) moved OUT of this "ignored" set once Probe grew a real
+# DuckDB implementation that genuinely consumes `config.probes.*` — see
+# `duckdb_/probe.py`. This set is handed to `ExecutorProtocol.execute_kwargs` below,
 # so `call_execute()` drops anything outside it BEFORE calling `_execute` —
 # emitting one suppressible `engine_kwarg_ignored` warning per dropped kwarg
 # (Phase 79) instead of the prior silent drop. `_execute`'s own filter
@@ -68,6 +70,8 @@ _DUCKDB_EXECUTE_KWARGS: frozenset[str] = frozenset(
         # are no-ops for a Manifest with no Handoff module (the common case).
         "observability_store",
         "handoff_spill_uris",
+        # Pass F — Probe sampling governance, genuinely consumed now.
+        "sampling",
     }
 )
 
@@ -88,9 +92,9 @@ def _execute(*args: Any, **kwargs: Any) -> ExecutionResult:
 
     Positional args (``manifest``, the DuckDB connection) pass through; keyword
     run options are filtered to ``_DUCKDB_EXECUTE_KWARGS`` so a Spark-only
-    option the shared CLI passes (``parallel``/``use_observe``/``sampling``/…)
-    is dropped rather than raising ``TypeError`` from the real execute. Lazy
-    import keeps this module importable without ``duckdb`` at module load.
+    option the shared CLI passes (``parallel``/``use_observe``/…) is dropped
+    rather than raising ``TypeError`` from the real execute. Lazy import keeps
+    this module importable without ``duckdb`` at module load.
     """
     from aqueduct.executor.duckdb_.executor import execute
 

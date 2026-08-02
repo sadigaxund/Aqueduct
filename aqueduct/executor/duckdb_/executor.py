@@ -1,11 +1,9 @@
 """Executor orchestrator — runs a Manifest against a live DuckDB connection.
 
 Stage A supported module types: Ingress, Channel, Egress, Junction, Funnel,
-Regulator, Assert (Pass D). Probe is UNSUPPORTED this stage (see
-``capabilities.yml``'s ``module.type.Probe`` row) — a Blueprint using it
-gets a clean ``CompileError`` before it ever reaches this module, so
-``_SUPPORTED_TYPES`` below never actually sees it; the check exists as
-defense in depth, mirroring Spark's.
+Regulator, Assert (Pass D), Probe (Pass F). ``_SUPPORTED_TYPES`` below is
+defense in depth, mirroring Spark's — every dispatched type also carries a
+real ``capabilities.yml`` verdict.
 
 Execution model — same shape as Spark's ``execute()``
 (``aqueduct/executor/spark/executor.py``), the contract
@@ -69,6 +67,7 @@ from aqueduct.executor.duckdb_.egress import EgressError, _escape, write_egress
 from aqueduct.executor.duckdb_.funnel import FunnelError, execute_funnel
 from aqueduct.executor.duckdb_.ingress import IngressError, read_ingress
 from aqueduct.executor.duckdb_.junction import JunctionError, execute_junction
+from aqueduct.executor.duckdb_.probe import ProbeSampling, execute_probe
 from aqueduct.executor.duckdb_.udf import UDFError, register_udfs
 from aqueduct.executor.models import (
     ExecutionResult,
@@ -96,14 +95,13 @@ class ExecuteError(AqueductError):
     """Raised for unrecoverable execution failures (config, unsupported type, etc.)."""
 
 
-# Module types this executor actually dispatches. Probe is declared
-# UNSUPPORTED in capabilities.yml and is rejected at compile time before a
-# Manifest naming it ever reaches here — this set is defense in depth, same
-# as Spark's `_SUPPORTED_TYPES`.
+# Module types this executor actually dispatches — defense in depth, same as
+# Spark's `_SUPPORTED_TYPES`; every entry also carries a `supported` verdict
+# in capabilities.yml.
 _SUPPORTED_TYPES: frozenset[str] = frozenset(
     {ModuleType.Ingress, ModuleType.Channel, ModuleType.Egress,
      ModuleType.Junction, ModuleType.Funnel, ModuleType.Regulator,
-     ModuleType.Handoff, ModuleType.Assert}
+     ModuleType.Handoff, ModuleType.Assert, ModuleType.Probe}
 )
 
 _SIGNAL_PORTS: frozenset[str] = frozenset({"signal"})
@@ -252,16 +250,36 @@ def _topo_sort(modules: tuple[Module, ...], edges: tuple[Edge, ...]) -> list[Mod
 
 
 def _build_execution_order(manifest: Manifest) -> list[Module]:
-    """Topo-sort dispatchable modules. Probe is excluded — Stage A never
-    dispatches it (see module docstring); a Probe module never reaches this
-    function on a real compile because the capability gate refuses it first,
-    but the filter is kept as defense in depth. Assert (Pass D) IS
-    dispatched — it participates in the topo sort like any other module.
+    """Topo-sort non-Probe modules, then insert each Probe immediately after
+    its ``attach_to`` target — same shape as Spark's
+    ``executor/spark/executor.py::_build_execution_order`` (Pass F). A Probe
+    has no data edges (it binds via ``attach_to`, not the graph), so it is
+    excluded from the topo-sort input and reinserted positionally afterward.
+    This guarantees a Probe's signals are written to the store before a
+    Regulator downstream of it evaluates them. Assert (Pass D) IS part of the
+    topo sort — it participates like any other module.
     """
-    dispatchable = tuple(
-        m for m in manifest.modules if m.type != ModuleType.Probe
-    )
-    return _topo_sort(dispatchable, manifest.edges)
+    probe_modules = [m for m in manifest.modules if m.type == ModuleType.Probe]
+    non_probe_modules = tuple(m for m in manifest.modules if m.type != ModuleType.Probe)
+
+    order = _topo_sort(non_probe_modules, manifest.edges)
+
+    probes_by_attach: dict[str | None, list[Module]] = defaultdict(list)
+    for probe in probe_modules:
+        probes_by_attach[probe.attach_to].append(probe)
+
+    final_order: list[Module] = []
+    for module in order:
+        final_order.append(module)
+        for probe in probes_by_attach.pop(module.id, []):
+            final_order.append(probe)
+
+    # Probes with unresolved attach_to (shouldn't happen after compiler
+    # validation — wirer.py's validate_probes rejects this at compile time).
+    for remaining_probes in probes_by_attach.values():
+        final_order.extend(remaining_probes)
+
+    return final_order
 
 
 def _write_checkpoint(
@@ -415,21 +433,21 @@ def execute(
     warnings_silence_all: bool = False,
     observability_store: Any = None,
     handoff_spill_uris: dict[str, str] | None = None,
+    sampling: ProbeSampling = ProbeSampling(),
 ) -> ExecutionResult:
     """Execute a compiled Manifest against a live DuckDB connection.
 
     Args mirror Spark's ``execute()`` where the concept exists on this engine;
-    Spark-only kwargs (``spark``/``parallel``/``use_observe``/``sampling``/
+    Spark-only kwargs (``spark``/``parallel``/``use_observe``/
     ``explain_capture``) have no DuckDB counterpart this stage and are simply
     not part of this signature — see ``ExecutorProtocol.execute``'s docstring:
     "the uniform part of the contract is Manifest in, ExecutionResult out;
     kwargs are a per-engine extension point."
 
-    ``block_full_actions`` is accepted for Blueprint/config parity (Probe's
-    ``config.danger.allow_full_probe_actions`` leaf is declared
-    ``ignored_with_warning`` — see capabilities.yml — because Probe itself
-    is not implemented on this engine) but Stage A never executes a Probe
-    module, so it is currently inert.
+    ``block_full_actions`` (config.danger.allow_full_probe_actions, inverted)
+    and ``sampling`` (config.probes.default_sample_fraction/max_sample_rows)
+    are now genuine Probe knobs (Pass F — see ``duckdb_/probe.py``), not the
+    inert parity placeholders they were before Probe existed on this engine.
 
     ``observability_store``/``handoff_spill_uris`` (Phase 81 step 3) back the
     Handoff module ONLY — see the Handoff dispatch branch below. A Manifest
@@ -948,6 +966,35 @@ def execute(
                 )
                 module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
 
+        # ── Probe (Pass F — signal capture for Regulator gates) ─────────────
+        # Same shape as Spark's Probe branch: a Probe has no main-port edge
+        # (it binds via attach_to, positioned right after its target by
+        # _build_execution_order above), so it reads frame_store directly
+        # instead of going through _incoming_main.
+        elif module.type == ModuleType.Probe:
+            source_id = module.attach_to
+            source_val = frame_store.get(source_id) if source_id else None
+            _probe_notes: tuple[str, ...] = ()
+
+            if source_val is None or _is_gate_closed(source_val):
+                logger.debug(
+                    "Probe %r: attach_to=%r not available; skipping.",
+                    module.id, source_id,
+                )
+            elif store_dir is not None:
+                try:
+                    _probe_notes = execute_probe(
+                        module, source_val, con, run_id, store_dir,
+                        block_full_actions=block_full_actions,
+                        observability_store=observability_store,
+                        sampling=sampling,
+                        base_dir=manifest.base_dir,
+                        target_module=modules_by_id.get(source_id) if source_id else None,
+                    ) or ()
+                except Exception as exc:
+                    logger.warning("[runtime_probe_error] Probe %r failed: %s", module.id, exc)
+            module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS, notes=_probe_notes))
+
     return ExecutionResult(
         blueprint_id=manifest.blueprint_id, run_id=run_id, status=ExecutionStatus.SUCCESS,
         module_results=tuple(module_results),
@@ -1004,7 +1051,15 @@ def _selector_included(
         backward = _reachable_backward(to_module, edges)
     else:
         backward = all_ids
-    return forward & backward
+    included = forward & backward
+
+    # Probes (Pass F): include when their tap target is included — same rule
+    # as Spark's _selector_included (a Probe has no data edge of its own).
+    for m in modules:
+        if m.type == ModuleType.Probe and m.attach_to in included:
+            included.add(m.id)
+
+    return included
 
 
 __all__ = ["execute", "ExecuteError"]

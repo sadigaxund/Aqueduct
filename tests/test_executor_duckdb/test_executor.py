@@ -18,7 +18,7 @@ import pytest
 from aqueduct.executor.duckdb_.channel import ChannelError, execute_channel
 from aqueduct.executor.duckdb_.egress import EgressError, write_egress
 from aqueduct.executor.duckdb_.error_extraction import extract_duckdb_error
-from aqueduct.executor.duckdb_.executor import execute
+from aqueduct.executor.duckdb_.executor import ExecuteError, execute
 from aqueduct.executor.duckdb_.funnel import FunnelError, execute_funnel
 from aqueduct.executor.duckdb_.ingress import IngressError, read_ingress
 from aqueduct.executor.duckdb_.junction import JunctionError, execute_junction
@@ -692,14 +692,18 @@ def test_full_pipeline_ingress_channel_egress(duckdb_con, tmp_path):
 
 
 def test_unsupported_module_type_raises_execute_error(duckdb_con):
-    modules = (_module("p", "Probe", {}, attach_to="x"),)
+    # Pass F: Probe is now dispatched (module.type.Probe: supported — see
+    # duckdb_/probe.py), so it no longer serves as the "unsupported type"
+    # example here. Arcade is the one authorable module type genuinely never
+    # dispatched by this executor — it is compiled away into flat modules by
+    # aqueduct/compiler/expander.py before a real Manifest ever reaches
+    # execute(); constructing one directly (bypassing that expansion, as this
+    # unit test does) is exactly the "module type this executor cannot run"
+    # case _SUPPORTED_TYPES exists to catch as defense in depth.
+    modules = (_module("a", "Arcade", {}),)
     manifest = Manifest(blueprint_id="bp", context={}, modules=modules, edges=(), spark_config={})
-    # Probe/Assert are excluded from execution order (defense in depth — the
-    # capability gate is the real enforcement point) so this manifest just
-    # runs to completion with zero dispatched modules, not an ExecuteError.
-    result = execute(manifest, duckdb_con, run_id="r2")
-    assert result.status == ExecutionStatus.SUCCESS
-    assert result.module_results == ()
+    with pytest.raises(ExecuteError, match="not supported"):
+        execute(manifest, duckdb_con, run_id="r2")
 
 
 # ── module.type.{Junction,Funnel,Regulator} driven through execute() ──────
