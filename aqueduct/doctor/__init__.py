@@ -98,7 +98,19 @@ def _host_port(url: str, default_port: int) -> tuple[str, int] | None:
     if "://" in url:
         p = urlparse(url)
         if p.hostname:
-            return p.hostname, p.port or default_port
+            try:
+                # `.port` is a lazily-parsed property that raises ValueError
+                # for a non-numeric or out-of-range port (e.g.
+                # "spark://host:notaport") — audit-fixed 2026-08: doctor
+                # checks must never raise (a config-editable master_url is
+                # user-reachable input); this function's own contract is
+                # "return None if unparseable", so treat that ValueError as
+                # exactly that, not an uncaught exception the CLI has no
+                # try/except around.
+                port = p.port or default_port
+            except ValueError:
+                return None
+            return p.hostname, port
         return None
     m = re.match(r"^([^:/]+):(\d+)$", url.strip())
     if m:
@@ -1106,6 +1118,7 @@ def check_blueprint_sources(
     _context_override: dict[str, Any] | None = None,
     *,
     preflight: bool = False,
+    _visited: frozenset[Path] | None = None,
 ) -> list[CheckResult]:
     """Parse a Blueprint and probe every Ingress/Egress path or JDBC endpoint.
 
@@ -1119,9 +1132,26 @@ def check_blueprint_sources(
     JDBC URLs: TCP socket probe to host:port (3s timeout — checks reachability,
                not credentials or schema).
     _context_override: caller-provided context injected when checking Arcade sub-blueprints.
+    _visited: caller-provided set of resolved blueprint paths already on the current
+              recursion path — cycle guard for Arcade `ref` chains (A includes B,
+              B includes A recurses without bound otherwise; the depth-limited
+              precedent is compiler/expander.py's Arcade expansion, capped at 10 —
+              a visited-set here catches a cycle at ANY depth, not just past 10,
+              and reports it as a CheckResult instead of a RecursionError that
+              aborts the whole doctor run and loses every other check's results).
     """
     import re
     import socket
+
+    _resolved_self = blueprint_path.resolve()
+    _visited = _visited or frozenset()
+    if _resolved_self in _visited:
+        return [CheckResult(
+            "arcade_cycle", "fail",
+            f"Arcade ref cycle detected: {_resolved_self} is already on the "
+            f"include chain ({' -> '.join(str(p) for p in _visited)} -> {_resolved_self})",
+        )]
+    _visited = _visited | {_resolved_self}
 
     # Find project root (same walk-up logic as `run` command)
     project_root = blueprint_path.parent
@@ -1267,6 +1297,7 @@ def check_blueprint_sources(
             sub_path,
             _context_override=module.context_override or {},
             preflight=preflight,
+            _visited=_visited,
         )
         # Prefix each result name so the user knows which arcade it came from
         for r in sub_results:

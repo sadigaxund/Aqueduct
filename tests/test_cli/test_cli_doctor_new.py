@@ -989,3 +989,61 @@ class TestAgentModelCount:
                             lambda *a, **k: (["a", "b"], None))
         r = _check_agent("openai_compat", "http://h/v1", "zzz")
         assert r.status == "warn" and "not in 2 loaded models" in r.detail
+
+
+class TestHostPort:
+    """Audit-fixed 2026-08: `_host_port` called `urlparse(url).port`
+    unguarded — a non-numeric or out-of-range port (e.g.
+    "spark://host:notaport") raises ValueError from that property access,
+    not from any explicit code here. Doctor checks must never raise (the
+    CLI has no try/except around them); this function's own documented
+    contract is "return None if unparseable", so the ValueError case must
+    resolve to that, not escape as a raw traceback."""
+
+    def test_valid_spark_url(self):
+        from aqueduct.doctor import _host_port
+        assert _host_port("spark://myhost:7077", 7077) == ("myhost", 7077)
+
+    def test_non_numeric_port_returns_none_not_raises(self):
+        from aqueduct.doctor import _host_port
+        assert _host_port("spark://host:notaport", 7077) is None
+
+    def test_out_of_range_port_returns_none_not_raises(self):
+        from aqueduct.doctor import _host_port
+        assert _host_port("spark://host:999999", 7077) is None
+
+    def test_k8s_scheme_with_bad_port_returns_none(self):
+        from aqueduct.doctor import _host_port
+        assert _host_port("k8s://https://host:notaport", 443) is None
+
+
+class TestCheckBlueprintSourcesArcadeCycle:
+    """Audit-fixed 2026-08: check_blueprint_sources recursed into Arcade
+    `ref` includes with no visited-set or depth guard (compiler/
+    expander.py's own Arcade expansion caps recursion at 10 for the same
+    reason). A cyclic include (A -> B -> A) hit RecursionError, aborting
+    the whole doctor run and losing every other check's results."""
+
+    def test_arcade_ref_cycle_reported_not_recursion_error(self, tmp_path):
+        from aqueduct.doctor import check_blueprint_sources
+
+        bp_a = tmp_path / "a.yml"
+        bp_b = tmp_path / "b.yml"
+        bp_a.write_text(
+            "aqueduct: '1.0'\nid: a\nname: A\ncontext: {}\n"
+            "modules:\n"
+            "  - id: inc_b\n    type: Arcade\n    label: IncB\n    ref: b.yml\n"
+            "edges: []\n"
+        )
+        bp_b.write_text(
+            "aqueduct: '1.0'\nid: b\nname: B\ncontext: {}\n"
+            "modules:\n"
+            "  - id: inc_a\n    type: Arcade\n    label: IncA\n    ref: a.yml\n"
+            "edges: []\n"
+        )
+
+        results = check_blueprint_sources(bp_a)  # must not raise RecursionError
+
+        cycle_results = [r for r in results if "cycle" in r.name.lower() or "cycle" in r.detail.lower()]
+        assert cycle_results, f"expected a cycle-naming CheckResult, got: {results}"
+        assert any(r.status == "fail" for r in cycle_results)
