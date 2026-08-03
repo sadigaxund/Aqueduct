@@ -924,6 +924,53 @@ class TestCheckExpectedEffect:
         assert len(failures) == 1
         assert "header" in failures[0]
 
+    def test_int_expected_does_not_match_superstring_actual(self):
+        """Audit-fixed 2026-08: `isinstance(x, (bool, int, float)) and
+        isinstance(x, bool) is not False` reduces to `isinstance(x, bool)`
+        — a genuine int/float expected_val never took the strict-equality
+        branch at all and silently fell through to the substring path,
+        where config_contains: {retries: 1} PASSED against an actual of
+        11 (str(1) is a substring of str(11)). Must now fail."""
+        patched = {"modules": [{"id": "m", "config": {"retries": 11}}]}
+        failures = self._call(
+            {"effect": {"module": "m", "config_contains": {"retries": 1}}},
+            patched_dict=patched,
+        )
+        assert len(failures) == 1
+        assert "retries" in failures[0]
+
+    def test_bool_expected_does_not_match_numeric_actual(self):
+        """Python's `1 == True` / `0 == False` must not let a numeric
+        actual satisfy a boolean expectation — a config field that should
+        be `true`/`false` but ended up `1`/`0` (e.g. through a lossy
+        round-trip) is a real, distinguishable defect, not a pass."""
+        patched = {"modules": [{"id": "m", "config": {"enabled": 1}}]}
+        failures = self._call(
+            {"effect": {"module": "m", "config_contains": {"enabled": True}}},
+            patched_dict=patched,
+        )
+        assert len(failures) == 1
+        assert "enabled" in failures[0]
+
+    def test_numeric_expected_does_not_match_bool_actual(self):
+        """The reverse direction: a numeric expectation must not accept a
+        bool actual just because `True == 1` in Python."""
+        patched = {"modules": [{"id": "m", "config": {"max_rows": True}}]}
+        failures = self._call(
+            {"effect": {"module": "m", "config_contains": {"max_rows": 1}}},
+            patched_dict=patched,
+        )
+        assert len(failures) == 1
+        assert "max_rows" in failures[0]
+
+    def test_float_expected_strict_equality_pass(self):
+        patched = {"modules": [{"id": "m", "config": {"threshold": 0.5}}]}
+        failures = self._call(
+            {"effect": {"module": "m", "config_contains": {"threshold": 0.5}}},
+            patched_dict=patched,
+        )
+        assert failures == []
+
     def test_patched_dict_none_skips_grader(self):
         from aqueduct.surveyor.scenario import _check_expected_effect
         failures = _check_expected_effect(

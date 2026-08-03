@@ -325,13 +325,35 @@ def _check_expected_effect(
             )
             continue
 
-        # Booleans / numbers → strict equality.
-        if isinstance(expected_val, (bool, int, float)) and isinstance(expected_val, bool) is not False:
-            # `isinstance(True, int)` is True in Python; the redundant check above keeps bools as bools.
-            if actual_val != expected_val:
+        # Booleans / numbers → strict equality, type-checked. `isinstance(True, int)`
+        # is True in Python, so a naive `isinstance(x, (bool, int, float))` plus a
+        # loose `!=` lets `True == 1` and `False == 0` silently satisfy the wrong
+        # expectation, AND (a distinct, more severe bug fixed in the same pass)
+        # `isinstance(x, (bool, int, float)) and isinstance(x, bool) is not False`
+        # reduces to `isinstance(x, bool)` — a genuine int/float `expected_val`
+        # (the overwhelmingly common case) never entered this branch at all and
+        # silently fell through to the substring path below, where e.g.
+        # `config_contains: {retries: 1}` passed against an ACTUAL of 11, 21, or
+        # 100001 (any value whose string form contains "1"). Booleans and
+        # numbers are now handled as two explicit, type-checked branches.
+        if isinstance(expected_val, bool):
+            if not isinstance(actual_val, bool) or actual_val != expected_val:
                 failures.append(
                     f"expected_patch.effect.config_contains[{key!r}]: "
-                    f"expected {expected_val!r}, got {actual_val!r}"
+                    f"expected bool {expected_val!r}, got {actual_val!r} "
+                    f"({type(actual_val).__name__})"
+                )
+            continue
+        if isinstance(expected_val, (int, float)):
+            if (
+                isinstance(actual_val, bool)
+                or not isinstance(actual_val, (int, float))
+                or actual_val != expected_val
+            ):
+                failures.append(
+                    f"expected_patch.effect.config_contains[{key!r}]: "
+                    f"expected {expected_val!r}, got {actual_val!r} "
+                    f"({type(actual_val).__name__})"
                 )
             continue
 

@@ -91,6 +91,54 @@ def test_duckdb_failure_routes_through_duckdb_extractor(manifest, tmp_path):
     assert row[1] == "BinderException"
 
 
+def test_root_exception_redacted_before_persist(manifest, tmp_path):
+    """Audit-fixed 2026-08: root_exception was persisted raw — every other
+    comparable FailureContext field (error_message, stack_trace,
+    manifest_json, provenance_json, blueprint_source_yaml) is redacted at
+    construction time, but root_exception's {"type", "message"} dict was
+    assigned straight from the structured extractor with no scrub. A
+    secret embedded in an exception message (a DSN, a token) would
+    persist unredacted in failure_contexts and reach every consumer
+    (dashboard, tools, MCP, the LLM prompt) unscrubbed."""
+    from aqueduct import redaction
+
+    redaction.clear()
+    secret = "leaked_secret_XYZ789"
+    redaction.register(secret)
+    try:
+        surveyor = Surveyor(manifest, store_dir=tmp_path, engine="duckdb")
+        surveyor.start("run1")
+
+        try:
+            duckdb.sql(f"SELECT {secret} FROM (SELECT 1 AS a)")
+            pytest.fail("expected duckdb.Error")
+        except duckdb.Error as exc:
+            live_exc: BaseException = exc
+
+        ctx = surveyor.record(_failing_result(live_exc), exc=live_exc)
+
+        assert ctx is not None
+        assert ctx.root_exception is not None
+        assert secret not in ctx.root_exception["message"]
+        # object_name comes from the same structured-error dict and shares
+        # the same gap (a column identifier is not normally secret-shaped,
+        # but this snippet deliberately used the secret AS the column name).
+        assert ctx.object_name is not None
+        assert secret not in ctx.object_name
+
+        # Persisted row must also be scrubbed, not just the in-memory ctx.
+        with surveyor._observability.connect() as cur:
+            row = cur.execute(
+                "SELECT root_exception, object_name FROM failure_contexts WHERE run_id = ?",
+                ["run1"],
+            ).fetchone()
+        assert row is not None
+        assert secret not in row[0]
+        assert secret not in (row[1] or "")
+    finally:
+        redaction.clear()
+
+
 def test_spark_failure_extraction_unchanged(manifest, tmp_path):
     """Spark's path still produces what it produced before this refactor.
 

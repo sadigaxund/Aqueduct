@@ -438,10 +438,22 @@ class Surveyor:
             blueprint_source_yaml=_redact(blueprint_source_yaml),
             error_type=_first_error_type(result),
             error_class=(structured or {}).get("error_class"),
-            root_exception=(structured or {}).get("root_exception"),
+            # root_exception is a {"type", "message"} dict — the "message"
+            # field is exactly where a secret-bearing exception (a DSN with
+            # an embedded password, a token in a URL) would land. Every
+            # other comparable field here (error_message, stack_trace,
+            # manifest_json, provenance_json, blueprint_source_yaml) is
+            # redacted at construction time; this one wasn't. redact()
+            # walks dicts recursively, so this is a direct drop-in.
+            root_exception=_redact((structured or {}).get("root_exception")),
             sql_state=(structured or {}).get("sql_state"),
             suggested_columns=tuple((structured or {}).get("suggested_columns") or ()),
-            object_name=(structured or {}).get("object_name"),
+            # Same structured-error dict as root_exception above, same
+            # redaction gap: a column/table identifier is not normally
+            # secret-shaped, but if a query literal or identifier happens
+            # to embed a registered secret value, this is the same field
+            # class as root_exception.message — protect it identically.
+            object_name=_redact((structured or {}).get("object_name")),
             engine=_engine,
         )
 
