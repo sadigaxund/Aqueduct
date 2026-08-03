@@ -99,6 +99,14 @@ class TestTranscriptWriterVerbose:
         assert "turn 5" in output
         assert "invalid patch (schema)" in output
         assert "stuck-detection escalated" in output
+        # Audit-fixed 2026-08: this line hardcoded "temperature=0.9" while
+        # loop.py actually applies providers._ESCALATION_TEMPERATURE (0.8)
+        # on escalation — pin against the real constant so a future tune
+        # can't silently leave the transcript wrong again.
+        from aqueduct.agent.providers import _ESCALATION_TEMPERATURE
+
+        assert f"temperature={_ESCALATION_TEMPERATURE}" in output
+        assert "temperature=0.9" not in output
 
 
 class TestTranscriptWriterToolCalls:
@@ -144,3 +152,16 @@ class TestTranscriptWriterSummary:
         assert "patch generated" in output   # solved → ✓ patch generated
         assert "3 turn" in output
         assert "└─" in output                # terminal close node
+
+    def test_every_stop_reason_has_a_human_phrase(self):
+        """Audit-fixed 2026-08: `_STOP_PHRASE` was missing `progress_stalled`
+        — an unmapped stop_reason falls back to the raw enum string
+        (`✗ progress_stalled`) instead of a readable phrase like every other
+        reason gets. Pin against the real StopReason enum (not a hardcoded
+        list) so a future StopReason member can't silently repeat this."""
+        from aqueduct.agent.budget import StopReason
+
+        for reason in StopReason:
+            phrase = TranscriptWriter._STOP_PHRASE.get(reason.value)
+            assert phrase is not None, f"StopReason.{reason.name} has no _STOP_PHRASE entry"
+            assert phrase != reason.value, f"StopReason.{reason.name} falls back to the raw value"

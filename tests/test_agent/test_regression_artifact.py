@@ -215,3 +215,22 @@ class TestGenerateConservativeSkips:
         result = generate(manifest, patch, _failure_ctx(), blueprint_path)
 
         assert result.written is False
+
+
+def test_testable_types_shared_with_spark_test_runner():
+    """Audit-fixed 2026-08: this module previously imported a PRIVATE
+    symbol (`_TESTABLE_TYPES`) directly out of
+    aqueduct.executor.spark.test_runner — a private-symbol cross-module
+    import that also violated AGENTS.md's "do NOT re-add an engine import
+    to aqueduct/agent/" rule. Both now reference the SAME engine-agnostic
+    constant (aqueduct.executor.models.TESTABLE_MODULE_TYPES) so they
+    cannot silently drift apart."""
+    from aqueduct.agent.regression_artifact import TESTABLE_MODULE_TYPES as agent_set
+    from aqueduct.executor.models import TESTABLE_MODULE_TYPES as canonical_set
+
+    assert agent_set is canonical_set
+
+    pytest.importorskip("pyspark")
+    from aqueduct.executor.spark.test_runner import _TESTABLE_TYPES as spark_local_alias
+
+    assert spark_local_alias is canonical_set

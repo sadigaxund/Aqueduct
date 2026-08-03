@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from aqueduct.models import ModuleType
+
 logger = logging.getLogger(__name__)
 
 # ── module_metrics DDL + writer (Phase 81 step 3) ───────────────────────────
@@ -233,3 +235,22 @@ def _collect_module_warnings() -> tuple[tuple[str, str], ...]:
     ws: list[tuple[str, str]] = getattr(_collector, "warnings", []) or []
     _collector.warnings = []
     return tuple(ws)
+
+
+# ── Module types testable in isolation (`aqueduct test`) ───────────────────
+# Which module TYPES support standalone testing is a property of the type
+# itself (a Channel/Junction/Funnel/Assert has a well-defined input->output
+# contract that can run against fixture data; an Ingress/Egress/Probe/
+# Regulator/Arcade does not), not of which engine runs it — so this lives
+# here, engine-agnostic, rather than only inside spark/test_runner.py.
+# Audit-fixed 2026-08: aqueduct/agent/regression_artifact.py previously
+# imported test_runner.py's PRIVATE `_TESTABLE_TYPES` directly
+# (`from aqueduct.executor.spark.test_runner import _TESTABLE_TYPES`) — a
+# private-symbol cross-module import that also violated AGENTS.md's "do
+# NOT re-add an engine import to aqueduct/agent/" rule (agent/ resolves
+# engine specifics through the registry, never a direct import by name).
+# spark/test_runner.py re-exports this under its historical private name
+# so its own internal call sites are unchanged.
+TESTABLE_MODULE_TYPES: frozenset[ModuleType] = frozenset(
+    {ModuleType.Channel, ModuleType.Junction, ModuleType.Funnel, ModuleType.Assert}
+)

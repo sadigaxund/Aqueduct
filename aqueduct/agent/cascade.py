@@ -114,8 +114,23 @@ def generate_cascade_patch(
                     idx, n, tokens_spent, base_budget.max_tokens_total,
                 )
                 if result is not None:
-                    result.stop_reason = StopReason.BUDGET_TOKENS_EXCEEDED
-                    return result
+                    # `result` here is the PRIOR tier's result, held over
+                    # from an escalation (`continue` above never cleared
+                    # it) — a deferred prior tier carries a non-None patch
+                    # (its diagnosis), which the module docstring's own
+                    # contract says gets discarded on escalation. Mutating
+                    # `result.stop_reason` in place while leaving `.patch`
+                    # populated returned an object whose two fields
+                    # contradicted each other: stop_reason said the
+                    # cascade-wide token budget was exhausted, but `.patch`
+                    # still carried the stale, supposedly-discarded
+                    # diagnosis from a tier that gave up for an unrelated
+                    # reason. Build a fresh result instead — same
+                    # token/attempt counters (the cascade DID spend that
+                    # much), no patch, correct stop_reason.
+                    return dataclasses.replace(
+                        result, patch=None, stop_reason=StopReason.BUDGET_TOKENS_EXCEEDED,
+                    )
                 return AgentPatchResult(
                     patch=None, attempts=0, stop_reason=StopReason.BUDGET_TOKENS_EXCEEDED,
                 )

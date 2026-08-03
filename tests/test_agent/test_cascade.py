@@ -327,6 +327,48 @@ class TestCascadeSpanningBudget:
         assert result.stop_reason == StopReason.BUDGET_TOKENS_EXCEEDED
         assert result.patch is None
 
+    def test_token_cap_exhaustion_discards_prior_tier_stale_patch(self, tmp_path):
+        """Audit-fixed 2026-08: when the cascade-wide token cap is exhausted
+        AFTER an escalating prior tier (whose result this loop iteration
+        still holds by reference), the code used to mutate that PRIOR
+        tier's result.stop_reason in place and return it — leaving `.patch`
+        populated with whatever that prior tier produced, even though the
+        module's own docstring says an escalated tier's diagnosis patch is
+        discarded. The returned object contradicted itself: stop_reason
+        said budget_tokens_exceeded while .patch carried a stale value from
+        a tier that stopped for an unrelated reason. Construct a tier-1
+        result that escalates (stuck_signature) but ALSO carries a non-None
+        patch (a best-effort diagnosis) to make the contradiction directly
+        observable, then exhaust the token cap before tier 2 can run."""
+        from aqueduct.agent.budget import BudgetConfig
+        from aqueduct.patch.grammar import PatchSpec
+
+        stale_patch = PatchSpec(
+            patch_id="stale",
+            rationale="best-effort diagnosis from tier 1",
+            operations=[{"op": "set_module_config_key", "module_id": "m1", "key": "k", "value": "v"}],
+        )
+        escalating_result_with_patch = AgentPatchResult(
+            patch=stale_patch, attempts=1, stop_reason=StopReason.STUCK_SIGNATURE,
+            tokens_in_total=1000, tokens_out_total=0,
+        )
+        with patch("aqueduct.agent.cascade.generate_agent_patch") as mock_gen:
+            mock_gen.side_effect = [escalating_result_with_patch]
+            result = generate_cascade_patch(
+                tiers=[_tier("model-a"), _tier("model-b"), _tier("model-c")],
+                failure_ctx=_fctx(), patches_dir=tmp_path,
+                budget=BudgetConfig(max_tokens_total=1000),
+            )
+        assert mock_gen.call_count == 1
+        assert result.stop_reason == StopReason.BUDGET_TOKENS_EXCEEDED
+        assert result.patch is None, (
+            "budget-exhausted result must not carry tier 1's stale, "
+            "supposedly-discarded diagnosis patch"
+        )
+        # The prior tier's OWN object must be untouched (no in-place mutation).
+        assert escalating_result_with_patch.stop_reason == StopReason.STUCK_SIGNATURE
+        assert escalating_result_with_patch.patch is stale_patch
+
     def test_null_tokens_total_unconstrained(self, tmp_path):
         """max_tokens_total: null → tiers unconstrained."""
         from aqueduct.agent.budget import BudgetConfig

@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from aqueduct.executor.spark.test_runner import _TESTABLE_TYPES
+from aqueduct.executor.models import TESTABLE_MODULE_TYPES
 from aqueduct.models import Manifest, Module
 from aqueduct.patch.grammar import PatchSpec
 from aqueduct.surveyor.models import FailureContext
@@ -178,12 +178,12 @@ def generate(
     if module is None:
         return RegressionArtifactResult(written=False, skip_reason=f"patched module {module_id!r} not found in manifest")
 
-    if module.type not in _TESTABLE_TYPES:
+    if module.type not in TESTABLE_MODULE_TYPES:
         return RegressionArtifactResult(
             written=False,
             skip_reason=(
                 f"module {module_id!r} has type {module.type!r}, not testable via aqtest "
-                f"(only {sorted(t.value for t in _TESTABLE_TYPES)} are supported)"
+                f"(only {sorted(t.value for t in TESTABLE_MODULE_TYPES)} are supported)"
             ),
         )
 

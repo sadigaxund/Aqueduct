@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from aqueduct.agent.providers import _ESCALATION_TEMPERATURE
+
 # -v raw-response dump is capped so a verbose model can't flood the terminal.
 _MAX_RAW_LINES = 40
 
@@ -261,7 +263,7 @@ class TranscriptWriter:
             self._emit(f"{sub}reprompt: {reprompt_reason[:300]}")
 
         if rec.escalated:
-            self._emit(f"{sub}stuck-detection escalated (temperature=0.9)")
+            self._emit(f"{sub}stuck-detection escalated (temperature={_ESCALATION_TEMPERATURE})")
 
         hint = getattr(rec, "_aq_hint", None)
         if hint:
@@ -273,6 +275,7 @@ class TranscriptWriter:
         "api_error": "all tiers unreachable",
         "exhausted_attempts": "out of attempts",
         "stuck_signature": "stuck (repeating error)",
+        "progress_stalled": "stalled (no new error signatures)",
         "deferred": "deferred to human",
         "budget_seconds_exceeded": "time budget exceeded",
         "budget_tokens_exceeded": "token budget exceeded",
