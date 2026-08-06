@@ -328,9 +328,23 @@ class TestValidateStoreBackendsCoverage:
         with pytest.raises(Exception, match=r"benchmark.*psycopg2"):
             _validate_store_backends(stores_cfg)
 
-    def test_default_depot_only_still_passes_with_no_sdk_needed(self):
+    def test_default_depot_only_still_passes_with_no_sdk_needed(self, monkeypatch):
         """Regression guard: the common case (duckdb-only, no extra
-        depots/benchmark backend) must still load with zero SDK checks."""
+        depots/benchmark backend) must still load with ZERO SDK checks.
+
+        Asserts the claim the docstring actually makes — that no third-party
+        SDK is probed at all — rather than only that nothing raised. A future
+        change that started probing (say) psycopg2 for a duckdb-only config
+        would still "not raise" here while adding a real import cost to the
+        common path, so `find_spec` is recorded and required to stay unused.
+        """
+        import importlib.util as importlib_util
+
         from aqueduct.config import StoresConfig, _validate_store_backends
 
-        _validate_store_backends(StoresConfig())  # must not raise
+        probed: list[str] = []
+        monkeypatch.setattr(
+            importlib_util, "find_spec", lambda name: probed.append(name) or object()
+        )
+        _validate_store_backends(StoresConfig())
+        assert probed == []
