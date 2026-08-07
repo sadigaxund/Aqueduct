@@ -87,3 +87,43 @@ def test_depot_get_after_put_no_read_only_error(tmp_path):
     # This was previously broken: get() ran CREATE TABLE on read_only conn
     result = store.get("watermark", "fallback")
     assert result == "2024-01-01"
+
+
+def test_depot_no_args_constructor_raises_type_error():
+    """`DepotStore()` with neither `db_path` nor `backend` is the documented
+    (in the class docstring) error path, not a silent default."""
+    with pytest.raises(TypeError, match="requires either db_path or backend"):
+        DepotStore()
+
+
+class _FakeBackend:
+    """Generic `aqueduct.stores.DepotStore` stand-in — the façade must
+    delegate to WHATEVER backend it's constructed with, not just DuckDB
+    (the only backend the rest of this file's tests exercise via `db_path`).
+    """
+
+    def __init__(self):
+        self.calls: list[tuple] = []
+        self._data: dict[str, str] = {}
+
+    def kv_get(self, key: str, default: str = "") -> str:
+        self.calls.append(("kv_get", key, default))
+        return self._data.get(key, default)
+
+    def kv_put(self, key: str, value: str) -> None:
+        self.calls.append(("kv_put", key, value))
+        self._data[key] = value
+
+
+def test_depot_delegates_to_generic_backend():
+    backend = _FakeBackend()
+    store = DepotStore(backend=backend)
+
+    assert store.get("missing", "fallback") == "fallback"
+    store.put("k", "v")
+    assert store.get("k") == "v"
+    assert store.close() is None
+
+    assert ("kv_get", "missing", "fallback") in backend.calls
+    assert ("kv_put", "k", "v") in backend.calls
+    assert ("kv_get", "k", "") in backend.calls
