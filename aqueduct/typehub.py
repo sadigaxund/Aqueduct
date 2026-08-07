@@ -13,8 +13,9 @@ naive wall-clock value. The same Blueprint, unmodified, silently means a
 different value on each engine.
 
 This module is the fix's FIRST piece: one internal type vocabulary every
-engine will eventually declare a mapping to/from (work package 3 — NOT this
-module's job). The vocabulary deliberately BORROWS Apache Arrow's semantics
+engine declares a mapping to/from (work package 3 — see ``executor/spark/
+type_render.py`` and ``executor/duckdb_/type_render.py``, NOT this module's
+job). The vocabulary deliberately BORROWS Apache Arrow's semantics
 for the constructors it defines (Arrow's timestamp-with-tz vs.
 timestamp-without-tz distinction is exactly the ``timestamp`` ambiguity above,
 already solved upstream) — this is not a pyarrow dependency (no import of
@@ -37,11 +38,16 @@ This module (work package 1) is engine-agnostic — no ``pyspark`` import, no
   3. ``render(hub_type)`` — the inverse: a hub type back to its canonical
      spelling. ``parse_type(render(parse_type(s)))`` is stable.
 
-What this module does NOT do (later work packages): no engine reads or
-writes this vocabulary yet (package 3), no capability-leaf gating on types
-(package 2), and the Blueprint grammar itself is unchanged — every
-inventoried surface still carries a plain ``str`` (package 1 is validation
-only, see ``aqueduct/compiler/compiler.py``'s integration step).
+Packages 2 and 3 have since landed on top of this module (both engines'
+``ExecutorProtocol`` register a ``render_type`` — ``spark/type_render.py``'s
+``render_spark_type``, ``duckdb_/type_render.py``'s ``render_duckdb_type`` —
+and ``executor/capability_leaves.py``'s ``_type_leaves()``/
+``_type_native_leaves()`` derive ``type.*`` capability leaves from
+``constructor_names()`` below, gated per-engine like any other leaf). What
+this module still does NOT do: the Blueprint grammar itself is unchanged —
+every inventoried surface still carries a plain ``str`` (this module is
+validation/vocabulary only, see ``aqueduct/compiler/compiler.py``'s
+integration step).
 """
 
 from __future__ import annotations
@@ -325,9 +331,21 @@ def _split_top_level(s: str, sep: str) -> list[str]:
     return parts
 
 
+# Candidate keywords in `_unknown_spelling_message`'s vocabulary that do NOT
+# parse when suggested bare, so must never appear in the "Did you mean" hint:
+# `duration` needs an explicit `(unit)` argument (bare `duration` recurses
+# right back into this same unknown-spelling path — reproduced with
+# `parse_type("duration")`), and bare `timestamp` hard-errors on the
+# ambiguity check instead of resolving (see the `lower == "timestamp"`
+# branch above). `decimal` is deliberately NOT in this set — bare `decimal`
+# DOES parse (defaults to `decimal(10,0)`), so it stays suggestible.
+_UNSUGGESTABLE_BARE_CANDIDATES = frozenset({"duration", "timestamp"})
+
+
 def _unknown_spelling_message(spelling: str) -> str:
     candidates = sorted(set(_SCALAR_ALIASES) | {"decimal", "timestamp", "duration"})
     close = difflib.get_close_matches(spelling.strip().lower(), candidates, n=3)
+    close = [c for c in close if c not in _UNSUGGESTABLE_BARE_CANDIDATES]
     hint = f" Did you mean: {', '.join(close)}?" if close else ""
     return (
         f"Unknown type spelling {spelling!r}.{hint} Composite types use "
@@ -339,14 +357,33 @@ def _unknown_spelling_message(spelling: str) -> str:
     )
 
 
-def _parse_one(spelling: str, *, suppress: Iterable[str] | None) -> "HubType | NativeType":
+# Composite-nesting depth guard: array<array<...>>/map<...>/struct<...> parse
+# recursively, so a sufficiently deep (accidental or adversarial) Blueprint
+# type spelling hits Python's actual `RecursionError` before this module's
+# own error type — a bare builtin escaping past the `TypeSpellingError`
+# contract every other rejection in this function honors (reproduced with
+# `parse_type("array<" * 2000 + "int" + ">" * 2000)`). No real Blueprint
+# nests types anywhere near this deep, so the cap is generous, not a grammar
+# limit.
+_MAX_TYPE_NESTING_DEPTH = 64
+
+
+def _parse_one(
+    spelling: str, *, suppress: Iterable[str] | None, _depth: int = 0
+) -> "HubType | NativeType":
+    if _depth > _MAX_TYPE_NESTING_DEPTH:
+        raise TypeSpellingError(
+            f"Type spelling nests more than {_MAX_TYPE_NESTING_DEPTH} levels deep "
+            f"({spelling.strip()[:40]!r}...) — this is almost certainly a malformed "
+            "spelling, not a legitimate composite type."
+        )
     s = spelling.strip()
     if not s:
         raise TypeSpellingError("Type spelling must not be empty.")
 
     m = _ARRAY_RE.match(s)
     if m:
-        return Array(_parse_one(m.group(1), suppress=suppress))
+        return Array(_parse_one(m.group(1), suppress=suppress, _depth=_depth + 1))
 
     m = _MAP_RE.match(s)
     if m:
@@ -356,8 +393,8 @@ def _parse_one(spelling: str, *, suppress: Iterable[str] | None) -> "HubType | N
                 f"map<...> needs exactly two comma-separated type arguments "
                 f"(key,value); got {s!r}."
             )
-        key = _parse_one(parts[0], suppress=suppress)
-        value = _parse_one(parts[1], suppress=suppress)
+        key = _parse_one(parts[0], suppress=suppress, _depth=_depth + 1)
+        value = _parse_one(parts[1], suppress=suppress, _depth=_depth + 1)
         return Map(key, value)
 
     m = _STRUCT_RE.match(s)
@@ -375,7 +412,7 @@ def _parse_one(spelling: str, *, suppress: Iterable[str] | None) -> "HubType | N
             name = name.strip()
             if not name:
                 raise TypeSpellingError(f"struct field {chunk.strip()!r} has an empty field name.")
-            fields.append(StructField(name, _parse_one(ftype, suppress=suppress)))
+            fields.append(StructField(name, _parse_one(ftype, suppress=suppress, _depth=_depth + 1)))
         return Struct(tuple(fields))
 
     m = _DECIMAL_RE.match(s)
