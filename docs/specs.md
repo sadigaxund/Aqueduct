@@ -1595,7 +1595,7 @@ The canonical field reference with descriptions and defaults lives in the `aqued
 | `stores` | Backend selection for observability, depot, blob, and benchmark (DuckDB / Postgres / Redis / local / s3 / gcs / adls) |
 | `probes` | Default probe signal limits |
 | `danger` | Safety-gate overrides |
-| `secrets` | Secrets provider (env / aws / gcp / azure / hashicorp) |
+| `secrets` | Secrets provider (env / aws / gcp / azure / custom) |
 | `webhooks` | Outbound webhook endpoints for run lifecycle events |
 | `lineage` | OpenLineage emission config (`openlineage_url`, `openlineage_namespace`) |
 | `agent` | LLM connection defaults (provider, base_url, model, api_key, cascade, timeout, budget), CI webhook URL |
