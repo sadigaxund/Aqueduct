@@ -24,7 +24,7 @@ from aqueduct.cli import (
 )
 from aqueduct.cli.output import emit
 from aqueduct.executor.models import concise_error
-from aqueduct.parser.models import ModuleType
+from aqueduct.models import ModuleType
 
 
 @cli.command()
@@ -338,8 +338,23 @@ def _load_engine_config(
                 set_items, allow_blueprint=True
             )
             cfg = apply_to_model(cfg, _config_set_nested)
+            if _config_set_nested:
+                # `--set` overlays AFTER `load_config()` already ran its own
+                # governance gates, so it bypasses both: re-run them here so
+                # `--set stores.observability.backend=postgres` without the
+                # extra installed gets the same ConfigError + install hint the
+                # file-based path gets (not a bare ImportError at first
+                # store use), and an engine-ignored `--set engine.<x>.*` key
+                # still emits the suppressible `engine_key_ignored` warning.
+                from aqueduct.config import _validate_store_backends, _warn_ignored_config_keys
+
+                _validate_store_backends(cfg.stores)
+                _warn_ignored_config_keys(cfg)
         except OverrideError as exc:
-            click.echo(f"✗ {exc}", err=True)
+            _err(str(exc))
+            _sys.exit(exit_codes.CONFIG_ERROR)
+        except ConfigError as exc:
+            _err(f"config error: {exc}")
             _sys.exit(exit_codes.CONFIG_ERROR)
         if _config_set_nested.get("danger"):
             _warn(
@@ -826,11 +841,25 @@ def _setup_surveyor(
     # AqueductWarning for the rest of this run so they never leak mid-execution.
     # Runtime probe/assert warnings use logger.warning (not AqueductWarning) and
     # are unaffected.
+    #
+    # KNOWN SCOPING GAP (audit 2026-08-01): this is a category-wide, process-global
+    # filter with no matching restore, so it also swallows any AqueductWarning a
+    # LATER phase raises for a genuinely new reason (not a re-emission of the
+    # already-shown compile warnings) — e.g. a patch that introduces a new compiler
+    # warning during a heal re-compile. A correct fix scopes this to "already-shown
+    # message text only" or wraps the remainder of `run()` in
+    # `warnings.catch_warnings()` so the filter reverts when the command ends; both
+    # require either re-indenting the rest of this (very long) function or changing
+    # how heal/gates/sandbox (`aqueduct/agent/`, `aqueduct/patch/preview.py` — both
+    # outside this batch's surface) capture their own recompile warnings, so it is
+    # not done here. `filterwarnings` (used below) is at least non-destructive to
+    # OTHER pre-existing filters, unlike `simplefilter`, which clears the entire
+    # filter list first.
     import warnings as _wmod
 
     from aqueduct.warnings import AqueductWarning as _AqWarning
 
-    _wmod.simplefilter("ignore", _AqWarning)
+    _wmod.filterwarnings("ignore", category=_AqWarning)
 
     # ── Resolve agent connection (engine defaults \u2190 blueprint overrides) ────
     from aqueduct.cli import resolve_agent_connection
@@ -1123,7 +1152,7 @@ def _setup_surveyor(
     metavar="PATH=VALUE",
     help="Override a config or blueprint value for this run only (repeatable, "
     "in-memory, never persisted). Dotted path — e.g. "
-    "--set agent.approval_mode=auto --set engine.spark.master_url=spark://h:7077. "
+    "--set agent.approval=auto --set engine.spark.master_url=spark://h:7077. "
     "Values coerce to bool/int/float/null else string; use PATH:=JSON for "
     "structured values. Highest precedence (beats blueprint + aqueduct.yml).",
 )
@@ -1258,6 +1287,23 @@ def run(
         # ── Phase 63 / 64 — remote-submit targets branch ──────────────────────────
         _REMOTE_TARGETS = frozenset({"databricks", "emr", "dataproc"})
         if cfg.deployment.target in _REMOTE_TARGETS:
+            if set_items:
+                # package() below uploads the RAW blueprint.yml / aqueduct.yml
+                # bytes from disk (deploy/databricks.py) — it never sees the
+                # in-memory overridden `cfg`/blueprint dict, so every --set
+                # override would be silently dropped for the remote run even
+                # though the preamble above just announced them. Refuse
+                # loudly instead of letting the remote job run un-overridden.
+                click.echo(
+                    "✗ --set is not supported for remote-submit targets "
+                    f"({cfg.deployment.target}): the packaged run reads "
+                    "blueprint.yml/aqueduct.yml from disk, so overrides "
+                    "would be silently dropped. Edit the files directly or "
+                    "run locally.",
+                    err=True,
+                )
+                sys.exit(exit_codes.CONFIG_ERROR)
+
             from aqueduct.deploy import get_submitter
 
             _submitter = get_submitter(cfg.deployment.target, cfg)
@@ -1291,12 +1337,31 @@ def run(
                 click.echo(f"✗ remote submit failed: {exc}", err=True)
                 sys.exit(exit_codes.DATA_OR_RUNTIME)
 
-            _remote_result = _submitter.poll(_job_id, cfg)
-            _logs = (
-                _submitter.fetch_logs(_job_id, cfg)
-                if _remote_result.status == ExecutionStatus.ERROR
-                else ""
-            )
+            try:
+                # `poll()` documents raising TimeoutError as EXPECTED, routine
+                # behavior (a slow/stuck remote job) — unlike package()/submit()
+                # above, this call had no try/except at all, so that raised
+                # unstyled, uncaught out of the CLI (a raw traceback, no
+                # exit_codes.* mapping) instead of the same clean "✗ ... "
+                # DATA_OR_RUNTIME its sibling calls get.
+                _remote_result = _submitter.poll(_job_id, cfg)
+            except Exception as exc:
+                click.echo(f"✗ remote poll failed: {exc}", err=True)
+                sys.exit(exit_codes.DATA_OR_RUNTIME)
+            _logs = ""
+            if _remote_result.status == ExecutionStatus.ERROR:
+                try:
+                    # `_packaged` (not `_job_id`) — the artefacts' storage
+                    # key is whatever `package()` assigned, not the target's
+                    # own job/run id (a different id in a different
+                    # namespace; see `Submitter.fetch_logs`'s docstring).
+                    _logs = _submitter.fetch_logs(_packaged, cfg)
+                except Exception as _log_exc:
+                    # Best-effort: a failure fetching logs must not crash the
+                    # failure REPORT itself (we're already about to tell the
+                    # user the run failed) or mask it behind an unrelated
+                    # traceback.
+                    click.echo(f"  ⚠ could not fetch remote logs: {_log_exc}", err=True)
 
             if _remote_result.status == ExecutionStatus.SUCCESS:
                 for mr in _remote_result.module_results:
@@ -3099,6 +3164,16 @@ def run(
                     # A validation gate rejected this patch — if the multi-patch loop
                     # exhausts with no success, this drives the VALIDATION_GATE(4) exit.
                     patch_rejected_by_gate = True
+                    if patch_count >= max_patches:
+                        # Exhausted: break directly rather than `continue` back to
+                        # the loop top, which resets `patch_rejected_by_gate` to
+                        # False (line ~1921, "reset per iteration") before the
+                        # `patch_count >= max_patches` check at the top ever sees
+                        # it — that ordering silently downgraded every
+                        # gate-rejection-at-exhaustion to DATA_OR_RUNTIME(2)
+                        # instead of VALIDATION_GATE(4), and also wasted one
+                        # extra re-execution of the still-broken blueprint.
+                        break
                     continue
                 if _g3 is not None and not _g3_passed:
                     click.echo(
@@ -3124,6 +3199,8 @@ def run(
                     patch_rejected_by_gate = (
                         True  # sandbox gate → VALIDATION_GATE(4) if loop exhausts
                     )
+                    if patch_count >= max_patches:
+                        break  # see the identical comment on the explain-gate branch above
                     continue  # try next patch iteration
 
                 _patch_validation = manifest.agent.patch_validation or cfg.agent.patch_validation

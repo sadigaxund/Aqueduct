@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.49: Reference Document**
+**Version 2.50: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -1806,6 +1806,12 @@ Setting `deployment.target` to either of these values raises a `ConfigError`.
 Self‑healing is **disabled** on all remote‑submit targets, ``aqueduct run``
 skips the healing loop and ignores ``agent.approval``. Patches must be
 authored and applied locally before the next run.
+
+``-s/--set`` overrides are **rejected** (``CONFIG_ERROR``) on a remote‑submit
+target. Packaging uploads ``blueprint.yml``/``aqueduct.yml`` from disk
+verbatim, so an in‑memory override would be silently dropped for the remote
+run; edit the files directly instead (see `docs/cli_reference.md` "Config
+overrides").
 
 ## **10.9 Engines and the capability framework**
 

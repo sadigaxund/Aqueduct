@@ -187,6 +187,8 @@ aqueduct run bp.yml \
 
 `--set danger.*` overrides print a loud stderr warning (single-run, not persisted). Available on `run`, `benchmark`, and `heal`. `--set` replaced the one-off override flags (`--provider`/`--base-url`/`--timeout`/`--no-persist`/`--store-path`/`--gate-on-regression`), which were removed in 2.0.
 
+**Not supported for remote-submit targets** (`deployment.target: databricks/emr/dataproc`). The remote job packages `blueprint.yml`/`aqueduct.yml` from disk verbatim, so `aqueduct run --set ... --target databricks` refuses with `CONFIG_ERROR` rather than silently running un-overridden — edit the files directly for a remote run.
+
 ---
 
 ## 3. Observability

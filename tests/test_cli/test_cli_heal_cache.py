@@ -192,10 +192,25 @@ def test_replay_gate_fail_falls_through_to_llm(tmp_path):
                     # mocked get_executor() above — mock it directly to force
                     # the FAIL this test needs (driving the fall-through) and
                     # to never start a real Spark session.
+                    #
+                    # `_run_patch_gates_inline` (cli/__init__.py) calls this
+                    # SAME `run_sandbox_gate` for the LLM-generated patch's own
+                    # gate check too (the replay path and the main auto-mode
+                    # path share one implementation) — a single `return_value`
+                    # would reject BOTH, so the LLM patch would also fail its
+                    # gate and correctly exit VALIDATION_GATE(4), not the
+                    # SUCCESS(0) this test is actually about. `side_effect`
+                    # distinguishes the two calls: 1st (replay) fails, driving
+                    # the fall-through; 2nd (the LLM patch) passes, so the
+                    # patch is actually applied and the second get_executor()
+                    # call (`_run_ok()` above) is a genuine post-patch re-run.
                     with patch("aqueduct.patch.preview.run_sandbox_gate") as mock_sandbox:
-                        mock_sandbox.return_value = SandboxGateResult(
-                            status="fail", detail="replay candidate no longer applies",
-                        )
+                        mock_sandbox.side_effect = [
+                            SandboxGateResult(
+                                status="fail", detail="replay candidate no longer applies",
+                            ),
+                            SandboxGateResult(status="pass", detail="ok"),
+                        ]
                         res = runner.invoke(cli, ["run", str(bp_path), "--config", str(cfg_path)])
 
     assert "falling through to Agent" in res.output
