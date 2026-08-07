@@ -125,14 +125,3 @@ def install_cli_formatter() -> None:
         return
     _w.formatwarning = _aq_format  # type: ignore[assignment]
     _INSTALLED = True
-
-
-def resolve_suppress(config_suppress: Iterable[str] | None,
-                     cli_suppress: Iterable[str] | None = None) -> set[str]:
-    """Merge config + CLI suppression lists into a single set."""
-    out: set[str] = set()
-    if config_suppress:
-        out.update(s for s in config_suppress if s)
-    if cli_suppress:
-        out.update(s for s in cli_suppress if s)
-    return out
