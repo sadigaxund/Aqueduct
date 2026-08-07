@@ -11,7 +11,23 @@ import pytest
 
 pytestmark = pytest.mark.unit
 
+from aqueduct import redaction
 from aqueduct.secrets import SecretsError, load_resolver_fn, resolve_secret
+
+
+@pytest.fixture(autouse=True)
+def _clean_redaction_registry():
+    """Isolate the process-global redaction registry across this file's tests.
+
+    Every ``resolve_secret()`` call below now registers its return value with
+    ``aqueduct.redaction`` (see secrets.py's module docstring) — without this,
+    values from one test (``"super-secret"``, ``"s3cr3t"``, ...) would leak
+    into the shared registry and could affect ``redact()`` behaviour observed
+    by unrelated tests running later in the same process.
+    """
+    redaction.clear()
+    yield
+    redaction.clear()
 
 
 # ── provider: env ────────────────────────────────────────────────────────────
@@ -321,3 +337,64 @@ def test_load_resolver_fn_missing_file_raises(tmp_path):
     import_module fallback surfaces its own ModuleNotFoundError."""
     with pytest.raises(ImportError, match="nope"):
         load_resolver_fn("nope.resolver.fn", str(tmp_path))
+
+
+# ── redaction registration at the resolution boundary ──────────────────────
+#
+# resolve_secret() is the single funnel every secret-consuming call site uses
+# (compiler/runtime.py's @aq.secret(), config.py's aqueduct.yml-text pass,
+# executor/duckdb_/extensions.py's S3-credential lookup). Before this fix,
+# only config.py's caller registered its resolved value explicitly — the
+# other two call sites produced a real secret value that was never entered
+# into aqueduct.redaction, so it could leak unredacted into a traceback,
+# FailureContext, patch sidecar file, or webhook body. These tests prove the
+# registration happens inside resolve_secret() itself, with no explicit
+# caller-side register() call anywhere in the test body.
+
+def test_env_provider_secret_is_redacted_without_caller_registering(monkeypatch):
+    monkeypatch.setenv("REDACT_ME_ENV", "a-strong-random-secret-value-12345")
+    val = resolve_secret("REDACT_ME_ENV", provider="env")
+
+    assert redaction.is_registered(val)
+    message = f"connection failed, token={val!r} was rejected"
+    assert val not in redaction.redact(message)
+    assert redaction.REDACTED_PLACEHOLDER in redaction.redact(message)
+
+
+def test_aws_provider_secret_is_redacted_without_caller_registering(monkeypatch):
+    monkeypatch.delenv("REDACT_ME_AWS", raising=False)
+    mock_boto3 = MagicMock()
+    mock_client = MagicMock()
+    mock_boto3.client.return_value = mock_client
+    mock_client.get_secret_value.return_value = {
+        "SecretString": "another-strong-random-secret-67890"
+    }
+    mock_botocore = MagicMock()
+    mock_botocore.exceptions = MagicMock()
+
+    with patch.dict(
+        sys.modules,
+        {"boto3": mock_boto3, "botocore": mock_botocore, "botocore.exceptions": mock_botocore.exceptions},
+    ):
+        val = resolve_secret("REDACT_ME_AWS", provider="aws")
+
+    assert val == "another-strong-random-secret-67890"
+    assert redaction.is_registered(val)
+    assert val not in redaction.redact(f"traceback embedded {val}")
+
+
+def test_custom_provider_weak_secret_self_gates_without_raising(monkeypatch):
+    """A short/low-entropy value must not be registered (and must not raise)
+    — resolve_secret() still returns it, but redact() cannot scrub it, which
+    is the documented weak-secret behaviour (a warning, not a crash)."""
+    monkeypatch.delenv("REDACT_ME_WEAK", raising=False)
+    resolver_mod = types.ModuleType("_test_weak_secret_mod")
+    resolver_mod.fetch = lambda key: "abc"  # below _MIN_SECRET_LENGTH
+    sys.modules["_test_weak_secret_mod"] = resolver_mod
+    try:
+        val = resolve_secret("REDACT_ME_WEAK", provider="custom", resolver="_test_weak_secret_mod.fetch")
+    finally:
+        del sys.modules["_test_weak_secret_mod"]
+
+    assert val == "abc"
+    assert not redaction.is_registered(val)

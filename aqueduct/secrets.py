@@ -11,6 +11,14 @@ Each call hits the provider directly — no in-process or os.environ cache.
 This preserves provider-side rotation (a rotated secret takes effect on the
 next call without restarting the process) and per-call audit logs. Caching
 is intentionally deferred (see TODOs.md, Phase 32 deferred items).
+
+Every value ``resolve_secret()`` returns is registered with
+``aqueduct.redaction`` before it reaches the caller — this is the single
+resolution boundary every secret-consuming call site funnels through
+(compile-time ``@aq.secret()`` in ``compiler/runtime.py``, the
+``aqueduct.yml``-text pass in ``config.py``, DuckDB's S3-credential lookup
+in ``executor/duckdb_/extensions.py``), so a caller can never produce an
+unredacted secret by forgetting to register it explicitly.
 """
 
 from __future__ import annotations
@@ -78,10 +86,23 @@ def resolve_secret(
 
     Raises:
         SecretsError: Secret not found or provider misconfigured.
+
+    Every value returned here is registered with ``aqueduct.redaction``
+    before being handed back — this is THE resolution boundary all four
+    callers (Tier 1 ``@aq.secret()`` in ``compiler/runtime.py``, the
+    ``aqueduct.yml``-text pass in ``config.py``, and the DuckDB S3-credential
+    lookup in ``executor/duckdb_/extensions.py``) funnel through, so
+    registering here — once — closes the gap left by any caller that
+    forgets to register explicitly. ``redaction.register()`` is idempotent
+    and self-gates on length/entropy, so this is safe to call unconditionally
+    and safe to call again on a value some caller already registered.
     """
+    from aqueduct import redaction
+
     if provider == "env":
         val = os.environ.get(key)
         if val is not None:
+            redaction.register(val, key_hint=key)
             return val
         raise SecretsError(
             f"@aq.secret: {key!r} not found in environment. "
@@ -107,6 +128,7 @@ def resolve_secret(
             f"@aq.secret: {key!r} not found via provider={provider!r}."
         )
 
+    redaction.register(fetched, key_hint=key)
     return fetched
 
 
