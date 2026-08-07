@@ -36,8 +36,15 @@ only as a call site: the Probe signal is invoked as ``fn(df, sig_cfg)`` in
 whose result is read for ``passed`` / ``message`` / ``quarantine_df``. There is no
 Protocol object to read, so those signatures are stated here — and pinned by
 ``tests/test_cli/test_cli_dev_scaffold.py``, which parses the real call sites and
-fails the build if the arity or the result keys move. Do not "simplify" that test
-away: it is the only thing standing between these stubs and silent rot.
+fails the build if the arity moves for either seam. Result-KEY pinning differs
+between the two: the Assert rule's call site literally reads
+``result.get("passed"/"message"/"quarantine_df")``, so the test greps for those
+against the real code; the Probe callable's result is forwarded verbatim
+(``{"custom": True, **result}``, no per-key access in ``probe.py``), so its keys
+are pinned against the literal contract string in ``probe.py``'s own module
+docstring instead — narrower, but still fails the build on drift. Do not
+"simplify" that test away: it is the only thing standing between these stubs and
+silent rot.
 """
 
 from __future__ import annotations

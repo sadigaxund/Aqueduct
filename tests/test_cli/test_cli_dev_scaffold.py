@@ -183,6 +183,20 @@ def test_probe_signal_contract_matches_the_real_call_site():
         f"probe.py calls the custom signal with {calls}, but the scaffold generates "
         f"{scaffolds.PROBE_SIGNAL_ARGS} — update aqueduct/dev/scaffolds.py"
     )
+    # Result-key pinning (audit 2026-08-01): unlike the Assert rule below,
+    # `probe.py`'s callable branch just does `{"custom": True, **result}` —
+    # it forwards the dict verbatim rather than reading each key by name, so
+    # there is no `result.get("estimate"...)`-shaped call site to pin
+    # against. The contract IS stated as a literal string in probe.py's own
+    # module docstring (`fn(df, sig_cfg) -> {"estimate", "metadata",
+    # "passed"}`) — pin against that instead, so a docstring/scaffold drift
+    # still fails the build rather than only the callable's own arity.
+    src = (_REPO / "aqueduct" / "executor" / "spark" / "probe.py").read_text(encoding="utf-8")
+    for key in scaffolds.PROBE_SIGNAL_RESULT_KEYS:
+        assert f'"{key}"' in src, (
+            f"probe.py's module docstring no longer states {key!r} as part of the "
+            "custom-signal callable contract — update aqueduct/dev/scaffolds.py"
+        )
 
 
 def test_assert_rule_contract_matches_the_real_call_site():
