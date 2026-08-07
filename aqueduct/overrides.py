@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from difflib import get_close_matches
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from aqueduct.errors import AqueductError
 
@@ -64,6 +64,12 @@ def _coerce_scalar(token: str) -> Any:
             return int(token)
         except ValueError:  # pragma: no cover
             pass
+    # float() accepts the same underscore grouping ("1_000" -> 1000.0) plus
+    # "inf"/"nan" spellings — none of which a `--set` user means as a number.
+    # Reject those before the float() call so they fall through to the
+    # literal-string branch, same intent as the int-form guard above.
+    if "_" in token or low in ("inf", "-inf", "+inf", "infinity", "-infinity", "+infinity", "nan", "-nan", "+nan"):
+        return token
     try:
         return float(token)
     except ValueError:
@@ -85,7 +91,11 @@ def parse_set_items(items: typing.Iterable[str]) -> list[Override]:
             path_str, raw_val, is_json = item[:eq], item[eq + 1:], False
         segments = tuple(s for s in path_str.split("."))
         if not path_str or any(not s for s in segments):
-            raise OverrideError(f"--set path is empty or malformed: {item!r}")
+            # Report the PATH only, never `item` — it embeds the (possibly
+            # secret) value, which is unregistered at this point and would
+            # bypass the click.echo redaction wrapper (that only scrubs
+            # values registered via @aq.secret()).
+            raise OverrideError(f"--set path is empty or malformed: {path_str!r}")
         if is_json:
             try:
                 value = json.loads(raw_val)
@@ -230,7 +240,7 @@ def apply_to_model(model_instance: BaseModel, nested: dict[str, Any]) -> BaseMod
     merged = deep_merge(data, nested)
     try:
         return type(model_instance).model_validate(merged)
-    except Exception as exc:  # pydantic ValidationError
+    except ValidationError as exc:
         raise OverrideError(f"--set produced an invalid config: {exc}") from exc
 
 
@@ -259,8 +269,13 @@ def route_overrides(
         else:
             roots = [AqueductConfig, BlueprintSchema] if allow_blueprint else [AqueductConfig]
             hint = suggest_for_path(roots, ov.path)
+            # Report the PATH only, never `ov.raw`/the value — a typo'd key
+            # (e.g. `--set agent.api_ke=<secret>`) would otherwise echo the
+            # value unredacted: it is unregistered at this point (redaction
+            # only scrubs values registered via @aq.secret() on successful
+            # resolution) so the click.echo redaction wrapper can't catch it.
             raise OverrideError(
-                f"--set {ov.raw!r}: no config field at path "
+                f"--set: no config field at path "
                 f"{'.'.join(ov.path)!r}" + (f" — {hint}" if hint else "")
             )
     return to_nested(config_ov), to_nested(blueprint_ov)
