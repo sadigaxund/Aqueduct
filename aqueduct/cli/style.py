@@ -32,7 +32,15 @@ class StyledLogFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         msg = record.getMessage()
         if record.exc_info:
-            msg = f"{msg}\n{self.formatException(record.exc_info)}"
+            # `record.exc_text`, when already set, is a cache — the root
+            # logger's `_RedactingFilter` (cli/__init__.py) pre-renders +
+            # redacts it before this formatter ever sees the record (a
+            # secret embedded in the exception's own text would otherwise
+            # print raw, since the filter can't touch text this formatter
+            # renders itself). Only fall back to formatting fresh when
+            # nothing populated it (e.g. this formatter used standalone,
+            # without the CLI's redaction filter installed).
+            msg = f"{msg}\n{record.exc_text or self.formatException(record.exc_info)}"
         if record.levelno >= logging.ERROR:
             icon, color = ICON["fail"], "red"
         elif record.levelno >= logging.WARNING:
@@ -69,10 +77,10 @@ def dim(text: str) -> str:
     return click.style(text, dim=True)
 
 
-# Semantic icon → colour. ✓ success, ✗ failure, ⚠ warning, ⓘ/◆/↻/▸/⏭ accents.
+# Semantic icon → colour. ✓ success, ✗ failure, ⚠ warning, ⓘ/◆/↻/▸/⏭/✎ accents.
 _ICON_COLOR = {
     "✓": "green", "✗": "red", "⚠": "yellow",
-    "ⓘ": "cyan", "◆": "cyan", "↻": "cyan", "▸": "cyan", "⏭": "cyan",
+    "ⓘ": "cyan", "◆": "cyan", "↻": "cyan", "▸": "cyan", "⏭": "cyan", "✎": "cyan",
 }
 # Structure / sub-detail glyphs recede (dim).
 _DIM_GLYPHS = ("├─", "└─", "│", "┆", "↳", "↑")
@@ -90,11 +98,23 @@ def colorize_line(line: str) -> str:
     ⚠ yellow / ⓘ◆↻▸ cyan; ``│ ├─ └─ ┆ ↳ ↑`` dimmed). Returns the line unchanged
     when colour is off, when it is already styled (contains an ANSI escape), or
     when it is not a status/tree line (doesn't start with a known glyph) — so
-    JSON output and prose stay intact."""
+    JSON output and prose stay intact.
+
+    A line LEADING with a status glyph (✓/✗/⚠/ⓘ/◆/↻/▸/⏭) is coloured whole-line
+    (matching ``style.error``/``success``/``warn`` — never icon-only-with-plain-text,
+    the bug this vocabulary explicitly forbids). A line leading with a
+    tree/structure glyph (``├─ └─ │ ┆ ↳ ↑``) keeps the narrower per-glyph
+    treatment: its own leading glyph is dimmed, and any status glyph it embeds
+    (a child status line under a tree branch) is still coloured individually,
+    since whole-line colour would swallow the tree's own dim styling."""
     if not isinstance(line, str) or not _color_enabled():
         return line
     if "\x1b[" in line or not line.lstrip().startswith(_LEADERS):
         return line
+    stripped = line.lstrip()
+    for glyph, colour in _ICON_COLOR.items():
+        if stripped.startswith(glyph):
+            return click.style(line, fg=colour)
     out = line
     for glyph, colour in _ICON_COLOR.items():
         if glyph in out:
@@ -164,7 +184,7 @@ def emit_warnings(caught: list, *, verbose: bool = False, err: bool = True, labe
                 rid, rest = "", body
             aq.append((rid, rest))
         elif issubclass(w.category, UserWarning):
-            click.echo(f"WARNING: {w.message}", err=err)
+            warn(str(w.message), err=err)
         else:
             _warnings.warn_explicit(w.message, w.category, w.filename, w.lineno)
 

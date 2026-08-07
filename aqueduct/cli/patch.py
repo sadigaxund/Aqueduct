@@ -1023,19 +1023,30 @@ def patch_discard(blueprint: str, patches_dir: str | None) -> None:
     pending_dir = patches_root / "pending"
     pending_dir.mkdir(parents=True, exist_ok=True)
     moved = 0
+    failed: list[str] = []
     for patch_file in uncommitted:
         dest = pending_dir / patch_file.name
         try:
             patch_file.rename(dest)
             moved += 1
-        except OSError:
-            pass
+        except OSError as exc:
+            # Cross-device rename, permission issue, etc. — do not abort the
+            # rollback (the blueprint restore above already succeeded); surface
+            # the leftover file instead of silently under-reporting `moved`.
+            failed.append(f"{patch_file.name} ({exc})")
 
     if moved:
         click.echo(f"  moved {moved} applied patch(es) back to patches/pending/")
         click.echo(
             f"  re-apply with: aqueduct patch apply patches/pending/<file> --blueprint {blueprint}"
         )
+    if failed:
+        click.echo(
+            f"⚠ {len(failed)} applied patch(es) could not be moved back to patches/pending/:",
+            err=True,
+        )
+        for item in failed:
+            click.echo(f"  · {item}", err=True)
 
 
 @patch.command("list")
@@ -1115,8 +1126,17 @@ def patch_list(
             ps = make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, _patches_root)
             _list_from_store(ps, filter_status, out_format)
             return
-        except Exception:
-            pass  # fall through to the local-dir scan
+        except Exception as exc:
+            # A missing aqueduct.yml resolves to defaults above and never reaches
+            # here (load_config's own contract) — anything caught here is a real
+            # resolution problem (malformed config, missing store SDK, unreachable
+            # backend). Warn rather than silently showing the (possibly wrong)
+            # local-dir scan the docstring promises this path avoids.
+            click.echo(
+                f"⚠ could not resolve the configured patch store ({exc}); "
+                "falling back to a local directory scan",
+                err=True,
+            )
 
     if patches_dir:
         patches_root = Path(patches_dir)

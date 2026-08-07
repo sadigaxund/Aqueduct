@@ -197,6 +197,82 @@ def test_cli_redaction_hook_logging(caplog):
     assert secret not in caplog.records[0].msg
 
 
+def test_cli_redaction_hook_named_logger_via_handler(tmp_path):
+    """Regression (audit 2026-08-01): a filter on the ROOT LOGGER OBJECT is
+    only consulted when a record originates AT the root logger itself — never
+    during propagation from a NAMED logger (`logging.getLogger(__name__)`,
+    the pattern used everywhere else in the codebase) to root's handler.
+    `_install_secret_redaction_hooks()` must also attach to root's HANDLER(s)
+    so a named-logger record gets redacted too, not just bare
+    `logging.warning(...)` calls."""
+    import io
+
+    secret = "hunter2longenough"
+    redaction.register(secret)
+
+    root = logging.getLogger()
+    saved_handlers, saved_filters, saved_level = (
+        list(root.handlers), list(root.filters), root.level,
+    )
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    root.handlers = [handler]
+    root.filters = []
+    root.setLevel(logging.WARNING)
+    try:
+        _install_secret_redaction_hooks()
+        logging.getLogger("aqueduct.some.module").warning(
+            "failed with secret %s", secret
+        )
+    finally:
+        root.handlers = saved_handlers
+        root.filters = saved_filters
+        root.setLevel(saved_level)
+
+    output = stream.getvalue()
+    assert "[REDACTED]" in output
+    assert secret not in output
+
+
+def test_cli_redaction_hook_exception_traceback(tmp_path):
+    """Regression (audit 2026-08-01): `_RedactingFilter` used to redact only
+    `record.msg`, leaving a secret embedded in a logged exception's traceback
+    (rendered by the Formatter's own `formatException`, a separate path the
+    filter never touched) printing raw."""
+    import io
+
+    from aqueduct.cli.style import StyledLogFormatter
+
+    secret = "hunter2longenough"
+    redaction.register(secret)
+
+    root = logging.getLogger()
+    saved_handlers, saved_filters, saved_level = (
+        list(root.handlers), list(root.filters), root.level,
+    )
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(StyledLogFormatter())
+    root.handlers = [handler]
+    root.filters = []
+    root.setLevel(logging.WARNING)
+    try:
+        _install_secret_redaction_hooks()
+        logger = logging.getLogger("aqueduct.some.other_module")
+        try:
+            raise ValueError(f"request failed: token={secret}")
+        except ValueError:
+            logger.exception("request failed")
+    finally:
+        root.handlers = saved_handlers
+        root.filters = saved_filters
+        root.setLevel(saved_level)
+
+    output = stream.getvalue()
+    assert secret not in output
+    assert "[REDACTED]" in output
+
+
 # ── 4. Observability and Surveyor ────────────────────────────────────────────
 
 def test_observability_redaction_surveyor(tmp_path):

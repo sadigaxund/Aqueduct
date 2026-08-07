@@ -33,7 +33,7 @@ from aqueduct.cli import (
     cli,
 )
 from aqueduct.cli.output import emit
-from aqueduct.parser.models import ModuleType
+from aqueduct.models import ModuleType
 
 
 @cli.command()

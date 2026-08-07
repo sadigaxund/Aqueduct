@@ -793,44 +793,85 @@ def _install_styled_echo() -> None:
     click.echo = _styled_echo  # type: ignore[assignment]
 
 
+class _RedactingFilter(logging.Filter):
+    """Scrub registered @aq.secret() values from a log record.
+
+    Module-level (not nested inside ``_install_secret_redaction_hooks``): the
+    ``isinstance`` idempotency checks below compare against THIS class object,
+    which only stays stable across repeated calls if the class itself isn't
+    redefined on every call — a nested-class version was previously redefined
+    each call, so a same-call ``isinstance`` check against a PRIOR call's
+    (different) class object always came back ``False``, silently defeating
+    its own dedup guard (masked only by the ``click.echo`` early-return that
+    used to skip this whole function on the 2nd+ call).
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        from aqueduct.redaction import redact as _redact
+
+        try:
+            record.msg = _redact(record.getMessage())
+            record.args = ()
+            # A logged exception's TRACEBACK TEXT is a separate render path:
+            # ``logging.Formatter``/``style.StyledLogFormatter`` both call
+            # ``formatException(record.exc_info)`` themselves, after this
+            # filter has already run — so redacting only `record.msg` above
+            # leaves a secret embedded in the exception (e.g. in a caught
+            # HTTPError's URL/body) printing raw. Pre-render + redact it here
+            # into `record.exc_text`, which ``logging.Formatter`` already
+            # treats as a cache (skips re-formatting if set) —
+            # `StyledLogFormatter` honours the same cache.
+            if record.exc_info:
+                import traceback as _tb
+
+                record.exc_text = _redact("".join(_tb.format_exception(*record.exc_info)))
+        except Exception:  # noqa: BLE001
+            pass  # redaction must never break logging; best-effort sanitisation
+        return True
+
+
 def _install_secret_redaction_hooks() -> None:
     """Wrap click.echo and the logging chain so registered @aq.secret() values
     are scrubbed from every CLI emit path.
 
-    Idempotent — the wrapped functions carry an attribute that signals they are
-    already wrapped, so re-invoking from nested commands is a no-op. Installed
-    eagerly at top-level ``cli`` invocation; commands that never resolve a
-    secret incur a tiny per-emit no-op cost (empty registry → fast path).
+    Idempotent — the wrapped click.echo carries an attribute that signals it
+    is already wrapped, so re-wrapping is a no-op. Installed eagerly at
+    top-level ``cli`` invocation; commands that never resolve a secret incur a
+    tiny per-emit no-op cost (empty registry → fast path).
+
+    The logging half is NOT gated behind the same early return as click.echo:
+    a filter on the ROOT LOGGER OBJECT (``root.addFilter``) is only consulted
+    when a record originates AT the root logger itself (a bare
+    ``logging.warning(...)``) — never during propagation from a NAMED logger
+    (``logging.getLogger(__name__)``, used throughout the rest of the
+    codebase) to root's handler. That path is only covered by a filter on the
+    HANDLER, checked regardless of the record's origin logger. `cli()`
+    replaces `root.handlers` on every invocation (``--log-format``/
+    ``--verbose``), so this re-attaches to whatever handler exists NOW on
+    every call rather than bailing out early — a handler created after the
+    first call would otherwise never get the filter.
     """
     import logging as _logging
 
     from aqueduct.redaction import redact as _redact
 
-    if getattr(click.echo, "_aq_redaction_wrapped", False):
-        return
+    if not getattr(click.echo, "_aq_redaction_wrapped", False):
+        _orig_echo = click.echo
 
-    _orig_echo = click.echo
+        def _wrapped_echo(message=None, file=None, nl=True, err=False, color=None):
+            if isinstance(message, str):
+                message = _redact(message)
+            return _orig_echo(message, file=file, nl=nl, err=err, color=color)
 
-    def _wrapped_echo(message=None, file=None, nl=True, err=False, color=None):
-        if isinstance(message, str):
-            message = _redact(message)
-        return _orig_echo(message, file=file, nl=nl, err=err, color=color)
-
-    _wrapped_echo._aq_redaction_wrapped = True  # type: ignore[attr-defined]
-    click.echo = _wrapped_echo  # type: ignore[assignment]
-
-    class _RedactingFilter(_logging.Filter):
-        def filter(self, record: _logging.LogRecord) -> bool:
-            try:
-                record.msg = _redact(record.getMessage())
-                record.args = ()
-            except Exception:  # noqa: BLE001
-                pass  # redaction must never break logging; best-effort sanitisation
-            return True
+        _wrapped_echo._aq_redaction_wrapped = True  # type: ignore[attr-defined]
+        click.echo = _wrapped_echo  # type: ignore[assignment]
 
     root = _logging.getLogger()
     if not any(isinstance(f, _RedactingFilter) for f in root.filters):
         root.addFilter(_RedactingFilter())
+    for _handler in root.handlers:
+        if not any(isinstance(f, _RedactingFilter) for f in _handler.filters):
+            _handler.addFilter(_RedactingFilter())
 
 
 class _AqueductJsonLogFormatter:
@@ -1042,9 +1083,13 @@ def _uncommitted_applied_patches(
         for _p in all_applied:
             try:
                 _d = json.loads(_p.read_text(encoding="utf-8"))
+                _meta = _d.get(_PMK) if isinstance(_d, dict) else None
+                _bp = _meta.get("blueprint_id") if isinstance(_meta, dict) else None
             except Exception:
-                continue
-            _bp = (_d.get(_PMK) or {}).get("blueprint_id")
+                # Unreadable/malformed applied-patch file: treat like "no recorded
+                # blueprint_id" (conservative — kept, per the comment above) rather
+                # than crashing this safety scan or silently dropping the patch.
+                _bp = None
             if _bp is None or _bp == blueprint_id:
                 owned.append(_p)
         all_applied = owned
@@ -1078,10 +1123,13 @@ def _uncommitted_applied_patches(
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
         except Exception:
+            continue  # unreadable/malformed patch file — skip rather than abort the scan
+        if not isinstance(data, dict):
             continue
         # applied_at may be top-level or inside _aq_meta
-        applied_at_str = data.get("applied_at") or (data.get(PATCH_META_KEY) or {}).get(
-            "applied_at"
+        _meta = data.get(PATCH_META_KEY)
+        applied_at_str = data.get("applied_at") or (
+            _meta.get("applied_at") if isinstance(_meta, dict) else None
         )
         if not applied_at_str:
             continue

@@ -111,8 +111,10 @@ def stores_migrate(
     from aqueduct.stores import get_stores
 
     if store.lower() != "depot":
+        # exit_codes.py's own USAGE_ERROR docstring names this exact case
+        # ("an unsupported `--store` value") as its canonical example.
         _error(f"unsupported --store: {store}")
-        sys.exit(exit_codes.CONFIG_ERROR)
+        sys.exit(exit_codes.USAGE_ERROR)
 
     try:
         _resolve_and_load_env(
