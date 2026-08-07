@@ -35,10 +35,13 @@ exactly the built-ins below.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # setuptools entry-point group reserved for future custom-tool distribution.
 # NOT resolved anywhere in this module — see module docstring.
@@ -130,7 +133,14 @@ def _list_runs(
     for h in discover_stores(cfg, store_dir=store_dir):
         try:
             rows.extend(_q_list_runs(h.store, limit=limit, blueprint_id=blueprint_id))
-        except Exception:
+        except Exception as exc:
+            # Best-effort fan-out across every discovered store: one
+            # unreadable/corrupt backend must not blank out every OTHER
+            # store's runs from a fleet-wide `list_runs` call. Silence is
+            # correct for any exception here (a read-only diagnostics tool
+            # has no repair action to take), but it must not be invisible —
+            # log at debug so a genuinely broken store is still traceable.
+            logger.debug("list_runs: skipping unreadable store %r: %s", h, exc)
             continue
     rows.sort(key=lambda r: r.started_at or "", reverse=True)
     return [_asdict(r) for r in rows[:limit]]

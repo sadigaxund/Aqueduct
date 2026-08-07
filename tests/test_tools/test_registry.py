@@ -149,6 +149,36 @@ def test_list_runs_tool_returns_json_serializable_rows(tmp_path):
     assert row["finished_at"].startswith("2026-01-01")
 
 
+def test_list_runs_skips_unreadable_store_without_losing_others(monkeypatch, caplog):
+    """One store failing to query must not blank out runs from every OTHER
+    discovered store (best-effort fan-out across a fleet), and the failure
+    must be logged, not silently swallowed — regression for the previously
+    uncommented `except Exception: continue` in `_list_runs`."""
+    import logging as _logging
+
+    good_handle = SimpleNamespace(store="good-store")
+    bad_handle = SimpleNamespace(store="bad-store")
+
+    def fake_discover_stores(cfg, store_dir=None):
+        return [bad_handle, good_handle]
+
+    good_row = SimpleNamespace(started_at="2026-01-01T00:00:00")
+
+    def fake_list_runs(store, limit=50, blueprint_id=None):
+        if store == "bad-store":
+            raise RuntimeError("corrupt store")
+        return [good_row]
+
+    monkeypatch.setattr("aqueduct.stores.queries.discover_stores", fake_discover_stores)
+    monkeypatch.setattr("aqueduct.stores.queries.list_runs", fake_list_runs)
+
+    with caplog.at_level(_logging.DEBUG, logger="aqueduct.tools.registry"):
+        rows = call_tool("list_runs", config_path=None, store_dir=None)
+
+    assert len(rows) == 1
+    assert any("skipping unreadable store" in r.message for r in caplog.records)
+
+
 def test_doctor_tool_returns_structured_checks():
     result = call_tool("doctor", skip_spark=True)
     assert "passed" in result
