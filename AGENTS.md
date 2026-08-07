@@ -304,13 +304,14 @@ whenever a package is restructured — use it as the first filter before greppin
 ### `aqueduct/models.py` — Cross-layer boundary types
 
 Re-export surface for downstream layers (executor, surveyor). Imports from
-`parser.models` and `compiler.models` so executor/surveyor don't reach into
-those internals. Pure re-export — definitions still live in their original
-modules.
+`parser.models`, `compiler.models`, and `compiler.islands` so executor/surveyor
+don't reach into those internals. Pure re-export — definitions still live in
+their original modules.
 
 | Symbol | Defined in | Role |
 |--------|-----------|------|
 | `Manifest` | `compiler.models` | Compiled Blueprint ready for execution |
+| `Island` | `compiler.islands` | Per-engine island (Phase 81 cross-engine boundary) |
 | `Module` | `parser.models` | Parsed module node |
 | `Edge` | `parser.models` | Data-flow edge |
 | `RetryPolicy` | `parser.models` | Per-pipeline retry config |
