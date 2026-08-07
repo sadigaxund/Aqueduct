@@ -133,17 +133,15 @@ def test_operator_build_command():
     ]
 
 
-def test_operator_resolved_patches_dir():
+def test_operator_loggable_command_redacts_set_values():
     from aqueduct.integrations.airflow.operator import AqueductOperator
 
-    # Case 1: explicit patches_dir
-    op = AqueductOperator(task_id="t1", blueprint="dir/my_bp.yml", patches_dir="/tmp/custom_patches")
-    assert op._resolved_patches_dir() == "/tmp/custom_patches"
-
-    # Case 2: default resolution
-    op2 = AqueductOperator(task_id="t2", blueprint="dir/my_bp.yml")
-    expected = str(Path("dir/my_bp.yml").resolve().parent / "patches")
-    assert op2._resolved_patches_dir() == expected
+    cmd = ["aqueduct", "run", "bp.yml", "--run-id", "r1", "--set", "ctx.db_password=hunter2"]
+    rendered = AqueductOperator._loggable_command(cmd)
+    assert "hunter2" not in rendered
+    assert "ctx.db_password=<redacted>" in rendered
+    # A --set with no `=` (malformed, but must not crash the log line) passes through.
+    assert AqueductOperator._loggable_command(["aqueduct", "--set", "bare"]).endswith("bare")
 
 
 def test_operator_template_fields_and_env():
@@ -257,17 +255,42 @@ def test_trigger_serialize():
         "run_id": "run-1",
         "blueprint": "bp.yml",
         "patches_dir": "patches",
+        "config": None,
         "aqueduct_cmd": ["/usr/bin/aqueduct"],
         "poll_interval": 10.0
     }
 
 
+def test_trigger_build_command_omits_patches_dir_when_unset():
+    """Unset patches_dir (the default) must NOT force the legacy local scan
+    — omitting `--patches-dir` lets `aqueduct patch list` resolve the
+    configured store itself (local or object-store). `--blueprint` is always
+    included (anchors the local-backend default + legacy-scan fallback);
+    `--config` is included only when the operator configured one."""
+    from aqueduct.integrations.airflow.trigger import AqueductPatchTrigger
+
+    t = AqueductPatchTrigger(run_id="run-1", blueprint="bp.yml")
+    cmd = t._build_command()
+    assert "--patches-dir" not in cmd
+    assert "--config" not in cmd
+    assert cmd[-2:] == ["--blueprint", "bp.yml"]
+
+    t_override = AqueductPatchTrigger(
+        run_id="run-1", blueprint="bp.yml", patches_dir="/custom/patches", config="my.yml",
+    )
+    cmd2 = t_override._build_command()
+    assert "--patches-dir" in cmd2 and "/custom/patches" in cmd2
+    assert "--config" in cmd2 and "my.yml" in cmd2
+
+
 def test_trigger_matches_run():
     from aqueduct.integrations.airflow.trigger import AqueductPatchTrigger
 
-    # Empty run_id matches anything
+    # Empty run_id is a construction error, not "match anything" — it must
+    # NEVER approve the first patch belonging to some OTHER run.
     t1 = AqueductPatchTrigger(run_id="", blueprint="bp.yml", patches_dir="patches")
-    assert t1._matches_run({"file": "patch_1.json", "rationale": "fixes stuff"}) is True
+    assert t1._matches_run({"file": "patch_1.json", "rationale": "fixes stuff"}) is False
+    assert t1._matches_run({"run_id": "some-other-run"}) is False
 
     t2 = AqueductPatchTrigger(run_id="run-123", blueprint="bp.yml", patches_dir="patches")
     
@@ -324,6 +347,28 @@ def test_trigger_check_once():
         ]
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(payload))
         assert t._check_once() == ("pending", None, None)
+
+
+def test_trigger_check_once_logs_on_cli_failure_and_bad_json(caplog):
+    """Regression: both silent-pending paths (non-zero rc, unparseable JSON)
+    used to leave zero trace — a stuck deferred task with no diagnostic
+    anywhere. Both must now log a WARNING naming the run_id."""
+    import logging as _logging
+    from aqueduct.integrations.airflow.trigger import AqueductPatchTrigger
+
+    t = AqueductPatchTrigger(run_id="run-123", blueprint="bp.yml")
+
+    with caplog.at_level(_logging.WARNING, logger="aqueduct.integrations.airflow.trigger"):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="boom")
+            assert t._check_once() == ("pending", None, None)
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="not json", stderr="")
+            assert t._check_once() == ("pending", None, None)
+
+    messages = [r.message for r in caplog.records]
+    assert any("rc=1" in m and "run-123" in m for m in messages)
+    assert any("unparseable JSON" in m and "run-123" in m for m in messages)
 
 
 def test_trigger_run_approved_sync():

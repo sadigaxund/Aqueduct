@@ -23,7 +23,6 @@ import os
 import shlex
 import subprocess
 from datetime import timedelta
-from pathlib import Path
 from typing import Any
 
 from airflow.exceptions import AirflowException
@@ -61,9 +60,13 @@ class AqueductOperator(BaseOperator):
         Max wall-clock seconds the trigger waits for approval before failing
         the task. ``None`` means wait forever.
     patches_dir:
-        Optional override for the patches root directory used by
-        ``aqueduct patch list --json``. Defaults to the blueprint's resolved
-        ``patches/`` directory.
+        Optional EXPLICIT override for the patches root directory used by
+        ``aqueduct patch list --json``, forcing the legacy local-directory
+        scan at that exact path. Leave unset (the default) to let the CLI
+        resolve the configured patch store itself — local **or** an
+        object-store backend (``stores.blob.backend: s3``/``gcs``/``adls``);
+        forcing a local scan here would poll an empty directory forever
+        whenever the store lives remotely.
     """
 
     template_fields = ("blueprint", "run_id", "extra_args", "env")
@@ -101,7 +104,7 @@ class AqueductOperator(BaseOperator):
         cmd = self._build_command()
         env = {**os.environ, **self.env}
 
-        self.log.info("aqueduct invocation: %s", " ".join(shlex.quote(c) for c in cmd))
+        self.log.info("aqueduct invocation: %s", self._loggable_command(cmd))
         result = subprocess.run(cmd, env=env, check=False)
         rc = result.returncode
 
@@ -136,7 +139,12 @@ class AqueductOperator(BaseOperator):
             trigger=AqueductPatchTrigger(
                 run_id=self.run_id,
                 blueprint=self.blueprint,
-                patches_dir=self._resolved_patches_dir(),
+                # Explicit override ONLY — an unset `patches_dir` here lets
+                # `aqueduct patch list` resolve the configured store itself
+                # (local or object-store) instead of being forced onto the
+                # legacy local-directory scan. See trigger.py's docstring.
+                patches_dir=self.patches_dir,
+                config=self.config,
                 aqueduct_cmd=self.aqueduct_cmd,
                 poll_interval=self.poll_interval,
             ),
@@ -173,7 +181,29 @@ class AqueductOperator(BaseOperator):
         cmd += self.extra_args
         return cmd
 
-    def _resolved_patches_dir(self) -> str:
-        if self.patches_dir:
-            return self.patches_dir
-        return str(Path(self.blueprint).resolve().parent / "patches")
+    @staticmethod
+    def _loggable_command(cmd: list[str]) -> str:
+        """Render ``cmd`` for the invocation log line with ``--set KEY=VALUE``
+        values stripped.
+
+        Mirrors ``cli/run.py``'s own resolution preamble, which shows only
+        ``--set`` KEYS, never values, for the identical reason: a ``--set``
+        override can carry a literal credential (e.g.
+        ``--set ctx.db_password=...``) with nothing downstream ever
+        registering it for redaction — that only happens inside the
+        ``aqueduct`` subprocess when a *resolved* secret is produced; a raw
+        ``--set`` literal the operator places on the command line is never
+        resolved by anything, so it would otherwise reach the Airflow worker
+        log verbatim.
+        """
+        rendered: list[str] = []
+        redact_next = False
+        for part in cmd:
+            if redact_next:
+                key = part.partition("=")[0]
+                rendered.append(f"{key}=<redacted>" if "=" in part else part)
+                redact_next = False
+            else:
+                rendered.append(part)
+                redact_next = part == "--set"
+        return " ".join(shlex.quote(c) for c in rendered)

@@ -549,6 +549,18 @@ structural test (`test_server_module_top_level_is_sdk_free`) plus a
 subprocess `sys.modules` check (`test_import_aqueduct_mcp_leaves_sdk_out_of_sys_modules`),
 both in `tests/test_mcp/test_server.py`.
 
+### `aqueduct/integrations/` — third-party orchestrator bindings
+
+| Module | What it owns |
+|--------|--------------|
+| `airflow/operator.py` | `AqueductOperator` — thin `subprocess.run` wrapper over `aqueduct run`. Maps exit codes onto Airflow outcomes (`SUCCESS`→success, `HEAL_PENDING`→`self.defer()` to the trigger, `DATA_OR_RUNTIME`/anything else→`AirflowException`). The invocation log line goes through `_loggable_command()`, which redacts `--set KEY=VALUE` values — an `extra_args` `--set` override can carry a literal credential that nothing downstream ever registers for redaction (that only happens for a *resolved* secret inside the `aqueduct` subprocess). |
+| `airflow/trigger.py` | `AqueductPatchTrigger` — async polling loop (runs in the Airflow `triggerer` process) over `aqueduct patch list --format json`. `patches_dir` is EXPLICIT-OVERRIDE-ONLY: unset (the default) omits `--patches-dir` so the CLI resolves the configured patch store itself (local or object-store, `stores.blob.backend: s3`/`gcs`/`adls`) instead of being forced onto the legacy local-directory scan (which is empty, and silently pending forever, when the store lives remotely — the CLI's own `patch_list` docstring/comment calls `--patches-dir` a forced legacy path). `--blueprint` is always passed (anchors the local-backend default + legacy-scan fallback to the same directory the operator resolves); `--config` is passed when the operator set one. Both silent-failure paths (non-zero CLI exit, unparseable JSON) log a WARNING naming the run_id. An empty `run_id` is a construction error, not "match anything" — `_matches_run` returns `False` rather than approving the first patch belonging to some other run. |
+| `airflow/sensor.py` | `AqueductPatchSensor` — standalone deferrable sensor for the split-task (`approval: ci`) pattern; same `patches_dir`/`config` threading as the operator. |
+| `airflow/__init__.py` | Lazy `__getattr__` loader — importing `aqueduct.integrations.airflow` never pulls the `airflow` package; only requesting `AqueductOperator`/`AqueductPatchSensor`/`AqueductPatchTrigger` does. |
+| `__init__.py` | Package marker only. |
+
+The `airflow` leaf lives in the `schedulers` aggregate (Packaging & Extras Policy above) — `apache-airflow` is never a base/`all` dependency. No user-supplied code executes on the Aqueduct driver from this package (everything here shells out FROM Airflow processes to the `aqueduct` CLI), so the entry-point/allowlist rule doesn't apply.
+
 ## Git & Commit Conventions
 
 ### Commit message format

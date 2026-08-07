@@ -9,7 +9,6 @@ approval before triggering a rerun task.
 from __future__ import annotations
 
 from datetime import timedelta
-from pathlib import Path
 from typing import Any
 
 from airflow.exceptions import AirflowException
@@ -28,6 +27,7 @@ class AqueductPatchSensor(BaseSensorOperator):
         *,
         run_id: str,
         blueprint: str,
+        config: str | None = None,
         patches_dir: str | None = None,
         aqueduct_cmd: list[str] | None = None,
         poll_interval: float = 30.0,
@@ -37,6 +37,7 @@ class AqueductPatchSensor(BaseSensorOperator):
         super().__init__(**kwargs)
         self.run_id = run_id
         self.blueprint = blueprint
+        self.config = config
         self.patches_dir = patches_dir
         self.aqueduct_cmd = aqueduct_cmd or ["aqueduct"]
         self.poll_interval = poll_interval
@@ -44,9 +45,6 @@ class AqueductPatchSensor(BaseSensorOperator):
 
     # ------------------------------------------------------------------
     def execute(self, context: dict[str, Any]) -> None:
-        patches_dir = self.patches_dir or str(
-            Path(self.blueprint).resolve().parent / "patches"
-        )
         timeout = (
             timedelta(seconds=self.patch_timeout) if self.patch_timeout is not None else None
         )
@@ -54,7 +52,11 @@ class AqueductPatchSensor(BaseSensorOperator):
             trigger=AqueductPatchTrigger(
                 run_id=self.run_id,
                 blueprint=self.blueprint,
-                patches_dir=patches_dir,
+                # Explicit override ONLY — see AqueductPatchTrigger's
+                # docstring: unset lets `aqueduct patch list` resolve the
+                # configured store (local or object-store) itself.
+                patches_dir=self.patches_dir,
+                config=self.config,
                 aqueduct_cmd=self.aqueduct_cmd,
                 poll_interval=self.poll_interval,
             ),
