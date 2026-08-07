@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
+pytestmark = pytest.mark.unit
 
 from aqueduct.compiler.models import Manifest
 try:

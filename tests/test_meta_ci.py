@@ -423,3 +423,235 @@ def test_no_test_directory_is_absent_from_every_pre_merge_lane():
             f"{allowlisted!r} in _MAIN_ONLY_TEST_DIR_ALLOWLIST no longer "
             "exists as a directory — remove the stale entry"
         )
+
+
+# ── File-level lane coverage (Phase 081/082 cross-engine remediation) ────────
+# The directory-level guard above strips the `-m` clause before matching on
+# purpose (see its own docstring) — which means it calls a directory
+# "referenced" even when EVERY file inside it is actually excluded by that
+# directory's one lane's marker filter. That blind spot is exactly how this
+# repo shipped ~191 tests across 11 files that ran in NO pre-merge lane:
+# spark-marked tests living outside tests/test_executor/ (excluded by every
+# `-m "not spark"` lane, and never reached by the one `-m spark` lane, which
+# only points at tests/test_executor/ + test_blueprints.py), AND — the mirror
+# image, found while re-verifying that list instead of trusting it — plain
+# `unit`-marked tests trapped INSIDE tests/test_executor/ and tests/test_stores/,
+# whose only pre-merge lane filtered `-m spark` / `-m integration` respectively.
+#
+# This guard closes both directions at FILE granularity: a file counts as
+# covered only if some pre-merge command's path args reach it AND that
+# command's `-m` expression would actually select at least one of the
+# markers the file declares.
+
+_LAYER_VOCAB = frozenset(
+    {"unit", "integration", "e2e", "spark", "duckdb", "agent", "airflow", "todo"}
+)
+# Mirrors tests/conftest.py::_LAYER_OR_CAP verbatim. Duplicated, not imported
+# — importing tests.conftest for this one constant would run its module-level
+# `_spark_is_healthy()` call (a REAL `SparkSession.builder...getOrCreate()`)
+# as a side effect whenever pyspark happens to be importable, which this
+# fast `unit` guard must never trigger just to read a name list.
+
+
+def _explicit_file_markers(text: str) -> set[str]:
+    """Every `pytest.mark.<name>` token in `text` that's in the layer/cap
+    vocabulary — module-level `pytestmark`, per-function decorators, and
+    `pytest.param(..., marks=pytest.mark.X)` all match the same regex, since
+    all this needs is "could ANY test in this file carry this marker",
+    not which one. Markers outside the vocabulary (`slow`, `parametrize`,
+    `skipif`, `usefixtures`, ...) are dropped by the set intersection.
+    """
+    return set(re.findall(r"pytest\.mark\.(\w+)", text)) & _LAYER_VOCAB
+
+
+_DEF_TEST_RE = re.compile(r"^\s*def (test_\w+)")
+_DECORATOR_RE = re.compile(r"^\s*@")
+
+
+def _file_marker_groups(text: str) -> list[frozenset[str]]:
+    """The DISTINCT per-test marker combinations that actually occur in this
+    file: the module-level `pytestmark` line(s) (applied to EVERY test),
+    unioned per test function with that function's own immediately-preceding
+    `@pytest.mark.*` decorators — pytest ADDS decorator markers to the
+    module-level ones, it never replaces them. A function with no decorator
+    of its own just carries the module-level combination (or the implicit
+    `{"unit"}` default — see `test_no_test_file_relies_on_fixture_only_
+    auto_marking` for the one case this static scan can't see).
+
+    Returns the deduplicated set of these per-test combinations as a list of
+    frozensets, so `_marker_expr_selects` only has to find ONE combination a
+    lane's `-m` expression accepts for the whole file to count as covered.
+
+    Critically, this is NOT the same as flattening every marker in the file
+    into one set. `pytestmark = [pytest.mark.spark, pytest.mark.integration]`
+    means every test carries BOTH tags TOGETHER — `-m "not spark"` excludes
+    the whole file, full stop; the `integration` tag doesn't buy it a way
+    back in, because no test in the file is integration-WITHOUT-also-spark.
+    A flat union (`{"spark", "integration"} - {"spark"} = {"integration"}`,
+    non-empty) would have wrongly concluded a `-m "not spark"` lane covers
+    such a file — which is exactly the ORIGINAL bug this guard exists to
+    catch: `tests/test_surveyor/test_surveyor.py` and five sibling files were
+    marked precisely `[spark, integration]` and reachable by NO lane at all,
+    and a flat-union version of this check would have missed it.
+    """
+    lines = text.splitlines()
+    base: set[str] = set()
+    for line in lines:
+        if line.strip().startswith("pytestmark"):
+            base |= set(re.findall(r"pytest\.mark\.(\w+)", line)) & _LAYER_VOCAB
+
+    groups: set[frozenset[str]] = set()
+    for i, line in enumerate(lines):
+        if not _DEF_TEST_RE.match(line):
+            continue
+        decor: set[str] = set()
+        j = i - 1
+        while j >= 0 and _DECORATOR_RE.match(lines[j]):
+            decor |= set(re.findall(r"pytest\.mark\.(\w+)", lines[j])) & _LAYER_VOCAB
+            j -= 1
+        groups.add(frozenset(base | decor) or frozenset({"unit"}))
+
+    if not groups:
+        # No top-level-matched `def test_...` line at all (e.g. every test
+        # lives as an indented method the regex still matches via `^\s*def`,
+        # so in practice this only fires for a file with zero test functions)
+        # — fall back to the file-wide base combination as the one group.
+        groups.add(frozenset(base) or frozenset({"unit"}))
+    return list(groups)
+
+
+def _parse_pytest_command(cmd: str) -> tuple[list[str], "str | None"]:
+    """One `pytest ...` line -> (its `tests/...` path args, its `-m` marker
+    expression or None). Sibling of `_positive_coverage` above, but keeps
+    each command's path list and marker expression paired instead of pooling
+    them across every lane — file-level coverage needs to know which
+    SPECIFIC command's `-m` clause a candidate path was matched under, not
+    just whether the marker showed up somewhere in the whole workflow.
+    """
+    marker_re = re.compile(r'-m\s+"([^"]+)"|-m\s+(\S+)')
+    m = marker_re.search(cmd)
+    marker_expr = None
+    rest = cmd
+    if m:
+        marker_expr = m.group(1) or m.group(2)
+        rest = cmd[: m.start()] + cmd[m.end() :]
+    paths = [tok for tok in rest.split() if tok.startswith("tests/")]
+    return paths, marker_expr
+
+
+def _marker_expr_selects_group(marker_expr: "str | None", group: frozenset[str]) -> bool:
+    """True if a lane whose `-m` clause is `marker_expr` (None = no filter)
+    would run a test carrying EXACTLY the marker combination `group`.
+    Restricted to the flat `<term>` / `not <term>` grammar every `-m` clause
+    in this workflow actually uses — same documented restriction as
+    `_positive_marker_terms` above, not a general boolean-expression
+    evaluator. Membership is checked against `group` directly (never a set
+    difference against some flattened superset) — see `_file_marker_groups`
+    for why that distinction is load-bearing: a `not spark` lane must reject
+    a group that contains `spark` outright, regardless of what else is in
+    that SAME group.
+    """
+    if not marker_expr:
+        return True
+    expr = marker_expr.strip()
+    if expr.startswith("not "):
+        return expr[4:].strip() not in group
+    return expr in group
+
+
+def _path_covers_file(path_arg: str, file_rel: str) -> bool:
+    """True if pytest path argument `path_arg` (a file or a directory,
+    exactly as written in a `run:` step — always `tests/...`) would collect
+    `file_rel` (also `tests/...`)."""
+    if path_arg == file_rel:
+        return True
+    prefix = path_arg if path_arg.endswith("/") else path_arg + "/"
+    return file_rel.startswith(prefix)
+
+
+def test_no_test_file_relies_on_fixture_only_auto_marking():
+    """Guards the one blind spot `_file_marker_groups` documents: a file that
+    uses the real `spark` or `duckdb_con` fixture but declares NO explicit
+    `pytest.mark.*` anywhere would be auto-promoted away from `unit` by
+    `tests/conftest.py::pytest_collection_modifyitems` at real collection
+    time — invisibly, to this static scan. `test_every_test_file_is_selected_
+    by_some_pre_merge_lane` below would then misjudge such a file as `unit`
+    and could wrongly call it "covered" by a lane that never actually reaches
+    a Spark/DuckDB-only test inside it. Keeping this list empty is what makes
+    that guard's static approximation trustworthy instead of merely
+    plausible.
+    """
+    offenders = []
+    for path in sorted((_REPO / "tests").rglob("test_*.py")):
+        text = path.read_text(encoding="utf-8")
+        if _explicit_file_markers(text):
+            continue
+        uses_spark_fixture = re.search(r"def test_[^\n(]*\([^)]*\bspark\b", text)
+        uses_duckdb_fixture = "duckdb_con" in text
+        if uses_spark_fixture or uses_duckdb_fixture:
+            offenders.append(path.relative_to(_REPO).as_posix())
+    assert not offenders, (
+        f"{offenders} use the `spark`/`duckdb_con` fixture but declare no "
+        "explicit pytest.mark.* anywhere in the file — add one (matching "
+        "whatever tests/conftest.py would auto-assign: `spark` or `duckdb`) "
+        "so the file-level lane-coverage guard's static marker scan can see "
+        "it too."
+    )
+
+
+def test_every_test_file_is_selected_by_some_pre_merge_lane():
+    """The FILE-granularity, marker-aware version of
+    `test_no_test_directory_is_absent_from_every_pre_merge_lane` above — see
+    the block comment before `_LAYER_VOCAB` for the bug class this closes
+    (spark-marked tests stranded outside the one `-m spark` lane, and
+    unit-marked tests stranded inside it or inside the one `-m integration`
+    lane). A file is covered if, for at least one pre-merge command, its
+    path is reached by that command's path args AND that command's `-m`
+    expression would select at least one of the file's actual per-test
+    marker combinations (`_file_marker_groups` — never a flattened union of
+    every marker anywhere in the file; see its docstring for why that
+    distinction is exactly what the original bug needed to hide behind).
+
+    Deliberately parses `test-suite.yml` + the files themselves rather than
+    hardcoding which lane covers which file — a hardcoded list is exactly
+    the drift this repo has been bitten by repeatedly (see the `changes:`
+    path-filter drift this whole guard family exists to catch, and AGENTS.md
+    on hand-maintained lists). The one static-analysis gap (fixture-only
+    auto-marking) is independently asserted empty by the test above, so this
+    guard's approximation stays honest without needing to actually run
+    pytest collection (which would need every lane's extras installed in
+    whatever environment runs THIS test, including ones — Spark, MinIO,
+    Postgres — this fast `unit` lane deliberately doesn't have).
+    """
+    commands = _pre_merge_pytest_commands()
+    assert commands, "no pre-merge pytest commands found in test-suite.yml"
+    parsed = [_parse_pytest_command(cmd) for cmd in commands]
+
+    test_files = sorted(
+        p.relative_to(_REPO).as_posix() for p in (_REPO / "tests").rglob("test_*.py")
+    )
+    assert test_files, "no tests/**/test_*.py files found — did the layout move?"
+
+    for file_rel in test_files:
+        if any(
+            file_rel == allowlisted or file_rel.startswith(allowlisted + "/")
+            for allowlisted in _MAIN_ONLY_TEST_DIR_ALLOWLIST
+        ):
+            continue
+        groups = _file_marker_groups((_REPO / file_rel).read_text(encoding="utf-8"))
+        covered = any(
+            any(_marker_expr_selects_group(marker_expr, g) for g in groups)
+            and any(_path_covers_file(p, file_rel) for p in paths)
+            for paths, marker_expr in parsed
+        )
+        assert covered, (
+            f"{file_rel} (per-test marker combinations {sorted(map(sorted, groups))!r}) "
+            "is not selected by ANY pre-merge job in test-suite.yml once "
+            "both its path and its own pytest.mark.* markers are accounted "
+            "for — it only ever "
+            "runs post-merge (`coverage`) or at release time. Either add its "
+            "path to a lane whose `-m` filter accepts one of those markers "
+            "(see AGENTS.md's CI-lane table), fix a stale marker if the file "
+            "is actually mislabelled, or — if this is genuinely deliberate — "
+            "add it to _MAIN_ONLY_TEST_DIR_ALLOWLIST with a reason."
+        )

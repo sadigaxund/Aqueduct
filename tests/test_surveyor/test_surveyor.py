@@ -5,7 +5,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 import pytest
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
+pytestmark = pytest.mark.unit
 from unittest.mock import MagicMock, patch
 
 try:

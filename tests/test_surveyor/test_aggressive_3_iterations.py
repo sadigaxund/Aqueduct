@@ -16,7 +16,7 @@ except ImportError:
     pytest.skip("pyspark required", allow_module_level=True)
 from aqueduct.surveyor.surveyor import Surveyor
 
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
+pytestmark = pytest.mark.unit
 
 
 def test_three_iterations_produce_three_rows_linked_by_parent_run_id(tmp_path):

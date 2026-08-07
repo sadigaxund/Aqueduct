@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import pytest
 
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
+pytestmark = pytest.mark.unit
 
 from aqueduct.surveyor.models import FailureContext
 

@@ -10,7 +10,7 @@ except ImportError:
     pytest.skip("pyspark required", allow_module_level=True)
 from aqueduct.surveyor.surveyor import Surveyor
 
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
+pytestmark = pytest.mark.unit
 
 @pytest.fixture
 def manifest():
