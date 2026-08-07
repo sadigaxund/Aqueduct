@@ -15,6 +15,24 @@ A variation of `aqskill-audit.md` for module-isolated granularity. Same accuracy
 2. **Verification pass = precision.** Every candidate must clear its skill's "Verify before you report" gate: read the `file:line` + context, check the repo neutralizers, write a **concrete failure scenario**, and confirm it's **still true at HEAD**. A candidate with no failure scenario is SUSPECTED → drop or clearly label. This pass is the single biggest accuracy lever — run it as a distinct step, ideally with the strongest model available, before anything reaches the final report.
 3. **Cheaper models do step 1; the strongest model (or the user) owns step 2.** Never let a cheap model's raw candidate list become the final verdict.
 
+### Measured calibration (29-report run, triaged 2026-08-03 → 2026-08-07)
+
+Spend budget where it pays. Measured across all 29 unit reports:
+
+- **HIGH/MEDIUM findings held up at a high rate** — better than this skill's own disclaimer implies. Nearly every top-3-by-severity finding per report survived empirical verification. Do not re-litigate them from scratch; verify and act.
+- **LOW/SUSPECTED was mostly noise**, and the audit had usually self-labelled it SUSPECTED already. Triage top-down by severity and stop when the yield dies.
+- **Only two clear hallucinations** across ~50 verified candidates. The bigger risks turned out to be modes 4 and 5 above (stale and misattributed), not invention.
+- The findings that mattered most were **not the ones the reports ranked highest**. Three of the four severe bugs surfaced while investigating an adjacent, lower-ranked item: a secret-redaction filter that protected almost nothing, an exit code that was structurally unreachable, and a deploy path broken end to end. **Follow the thread when a small finding smells structural.**
+
+### Derive, never restate
+
+Any inventory in a prompt, a doc, or this file is a snapshot that rots. Derive every list from
+the repo at audit time and show the command that produced it. This is not theoretical: the
+2026-08-07 sync audit was handed a known-surface list naming
+`aqueduct/executor/capabilities.yml` — a path that does not exist (declarations live per-engine)
+— and caught it only because it was required to derive rather than copy. The same rule applies
+to counts: never report a number you did not compute.
+
 Common false positives this guards against (all observed): "missing pytest marker" when `conftest.py` auto-marks; "convert this `ValueError`" when it's a pydantic validator; "stale assertion" when a wrapper re-raises the right type or the file is already migrated; "pyspark violation" when the import is lazy/in-function; "stale Phase artifact" in a location where AGENTS.md allows it.
 
 Three hallucination MODES confirmed in the 2026-07-03 pending-audit verification — the verification pass must test each candidate against all three explicitly:
@@ -22,6 +40,11 @@ Three hallucination MODES confirmed in the 2026-07-03 pending-audit verification
 1. **Grep-without-context.** An `rg` hit cited as a violation, but the line is docstring/comment prose, or the cited line ALREADY uses the enum/helper the finding demands, or a keyword match gets an invented usage context. Gate: read ±10 lines and classify the hit as code / docstring / serialization-boundary BEFORE reporting.
 2. **Drop-in-equivalence assumption.** "Helper X already exists, replace hand-rolled Y" without checking signature/vocabulary compatibility. Gate: before proposing a replacement, diff the two signatures/key-sets and state the mapping.
 3. **Failure-scenario invention contradicted by nearby code.** The failure story assumes a divergence the code already prevents, or the proposed fix breaks documented intent. Gate: the failure scenario must survive the imports and docstrings of the cited file.
+
+Two further modes, both confirmed during the 2026-08-03/07 triage of this skill's own output:
+
+4. **Stale claim — true when written, false at HEAD.** A finding describes a real defect that a later pass already fixed. Two of these reached the triage stage in one batch (`config.py`'s "raw `warnings.warn` bypass sites" were already routed through `emit()`, with a comment saying so). Costs more than a hallucination: the fixer "fixes" working code. Gate: **confirm the defect still exists at HEAD before changing anything** — reproduce it, don't just read the cited line. Reports carry a date; the repo has moved since.
+5. **Misattributed location — right defect, wrong file.** The redaction audit reported "the root-logger filter does not scrub tracebacks" against `redaction.py`; the filter actually lives in `cli/__init__.py`. The defect was real and, once traced, far more severe than reported. **This mode is lethal under per-unit decomposition**: a unit agent scoped to `redaction.py` finds nothing at the cited line and drops a true finding as a false positive. Gate: when a candidate's cited line does not contain the thing described, search for the described thing before dropping it — then record it as a cross-unit handoff (below), not as a dropped candidate.
 
 ## Domain skills — the checklist sources
 
@@ -86,7 +109,22 @@ Every unit agent prompt contains, verbatim-shaped:
 
 ## Verification pass (mandatory, unchanged)
 
-The orchestrator owns precision. Every candidate in every returned unit report must survive the gate before the report is persisted: re-read flagged rows, apply neutralizers, confirm at HEAD, drop hallucinated rows (the 3 modes), attach failure scenarios. Unit agents return candidates; the orchestrator is the final verdict. Do this with the strongest model available.
+The orchestrator owns precision. Every candidate in every returned unit report must survive the gate before the report is persisted: re-read flagged rows, apply neutralizers, confirm at HEAD, drop hallucinated rows (the 5 modes), attach failure scenarios. Unit agents return candidates; the orchestrator is the final verdict. Do this with the strongest model available.
+
+## Cross-unit handoffs — the cost of module isolation
+
+Per-unit scoping is what makes this skill precise, and it is also its one structural blind spot:
+**a bug whose symptom and cause live in different units belongs to neither agent.** Measured
+instance — the most severe finding of the entire 2026-08 run (a secret-redaction filter attached
+to the root logger *object*, so every record propagated from a named logger went unredacted) was
+invisible to the `redaction` unit (the filter is not in that file) and off-topic for the `cli`
+unit (it reads as a redaction concern). It surfaced only because the redaction unit's
+misattributed row was passed to the cli unit as an explicit handoff.
+
+So: a unit agent that finds a defect **outside** its scope must never silently drop it and must
+never edit it. It records a `## Cross-unit handoffs` section — `file:line`, what is wrong, and
+which unit owns it. The orchestrator routes each handoff into the owning unit's brief as a
+**pre-verified item**, not as a fresh candidate. Reports without that section are incomplete.
 
 ## Report artifacts — one file per unit
 
@@ -148,6 +186,48 @@ All unit agents are independent — spawn them in parallel batches of 8–10 (to
 
 The user may scope by unit ("audit just cli/ and config.py"), by batch ("only the top-level files"), or by domain inside a unit ("audit executor's pyspark discipline"). Default = full inventory.
 
+## Triage phase — consuming the reports
+
+Detection produces reports; **triage is a separate pass with its own rules**, and it is where the
+value is realised. Run it in batches grouped by FILE OWNERSHIP, not by report count, so no two
+batches can edit the same file. Serialize the batches.
+
+Per report, in order:
+
+1. Read it. Verify every finding at HEAD before believing it — all five hallucination modes,
+   especially **stale** (mode 4).
+2. Fix what survives, top-down by severity. Stop when yield dies.
+3. `git mv` the report to `.dev/AUDITS/triaged/`. Note `.dev/` is gitignored, so this move is
+   not committable — that is expected, not a failure.
+
+Non-negotiables for a triage agent, each learned by having it go wrong:
+
+- **Commit after every report.** A host process died mid-run with ~15 files of uncommitted work
+  across four packages. Nothing was lost, but only by luck.
+- **Stage by explicit path. Never `git add -A`.** The tree routinely carries unrelated in-flight
+  changes owned by the user.
+- **No destructive git, ever** — no `checkout --`, `reset --hard`, `stash`, `clean`. An agent
+  destroyed uncommitted work with `git checkout --` to undo a formatting change.
+- **Memory discipline.** Never run the full suite (~3700 tests, spawns Spark JVMs). Scope pytest
+  to the directories touched, one at a time; no xdist. Concurrent agents each running full suites
+  OOM-killed the host. Prefer `--collect-only` when the question is about selection, not behavior.
+- **Run pytest through `rtk proxy`.** A shell hook otherwise rewrites and filters pytest output;
+  this produced one wrong conclusion (a ~200-file false positive) before it was noticed. Never
+  conclude "absent" from truncated output.
+- **Do not verify only with `-m "not spark"`.** Every coordinator check in one session used that
+  exclusion, so spark-marked tests never ran locally and CI caught two regressions as a result.
+- A test added during triage must assert the claim its docstring makes.
+  `tests/test_meta_quality.py::test_no_zero_assertion_tests` rejects a bare call with a
+  `# must not raise` comment — and it caught a triage agent doing exactly that.
+- A guard added during triage must be **falsifiable**: reintroduce the bug, confirm the guard
+  fails and names the offender, then revert. Per AGENTS.md's meta-test rule.
+
 ## Post-audit
 
 After fixes, update AGENTS.md prevention rules if a bug class recurs across units — the per-module layout makes cross-module repetition visible. Reports stay in `.dev/AUDITS/pending/` until triaged; move triaged ones to `.dev/AUDITS/triaged/`. The audit skill is the detection layer; AGENTS.md is the prevention layer.
+
+Two companion audits exist alongside the per-unit sweep and answer questions this decomposition
+cannot: a **sync-surface audit** (every place two artifacts must agree, whether a guard enforces
+it, and whether they agree today) and an **extensibility inventory** (every closed set, its
+extension path, and the real cost to add one member). Both are derivation-first and read-only.
+They catch drift *between* units, where per-unit isolation is weakest.
