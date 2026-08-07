@@ -75,6 +75,54 @@ def test_server_module_top_level_is_sdk_free():
             assert line != stripped, f"top-level SDK import: {stripped!r}"
 
 
+def test_import_aqueduct_mcp_leaves_sdk_out_of_sys_modules():
+    """AGENTS.md's stdio-server section claims a `sys.modules` check backs
+    the "import aqueduct.mcp never pulls the SDK" contract, alongside the
+    source-scan test above — mirrors test_dashboard_cli.py's parallel check
+    for `streamlit`. Runs in a clean subprocess so an unrelated test that
+    already imported `mcp`/`anyio` elsewhere in the same process can't mask
+    a real regression here."""
+    import subprocess
+    import sys
+
+    r = subprocess.run(
+        [sys.executable, "-c",
+         "import aqueduct.mcp, sys; "
+         "assert 'mcp' not in sys.modules, 'import aqueduct.mcp pulled the mcp SDK'; "
+         "assert 'anyio' not in sys.modules, 'import aqueduct.mcp pulled anyio'"],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 0, r.stderr
+
+
+def test_server_module_import_surface_is_registry_and_redaction_only():
+    """Stronger structural guarantee than the write-marker grep below: parse
+    every `aqueduct.*` import in server.py (module-level and inside function
+    bodies, e.g. the lazy `from aqueduct import redaction`) and assert none
+    reaches outside the registry/redaction surface. A future write API
+    referenced under a name the marker grep doesn't recognise (e.g. a new
+    `record_run(`) still can't reach this module unless it is also imported
+    here — the marker list is a rot-prone second copy of this check."""
+    import ast
+
+    import aqueduct.mcp.server as srv
+
+    tree = ast.parse(inspect.getsource(srv))
+    aqueduct_imports: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("aqueduct"):
+            for alias in node.names:
+                aqueduct_imports.add(f"{node.module}.{alias.name}")
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.startswith("aqueduct"):
+                    aqueduct_imports.add(alias.name)
+
+    allowed_prefixes = ("aqueduct.tools.registry.", "aqueduct.redaction")
+    for imp in aqueduct_imports:
+        assert imp.startswith(allowed_prefixes), f"unexpected aqueduct import in server.py: {imp}"
+
+
 def test_server_module_has_no_write_api_references():
     """Read-only stays structural: the server imports only the registry."""
     import aqueduct.mcp.server as srv
@@ -231,3 +279,29 @@ def test_session_explicit_config_path_beats_server_flag(tmp_path):
 
     res = _run_session(_build_server(config_path=str(bad_cfg)), script)
     assert res.isError is False  # client's explicit config_path won
+
+
+def test_session_explicit_null_config_path_is_not_overridden(tmp_path, monkeypatch):
+    """A client sending `{"config_path": null}` is stating "use the default
+    aqueduct.yml lookup" (the tool's own default, and its JSON-schema default)
+    — the server flag must not clobber that explicit choice. Before the fix
+    this was indistinguishable from "key absent" (`kwargs.get(...) is None`
+    is true either way), so an explicit null silently inherited the server's
+    --config instead of client-set value winning, as AGENTS.md documents."""
+    pytest.importorskip("mcp")
+    from aqueduct.mcp.server import _build_server
+
+    bad_cfg = tmp_path / "bad.yml"
+    bad_cfg.write_text("aqueduct_config: '1.0'\nstores: [not, a, dict]\n")
+
+    # No aqueduct.yml at CWD → load_config(None) resolves to all-defaults,
+    # not the server's malformed bad_cfg.
+    cwd = tmp_path / "no_config_here"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+
+    async def script(session):
+        return await session.call_tool("list_runs", {"config_path": None})
+
+    res = _run_session(_build_server(config_path=str(bad_cfg)), script)
+    assert res.isError is False  # explicit null used the default, not bad_cfg

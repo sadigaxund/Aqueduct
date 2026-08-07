@@ -544,8 +544,10 @@ REAL loader, never a string comparison).
 | `__init__.py` | Re-export shim (`serve`, `build_tool_declarations`); top-level `import aqueduct.mcp` must never pull the SDK |
 
 Package is named `aqueduct/mcp/` (not `mcp_`) — absolute imports mean an
-`import mcp` inside it still resolves the SDK; verified by a structural test
-plus the `sys.modules` check in `tests/test_mcp/test_server.py`.
+`import mcp` inside it still resolves the SDK; verified by a source-scan
+structural test (`test_server_module_top_level_is_sdk_free`) plus a
+subprocess `sys.modules` check (`test_import_aqueduct_mcp_leaves_sdk_out_of_sys_modules`),
+both in `tests/test_mcp/test_server.py`.
 
 ## Git & Commit Conventions
 

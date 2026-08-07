@@ -81,7 +81,7 @@ def _build_server(config_path: str | None = None):
             config_path is not None
             and tool is not None
             and "config_path" in tool.params_schema.get("properties", {})
-            and kwargs.get("config_path") is None
+            and "config_path" not in kwargs
         ):
             kwargs["config_path"] = config_path
         try:
