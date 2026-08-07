@@ -83,6 +83,12 @@ edges:
         f001 = [f for f in findings if f.rule_id == "AQ-LINT001"]
         assert len(f001) == 1
         assert f001[0].module_id == "orphan"
+        # Regression (audit 2026-08-01, failure_taxonomy #2 — advice-rot
+        # message): an orphaned Channel DOES get scheduled and aborts the
+        # run ("Channel has no main-port incoming edges") — it is not
+        # skipped like an orphaned Probe. The message must say so.
+        assert "will not execute" not in f001[0].message
+        assert "run will fail" in f001[0].message
 
     def test_single_module_no_finding(self, tmp_path):
         p = bp_yml("""
@@ -254,6 +260,74 @@ edges:
         findings = run_lint(bp)
         assert not any(f.rule_id == "AQ-LINT004" for f in findings)
 
+    def test_schema_qualified_distinct_relations_clean(self, tmp_path):
+        """Regression (audit 2026-08-01): keying on `tbl.name` alone treated
+        `sales.orders` and `hr.orders` — two distinct, fully-qualified
+        relations that happen to share a bare table name — as a self-join."""
+        p = bp_yml("""
+aqueduct: "1.0"
+id: lint_sj_qualified
+name: SelfJoinQualified
+modules:
+  - id: src
+    type: Ingress
+    label: Src
+    config: {format: parquet, path: d.parquet}
+  - id: ch
+    type: Channel
+    label: Ch
+    config:
+      op: sql
+      query: "SELECT * FROM sales.orders JOIN hr.orders ON sales.orders.id = hr.orders.id"
+  - id: sink
+    type: Egress
+    label: Sink
+    config: {format: parquet, path: d2.parquet}
+edges:
+  - from: src
+    to: ch
+  - from: ch
+    to: sink
+""")
+        bp = parse(str(p))
+        findings = run_lint(bp)
+        assert not any(f.rule_id == "AQ-LINT004" for f in findings)
+
+    def test_subquery_scoped_reference_clean(self, tmp_path):
+        """Regression (audit 2026-08-01): `find_all(exp.Table)` on the whole
+        statement counted a table inside a nested subquery as a second
+        reference to the outer table of the same name — `t JOIN (SELECT *
+        FROM t) sub` is a legal, non-ambiguous query (the inner `t` is
+        scoped to `sub`), not a self-join collision."""
+        p = bp_yml("""
+aqueduct: "1.0"
+id: lint_sj_subquery
+name: SelfJoinSubquery
+modules:
+  - id: src
+    type: Ingress
+    label: Src
+    config: {format: parquet, path: d.parquet}
+  - id: ch
+    type: Channel
+    label: Ch
+    config:
+      op: sql
+      query: "SELECT * FROM src JOIN (SELECT * FROM src) sub ON src.id = sub.id"
+  - id: sink
+    type: Egress
+    label: Sink
+    config: {format: parquet, path: d2.parquet}
+edges:
+  - from: src
+    to: ch
+  - from: ch
+    to: sink
+""")
+        bp = parse(str(p))
+        findings = run_lint(bp)
+        assert not any(f.rule_id == "AQ-LINT004" for f in findings)
+
 
 # ── AQ-LINT010: cartesian join ─────────────────────────────────────────────────
 
@@ -404,6 +478,44 @@ edges:
         findings = run_lint(bp)
         assert not any(f.rule_id == "AQ-LINT011" for f in findings)
 
+    def test_select_star_into_spillway_egress_detected(self, tmp_path):
+        """Regression (audit 2026-08-01): the downstream map only followed
+        `port == "main"` edges (an include-list), so a Channel's `spillway`
+        edge into a quarantine Egress — a documented pattern — was invisible
+        to this rule even though it is a direct data feed into an Egress."""
+        p = bp_yml("""
+aqueduct: "1.0"
+id: lint_star_spillway
+name: StarSpillway
+modules:
+  - id: src
+    type: Ingress
+    label: Src
+    config: {format: parquet, path: d.parquet}
+  - id: ch
+    type: Channel
+    label: Ch
+    spillway: quarantine
+    config:
+      op: sql
+      query: "SELECT * FROM src"
+  - id: quarantine
+    type: Egress
+    label: Quarantine
+    config: {format: parquet, path: d2.parquet, mode: append}
+edges:
+  - from: src
+    to: ch
+  - from: ch
+    to: quarantine
+    port: spillway
+""")
+        bp = parse(str(p))
+        findings = run_lint(bp)
+        f011 = [f for f in findings if f.rule_id == "AQ-LINT011"]
+        assert len(f011) == 1
+        assert f011[0].module_id == "ch"
+
 
 # ── AQ-LINT012: GROUP BY mismatch ──────────────────────────────────────────────
 
@@ -456,6 +568,76 @@ modules:
     config:
       op: sql
       query: "SELECT region, SUM(amount) FROM src GROUP BY region"
+  - id: sink
+    type: Egress
+    label: Sink
+    config: {format: parquet, path: d2.parquet}
+edges:
+  - from: src
+    to: ch
+  - from: ch
+    to: sink
+""")
+        bp = parse(str(p))
+        findings = run_lint(bp)
+        assert not any(f.rule_id == "AQ-LINT012" for f in findings)
+
+    def test_window_function_no_groupby_clean(self, tmp_path):
+        """Regression (audit 2026-08-01, failure_taxonomy #3 — dangerous
+        remediation advice): `p.find(exp.AggFunc)` descended into a Window,
+        so a legal window-function query (`SUM(...) OVER (...)` needs no
+        GROUP BY) was flagged with a fix ("add a GROUP BY clause") that
+        collapses the per-row window result and changes the query's
+        meaning."""
+        p = bp_yml("""
+aqueduct: "1.0"
+id: lint_gb_window
+name: GroupByWindow
+modules:
+  - id: src
+    type: Ingress
+    label: Src
+    config: {format: parquet, path: d.parquet}
+  - id: ch
+    type: Channel
+    label: Ch
+    config:
+      op: sql
+      query: "SELECT region, SUM(amount) OVER (PARTITION BY region) AS total FROM src"
+  - id: sink
+    type: Egress
+    label: Sink
+    config: {format: parquet, path: d2.parquet}
+edges:
+  - from: src
+    to: ch
+  - from: ch
+    to: sink
+""")
+        bp = parse(str(p))
+        findings = run_lint(bp)
+        assert not any(f.rule_id == "AQ-LINT012" for f in findings)
+
+    def test_scalar_subquery_aggregate_no_groupby_clean(self, tmp_path):
+        """Regression (audit 2026-08-01): an AggFunc inside a scalar
+        subquery projection belongs to that subquery's own self-contained
+        scope, not to the outer SELECT's aggregation — a bare column
+        alongside it needs no GROUP BY on the outer query."""
+        p = bp_yml("""
+aqueduct: "1.0"
+id: lint_gb_subquery
+name: GroupBySubquery
+modules:
+  - id: src
+    type: Ingress
+    label: Src
+    config: {format: parquet, path: d.parquet}
+  - id: ch
+    type: Channel
+    label: Ch
+    config:
+      op: sql
+      query: "SELECT id, (SELECT SUM(amount) FROM other WHERE other.id = src.id) AS total FROM src"
   - id: sink
     type: Egress
     label: Sink

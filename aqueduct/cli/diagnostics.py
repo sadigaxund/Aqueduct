@@ -236,6 +236,10 @@ def lint_cmd(
     All initial rules are advisory (`warn`); a clean Blueprint and a
     warn-only result both exit 0. `--strict` promotes findings to errors so a
     non-empty result exits non-zero — wire that into CI to enforce a clean tree.
+
+    Findings are suppressible by `AQ-LINT<NNN>` rule_id via the Blueprint's
+    `warnings.suppress` block (or `--suppress-warning`/`aqueduct.yml`'s
+    `_DEFAULT_SUPPRESS`), same as every other AQ-* diagnostic.
     """
     from pathlib import Path
 
@@ -261,6 +265,20 @@ def lint_cmd(
         sys.exit(exit_codes.CONFIG_ERROR)
 
     findings = run_lint(bp)
+
+    # Suppressible like every other AQ-* diagnostic (compile warnings, the
+    # `hook_cycle` check above) — same merge as those: engine-level
+    # `_DEFAULT_SUPPRESS` (`--suppress-warning`/`aqueduct.yml`) unioned with
+    # the Blueprint's own `warnings.suppress` block, `"*"` silences all. Lint
+    # previously bypassed this entirely: `warnings.suppress: ["AQ-LINT012"]`
+    # looked identical to suppressing any other rule_id but did nothing here.
+    from aqueduct.warnings import _DEFAULT_SUPPRESS, _SUPPRESS_ALL
+
+    _lint_suppress = set(_DEFAULT_SUPPRESS) | set(bp.warning_suppress)
+    if _SUPPRESS_ALL not in _lint_suppress:
+        findings = [f for f in findings if f.rule_id not in _lint_suppress]
+    else:
+        findings = []
 
     def _sev(f) -> str:
         return "error" if strict else f.severity

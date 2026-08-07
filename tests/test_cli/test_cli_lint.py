@@ -93,6 +93,39 @@ class TestLintCliText:
         assert result.exit_code == 1
         assert "parse error" in result.output
 
+    def test_suppressed_rule_id_dropped_from_findings(self, tmp_path):
+        """Regression (audit 2026-08-01): lint findings never went through
+        `aqueduct.warnings.emit`, so a Blueprint's `warnings.suppress:
+        [AQ-LINTxxx]` — which silences every other AQ-* diagnostic —
+        silently did nothing for lint. AQ-LINT002 (empty label on `ch`)
+        suppressed; AQ-LINT011 (SELECT * into Egress) still reported."""
+        bp = tmp_path / "bp.yml"
+        bp.write_text(
+            BP_HAS_FINDINGS.replace(
+                'name: Lint Findings\n',
+                'name: Lint Findings\nwarnings:\n  suppress: ["AQ-LINT002"]\n',
+            )
+        )
+        result = RUNNER.invoke(cli, ["lint", "--format", "json", str(bp)])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        rule_ids = {f["rule_id"] for f in data["findings"]}
+        assert "AQ-LINT002" not in rule_ids
+        assert "AQ-LINT011" in rule_ids
+
+    def test_suppress_star_drops_all_findings(self, tmp_path):
+        bp = tmp_path / "bp.yml"
+        bp.write_text(
+            BP_HAS_FINDINGS.replace(
+                'name: Lint Findings\n',
+                'name: Lint Findings\nwarnings:\n  suppress: ["*"]\n',
+            )
+        )
+        result = RUNNER.invoke(cli, ["lint", "--format", "json", str(bp)])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["findings"] == []
+
 
 class TestLintCliJson:
     def test_clean_blueprint_json(self, tmp_path):

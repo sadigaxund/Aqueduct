@@ -85,7 +85,7 @@ aqueduct completion fish > ~/.config/fish/completions/aqueduct.fish
 
 ### `aqueduct lint` rules
 
-`lint` runs after a successful parse and reports static smells the schema permits. Each rule has a stable `AQ-LINT<NNN>` id and a severity. All initial rules are advisory (`warn`), a warn-only result exits `0`; `--strict` promotes findings to errors so a non-empty result exits `1` (`CONFIG_ERROR`), for CI gating. SQL rules parse Channel `op: sql` queries with sqlglot (`dialect="spark"`); unparseable SQL is skipped, never errored.
+`lint` runs after a successful parse and reports static smells the schema permits. Each rule has a stable `AQ-LINT<NNN>` id and a severity. All initial rules are advisory (`warn`), a warn-only result exits `0`; `--strict` promotes findings to errors so a non-empty result exits `1` (`CONFIG_ERROR`), for CI gating. SQL rules parse Channel `op: sql` queries with sqlglot (`dialect="spark"`); unparseable SQL is skipped, never errored. Findings are suppressible by rule_id via the Blueprint's `warnings.suppress` block (or `--suppress-warning`/`aqueduct.yml`), same as every other AQ-* diagnostic.
 
 | Rule | Severity | Flags |
 |------|----------|-------|

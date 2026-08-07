@@ -65,11 +65,21 @@ def _rule_unused_module(bp: Blueprint) -> Iterator[LintFinding]:
             touched.add(m.attach_to)
     for m in bp.modules:
         if m.id not in touched:
+            # Only a Probe without attach_to is genuinely skipped at runtime.
+            # Every other orphaned data-consuming type (Channel, Junction,
+            # Assert, Regulator, Egress) is still scheduled and raises "no
+            # main-port incoming edges" / "no main-port edge arriving" —
+            # aborting the whole run, not silently not-executing.
+            _fate = (
+                "it is orphaned and will be skipped at runtime"
+                if m.type == ModuleType.Probe
+                else "it is orphaned — the run will fail with a "
+                "\"no main-port incoming edges\" error for this module"
+            )
             yield LintFinding(
                 "AQ-LINT001", "warn",
                 f"module {m.id!r} ({m.type}) is not referenced by any edge, "
-                "depends_on, spillway, or attach_to — it is orphaned and will "
-                "not execute as part of the DAG",
+                f"depends_on, spillway, or attach_to — {_fate}",
                 m.id,
             )
 
@@ -163,13 +173,22 @@ def _rule_self_join_collision(bp: Blueprint) -> Iterator[LintFinding]:
     import sqlglot.expressions as exp
 
     for mid, query in _sql_channels(bp):
-        stmt = _parse_sql(query)
-        if stmt is None:
+        sel = _top_select(_parse_sql(query))
+        if sel is None:
             continue
-        by_name: dict[str, list[str]] = {}
-        for tbl in stmt.find_all(exp.Table):
-            by_name.setdefault(tbl.name, []).append(tbl.alias or "")
-        for name, aliases in by_name.items():
+        by_name: dict[tuple[str, str, str], list[str]] = {}
+        for tbl in sel.find_all(exp.Table):
+            # Scope to THIS SELECT's own FROM/JOIN list — a table inside a
+            # nested subquery (`JOIN (SELECT * FROM a) sub`) is scoped to
+            # that subquery, not a second reference to the outer `a`.
+            if tbl.find_ancestor(exp.Subquery) is not None:
+                continue
+            # Key on the fully-qualified name — `sales.orders` and
+            # `hr.orders` are two distinct relations that happen to share a
+            # bare table name, not a self-join.
+            key = (tbl.catalog or "", tbl.db or "", tbl.name)
+            by_name.setdefault(key, []).append(tbl.alias or "")
+        for key, aliases in by_name.items():
             if len(aliases) < 2:
                 continue
             # Collision when two references share the same alias key (an empty
@@ -177,9 +196,10 @@ def _rule_self_join_collision(bp: Blueprint) -> Iterator[LintFinding]:
             # `t a JOIN t b` is fine.
             seen: set[str] = set()
             if any(a in seen or seen.add(a) for a in aliases):  # type: ignore[func-returns-value]
+                qualified = ".".join(p for p in key if p) or key[-1]
                 yield LintFinding(
                     "AQ-LINT004", "warn",
-                    f"Channel {mid!r}: relation {name!r} is referenced "
+                    f"Channel {mid!r}: relation {qualified!r} is referenced "
                     f"{len(aliases)} times without distinct aliases — Spark "
                     "self-joins need explicit, distinct aliases or column "
                     "references are ambiguous",
@@ -222,6 +242,17 @@ def _rule_cartesian_join(bp: Blueprint) -> Iterator[LintFinding]:
             break  # one finding per channel is enough
 
 
+# Ports that carry control signals only, not data — mirrors
+# ``executor/spark/executor.py::_SIGNAL_PORTS``. Can't import that constant
+# directly: it lives in a pyspark-importing executor module, and lint.py is
+# parser-layer (pyspark-free, no executor dependency). Classify by EXCLUSION
+# of this small, closed set rather than by inclusion of `{"main"}` — an
+# include-list silently drops every non-"main" DATA port added later (e.g. a
+# Junction's own branch-name ports), the exact shape that mis-classified
+# Junction outputs in `compiler/islands.py` before it was fixed there.
+_NON_DATA_PORTS: frozenset[str] = frozenset({"signal"})
+
+
 def _rule_star_into_egress(bp: Blueprint) -> Iterator[LintFinding]:
     """AQ-LINT011 — a ``SELECT *`` Channel that feeds directly into an Egress."""
     import sqlglot.expressions as exp
@@ -231,7 +262,7 @@ def _rule_star_into_egress(bp: Blueprint) -> Iterator[LintFinding]:
         return
     downstream: dict[str, list[str]] = {}
     for e in bp.edges:
-        if e.port == "main":
+        if e.port not in _NON_DATA_PORTS:
             downstream.setdefault(e.from_id, []).append(e.to_id)
     for mid, query in _sql_channels(bp):
         if not any(t in egress_ids for t in downstream.get(mid, [])):
@@ -258,7 +289,20 @@ def _rule_groupby_mismatch(bp: Blueprint) -> Iterator[LintFinding]:
         if sel is None or sel.args.get("group"):
             continue
         projections = sel.expressions
-        has_agg = any(p.find(exp.AggFunc) for p in projections)
+        # An AggFunc nested under a Window (`SUM(x) OVER (...)`) is a window
+        # function, not a GROUP BY aggregate — Spark runs it fine with zero
+        # GROUP BY (failure_taxonomy #3: the old unqualified `p.find` treated
+        # `SUM(amount) OVER (PARTITION BY region)` as a GROUP BY violation and
+        # suggested "add a GROUP BY clause", a fix that changes the query's
+        # meaning by collapsing the per-row window result). An AggFunc nested
+        # under a Subquery belongs to that subquery's own (self-contained)
+        # scope, not to this SELECT's aggregation — a scalar subquery
+        # projection alongside a bare column is legal with no GROUP BY here.
+        has_agg = any(
+            agg.find_ancestor(exp.Window, exp.Subquery) is None
+            for p in projections
+            for agg in p.find_all(exp.AggFunc)
+        )
         has_bare_col = any(
             isinstance(p.this if isinstance(p, exp.Alias) else p, exp.Column)
             for p in projections
