@@ -12,10 +12,22 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from aqueduct.errors import AqueductError
 from aqueduct.executor.models import ExecutionResult
 
 if TYPE_CHECKING:
     from aqueduct.config import AqueductConfig
+
+
+class DeployError(AqueductError):
+    """Raised for deployment/dispatch failures in the remote-submit package.
+
+    Lives here (not in a specific submitter module) so `deploy/__init__.py`'s
+    engine-agnostic `get_submitter()` dispatch can raise it too, for a
+    user-editable `deployment.target` it doesn't recognize — never a bare
+    `NotImplementedError`/`TimeoutError` (AGENTS.md: user-reachable errors
+    raise an AqueductError subclass).
+    """
 
 
 @dataclass(frozen=True)
@@ -57,13 +69,21 @@ class Submitter(ABC):
     ) -> ExecutionResult:
         """Poll until the job finishes and map its outcome to an ExecutionResult.
 
-        Raises ``TimeoutError`` if the job does not finish within
-        *timeout_seconds*.
+        Raises ``DeployError`` if the job does not finish within
+        *timeout_seconds* — a routine, user-triggerable condition (a slow or
+        stuck remote job), not a bare ``TimeoutError``.
         """
 
     @abstractmethod
-    def fetch_logs(self, job_id: str, cfg: AqueductConfig) -> str:
-        """Retrieve the remote driver / stdout logs after completion."""
+    def fetch_logs(self, packaged: PackagedBlueprint, cfg: AqueductConfig) -> str:
+        """Retrieve the remote driver / stdout logs after completion.
+
+        Takes the ``PackagedBlueprint`` `package()` returned — not a bare
+        job id — because the artefacts' storage location is keyed by
+        whatever id `package()` assigned BEFORE the target's own job/run id
+        exists (`submit()` runs after `package()`); a submitter needs its
+        own packaging key to find its own artefacts back, not the target's.
+        """
 
     def fetch_failure_context(self, job_id: str, cfg: AqueductConfig) -> None:
         """Stub — self-healing is not supported for remote targets in v1.

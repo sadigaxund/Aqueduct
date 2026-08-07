@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from unittest import mock
 from unittest.mock import MagicMock
@@ -180,6 +181,42 @@ class TestDatabricksSubmitterSubmit:
             assert job_id == "98765"
 
     @mock.patch.dict("os.environ", {"DATABRICKS_TOKEN": "test-token"})
+    def test_submit_passes_fuse_mounted_paths_to_bootstrap(self):
+        """Regression (audit 2026-08-01): the bootstrap script's own
+        `sys.argv` parameters are opaque strings to Databricks — OUR script
+        opens them with plain `open()`/`Path`, which cannot resolve a
+        `dbfs:/` URI. `submit()` must translate blueprint/config/outcome
+        paths to their FUSE-mounted `/dbfs/...` equivalent (only
+        `python_file`, a Databricks Jobs API field Databricks itself
+        resolves, stays a `dbfs:/` URI)."""
+        from aqueduct.deploy.base import PackagedBlueprint
+
+        cfg = _make_cfg()
+        packaged = PackagedBlueprint(
+            blueprint_path="dbfs:/aqueduct/jobs/r1/blueprint.yml",
+            config_path="dbfs:/aqueduct/jobs/r1/aqueduct.yml",
+            bootstrap_path="dbfs:/aqueduct/jobs/r1/bootstrap.py",
+            run_id="r1",
+        )
+
+        with mock.patch("aqueduct.deploy.databricks.httpx.post") as mock_post:
+            mock_post.return_value = _mock_response({"run_id": 98765})
+
+            from aqueduct.deploy.databricks import DatabricksSubmitter
+            sub = DatabricksSubmitter()
+            sub.submit(packaged, cfg)
+
+            payload = mock_post.call_args.kwargs["json"]
+            task = payload["tasks"][0]
+            assert task["spark_python_task"]["python_file"] == packaged.bootstrap_path
+            params = task["spark_python_task"]["parameters"]
+            assert params[0] == "/dbfs/aqueduct/jobs/r1/blueprint.yml"
+            assert params[1] == "/dbfs/aqueduct/jobs/r1/aqueduct.yml"
+            # 3rd param is the outcome path, keyed by OUR run_id (r1), not
+            # any Databricks-assigned job id (which doesn't exist yet here).
+            assert params[2] == "/dbfs/aqueduct/jobs/r1/result.json"
+
+    @mock.patch.dict("os.environ", {"DATABRICKS_TOKEN": "test-token"})
     def test_submit_missing_databricks_config_raises(self):
         from aqueduct.config import AqueductConfig, ConfigError, DeploymentConfig, SecretsConfig
 
@@ -229,6 +266,90 @@ class TestDatabricksSubmitterPoll:
             assert result.status == "error"
             assert result.module_results[0].error == "driver error"
 
+    @mock.patch.dict("os.environ", {"DATABRICKS_TOKEN": "test-token"})
+    def test_poll_timeout_raises_deploy_error(self):
+        """Regression (audit 2026-08-01): a stuck/slow remote job used to
+        raise a bare `TimeoutError` — a routine, user-triggerable condition
+        that must surface as an `AqueductError` subclass."""
+        cfg = _make_cfg()
+
+        with mock.patch("aqueduct.deploy.databricks.httpx.get") as mock_get, \
+             mock.patch("aqueduct.deploy.databricks.time.sleep"):
+            mock_get.return_value = _mock_response({
+                "state": {"life_cycle_state": "RUNNING"},
+            })
+
+            from aqueduct.deploy.databricks import DatabricksSubmitter, DeployError
+            sub = DatabricksSubmitter()
+            with pytest.raises(DeployError, match="did not finish within"):
+                sub.poll("job-1", cfg, timeout_seconds=0)
+
+
+class TestDatabricksSubmitterFetchLogs:
+    """Regression (audit 2026-08-01): `fetch_logs` read from
+    `{_dbfs_base(job_id)}/../result.json` — keyed by the DATABRICKS-assigned
+    numeric run id (a different namespace than `package()`'s own uuid12 run
+    id, which is what every artefact was actually uploaded under) and with a
+    stray `/../` that doesn't even point at the per-run folder. No artefact
+    was ever uploaded to either path, and nothing in `submit()`'s bootstrap
+    parameters ever told the bootstrap script to write its outcome to DBFS
+    at all (it defaulted to the driver's local, ephemeral `/tmp`) — so this
+    always returned `""` in production. Fixed by keying on
+    `packaged.run_id` and having `submit()` pass a FUSE-mounted outcome path
+    the bootstrap can actually write through."""
+
+    @mock.patch.dict("os.environ", {"DATABRICKS_TOKEN": "test-token"})
+    def test_fetch_logs_reads_from_the_run_id_keyed_path(self):
+        from aqueduct.deploy.base import PackagedBlueprint
+
+        cfg = _make_cfg()
+        packaged = PackagedBlueprint(
+            blueprint_path="dbfs:/aqueduct/jobs/abc123/blueprint.yml",
+            config_path="",
+            bootstrap_path="dbfs:/aqueduct/jobs/abc123/bootstrap.py",
+            run_id="abc123",
+        )
+        outcome = {"stdout": "hello", "stderr": ""}
+        encoded = base64.b64encode(json.dumps(outcome).encode()).decode()
+
+        with mock.patch("aqueduct.deploy.databricks.httpx.get") as mock_get:
+            # `_db_read` loops on `offset` until a response signals EOF (no
+            # `data`) — a single static `return_value` would keep returning
+            # the same non-empty chunk forever regardless of `offset`.
+            mock_get.side_effect = [
+                _mock_response({"data": encoded, "bytes_read": len(encoded)}),
+                _mock_response({"data": ""}),
+            ]
+
+            from aqueduct.deploy.databricks import DatabricksSubmitter
+            sub = DatabricksSubmitter()
+            logs = sub.fetch_logs(packaged, cfg)
+
+            assert logs == "hello"
+            read_path = mock_get.call_args.kwargs["params"]["path"]
+            assert read_path == "dbfs:/aqueduct/jobs/abc123/result.json"
+            assert ".." not in read_path
+
+    @mock.patch.dict("os.environ", {"DATABRICKS_TOKEN": "test-token"})
+    def test_fetch_logs_missing_outcome_file_returns_empty(self):
+        from aqueduct.deploy.base import PackagedBlueprint
+
+        cfg = _make_cfg()
+        packaged = PackagedBlueprint(
+            blueprint_path="dbfs:/aqueduct/jobs/abc123/blueprint.yml",
+            config_path="",
+            bootstrap_path="dbfs:/aqueduct/jobs/abc123/bootstrap.py",
+            run_id="abc123",
+        )
+
+        with mock.patch("aqueduct.deploy.databricks.httpx.get") as mock_get:
+            mock_get.return_value = _mock_response(status_code=404)
+            mock_get.return_value.status_code = 404
+
+            from aqueduct.deploy.databricks import DatabricksSubmitter
+            sub = DatabricksSubmitter()
+            assert sub.fetch_logs(packaged, cfg) == ""
+
 
 class TestGetSubmitter:
     def test_databricks_returns_submitter(self):
@@ -239,15 +360,19 @@ class TestGetSubmitter:
         assert isinstance(sub, DatabricksSubmitter)
 
     def test_emr_not_implemented(self):
+        # Regression (audit 2026-08-01): a user-editable `deployment.target`
+        # value must raise an AqueductError subclass, not a bare builtin —
+        # even though config.py's validator makes this dead code on the
+        # normal `aqueduct run` path today (see get_submitter's docstring).
         cfg = _make_cfg()
-        from aqueduct.deploy import get_submitter
-        with pytest.raises(NotImplementedError, match="not yet implemented"):
+        from aqueduct.deploy import DeployError, get_submitter
+        with pytest.raises(DeployError, match="not yet implemented"):
             get_submitter("emr", cfg)
 
     def test_unknown_target_not_implemented(self):
         cfg = _make_cfg()
-        from aqueduct.deploy import get_submitter
-        with pytest.raises(NotImplementedError, match="No submitter"):
+        from aqueduct.deploy import DeployError, get_submitter
+        with pytest.raises(DeployError, match="No submitter"):
             get_submitter("unknown", cfg)
 
 

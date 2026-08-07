@@ -20,18 +20,14 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from aqueduct.deploy.base import PackagedBlueprint, Submitter
-from aqueduct.errors import AqueductError, ConfigError
+from aqueduct.deploy.base import DeployError, PackagedBlueprint, Submitter
+from aqueduct.errors import ConfigError
 from aqueduct.executor.models import ExecutionResult, ModuleResult
 
 if TYPE_CHECKING:
     from aqueduct.config import AqueductConfig
 
 logger = logging.getLogger(__name__)
-
-
-class DeployError(AqueductError):
-    """Raised for deployment/runtime failures during remote submission."""
 
 
 _BOOTSTRAP_SCRIPT = """\
@@ -207,6 +203,21 @@ class DatabricksSubmitter(Submitter):
     def _dbfs_base(self, run_id: str) -> str:
         return f"dbfs:/aqueduct/jobs/{run_id}"
 
+    @staticmethod
+    def _fuse_path(dbfs_uri: str) -> str:
+        """``dbfs:/foo/bar`` -> ``/dbfs/foo/bar`` — the path the SAME file is
+        reachable at on the cluster driver's local filesystem, via the
+        FUSE mount every Databricks Runtime cluster provides.
+
+        The ``dbfs:/`` URI scheme is a Jobs/DBFS-REST-API address; it is not
+        a real filesystem path, so passing it to the bootstrap script (which
+        runs on the driver as plain Python, using ``open()``/``Path``, not
+        the DBFS SDK) would fail to open. Every artefact `package()` uploads
+        via the REST API is ALSO visible under this mount, so the bootstrap
+        can read/write it with ordinary file I/O.
+        """
+        return "/dbfs/" + dbfs_uri.removeprefix("dbfs:/")
+
     # ── Submitter ABC ──────────────────────────────────────────────────────
 
     def package(self, blueprint_path: str, cfg: AqueductConfig) -> PackagedBlueprint:
@@ -251,15 +262,24 @@ class DatabricksSubmitter(Submitter):
         if databricks is None:
             raise ConfigError("deployment.databricks block is required for target=databricks")
 
+        # `python_file` is a Databricks Jobs API field — Databricks itself
+        # resolves the `dbfs:/` URI before invoking the entrypoint, so it
+        # stays as-is. The bootstrap's own `sys.argv` parameters are opaque
+        # strings to Databricks; OUR script opens them with plain Python
+        # `open()`/`Path`, which does not understand `dbfs:/` — those need
+        # the FUSE-mounted local-filesystem equivalent (see `_fuse_path`).
+        outcome_fuse_path = f"{self._fuse_path(self._dbfs_base(packaged.run_id))}/result.json"
         task: dict = {
             "task_key": "aqueduct-run",
             "spark_python_task": {
                 "python_file": packaged.bootstrap_path,
-                "parameters": [packaged.blueprint_path],
+                "parameters": [
+                    self._fuse_path(packaged.blueprint_path),
+                    self._fuse_path(packaged.config_path) if packaged.config_path else "",
+                    outcome_fuse_path,
+                ],
             },
         }
-        if packaged.config_path:
-            task["spark_python_task"]["parameters"].append(packaged.config_path)
 
         if databricks.cluster_id:
             task["existing_cluster_id"] = databricks.cluster_id
@@ -385,7 +405,7 @@ class DatabricksSubmitter(Submitter):
                 )
 
             if time.monotonic() >= deadline:
-                raise TimeoutError(
+                raise DeployError(
                     f"Databricks run_id={job_id} did not finish within "
                     f"{timeout_seconds:.0f}s. Last state: {life_cycle_state}"
                 )
@@ -393,9 +413,16 @@ class DatabricksSubmitter(Submitter):
             time.sleep(interval)
             interval = min(interval * _BACKOFF_FACTOR, _BACKOFF_CAP)
 
-    def fetch_logs(self, job_id: str, cfg: AqueductConfig) -> str:
-        """Read the outcome file written by the bootstrap script on DBFS."""
-        outcome_path = f"{self._dbfs_base(job_id)}/../result.json"
+    def fetch_logs(self, packaged: PackagedBlueprint, cfg: AqueductConfig) -> str:
+        """Read the outcome file the bootstrap script wrote on DBFS.
+
+        Keyed by ``packaged.run_id`` (OUR uuid12, assigned at `package()`
+        time and used for every artefact's DBFS folder) — never the
+        Databricks-assigned numeric job/run id `submit()`/`poll()` return,
+        which is a different id in a different namespace and was never the
+        folder key any artefact was actually uploaded under.
+        """
+        outcome_path = f"{self._dbfs_base(packaged.run_id)}/result.json"
         try:
             raw = self._db_read(outcome_path, cfg)
             if raw:
