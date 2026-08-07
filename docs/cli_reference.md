@@ -392,6 +392,8 @@ The build stays red while any row is `undeclared`: it is a sentinel ("nobody has
 | `4` | VALIDATION_GATE | Patch rejected by validation |
 | `5` | USAGE_ERROR | Invalid command usage |
 
+Note: Click's own usage errors (unknown flag, missing required argument) exit `2`, not `5` — Click does not know this taxonomy. Code `5` is reachable only from an Aqueduct-detected usage mistake that a command raises explicitly.
+
 ---
 
 **Tip:** Most common operations have rich built-in help. Try `aqueduct <command> --help`.

@@ -1793,6 +1793,8 @@ Aqueduct stays orchestrator-agnostic. Schedulers (Airflow, Dagster, Prefect) wra
 | 4 | VALIDATION_GATE | Patch rejected by validation |
 | 5 | USAGE_ERROR | Invalid command usage |
 
+Note: Click's own `UsageError` (unknown flag, missing required argument) exits **2**, not 5 — Click does not know this taxonomy. Code 5 is reachable only from an Aqueduct-detected usage mistake that a command raises explicitly (e.g. an unsupported `--store` value).
+
 ## **10.8 Remote-submit targets**
 
 `emr` and `dataproc` are **rejected at config‑load** in the current release.

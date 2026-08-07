@@ -16,8 +16,13 @@ Codes:
                              sandbox / explain) rejected a patch in
                              non-interactive mode
     5   USAGE_ERROR          CLI invoked with invalid flag / missing arg.
-                             Click already exits with this category; the
-                             constant is here for completeness.
+                             NOTE: Click's own `UsageError` (unknown flag,
+                             missing required argument) exits 2, not 5 —
+                             verified empirically, Click does not know this
+                             taxonomy exists. This constant is reachable only
+                             from the manual `sys.exit(exit_codes.USAGE_ERROR)`
+                             call sites for an Aqueduct-detected usage
+                             mistake (e.g. an unsupported `--store` value).
 
 Add a code by appending to this module — never reuse a retired number.
 """
