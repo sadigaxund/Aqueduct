@@ -38,8 +38,10 @@ Pure stdlib (``importlib`` + ``pathlib``) — no pyspark, no domain imports.
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import importlib.util
+import os
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
@@ -58,6 +60,22 @@ def load_module(module_path: str, base_dir: str | None = None) -> ModuleType:
         spec = importlib.util.spec_from_file_location(module_path, file_path)
         if spec is None or spec.loader is None:
             raise ImportError(f"could not load spec for {file_path}")
+        # `SourceFileLoader.exec_module` validates a __pycache__ pyc against
+        # the source's mtime, but CPython's non-hash-based pyc invalidation
+        # stores that mtime truncated to whole SECONDS — two edits to the
+        # same file inside one second are indistinguishable, so a stale pyc
+        # from the previous call reads as "still valid" and gets served
+        # instead of the just-edited source. That silently contradicts this
+        # module's own contract ("re-loaded on every call ... editing takes
+        # effect on the next call with no restart" — see the module
+        # docstring), which every caller relies on (most concretely the
+        # secrets resolver: `secrets.py::load_resolver_fn` promises a
+        # rotated/edited resolver takes effect with no restart). Removing
+        # any existing cache entry first forces a genuine recompile from the
+        # current bytes every time.
+        cached = importlib.util.cache_from_source(str(file_path))
+        with contextlib.suppress(OSError):
+            os.remove(cached)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         return mod

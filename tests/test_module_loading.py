@@ -69,3 +69,38 @@ def test_load_callable_resolves_module_and_attr(tmp_path):
 def test_load_callable_missing_module_raises():
     with pytest.raises(ImportError):
         load_callable("nope_mod_xyz.fn", None)
+
+
+def test_load_callable_no_dot_raises_value_error():
+    """A dotted path with no dot (e.g. a user typo'd ``fn:`` with just a bare
+    name) can't be split into module + attribute — rsplit('.', 1) leaves one
+    element, so unpacking raises ValueError (load_secret's docstring names
+    this explicitly as one of the three exception types callers must wrap)."""
+    with pytest.raises(ValueError):
+        load_callable("no_dot_at_all", None)
+
+
+def test_load_module_reloads_from_file_on_every_call(tmp_path):
+    """No caching / no sys.modules registration for a base_dir file load — two
+    calls after editing the file on disk both see the CURRENT contents."""
+    mod_file = tmp_path / "reloadme.py"
+    mod_file.write_text("VALUE = 1\n")
+    first = load_module("reloadme", str(tmp_path))
+    assert first.VALUE == 1
+
+    mod_file.write_text("VALUE = 2\n")
+    second = load_module("reloadme", str(tmp_path))
+    assert second.VALUE == 2
+    assert "reloadme" not in sys.modules
+
+
+def test_load_module_raises_import_error_when_spec_is_none(tmp_path, monkeypatch):
+    """A base_dir file exists but spec_from_file_location fails to produce a
+    usable spec (e.g. a loader-less/corrupt location) — surfaces as
+    ImportError, not a silent None-returning path or an AttributeError."""
+    (tmp_path / "brokenmod.py").write_text("VALUE = 1\n")
+    import importlib.util as _ilu
+
+    monkeypatch.setattr(_ilu, "spec_from_file_location", lambda *a, **k: None)
+    with pytest.raises(ImportError, match="could not load spec"):
+        load_module("brokenmod", str(tmp_path))
