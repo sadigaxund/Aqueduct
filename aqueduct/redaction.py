@@ -20,7 +20,7 @@ Sinks that call ``redact()``:
   - observability.db writes (failure_contexts.context_json, runs.error_message)
   - patch sidecar files (patches/{pending,applied}/*.json)
   - webhook payloads (surveyor/webhook.py)
-  - LLM agent request body (agent/__init__.py before httpx.post)
+  - LLM agent request body (agent/providers.py's `_call_agent`, before httpx.post)
 
 The registry is process-global by design: a secret resolved during config load
 must be scrubbable everywhere downstream without threading the registry through
@@ -31,9 +31,10 @@ from __future__ import annotations
 
 import math
 import re
-import warnings
 from collections.abc import Iterable
 from typing import Any
+
+from aqueduct.warnings import emit as _emit_warning
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -50,6 +51,13 @@ _MIN_SECRET_ENTROPY = 2.5
 
 # The placeholder substituted for each redacted occurrence.
 REDACTED_PLACEHOLDER = "[REDACTED]"
+
+# rule_id for the weak-secret diagnostic below — routed through
+# `aqueduct.warnings.emit` (not a raw `warnings.warn`) so it is suppressible
+# via `warnings.suppress: [secret-weak-redact]` in aqueduct.yml like every
+# other engine diagnostic, instead of only through the legacy `WARNING:`
+# fallback formatter.
+_WEAK_SECRET_RULE_ID = "secret-weak-redact"
 
 
 # ── Internal state ────────────────────────────────────────────────────────────
@@ -165,11 +173,11 @@ def _shannon_entropy(value: str) -> float:
 
 def _emit_weak_warning(key_hint: str | None, value: str) -> None:
     name = f"@aq.secret({key_hint!r})" if key_hint else "an @aq.secret() value"
-    warnings.warn(
-        f"AQ-WARN [secret-weak-redact] {name} resolved to a short or low-entropy "
+    _emit_warning(
+        _WEAK_SECRET_RULE_ID,
+        f"{name} resolved to a short or low-entropy "
         f"value (len={len(value)}, entropy={_shannon_entropy(value):.2f} bits/char); "
         "redaction will NOT scrub it from logs / FailureContext / patches because "
         "substring removal of common identifiers would produce too many false "
         "positives. Use a longer, higher-entropy secret to enable global redaction.",
-        stacklevel=3,
     )

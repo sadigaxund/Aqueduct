@@ -12,7 +12,16 @@ from unittest.mock import MagicMock, patch
 import click
 import pytest
 
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
+# Pure-stdlib module under test (aqueduct/redaction.py has no pyspark import);
+# every test here mocks its network/store boundaries (httpx, duckdb-in-tmp_path)
+# rather than needing a real Spark session, so this file is `unit`, not
+# `spark`/`integration`. The blanket `[spark, integration]` marker previously
+# here deselected the ENTIRE file from every CI lane: `config-tests` runs
+# `pytest ... tests/test_redaction.py -m "not spark"` (test-suite.yml), which
+# collects zero tests when every test in the file carries `spark`, and no
+# `-m spark` lane's path filter includes this file either — the redaction
+# suite silently never ran in CI.
+pytestmark = [pytest.mark.unit]
 
 from aqueduct import redaction
 from aqueduct.cli import _install_secret_redaction_hooks
@@ -53,7 +62,7 @@ def test_redaction_register_strong():
 def test_redaction_register_weak_length():
     """register("abc") -> returns False (below _MIN_SECRET_LENGTH); emits AQ-WARN [secret-weak-redact]."""
     secret = "abc"
-    with pytest.warns(UserWarning, match=r"AQ-WARN \[secret-weak-redact\]"):
+    with pytest.warns(UserWarning, match=r"\[aqueduct:secret-weak-redact\]"):
         res = redaction.register(secret, key_hint="SHORT_SECRET")
     assert res is False
     assert not redaction.is_registered(secret)
@@ -62,7 +71,7 @@ def test_redaction_register_weak_length():
 def test_redaction_register_weak_entropy():
     """register("aaaaaaaaaaaaaaaaaaaa") -> returns False (Shannon entropy below threshold); emits warning."""
     secret = "aaaaaaaaaaaaaaaaaaaa"
-    with pytest.warns(UserWarning, match=r"AQ-WARN \[secret-weak-redact\]"):
+    with pytest.warns(UserWarning, match=r"\[aqueduct:secret-weak-redact\]"):
         res = redaction.register(secret, key_hint="LOW_ENTROPY")
     assert res is False
     assert not redaction.is_registered(secret)
