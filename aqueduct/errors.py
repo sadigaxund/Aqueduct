@@ -124,18 +124,21 @@ class CapabilityScopeError(AqueductError):
       - ``CapabilityDeclarationError``: a governed leaf has no row / an
         ``undeclared`` row / an orphaned row / an illegal verdict. Fix: run
         ``aqueduct dev capabilities sync`` and declare a verdict.
-      - ``CapabilityScopeError`` (this one): a ``config.*`` leaf living under
-        an ``engine.<name>.*`` block has no
-        ``Field(..., json_schema_extra={"engine_scoped": True})`` tag in
-        ``aqueduct/config.py``. There is no valid "core" reading for a field
-        namespaced to exactly one engine, so the walker
-        (``aqueduct/executor/config_leaves.py``) raises this at REGISTRATION
-        TIME (import of each engine's ``capabilities.py``, which calls
-        ``all_config_leaves(engine=...)``) — never CI-only. Fix: either tag
-        the field ``engine_scoped: True`` (if it is genuinely engine-scoped),
-        or, for a field NOT under ``engine.<name>.*``, decide whether it
-        dispatches through an engine (tag it) or only ever executes in core
-        code paths (leave it untagged — untagged means core).
+      - ``CapabilityScopeError`` (this one): a ``config.*`` leaf has NO
+        ``Field(..., json_schema_extra={"engine_scoped": ...})`` tag at all in
+        ``aqueduct/config.py`` — there is no untagged state and no "untagged
+        means core" fallback; every leaf must carry an EXPLICIT ``True`` or
+        ``False``. A leaf living under an ``engine.<name>.*`` block is
+        additionally restricted to ``True`` — tagging it ``False`` (or
+        leaving it untagged) is a contradiction, since there is no valid
+        "core" reading for a field namespaced to exactly one engine. The
+        walker (``aqueduct/executor/config_leaves.py``) raises this at
+        REGISTRATION TIME (import of each engine's ``capabilities.py``, which
+        calls ``all_config_leaves(engine=...)``) — never CI-only. Fix: tag
+        the field ``engine_scoped: True`` if it dispatches through an engine
+        (an engine module reads it, or it reaches ``ExecutorProtocol``), or
+        ``engine_scoped: False`` if it only ever executes in core code paths
+        — the latter is illegal for a field under ``engine.<name>.*``.
 
     Raised by ``aqueduct.executor.config_leaves``.
     """
