@@ -760,6 +760,15 @@ edges: []
     cfg = tmp_path / "aqueduct.yml"
     cfg.write_text("""\
 aqueduct_config: "1.0"
+# duckdb, not the default spark engine. This test exercises the OPERATOR's
+# exit-code plumbing (HEAL_PENDING -> defer -> trigger -> resume), which is
+# engine-agnostic and never needs a real Spark session. Left on the default,
+# the run exits CONFIG_ERROR(1) ("not a registered engine") instead of
+# HEAL_PENDING(3) in the misc-tests CI lane, which installs `.[dev,llm,redis]`
+# with no spark extra, so the spark engine plugin never registers. duckdb is a
+# base dependency and registers in every lane.
+deployment:
+  engine: duckdb
 stores:
   observability:
     backend: duckdb

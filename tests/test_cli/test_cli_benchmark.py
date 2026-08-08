@@ -612,6 +612,23 @@ def test_benchmark_diff_rejects_postgres_backend(tmp_path, monkeypatch):
         "stores:\n  benchmark:\n    backend: postgres\n    path: postgresql://h/db\n"
     )
     monkeypatch.chdir(tmp_path)
+
+    # `_validate_store_backends` fail-fasts on `stores.benchmark.backend: postgres`
+    # when psycopg2 is absent, which happens BEFORE benchmark-diff's own
+    # duckdb-only check and would mask the behaviour under test. That fail-fast
+    # is correct and has its own coverage in tests/test_config.py — here we only
+    # care that a *loadable* postgres benchmark store is rejected by diff itself,
+    # so pretend the driver is installed. Without this the test passes locally
+    # (psycopg2 present) and fails in the cli-tests CI lane (psycopg2 absent).
+    import importlib.util as _importlib_util
+
+    _real_find_spec = _importlib_util.find_spec
+    monkeypatch.setattr(
+        _importlib_util,
+        "find_spec",
+        lambda name, *a, **k: object() if name == "psycopg2" else _real_find_spec(name, *a, **k),
+    )
+
     result = CliRunner().invoke(cli, ["benchmark-diff", "--config", "aqueduct.yml"])
     assert result.exit_code != 0
     assert "duckdb benchmark stores only" in result.output
