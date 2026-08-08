@@ -606,6 +606,14 @@ These rules come from the recurring failure patterns that caused the most fixes 
 ### Path anchoring
 Every path-typed field in a schema model must use `Annotated[str, FsPath()]`. Every YAML parse must go through `parse_dict(base_dir=…)`, never round-trip through temp files. A relative path resolved against the wrong base directory (CWD, /tmp, an arcade file's dir instead of the parent blueprint's) has been the single most recurring bug class — tempfile detours, sandbox replay, and arcade expansion all hit it independently before `FsPath` anchoring made it structural.
 
+### Splitting or moving a module: copy bodies VERBATIM, never reconstruct
+
+When a file is split into a package (or any code is moved between files), each function body must be copied **verbatim from a fresh full `Read` of the original**. Never retype it from memory — not even an "obvious" helper. If the original does not fit one `Read`, read it in ranges and copy each range; never fill a gap from recall.
+
+This is the one rule here addressed to how an *agent* edits rather than to how Aqueduct behaves, and it earns its place because the failure mode is invisible: a reconstructed move still imports, still exposes every expected name, and still looks correct on review. The damage only surfaces at the call site. When `doctor.py` was split into `doctor/`, five reconstructed functions shipped with wrong signatures (`check_store_backend(store_name, backend, path_or_url)` instead of the real `(label, store_cfg, *, is_kv_only)`), two fabricated import paths (`aqueduct.parser.aqtest`, `aqueduct.benchmark` — neither exists; the real code does an inline yaml parse plus `aqueduct.surveyor.scenario.load_scenario`), and wrong `run_doctor` skip-spark text. 22 tests failed.
+
+Before declaring a move done, verify mechanically rather than by eye: `ast.parse` each new file, import the package, and diff `inspect.signature()` of every moved public function against its call sites (`grep 'fn_name(' tests/`). Confirm every import path in the new file names a module that actually exists.
+
 ### User-code imports go through `infra/module_loading.py`
 Any feature that imports **user-authored** code from a Blueprint/config reference (a dotted `fn:`, a `module:`+`entry:` pointer, a `module.Class` path) must use `infra.module_loading.load_callable`/`load_module` with `manifest.base_dir` — never a bare `importlib.import_module`. Bare imports only search `sys.path`, and the `aqueduct` console script never has the blueprint's directory there — a sibling `.py` next to the blueprint is invisible. This exact bug shipped independently 5 times (secrets resolver, custom Assert, custom Probe pointer, python UDF, custom DataSource) before being fixed once at the root (see failure_taxonomy.md #11). Bare `import_module` remains correct only for engine-internal/bundled modules (e.g. `udf.py`'s bundled-cloudpickle probe).
 
