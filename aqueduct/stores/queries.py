@@ -139,10 +139,13 @@ class PlanMetricRow:
 def _duckdb_files(obs_path: str | None, store_dir: str | None, root: str) -> list[tuple[str, Path]]:
     """All DuckDB observability files → (blueprint_id, path).
 
-    Covers: ``--store-dir`` override, else the routing base directory (the
-    configured ``path`` when set, the default root otherwise) — per-blueprint
-    files at ``<base>/<blueprint_id>/observability.db``. 2.0 removed the
-    explicit-single-file mode and the pre-routing flat-file fallback.
+    ``base`` is the routing directory: ``--store-dir`` when given, else the
+    configured ``path``, else the default root — both resolve identically
+    (docs/specs.md §10.4.1: ``--store-dir`` is "same per-blueprint split, but
+    under your directory"). Per-blueprint files at
+    ``<base>/<blueprint_id>/observability.db`` are discovered by globbing;
+    a flat ``<base>/observability.db`` (a store written directly at the
+    routing root, e.g. a single-pipeline ``--store-dir``) is also included.
     """
     out: list[tuple[str, Path]] = []
     seen: set[Path] = set()
@@ -153,13 +156,11 @@ def _duckdb_files(obs_path: str | None, store_dir: str | None, root: str) -> lis
             seen.add(path)
             out.append((bp, path))
 
-    if store_dir:
-        add("", Path(store_dir) / DEFAULT_OBS_DB_FILENAME)
-        return out
-    base = Path(obs_path) if obs_path else Path(root)
+    base = Path(store_dir) if store_dir else (Path(obs_path) if obs_path else Path(root))
     if base.is_dir():
         for sub in sorted(base.glob(f"*/{DEFAULT_OBS_DB_FILENAME}")):
             add(sub.parent.name, sub)
+    add("", base / DEFAULT_OBS_DB_FILENAME)
     return out
 
 

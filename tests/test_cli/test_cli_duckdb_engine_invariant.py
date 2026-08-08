@@ -18,6 +18,7 @@ by inspection:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -90,3 +91,72 @@ def test_on_failure_command_hook_fires_on_a_real_duckdb_run(tmp_path):
     assert marker.exists(), (
         "on_failure command hook did not fire on a real duckdb run\n" + result.output
     )
+
+
+_ROUTING_BP = """\
+aqueduct: '1.0'
+id: obs_routing_regression
+name: Obs Routing Regression
+modules:
+  - id: src
+    type: Ingress
+    label: Src
+    config: {{format: csv, path: {in_path}}}
+  - id: sink
+    type: Egress
+    label: Sink
+    config: {{format: csv, path: {out_path}, mode: overwrite}}
+edges:
+  - from: src
+    to: sink
+"""
+
+_ROUTING_CFG = """\
+aqueduct_config: "1.0"
+
+deployment:
+  engine: duckdb
+"""
+
+
+def test_run_store_dir_then_report_store_dir_finds_the_run(tmp_path):
+    """`aqueduct run --store-dir X` routes to `X/<blueprint_id>/observability.db`
+    (docs/specs.md §10.4.1 — --store-dir is a routing BASE, same as the
+    configured path). `aqueduct report --store-dir X` must resolve through
+    the SAME contract, not a flat `X/observability.db` — the whole bug in one
+    round trip: write with --store-dir, then read with the identical
+    --store-dir and find the run."""
+    in_path = tmp_path / "in.csv"
+    in_path.write_text("a,b\n1,2\n3,4\n")
+    out_path = tmp_path / "out.csv"
+
+    bp = tmp_path / "bp.yml"
+    bp.write_text(
+        _ROUTING_BP.format(in_path=in_path, out_path=out_path), encoding="utf-8"
+    )
+    cfg = tmp_path / "aqueduct.yml"
+    cfg.write_text(_ROUTING_CFG, encoding="utf-8")
+
+    store_dir = tmp_path / "store"
+    run_id = "obs-routing-regression-run"
+    runner = CliRunner()
+
+    run_result = runner.invoke(
+        cli,
+        ["run", str(bp), "--config", str(cfg), "--store-dir", str(store_dir),
+         "--run-id", run_id],
+    )
+    assert run_result.exit_code == exit_codes.SUCCESS, run_result.output
+
+    # The write side routed per-blueprint under store_dir, per the contract.
+    assert (store_dir / "obs_routing_regression" / "observability.db").exists()
+
+    report_result = runner.invoke(
+        cli,
+        ["report", run_id, "--config", str(cfg), "--store-dir", str(store_dir),
+         "--format", "json"],
+    )
+    assert report_result.exit_code == exit_codes.SUCCESS, report_result.output
+    payload = json.loads(report_result.output)
+    assert payload["run_id"] == run_id
+    assert payload["status"] == "success"

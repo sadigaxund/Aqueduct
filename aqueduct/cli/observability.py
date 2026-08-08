@@ -41,7 +41,7 @@ def _store_not_found(
     """
     from aqueduct.stores.read import _OBS_ROUTING_ROOT
     if store_dir:
-        searched = f"{store_dir}/observability.db"
+        searched = f"{store_dir}/*/observability.db"
     else:
         _base = None
         if cfg is not None:
@@ -742,20 +742,26 @@ def runs(
         # 2.0: duckdb path = routing base directory; per-blueprint files at
         # <base>/<blueprint_id>/observability.db. Explicit-file mode and the
         # pre-routing flat `.aqueduct/observability.db` fallback are gone.
+        # --store-dir names the SAME routing base (docs/specs.md §10.4.1),
+        # not a flat file — it resolves through the identical logic below.
         candidates: list[Path] = []
         if store_dir:
-            c = Path(store_dir) / "observability.db"
-            if c.exists():
-                candidates.append(c)
+            _base = Path(store_dir)
         else:
             from aqueduct.stores.read import _OBS_ROUTING_ROOT
             _base = Path(cfg.stores.observability.path or _OBS_ROUTING_ROOT)
-            if blueprint_id:
-                c = _base / blueprint_id / "observability.db"
-                if c.exists():
-                    candidates.append(c)
-            if not candidates:
-                candidates = sorted(_base.glob("*/observability.db"))
+        if blueprint_id:
+            c = _base / blueprint_id / "observability.db"
+            if c.exists():
+                candidates.append(c)
+        if not candidates:
+            candidates = sorted(_base.glob("*/observability.db"))
+        if not candidates:
+            # Flat store written directly at the routing root (e.g. a
+            # single-pipeline --store-dir with no per-blueprint nesting).
+            flat = _base / "observability.db"
+            if flat.exists():
+                candidates.append(flat)
         if not candidates:
             click.echo("No runs found (no observability.db files discovered)")
             return

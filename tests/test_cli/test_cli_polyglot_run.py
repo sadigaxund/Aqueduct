@@ -131,14 +131,10 @@ stores:
     )
     assert result.exit_code == 0, result.output
 
-    # `aqueduct run --store-dir X` treats X as a ROUTING base and nests
-    # `X/<blueprint_id>/observability.db`; `report --store-dir X` (unlike
-    # `run`) opens `X/observability.db` literally, no nesting — point it at
-    # the nested directory `run` actually wrote to.
     report_result = runner.invoke(
         cli,
         ["report", run_id, "--config", str(config_path),
-         "--store-dir", str(store_dir / "polyglot_report_test"), "--format", "json"],
+         "--store-dir", str(store_dir), "--format", "json"],
     )
     assert report_result.exit_code == 0, report_result.output
     payload = json.loads(report_result.output)

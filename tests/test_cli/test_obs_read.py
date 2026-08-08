@@ -127,7 +127,10 @@ def test_write_dir_location_only_dir(tmp_path):
 
 
 def test_write_dir_cli_store_dir_wins(tmp_path):
-    assert resolve_obs_store_dir(_cfg(path="anything"), "beta", store_dir=str(tmp_path)) == tmp_path
+    """--store-dir wins over the configured path AND is itself a routing base
+    (docs/specs.md §10.4.1: "same per-blueprint split, but under your
+    directory") — not the per-blueprint directory verbatim."""
+    assert resolve_obs_store_dir(_cfg(path="anything"), "beta", store_dir=str(tmp_path)) == tmp_path / "beta"
 
 
 def test_open_obs_write_creates_per_blueprint_file(tmp_path):
