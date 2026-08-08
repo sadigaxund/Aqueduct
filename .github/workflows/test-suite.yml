@@ -156,6 +156,9 @@ jobs:
               - 'aqueduct/infra/module_loading.py'
               - 'aqueduct/integrations/airflow/**'
               - 'aqueduct/executor/capabilities.py'
+              - 'aqueduct/compiler/warnings/**'
+              - 'aqueduct/executor/spark/warnings/**'
+              - 'aqueduct/templates/default/aqueduct.yml.template'
               - '.github/workflows/**'
               - 'requirements/**'
               - 'pyproject.toml'
@@ -169,6 +172,7 @@ jobs:
               - 'tests/test_module_loading.py'
               - 'tests/test_overrides.py'
               - 'tests/test_utils.py'
+              - 'tests/test_template_warning_sync.py'
 
   # ── Unit-test layer — fast, no Spark needed ──────────────────────────
 
@@ -652,7 +656,7 @@ jobs:
       - run: pip install -e ".[dev,llm,redis]"
       - run: |
           set +e
-          pytest tests/test_airflow.py tests/test_backlog.py tests/test_infra_http.py tests/test_lint.py tests/test_meta_ci.py tests/test_meta_quality.py tests/test_models.py tests/test_module_loading.py tests/test_overrides.py tests/test_utils.py -m "not spark" --junitxml=results.xml
+          pytest tests/test_airflow.py tests/test_backlog.py tests/test_infra_http.py tests/test_lint.py tests/test_meta_ci.py tests/test_meta_quality.py tests/test_models.py tests/test_module_loading.py tests/test_overrides.py tests/test_utils.py tests/test_template_warning_sync.py -m "not spark" --junitxml=results.xml
           rc=$?
           python scripts/ci-summary.py results.xml --name "Misc"
           exit $rc

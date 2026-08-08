@@ -845,12 +845,13 @@ agent:
 # Available compile-time rule IDs (registry: aqueduct/compiler/warnings/):
 #   kafka_checkpoint_stale, nondeterministic_fanout,
 #   count_col_likely_count_star, file_format_no_repartition,
-#   jdbc_missing_partition
+#   jdbc_missing_partition, custom_probe_driver_code,
+#   spillway_port_mismatch
 # Legacy compile-time rules, also suppressible:
 #   delivery_append_retry_dupes, perf_probe_sample_full_scan,
 #   perf_incremental_watermark_scan, perf_python_udf_row_at_a_time,
 #   perf_delta_append_no_partition, perf_multi_consumer_no_cache,
-#   perf_hadoop_fs_in_options
+#   perf_hadoop_fs_in_options, cross_engine_handoff_io
 # (maintenance_optimize_non_delta was escalated to a compile ERROR —
 #  deterministic runtime failure; not suppressible.)
 # Session-startup rules (registry: aqueduct/executor/spark/warnings/):
