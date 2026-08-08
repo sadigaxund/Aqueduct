@@ -70,3 +70,19 @@ def test_app_handles_empty_stores(tmp_path, monkeypatch):
     monkeypatch.delenv("AQ_DASH_CONFIG", raising=False)
     at = AppTest.from_file(_APP, default_timeout=30).run()
     assert not at.exception  # empty fleet must not crash
+
+
+def test_quality_tab_spillway_volume_not_hidden_by_keyword_filter(seeded_store_dir):
+    """Regression: `quarantine_volumes()` returns any module with
+    records_written > 0 across the fleet — its own docstring: "Falls back
+    to all records_written per blueprint/run so rising volumes are still
+    visible." A prior version of the Quality tab's Spillway Volume panel
+    re-filtered that result to module_ids containing a hardcoded keyword set
+    (quarantine/spill/reject/bad/error). Neither of this fixture's modules
+    (`src`, `sink`) matches any keyword, so the old filter silently hid both
+    and rendered "No spillway rows recorded yet." even though the query
+    returned real rows (records_written=10 for each)."""
+    at = AppTest.from_file(_APP, default_timeout=30).run()
+    assert not at.exception
+    captions = [c.value for c in at.caption]
+    assert "No spillway rows recorded yet." not in captions

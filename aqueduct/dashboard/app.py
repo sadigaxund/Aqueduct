@@ -25,6 +25,7 @@ import streamlit as st
 
 _md = "\u2014"  # em-dash, pre-computed for Python 3.11 f-string compat
 
+from aqueduct.executor.models import ExecutionStatus  # noqa: E402  (intentional mid-file import)
 from aqueduct.redaction import redact  # noqa: E402  (intentional mid-file import)
 from aqueduct.stores import queries as q  # noqa: E402  (intentional mid-file import)
 
@@ -166,15 +167,30 @@ def _blueprint_handle_map(handles):
             for r in q.list_runs(h.store, limit=500):
                 bp_to_handle.setdefault(r.blueprint_id, h)
         except Exception:
+            # Best-effort fan-out across every discovered store: this is a
+            # read-only viewer with no repair action available, so one
+            # unreadable store must not blank the whole page — but it must
+            # not vanish from OTHER stores' results either, hence per-store
+            # (not per-page) catch-and-continue.
             continue
     return bp_to_handle
 
 def _st_blob(handle, path_str: str, blueprint_id: str = "") -> None:
-    """Read a blob via the configured object store, redact, and display."""
+    """Read a blob via the configured object store, redact, and display.
+
+    ``blueprint_id`` is accepted for context/future use only — it must NOT be
+    appended to the Postgres branch's root. The write side
+    (``Surveyor._blob_store()`` → ``make_blob_store(backend, location,
+    self._store_dir)``) roots every blob under ``store_dir`` verbatim, with
+    no per-blueprint segment, because Postgres has exactly one handle for
+    every blueprint (unlike DuckDB's one-file-per-blueprint layout, where
+    ``duckdb_path.parent`` already IS the per-blueprint directory). Appending
+    ``blueprint_id`` here read from ``<store_dir>/<blueprint_id>/blobs/...``
+    while the write side used ``<store_dir>/blobs/...`` — every blob lookup
+    on Postgres + ``--store-dir`` silently failed with "Could not load blob".
+    """
     from aqueduct.stores.object_store import make_blob_store
-    root = handle.duckdb_path.parent if handle.duckdb_path else None
-    if root is None and handle.blob_root and blueprint_id:
-        root = handle.blob_root / blueprint_id
+    root = handle.duckdb_path.parent if handle.duckdb_path else handle.blob_root
     if root is None:
         st.caption("Blob viewing not supported for this backend.")
         return
@@ -294,6 +310,9 @@ def _collect_runs(handles):
                 runs.append(r)
                 owners.append(h)
         except Exception:
+            # Same best-effort fan-out justification as _blueprint_handle_map
+            # above: a read-only viewer, no repair action, one bad store
+            # must not blank every OTHER store's runs from the Runs tab.
             continue
     order = sorted(range(len(runs)), key=lambda i: runs[i].started_at or "", reverse=True)
     return [runs[i] for i in order], [owners[i] for i in order]
@@ -311,6 +330,9 @@ def _duration(started: str | None, finished: str | None) -> str:
             return f"{secs}s"
         return f"{secs // 60}m {secs % 60}s"
     except Exception:
+        # A malformed/unexpected timestamp string must render as "unknown
+        # duration", not crash the Runs tab for every other row \u2014 there is
+        # no user action to take on a formatting quirk in stored data.
         return "\u2014"
 
 
@@ -327,7 +349,10 @@ def _runs_tab(handles):
     fc1, fc2 = st.columns([3, 2])
     bps = sorted({r.blueprint_id for r in runs})
     pick_bp = fc1.multiselect("Filter blueprint", bps, placeholder="all blueprints")
-    pick_status = fc2.selectbox("Filter status", ["all", "success", "error", "skipped"])
+    pick_status = fc2.selectbox(
+        "Filter status",
+        ["all", ExecutionStatus.SUCCESS, ExecutionStatus.ERROR, ExecutionStatus.SKIPPED],
+    )
     keep = [
         i for i, r in enumerate(runs)
         if (not pick_bp or r.blueprint_id in pick_bp)
@@ -378,12 +403,14 @@ def _runs_tab(handles):
              "bytes_read": _v(prof.get(m.module_id), "bytes_read"),
              "bytes_out": _v(prof.get(m.module_id), "bytes_written"),
              "duration_ms": _v(prof.get(m.module_id), "duration_ms"),
-             "error": (m.error or "")[:200]}
+             "error": redact((m.error or "")[:200])}
             for m in det.modules
         ], formats={"duration_ms": "{:,}", "rows_out": "{:,}", "bytes_out": "{:,}",
                     "records_read": "{:,}", "bytes_read": "{:,}"})
 
-        if run.status == "error" or any(m.status == "error" for m in det.modules):
+        if run.status == ExecutionStatus.ERROR or any(
+            m.status == ExecutionStatus.ERROR for m in det.modules
+        ):
             fc = q.failure_context(owner.store, run.run_id)
             if fc is not None:
                 head = f"**module** `{fc.failed_module}`"
@@ -395,7 +422,7 @@ def _runs_tab(handles):
                 if fc.suggested_columns:
                     st.markdown("**suggested columns:** "
                                 + ", ".join(f"`{c}`" for c in fc.suggested_columns))
-                st.code(fc.error_message or "(no message)", language="text")
+                st.code(redact(fc.error_message) or "(no message)", language="text")
                 if fc.stack_trace:
                     with st.expander("Stack trace"):
                         _st_blob(owner, fc.stack_trace, run.blueprint_id)
@@ -409,7 +436,7 @@ def _runs_tab(handles):
                 for m in det.modules:
                     if m.error:
                         st.markdown(f"**`{m.module_id}`**")
-                        st.code(m.error, language="text")
+                        st.code(redact(m.error), language="text")
 
     with mt3:
         mod_ids = sorted({p.module_id for p in det.profile})
@@ -535,7 +562,11 @@ def _runs_tab(handles):
                     rows = p.get("rows") or []
                     if rows:
                         st.markdown(f"**{s.started_at[:19]}** — {len(rows)} rows")
-                        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+                        # Sampled rows are stored unredacted (they're real
+                        # data, not error text) — a registered secret that
+                        # happens to appear in sampled data must still be
+                        # scrubbed here, the one place this payload renders.
+                        st.dataframe(pd.DataFrame(redact(rows)), width="stretch", hide_index=True)
             elif sig_type == "data_freshness":
                 rows_l = []
                 for s in reversed(sigs):
@@ -582,7 +613,11 @@ def _runs_tab(handles):
                 for s in reversed(sigs):
                     p = s.payload
                     st.markdown(f"**{s.started_at[:19]}**")
-                    st.json(p)
+                    # Custom-signal payloads are arbitrary plugin output,
+                    # stored unredacted (executor/spark/probe.py writes it
+                    # verbatim) — this render is the one place it's safe to
+                    # scrub a registered secret before it reaches the browser.
+                    st.json(redact(p))
 
 
 def _lineage_tab(handles):
@@ -940,7 +975,7 @@ def _quality_tab(cfg, store_dir):
     if af:
         af_df = pd.DataFrame([
             {"run": a.run_id[:8], "blueprint": a.blueprint_id,
-             "rule": a.error_type, "error": a.error_message[:120]}
+             "rule": a.error_type, "error": redact(a.error_message[:120])}
             for a in af
         ])
         _table(af_df.to_dict("records"), status_cols=())
@@ -964,11 +999,18 @@ def _quality_tab(cfg, store_dir):
         st.caption("No assert failures recorded yet.")
 
     st.markdown("**Spillway Volume**")
+    # `quarantine_volumes()`'s own docstring: "Falls back to all
+    # records_written per blueprint/run so rising volumes are still
+    # visible" — that fallback IS the query's documented contract, not a
+    # noisy default to be narrowed back down. A prior version of this panel
+    # re-filtered the result to module_ids containing a hardcoded keyword
+    # set (quarantine/spill/reject/bad/error) — an include-list that hid
+    # every legitimately-named spillway sink outside those five words (e.g.
+    # `outliers_delta`) and silently defeated the fallback the query exists
+    # to provide. Trust the query's own contract instead of re-filtering it.
     qv = q.quarantine_volumes(cfg, store_dir=store_dir)
-    qv_filt = [v for v in qv if any(k in v.module_id.lower()
-                                     for k in ("quarantine", "spill", "reject", "bad", "error"))]
-    if qv_filt:
-        qv_rows = sorted(qv_filt, key=lambda v: v.started_at)
+    if qv:
+        qv_rows = sorted(qv, key=lambda v: v.started_at)
         qv_df = pd.DataFrame([
             {"run": v.run_id[:8], "blueprint": v.blueprint_id,
              "module": v.module_id, "spillway rows": v.records_written,
@@ -1160,7 +1202,9 @@ def _quality_tab(cfg, store_dir):
                 rows = p.get("rows") or []
                 if rows:
                     st.markdown(f"**{s.started_at[:19]}** — {len(rows)} rows")
-                    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+                    # See the counterpart render in _performance_tab: sampled
+                    # rows are stored unredacted, so this render is scrubbed.
+                    st.dataframe(pd.DataFrame(redact(rows)), width="stretch", hide_index=True)
 
         elif sig_type == "data_freshness":
             rows_l = []
@@ -1209,7 +1253,8 @@ def _quality_tab(cfg, store_dir):
             for s in reversed(sigs):
                 p = s.payload
                 st.markdown(f"**{s.started_at[:19]}**")
-                st.json(p)
+                # See the counterpart render in _performance_tab.
+                st.json(redact(p))
 
     else:
         st.caption("No blueprints found.")
