@@ -41,7 +41,14 @@ from pathlib import Path
 
 import yaml
 
-from aqueduct.executor.capabilities import AQ_ENGINES_ENTRYPOINT_GROUP, Support
+from aqueduct.errors import UnknownEngineError
+from aqueduct.executor.capabilities import (
+    AQ_ENGINES_ENTRYPOINT_GROUP,
+    CAPABILITY_REGISTRY,
+    NO_ENGINES_HINT,
+    Support,
+    load_engines,
+)
 from aqueduct.executor.capability_leaves import all_leaves, execution_leaves
 from aqueduct.executor.config_leaves import all_config_leaves
 
@@ -129,7 +136,9 @@ def resolve_test_id(test_id: str, repo_root: Path | None = None) -> tuple[bool, 
     return False, f"unrecognized node id shape: {test_id!r}"
 
 
-def governed_leaves(engine: str | None = None) -> frozenset[str]:
+def governed_leaves(
+    engine: str | None = None, *, require_registered: bool = True
+) -> frozenset[str]:
     """Blueprint-grammar leaves ∪ engine-config leaves — the checklist.
 
     Q4 step 2: ``all_config_leaves()`` now yields only ``engine_scoped: True``
@@ -141,7 +150,46 @@ def governed_leaves(engine: str | None = None) -> frozenset[str]:
     another engine. ``engine=None`` returns the full engine-scoped union
     (every engine's ``engine.<name>.*`` leaves included) — used for
     reference/spot-check purposes, never for validating one engine's table.
+    That meaning of ``None`` is unchanged by the check below.
+
+    ``require_registered`` (default ``True``): when ``engine`` is not
+    ``None``, the name must belong to an already-registered engine (checked
+    via ``load_engines()`` + ``CAPABILITY_REGISTRY``, the same seam
+    ``get_capabilities()``/``get_protocol()`` validate through), or this
+    raises ``UnknownEngineError``. Without this, an unrecognised name —
+    a typo (``'duckdb_'``), wrong case (``'SPARK'``), or a bogus string —
+    silently fell through ``all_config_leaves()``'s owner filter to "no
+    engine owns any of these positional leaves", which reads exactly like a
+    real, valid engine that happens to own zero ``engine.<name>.*`` config
+    leaves. Nothing raised, nothing warned: the caller got a plausible but
+    wrong leaf set. That is a bad foundation for anything gating behaviour
+    on this checklist (e.g. a per-engine config-patch allowlist).
+
+    Pass ``require_registered=False`` only for the two cases that are
+    legitimately about an engine that is NOT registered yet: ``scaffold()``
+    generating a brand-new engine's checklist before it has an entry point
+    (the whole point of the command), and ``check()``/``sync()`` walking a
+    declaration ``discover_declarations()`` found on disk for an engine that
+    has been scaffolded but not yet wired to an ``aqueduct.engines`` entry
+    point (see that function's docstring — "the state a new engine spends
+    its first hours in").
     """
+    if engine is not None and require_registered:
+        load_engines()
+        if engine not in CAPABILITY_REGISTRY:
+            registered = sorted(CAPABILITY_REGISTRY)
+            if not registered:
+                raise UnknownEngineError(
+                    f"cannot validate engine {engine!r}: {NO_ENGINES_HINT}",
+                    engine=engine,
+                    engines=registered,
+                )
+            raise UnknownEngineError(
+                f"unknown engine {engine!r} — no capability declaration "
+                f"registered. Registered engines: {registered}",
+                engine=engine,
+                engines=registered,
+            )
     return all_leaves() | all_config_leaves(engine=engine)
 
 
@@ -275,7 +323,11 @@ def check(paths: list[Path] | None = None) -> list[DeclarationReport]:
     exec_leaves = execution_leaves()
     reports: list[DeclarationReport] = []
     for path in paths if paths is not None else discover_declarations():
-        leaves = governed_leaves(engine=_engine_name(path))
+        # require_registered=False: discover_declarations() deliberately finds
+        # a capabilities.yml an engine has scaffolded but not yet wired to an
+        # `aqueduct.engines` entry point ("the state a new engine spends its
+        # first hours in") — check()/sync() must still be able to walk it.
+        leaves = governed_leaves(engine=_engine_name(path), require_registered=False)
         rows = load_rows(path)
         missing_test_links: list[str] = []
         dangling_test_links: list[tuple[str, str, str]] = []
@@ -450,7 +502,9 @@ def scaffold(engine: str, out: Path | str | None = None, force: bool = False) ->
     if target.exists() and not force:
         raise FileExistsError(target)
 
-    leaves = sorted(governed_leaves(engine=engine))
+    # require_registered=False: scaffold's whole purpose is generating a
+    # checklist for an engine that has no entry point / registration yet.
+    leaves = sorted(governed_leaves(engine=engine, require_registered=False))
     body = "".join(f"  {leaf}: {UNDECLARED}\n" for leaf in leaves)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(SCAFFOLD_HEADER.format(engine=engine, n=len(leaves)) + body, encoding="utf-8")

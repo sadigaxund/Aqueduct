@@ -51,8 +51,10 @@ def test_scaffold_emits_every_leaf_all_undeclared(tmp_path):
     rows = _rows(out)
     # Q4 step 2: a scaffolded engine's checklist is ITS OWN — no core leaves,
     # no other engine's engine.<name>.* leaves (e.g. engine.spark.master_url
-    # is Spark's alone, never toyengine's to declare).
-    assert set(rows) == set(governed_leaves(engine="toyengine"))
+    # is Spark's alone, never toyengine's to declare). require_registered=False
+    # throughout this file: "toyengine" is never registered by design — that
+    # is exactly the pre-registration state `scaffold` exists for.
+    assert set(rows) == set(governed_leaves(engine="toyengine", require_registered=False))
     assert {_verdict(v) for v in rows.values()} == {Support.UNDECLARED.value}
 
     header = out.read_text(encoding="utf-8")
@@ -74,16 +76,16 @@ def test_scaffolded_engine_cannot_register_until_verdicts_are_filled_in(tmp_path
     )
 
     with pytest.raises(CapabilityDeclarationError) as exc:
-        load_declaration(out, governed_leaves(engine="toyengine"))
+        load_declaration(out, governed_leaves(engine="toyengine", require_registered=False))
     assert "UNDECLARED" in str(exc.value)
     assert "aqueduct dev capabilities sync" in str(exc.value)
     assert "Reinstall" not in str(exc.value)  # wrong advice for this state
-    assert len(exc.value.leaves) == len(governed_leaves(engine="toyengine"))
+    assert len(exc.value.leaves) == len(governed_leaves(engine="toyengine", require_registered=False))
 
     # …and once every row is a real verdict, the same file loads.
     text = out.read_text(encoding="utf-8").replace(": undeclared", ": unsupported")
     out.write_text(text, encoding="utf-8")
-    caps = load_declaration(out, governed_leaves(engine="toyengine"))
+    caps = load_declaration(out, governed_leaves(engine="toyengine", require_registered=False))
     assert caps.engine == "toyengine"
     assert all(c.support is Support.UNSUPPORTED for c in caps.table.values())
 
@@ -120,7 +122,7 @@ def test_check_fails_and_names_the_gap(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(tooling, "discover_declarations", lambda extra=None: [decl])
     monkeypatch.setattr(
-        tooling, "governed_leaves", lambda engine=None: frozenset({"feature.a", "feature.new"})
+        tooling, "governed_leaves", lambda engine=None, **_: frozenset({"feature.a", "feature.new"})
     )
 
     result = CliRunner().invoke(cli, ["dev", "capabilities", "check"])
@@ -137,7 +139,7 @@ def test_sync_appends_undeclared_and_never_invents_a_verdict(tmp_path, monkeypat
     decl.write_text("engine: toy\nleaves:\n  feature.a: supported\n", encoding="utf-8")
     monkeypatch.setattr(tooling, "discover_declarations", lambda extra=None: [decl])
     monkeypatch.setattr(
-        tooling, "governed_leaves", lambda engine=None: frozenset({"feature.a", "feature.new"})
+        tooling, "governed_leaves", lambda engine=None, **_: frozenset({"feature.a", "feature.new"})
     )
 
     result = CliRunner().invoke(cli, ["dev", "capabilities", "sync"])
@@ -166,7 +168,7 @@ def test_sync_prunes_orphans_by_default(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     monkeypatch.setattr(tooling, "discover_declarations", lambda extra=None: [decl])
-    monkeypatch.setattr(tooling, "governed_leaves", lambda engine=None: frozenset({"feature.a"}))
+    monkeypatch.setattr(tooling, "governed_leaves", lambda engine=None, **_: frozenset({"feature.a"}))
 
     result = CliRunner().invoke(cli, ["dev", "capabilities", "sync"])
     assert result.exit_code == 0
@@ -186,7 +188,7 @@ def test_sync_no_prune_flag_reports_orphans_without_deleting(tmp_path, monkeypat
         encoding="utf-8",
     )
     monkeypatch.setattr(tooling, "discover_declarations", lambda extra=None: [decl])
-    monkeypatch.setattr(tooling, "governed_leaves", lambda engine=None: frozenset({"feature.a"}))
+    monkeypatch.setattr(tooling, "governed_leaves", lambda engine=None, **_: frozenset({"feature.a"}))
 
     result = CliRunner().invoke(cli, ["dev", "capabilities", "sync", "--no-prune"])
     assert result.exit_code == 0

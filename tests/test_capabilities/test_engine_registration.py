@@ -14,6 +14,7 @@ explicit capability import anywhere.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 import textwrap
@@ -292,3 +293,82 @@ def test_doctor_capability_check_no_longer_skips_for_spark():
     assert results
     for r in results:
         assert not (r.status == "skip" and "no capability declaration registered" in r.detail), r
+
+
+# ── governed_leaves() must fail closed on an unrecognised engine name ────────
+#
+# Bug: governed_leaves(engine=...) (and the config_leaves.all_config_leaves()
+# layer it threads `engine` through to) did no validation at all. A typo'd
+# package-dir name, wrong case, or a plain bogus string all silently fell
+# through all_config_leaves()'s owner filter to "this engine owns none of the
+# positional engine.<name>.* leaves" — indistinguishable from a real,
+# registered engine that legitimately owns zero of them. Nothing raised,
+# nothing warned; the caller got a plausible but wrong leaf set. Confirmed at
+# HEAD before the fix: governed_leaves(engine="duckdb_") (a natural typo of
+# the real "duckdb") returned the SAME 318-leaf set as
+# governed_leaves(engine="totally_bogus_engine") — 10 fewer than the real
+# "duckdb" (328), and those 10 are exactly `config.engine.duckdb.*`.
+
+
+def test_governed_leaves_rejects_an_unregistered_engine_name():
+    from aqueduct.errors import UnknownEngineError
+    from aqueduct.executor.capability_tooling import governed_leaves
+
+    for bad in ("duckdb_", "SPARK", "totally_bogus_engine", ""):
+        with pytest.raises(UnknownEngineError, match=re.escape(f"unknown engine {bad!r}")) as exc:
+            governed_leaves(engine=bad)
+        assert exc.value.engine == bad
+        assert exc.value.engines == ["duckdb", "spark"]
+
+
+def test_governed_leaves_still_returns_the_right_count_for_a_real_engine():
+    """A registered name keeps working exactly as before — and a typo of it
+    must not silently collapse to the same (smaller) leaf set."""
+    from aqueduct.errors import UnknownEngineError
+    from aqueduct.executor.capability_tooling import governed_leaves
+
+    duckdb_leaves = governed_leaves(engine="duckdb")
+    spark_leaves = governed_leaves(engine="spark")
+    unfiltered = governed_leaves(engine=None)
+
+    # engine=None keeps its documented meaning: the full union, unfiltered —
+    # unaffected by the new validation.
+    assert unfiltered >= duckdb_leaves
+    assert unfiltered >= spark_leaves
+    assert duckdb_leaves != spark_leaves
+
+    with pytest.raises(UnknownEngineError):
+        governed_leaves(engine="duckdb_")  # the exact typo from the bug report
+
+
+def test_governed_leaves_require_registered_false_bypasses_validation():
+    """The documented escape hatch for the two legitimate unregistered-engine
+    callers (scaffold(); check()/sync() on a not-yet-wired declaration) still
+    accepts any string, unvalidated — this is not a regression, it's the
+    contract `require_registered=False` exists to keep."""
+    from aqueduct.executor.capability_tooling import governed_leaves
+
+    # Must not raise for a name that will never be registered.
+    leaves = governed_leaves(engine="some_engine_that_will_never_exist", require_registered=False)
+    assert isinstance(leaves, frozenset)
+    assert len(leaves) > 0
+
+
+def test_governed_leaves_empty_registry_says_reinstall(monkeypatch, _reset_engine_load_cache):
+    """Mirrors get_capabilities()'s empty-registry diagnosis: a stale install
+    (no aqueduct.engines entry points visible) must not read as 'engine name
+    is wrong' — governed_leaves() reuses the same NO_ENGINES_HINT message."""
+    import importlib.metadata
+
+    from aqueduct.errors import UnknownEngineError
+    from aqueduct.executor.capability_tooling import governed_leaves
+
+    caps = _reset_engine_load_cache
+    caps.CAPABILITY_REGISTRY.clear()
+    monkeypatch.setattr(importlib.metadata, "entry_points", lambda **kw: [])
+
+    with pytest.raises(UnknownEngineError) as excinfo:
+        governed_leaves(engine="spark")
+
+    assert excinfo.value.no_engines_registered is True
+    assert "no execution engines are registered at all" in str(excinfo.value)

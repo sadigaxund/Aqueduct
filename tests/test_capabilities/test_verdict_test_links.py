@@ -195,7 +195,7 @@ def test_sync_preserves_existing_tests_key(tmp_path, monkeypatch):
     monkeypatch.setattr(tooling, "discover_declarations", lambda extra=None: [decl])
     monkeypatch.setattr(
         tooling, "governed_leaves",
-        lambda engine=None: frozenset({"feature.a", "feature.new"}),
+        lambda engine=None, **_: frozenset({"feature.a", "feature.new"}),
     )
 
     tooling.sync()
