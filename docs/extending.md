@@ -518,6 +518,83 @@ gate go green, and never downgrade a verdict just to dodge it — an honestly
 unbacked `supported` leaf should fail this test until you either write the
 missing test or admit the leaf is not really proven yet.
 
+## Other extension seams
+
+An engine is the largest seam and the only unstable one. There are smaller ones,
+and knowing which is which matters more than it sounds: some are open and
+documented, some are deliberately closed forever, and some are closed only
+because nobody has needed them open yet.
+
+### Bring your own code — five seams, one loader
+
+Five places accept user-authored Python from a Blueprint or config reference:
+
+| Seam | How it is referenced |
+| :- | :- |
+| Custom Probe signal | `type: custom` + `module:` / `entry:` |
+| Custom Assert rule | `type: custom` + `fn:` |
+| Python UDF | `udf_registry` entry with `module:` / `entry:` |
+| Custom DataSource | `format: custom` + `class:` (Spark 4.0+ `DataSource`) |
+| Secrets resolver | `secrets.provider: custom` + a resolver pointer |
+
+All five resolve through **`aqueduct/infra/module_loading.py`** against
+`manifest.base_dir`, never a bare `importlib.import_module`. That is a single
+chokepoint on purpose: a bare import only searches `sys.path`, and the
+`aqueduct` console script never has your Blueprint's directory on it, so a
+sibling `.py` next to the Blueprint is invisible. That exact bug shipped five
+times independently — once per seam — before being fixed once at the root.
+
+`aqueduct dev scaffold <kind> --name <name>` generates a working stub for any of
+them (`probe`, `assert`, `udf`, `datasource`, `secrets`). The stubs are rendered
+from the live contracts rather than from template strings, and each one is
+acceptance-tested by loading it through the real seam — so a scaffold that stops
+matching its seam fails the build.
+
+### Entry-point groups
+
+Four exist; only one is live. **Being named is not being loaded** — check before
+assuming a group works.
+
+| Group | State |
+| :- | :- |
+| `aqueduct.engines` | **Live.** Declared in `pyproject.toml`, resolved by `executor/capabilities.py::load_engines`. This guide is about writing one. |
+| `aqueduct.probe_signals` | **Resolved but unused.** `executor/probe_plugins.py` reads it; no package declares it. The `module:`/`entry:` pointer path carries the real load today. |
+| `aqueduct.tools` | **Reserved, not resolved.** The constant exists (`tools/registry.py`) and nothing reads it. Deliberate: a tool is code running on the driver, so custom-tool loading needs config allowlisting first. Do not implement loading without that gate. |
+| `aqueduct.actuators` | **Planned, not in code.** Phase 82 domains 3/5. |
+
+Anywhere plugin code executes on the driver, discovery alone is never
+authorization — an allowlist gates it.
+
+### Closed sets, and what extending one actually costs
+
+Most of the grammar is a finite set that the compiler validates against. Adding
+a member is usually cheap in lines and unavoidably wide in surface, because each
+one needs a capability verdict per engine:
+
+| Set | Where |
+| :- | :- |
+| Channel ops | `executor/channel_ops.py` |
+| Assert rule types / `on_fail` actions | `parser/schema.py` |
+| Junction / Funnel modes | `spark/junction.py`, `spark/funnel.py` |
+| Egress write modes, `on_new_columns` policies | `spark/egress.py` |
+| Ingress / Egress formats | `executor/capability_leaves.py` |
+| Probe signal types | `parser/schema.py` + each engine's `probe.py` |
+
+The realistic cost of one new member: the enum or frozenset value, an
+implementation in **every** registered engine, and one capability-table row with
+a verdict per engine. The build breaks until every engine has declared one —
+that is the framework working, not an obstacle. Run `aqueduct dev capabilities
+sync` and it will tell you exactly what is missing.
+
+Two sets are **closed by decision, not by accident**:
+
+- **Patch-grammar operations** (`patch/grammar.py`) are closed permanently. Replay
+  and sandbox verification depend on a finite, audited op set; an open patch
+  grammar would mean an agent could express an unbounded change, which is the
+  property this project exists to avoid.
+- **Exit codes** (`exit_codes.py`) are a v1 contract. Orchestrators branch on
+  them, so a new code is a compatibility event, not an addition.
+
 ## What this guide is not
 
 This is not a parity claim between engines. DuckDB is single-node,
