@@ -27,10 +27,12 @@ import pytest
 import aqueduct.executor.spark.capabilities  # noqa: F401 — registers "spark"
 from aqueduct.config import AqueductConfig, _warn_ignored_config_keys, load_config
 from aqueduct.executor.capabilities import (
+    CAPABILITY_REGISTRY,
     Capability,
     EngineCapabilities,
     Support,
     get_capabilities,
+    load_engines,
     register,
 )
 from aqueduct.executor.capability_leaves import all_leaves as bp_leaves
@@ -41,6 +43,21 @@ pytestmark = pytest.mark.unit
 
 _REPO = Path(__file__).resolve().parents[2]
 _GALLERY_CONFIGS = sorted((_REPO / "gallery" / "snippets").glob("*/aqueduct.yml"))
+
+_ENGINE_NS_PREFIX = "config.engine."
+
+
+def _namespaced_engine(leaf_id: str) -> str | None:
+    """Engine name a `config.engine.<name>.*` leaf belongs to, else None.
+
+    Derived from the leaf id itself, never a hand-kept list of engine names —
+    the same reason `all_config_leaves()` derives its namespace filter from the
+    `engine_scoped` tag instead of enumerating engines.
+    """
+    if not leaf_id.startswith(_ENGINE_NS_PREFIX):
+        return None
+    rest = leaf_id[len(_ENGINE_NS_PREFIX) :]
+    return rest.split(".", 1)[0] if "." in rest else None
 
 
 # ── 1. No-op proof (Spark) ──────────────────────────────────────────────────
@@ -57,17 +74,58 @@ def test_default_config_is_noop_on_spark():
 
 
 @pytest.mark.parametrize("cfg_path", _GALLERY_CONFIGS, ids=[p.parent.name for p in _GALLERY_CONFIGS])
-def test_gallery_configs_are_noop_on_spark(cfg_path):
-    """Every leaf a real gallery aqueduct.yml explicitly sets must resolve to
-    SUPPORTED on spark — checked directly against the capability table so the
-    result does not depend on any given file's own `warnings.suppress`."""
+def test_gallery_configs_set_no_dead_config_leaves(cfg_path):
+    """Every leaf a real gallery aqueduct.yml explicitly sets must be honoured
+    by SOME registered engine — checked against the capability tables directly,
+    so the result never depends on a given file's own `warnings.suppress`.
+
+    Two rules, because `engine.<name>.*` namespacing (Q4) made a single
+    spark-only rule wrong:
+
+    * An engine-NEUTRAL leaf must be SUPPORTED on spark. Unchanged, and it is
+      what catches a genuinely dead knob.
+    * A namespaced `config.engine.<name>.*` leaf must name a REGISTERED engine
+      and be SUPPORTED on THAT engine.
+
+    Why the second rule exists: every engine declares every OTHER engine's
+    namespaced keys UNSUPPORTED, which is Q4's design working as intended (a
+    foreign engine key is accepted and ignored with a suppressible
+    `engine_key_ignored` warning, never an error). Under the old
+    must-be-SUPPORTED-on-spark rule that made it impossible for any gallery
+    snippet to configure DuckDB at all — `23_table_first` needs
+    `engine.duckdb.database_path` because an unset path means `:memory:`, and
+    nothing survives between its populate script and the run.
+
+    This is not a weakening: dead config still fails, because a namespaced leaf
+    must be SUPPORTED on the engine that owns it.
+
+    On typos specifically, measured rather than assumed: an unknown engine name
+    never reaches this test. `engine.dukdb.database_path` is rejected at config
+    LOAD by pydantic's `extra="forbid"` on the `engine:` block
+    ("engine.dukdb — Extra inputs are not permitted"), so the
+    unregistered-engine branch below is defence in depth against a leaf id that
+    arrives some other way, not the primary typo guard.
+    """
     cfg = load_config(cfg_path)
     leaves = explicitly_set_config_leaves(cfg)
-    caps = get_capabilities("spark")
-    non_supported = [
-        leaf_id for leaf_id in leaves if caps.verdict(leaf_id).support != Support.SUPPORTED
-    ]
-    assert non_supported == [], f"{cfg_path} hit non-SUPPORTED config leaves on spark: {non_supported}"
+    # Resolve engines through the entry-point registry, the same seam
+    # `get_capabilities()` uses on the real compile path — so a third engine
+    # registered tomorrow is covered here with no edit to this test.
+    load_engines()
+    registered = set(CAPABILITY_REGISTRY)
+
+    dead: list[str] = []
+    for leaf_id in leaves:
+        owner = _namespaced_engine(leaf_id)
+        if owner is None:
+            if get_capabilities("spark").verdict(leaf_id).support != Support.SUPPORTED:
+                dead.append(f"{leaf_id} (engine-neutral, not SUPPORTED on spark)")
+        elif owner not in registered:
+            dead.append(f"{leaf_id} (names unregistered engine {owner!r})")
+        elif get_capabilities(owner).verdict(leaf_id).support != Support.SUPPORTED:
+            dead.append(f"{leaf_id} (not SUPPORTED on its own engine {owner!r})")
+
+    assert dead == [], f"{cfg_path} sets config leaves no engine honours: {dead}"
 
 
 def test_representative_config_emits_zero_engine_key_ignored_warnings():
