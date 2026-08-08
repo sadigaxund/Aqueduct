@@ -159,7 +159,7 @@ Full details in the [References](#references).
 
 When a pipeline fails, Aqueduct does not throw a stack trace at an LLM and hope. Healing is a staged, auditable pipeline. The model works inside a constrained grammar: it cannot write code, edit files, or run shell commands.
 
-A generated patch clears five gates before it ever touches the Blueprint. Guardrails first: deterministic policy checks on paths, operations, and confidence. Then compile-check: the patched Blueprint must still parse. Then lineage: does the patch break a downstream column consumer. Then sandbox: replay against representative data. Then a plan-regression check. They run in that order and the first failure wins:
+A generated patch clears four gates and a compile-check before it ever touches the Blueprint. Gate 1 is guardrails: deterministic policy checks on paths, operations, and confidence. The compile-check follows immediately, and the patched Blueprint must still parse. Then Gate 2, lineage: does the patch break a downstream column consumer. Gate 3, sandbox: replay against representative data. Gate 4, plan regression. They run in that order and the first failure wins:
 
 ```
 ✓ guardrails  →  ✓ compile-check  →  ✓ lineage  →  ✓ sandbox  →  ✓ plan-regression  →  patch applied
@@ -255,7 +255,7 @@ aqueduct dashboard            # opens http://localhost:8501
 <!--
   TODO(gallery): drop screenshots at docs/media/dashboard/*.png, then DELETE the
   "coming soon" <p> below and uncomment the table.
-  Use static PNGs, NOT a GIF — the dashboard is dense (tables/charts); stills read
+  Use static PNGs, NOT a GIF. The dashboard is dense (tables/charts); stills read
   sharper and load faster than a blurry tab-cycling GIF. Suggested four below.
 -->
 <!--
@@ -273,7 +273,8 @@ pip install aqueduct-core              # DuckDB engine included, no JVM needed
 pip install "aqueduct-core[spark]"     # adds Apache Spark + Delta Lake
 ```
 
-> **Requirements:** Python 3.11+. Java 17 for the `spark` extra only (`JAVA_HOME` must point to it).
+> [!NOTE]
+> Python 3.11+. Java 17 for the `spark` extra only (`JAVA_HOME` must point to it).
 > Every release is CI-tested against three pinned combos: LTS (Python 3.11 · Spark 4.1), Latest (Python 3.13 · Spark 4.1), Legacy (Python 3.12 · Spark 3.5). Live results in the [Compatibility Matrix](docs/compatibility.md).
 
 Compose extras as needed, for example `pip install "aqueduct-core[spark,airflow,aws]"`:
@@ -281,11 +282,15 @@ Compose extras as needed, for example `pip install "aqueduct-core[spark,airflow,
 | Extra | Adds | Install when |
 |---|---|---|
 | `spark` | PySpark 4 + Delta Lake | Running pipelines on Spark on this host. |
+| `duckdb` | numpy, for DuckDB Python UDFs | Writing a Python UDF that runs on DuckDB. The engine itself needs nothing. |
 | `airflow` | Apache Airflow operator shim | Scheduler / worker host; the box submitting jobs. |
 | `secrets` | AWS + GCP + Azure secret-manager SDKs (or pick `aws` / `gcp` / `azure` individually) | Resolving `@aq.secret('KEY')` against a cloud vault. |
-| `stores` | Postgres + Redis backends (or pick `postgres` / `redis` individually) | Replacing single-writer DuckDB defaults for obs / lineage / depot. |
+| `stores` | Postgres, Redis, and object-store backends (or pick `postgres` / `redis` / `object-store` individually) | Replacing single-writer DuckDB defaults for obs / lineage / depot. |
 | `llm` | `json-repair`, last-ditch recovery of malformed LLM patch JSON | Healing with small local models that emit imperfect JSON. |
-| `all` | Everything above | Single-laptop dev. |
+| `all` | Every runtime extra above, plus `databricks` | Single-laptop dev. |
+
+> [!IMPORTANT]
+> `all` covers runtime capabilities only. The two local dev tools ship separately on purpose, so a production install never pulls a web framework: `pip install "aqueduct-core[dashboard]"` for the Streamlit viewer and `pip install "aqueduct-core[mcp]"` for the MCP diagnostics server.
 
 ### A first blueprint
 
@@ -354,7 +359,7 @@ Full reference in [CLI Reference](docs/cli_reference.md).
 | Column lineage | Built-in, compile-time | Built-in | Plugin | DIY |
 | Built-in observability store | Yes (DuckDB/Postgres) | Partial | External | DIY |
 
-Aqueduct sits where a transformation engine and an autonomous repair loop meet. It is not a scheduler (pair it with Airflow via the `airflow` extra) and it is not a warehouse SQL tool.
+Aqueduct is a transformation engine with a repair loop attached. It is not a scheduler (pair it with Airflow via the `airflow` extra) and it is not a warehouse SQL tool.
 
 ## References
 
