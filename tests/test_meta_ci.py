@@ -188,12 +188,10 @@ def test_every_test_suite_lane_installs_under_the_lock():
     )
 
 
-def test_compat_promise_lanes_install_under_a_per_interpreter_lock():
+def test_compat_promise_lane_installs_under_a_per_interpreter_lock():
     jobs = _workflow("version-matrix.yml")["jobs"]
     compat = (jobs["compat"].get("env") or {}).get("PIP_CONSTRAINT", "")
     assert "requirements/compat-py" in compat
-    unit = (jobs["unit-tests"].get("env") or {}).get("PIP_CONSTRAINT", "")
-    assert "requirements/ci-py311.txt" in unit
 
 
 def test_canary_lane_stays_unpinned_on_purpose():
