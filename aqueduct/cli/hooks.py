@@ -74,6 +74,8 @@ from typing import TYPE_CHECKING, Any
 
 import click
 
+from aqueduct.parser.models import HOOK_EVENTS
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -421,7 +423,7 @@ def static_hook_check(blueprint_path: Path) -> list[str]:
             return []
         hooks = raw.get("hooks") or {}
         out: list[str] = []
-        for event in ("on_success", "on_failure", "on_patch_pending", "on_healed"):
+        for event in HOOK_EVENTS:
             for entry in hooks.get(event) or []:
                 if isinstance(entry, dict) and entry.get("blueprint"):
                     out.append(str(entry["blueprint"]))

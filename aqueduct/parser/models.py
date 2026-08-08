@@ -7,7 +7,7 @@ to produce modified copies.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from enum import StrEnum
 from typing import Any
 
@@ -287,9 +287,20 @@ class Hooks:
     on_healed: tuple[HookEntry, ...] = ()
 
     def __bool__(self) -> bool:
-        return bool(
-            self.on_success or self.on_failure or self.on_patch_pending or self.on_healed
-        )
+        return any(getattr(self, name) for name in HOOK_EVENTS)
+
+
+# The 4 `Hooks` field names, derived from the dataclass itself rather than
+# hand-copied — `compiler/models.py::Manifest.to_dict()` (hooks serialization)
+# and `cli/hooks.py` (the `hooks.blueprint:` cycle-detection pre-scan) both
+# need this exact list and used to hand-write the same 4-string tuple
+# independently. A 5th event added to `Hooks` above without also editing both
+# of those literals would silently vanish from the exported manifest AND from
+# cycle detection — the same include-list-on-a-growing-set shape AGENTS.md's
+# bug-family rule names (`compiler/islands.py`'s port set, the Assert
+# quarantine gate, ...). Deriving from `fields(Hooks)` makes that structurally
+# impossible: a new field is a member here the moment it exists.
+HOOK_EVENTS: tuple[str, ...] = tuple(f.name for f in fields(Hooks))
 
 
 @dataclass(frozen=True)

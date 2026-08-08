@@ -288,6 +288,38 @@ class TestStaticHookCheck:
         probs = hooks_mod.static_hook_check(tmp_path / "a.yml")
         assert any("not found" in p for p in probs)
 
+    def test_missing_target_reported_for_on_patch_pending_and_on_healed(self, tmp_path):
+        """Include-list bug-family regression guard: on_patch_pending and
+        on_healed are the two hook events added AFTER on_success/on_failure
+        (mid-run heal milestones vs. terminal-state events) -- exactly the
+        "newer member silently missing from a hand-copied subset" shape that
+        recurred four times elsewhere (islands.py's port set, the Assert
+        quarantine gate, ...). Every prior test in this class only exercises
+        on_success/on_failure, so this is the one place that would have
+        caught static_hook_check()'s loop reverting to a 2-event literal
+        tuple instead of HOOK_EVENTS."""
+        self._write(
+            tmp_path / "a.yml",
+            "hooks:\n"
+            "  on_patch_pending:\n    - blueprint: ghost_pending.yml\n"
+            "  on_healed:\n    - blueprint: ghost_healed.yml\n",
+        )
+        probs = hooks_mod.static_hook_check(tmp_path / "a.yml")
+        assert any("ghost_pending" in p and "not found" in p for p in probs)
+        assert any("ghost_healed" in p and "not found" in p for p in probs)
+
+    def test_hook_events_derived_from_hooks_dataclass(self):
+        """HOOK_EVENTS (parser/models.py) must track the Hooks dataclass
+        fields exactly -- the guard the two tests above depend on. Both
+        cli/hooks.py and compiler/models.py import this SAME constant
+        instead of hand-copying the 4-event tuple independently, so a 5th
+        Hooks field can't silently vanish from one of them."""
+        from dataclasses import fields
+
+        from aqueduct.parser.models import HOOK_EVENTS, Hooks
+
+        assert HOOK_EVENTS == tuple(f.name for f in fields(Hooks))
+
     def test_doctor_check_hooks(self, tmp_path):
         from aqueduct.doctor import check_hooks
         self._write(tmp_path / "plain.yml")

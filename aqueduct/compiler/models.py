@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from aqueduct.compiler.islands import Island
-from aqueduct.parser.models import AgentConfig, Edge, Hooks, Module, RetryPolicy
+from aqueduct.parser.models import HOOK_EVENTS, AgentConfig, Edge, Hooks, Module, RetryPolicy
 
 if TYPE_CHECKING:
     from aqueduct.compiler.provenance import ProvenanceMap
@@ -141,6 +141,6 @@ class Manifest:
                     }
                     for h in getattr(self.hooks, event)
                 ]
-                for event in ("on_success", "on_failure", "on_patch_pending", "on_healed")
+                for event in HOOK_EVENTS
             },
         }
