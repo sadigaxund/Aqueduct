@@ -63,14 +63,14 @@ def _mock_agent_result(patch):
 @patch("aqueduct.executor.get_executor")
 @patch("aqueduct.agent.generate_agent_patch")
 @patch("aqueduct.surveyor.surveyor.Surveyor")
+@patch("aqueduct.cli._agent_usable", return_value=True)
 def test_aggressive_mode_invalid_patch_stops_loop(
-    mock_surveyor_cls, mock_gen_patch, mock_get_executor, base_blueprint, mock_agent_patch
+    mock_agent_usable, mock_surveyor_cls, mock_gen_patch, mock_get_executor, base_blueprint, mock_agent_patch
 ):
     """
     Scenario: aggressive mode + patch produces invalid Blueprint (compile fail) -> loop stops.
     """
     runner = CliRunner()
-    patch("aqueduct.cli._agent_usable", return_value=True).start()
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
@@ -102,14 +102,14 @@ def test_aggressive_mode_invalid_patch_stops_loop(
 @patch("aqueduct.executor.get_executor")
 @patch("aqueduct.agent.generate_agent_patch")
 @patch("aqueduct.surveyor.surveyor.Surveyor")
+@patch("aqueduct.cli._agent_usable", return_value=True)
 def test_aggressive_mode_fails_then_continues(
-    mock_surveyor_cls, mock_gen_patch, mock_get_executor, base_blueprint, mock_agent_patch
+    mock_agent_usable, mock_surveyor_cls, mock_gen_patch, mock_get_executor, base_blueprint, mock_agent_patch
 ):
     """
     Scenario: aggressive mode + patch valid but re-run fails -> on_heal_failure applied (staged), loop continues.
     """
     runner = CliRunner()
-    patch("aqueduct.cli._agent_usable", return_value=True).start()
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
@@ -161,14 +161,14 @@ def test_aggressive_mode_fails_then_continues(
 @patch("aqueduct.executor.get_executor")
 @patch("aqueduct.agent.generate_agent_patch")
 @patch("aqueduct.surveyor.surveyor.Surveyor")
+@patch("aqueduct.cli._agent_usable", return_value=True)
 def test_aggressive_mode_succeeds_stops_loop(
-    mock_surveyor_cls, mock_gen_patch, mock_get_executor, base_blueprint, mock_agent_patch
+    mock_agent_usable, mock_surveyor_cls, mock_gen_patch, mock_get_executor, base_blueprint, mock_agent_patch
 ):
     """
     Scenario: aggressive mode + patch valid + re-run succeeds -> Blueprint written to disk, loop stops.
     """
     runner = CliRunner()
-    patch("aqueduct.cli._agent_usable", return_value=True).start()
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
@@ -198,14 +198,14 @@ def test_aggressive_mode_succeeds_stops_loop(
 @patch("aqueduct.executor.get_executor")
 @patch("aqueduct.agent.generate_agent_patch")
 @patch("aqueduct.surveyor.surveyor.Surveyor")
+@patch("aqueduct.cli._agent_usable", return_value=True)
 def test_trigger_agent_escalation(
-    mock_surveyor_cls, mock_gen_patch, mock_get_executor, base_blueprint, mock_agent_patch
+    mock_agent_usable, mock_surveyor_cls, mock_gen_patch, mock_get_executor, base_blueprint, mock_agent_patch
 ):
     """
     Scenario: result.trigger_agent=True + approval_mode=disabled -> effective_mode set to "human".
     """
     runner = CliRunner()
-    patch("aqueduct.cli._agent_usable", return_value=True).start()
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
@@ -235,14 +235,14 @@ def test_trigger_agent_escalation(
 @patch("aqueduct.executor.get_executor")
 @patch("aqueduct.agent.generate_agent_patch")
 @patch("aqueduct.surveyor.surveyor.Surveyor")
+@patch("aqueduct.cli._agent_usable", return_value=True)
 def test_trigger_agent_false_disabled_breaks(
-    mock_surveyor_cls, mock_gen_patch, mock_get_executor, base_blueprint
+    mock_agent_usable, mock_surveyor_cls, mock_gen_patch, mock_get_executor, base_blueprint
 ):
     """
     Scenario: result.trigger_agent=False + approval_mode=disabled -> loop breaks immediately.
     """
     runner = CliRunner()
-    patch("aqueduct.cli._agent_usable", return_value=True).start()
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
@@ -258,14 +258,14 @@ def test_trigger_agent_false_disabled_breaks(
 @patch("aqueduct.config.load_config")
 @patch("aqueduct.executor.get_executor")
 @patch("aqueduct.surveyor.surveyor.Surveyor")
+@patch("aqueduct.cli._agent_usable", return_value=True)
 def test_block_full_actions_propagation(
-    mock_surveyor_cls, mock_get_executor, mock_load_config, base_blueprint
+    mock_agent_usable, mock_surveyor_cls, mock_get_executor, mock_load_config, base_blueprint
 ):
     """
     Scenario: cfg.danger.allow_full_probe_actions=False -> block_full_actions=True passed to execute().
     """
     runner = CliRunner()
-    patch("aqueduct.cli._agent_usable", return_value=True).start()
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
@@ -296,12 +296,12 @@ def test_block_full_actions_propagation(
 
 @patch("aqueduct.agent.generate_agent_patch")
 @patch("aqueduct.executor.get_executor")
+@patch("aqueduct.cli._agent_usable", return_value=True)
 def test_trigger_agent_stays_human(
-    mock_get_executor, mock_gen_patch, base_blueprint, mock_agent_patch
+    mock_agent_usable, mock_get_executor, mock_gen_patch, base_blueprint, mock_agent_patch
 ):
     """trigger_agent=True + approval_mode=human -> stays human (no override message)"""
     runner = CliRunner()
-    patch("aqueduct.cli._agent_usable", return_value=True).start()
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
