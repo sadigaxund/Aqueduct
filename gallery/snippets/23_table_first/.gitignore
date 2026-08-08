@@ -3,3 +3,5 @@ data/output/
 spark-warehouse/
 metastore_db/
 derby.log
+demo.duckdb
+demo.duckdb.wal

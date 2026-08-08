@@ -11,6 +11,14 @@ deployment:
 engine:
   spark:
     master_url: "local[*]"
+  duckdb:
+    # Persistent catalog file so `table: demo_table`/`demo_output` survive
+    # across the separate populate.py / aqueduct-run / inspect_results.py
+    # processes — DuckDB's default `:memory:` connection is per-process and
+    # would make `table:` addressing unresolvable the instant the populating
+    # connection closes. This is DuckDB's equivalent of the Spark side's
+    # Derby-backed Hive metastore below.
+    database_path: "demo.duckdb"
 
 stores:
   observability:
