@@ -32,6 +32,8 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
+from aqueduct.stores.base import StoreConnectionError
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -157,7 +159,7 @@ class FsspecBackend(_Backend):
         try:
             import fsspec  # noqa: F401
         except ImportError as exc:  # pragma: no cover - exercised via extra
-            raise ImportError(
+            raise StoreConnectionError(
                 "Object-store backend requires fsspec. Install the extra: "
                 "pip install 'aqueduct-core[object-store]'"
             ) from exc
@@ -166,7 +168,17 @@ class FsspecBackend(_Backend):
 
         # ``url_to_fs`` returns (filesystem, stripped_path); we keep the fs and
         # rebuild full URIs per key so the same handle serves every key.
-        self._fs, _ = fsspec.core.url_to_fs(self._base)
+        try:
+            self._fs, _ = fsspec.core.url_to_fs(self._base)
+        except Exception as exc:
+            # Broad on purpose: url_to_fs dispatches to a per-scheme fsspec
+            # implementation (s3fs/gcsfs/adlfs), each raising its own
+            # driver's exception type (boto3/botocore, google-cloud, azure)
+            # for a bad URI, missing credentials, or an unreachable
+            # endpoint — there is no shared narrow type to catch across them.
+            raise StoreConnectionError(
+                f"Object-store backend could not resolve {self._base!r}: {exc}"
+            ) from exc
 
     def _uri(self, key: str) -> str:
         return f"{self._base}/{key.lstrip('/')}"
@@ -178,12 +190,25 @@ class FsspecBackend(_Backend):
             self._fs.makedirs(parent, exist_ok=True)
         except (NotImplementedError, OSError):
             pass  # object stores have no real dirs
-        with self._fs.open(uri, "wb") as fh:
-            fh.write(data)
+        try:
+            with self._fs.open(uri, "wb") as fh:
+                fh.write(data)
+        except Exception as exc:
+            # Broad on purpose (see __init__): a write failure here is a
+            # network/auth/permission condition from whichever cloud SDK
+            # backs this fs (boto3, google-cloud-storage, azure) — there is
+            # no shared narrow exception type across them, and a write
+            # failure must be surfaced, never swallowed.
+            raise StoreConnectionError(f"Object-store put({key!r}) failed: {exc}") from exc
 
     def get(self, key: str) -> bytes:
-        with self._fs.open(self._uri(key), "rb") as fh:
-            return fh.read()
+        try:
+            with self._fs.open(self._uri(key), "rb") as fh:
+                return fh.read()
+        except FileNotFoundError:
+            raise
+        except Exception as exc:
+            raise StoreConnectionError(f"Object-store get({key!r}) failed: {exc}") from exc
 
     def exists(self, key: str) -> bool:
         return bool(self._fs.exists(self._uri(key)))

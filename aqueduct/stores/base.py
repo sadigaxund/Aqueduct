@@ -33,6 +33,24 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class StoreConnectionError(AqueductError):
+    """Raised when a configured store backend cannot be reached or used.
+
+    A routine ops condition — Postgres unreachable (network/auth), a Redis
+    connection dropped or refused, a DuckDB file staying locked past the
+    retry window (or failing to open for a non-lock reason), a driver
+    package (``psycopg2``/``redis``/``fsspec``) missing at import time — must
+    surface through one catchable Aqueduct type instead of a driver-specific
+    exception (``psycopg2.OperationalError``, ``redis.exceptions.
+    ConnectionError``, a bare ``ImportError``/``RuntimeError``) with no
+    exit-code mapping. Config-time validation (``config.py:
+    _validate_store_backends``) already rejects a missing driver for the
+    common `aqueduct run` path; this class is what a direct/programmatic
+    store construction, or a live connectivity failure config-time
+    validation cannot foresee, raises instead.
+    """
+
+
 class BackendUnsupportedError(AqueductError):
     """Raised when a call site asks a backend for an operation it does not support.
 

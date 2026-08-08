@@ -16,7 +16,7 @@ import logging
 import os
 import time
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -121,6 +121,11 @@ class DatabricksSubmitter(Submitter):
             raise DeployError(
                 f"DBFS create failed for {dbfs_path!r}: {exc.response.status_code}"
             ) from exc
+        except httpx.RequestError as exc:
+            raise DeployError(
+                f"DBFS create for {dbfs_path!r} could not reach the Databricks "
+                f"workspace: {exc}"
+            ) from exc
 
         if handle is None:
             raise DeployError(f"DBFS create returned no handle for {dbfs_path!r}")
@@ -144,18 +149,16 @@ class DatabricksSubmitter(Submitter):
                 )
                 r_block.raise_for_status()
             except httpx.HTTPStatusError as exc:
-                try:
-                    httpx.post(
-                        self._api_url(cfg, "/api/2.0/dbfs/close"),
-                        headers=self._auth_header(),
-                        json={"handle": handle},
-                        timeout=10,
-                    )
-                except Exception:
-                    pass  # DBFS close-handle is best-effort cleanup on error; the real failure is the block upload
+                self._best_effort_close(handle, cfg)
                 raise DeployError(
                     f"DBFS add-block failed for {dbfs_path!r} at offset {offset}: "
                     f"{exc.response.status_code}"
+                ) from exc
+            except httpx.RequestError as exc:
+                self._best_effort_close(handle, cfg)
+                raise DeployError(
+                    f"DBFS add-block for {dbfs_path!r} at offset {offset} could not "
+                    f"reach the Databricks workspace: {exc}"
                 ) from exc
             offset += chunk_size
 
@@ -171,6 +174,28 @@ class DatabricksSubmitter(Submitter):
             raise DeployError(
                 f"DBFS close failed for {dbfs_path!r}: {exc.response.status_code}"
             ) from exc
+        except httpx.RequestError as exc:
+            raise DeployError(
+                f"DBFS close for {dbfs_path!r} could not reach the Databricks "
+                f"workspace: {exc}"
+            ) from exc
+
+    def _best_effort_close(self, handle: Any, cfg: AqueductConfig) -> None:
+        """Attempt to close a DBFS write handle after an upload failure.
+
+        Best-effort cleanup only — the real failure is the block upload that
+        triggered this, and any exception here (HTTP status, network, auth)
+        must never mask it.
+        """
+        try:
+            httpx.post(
+                self._api_url(cfg, "/api/2.0/dbfs/close"),
+                headers=self._auth_header(),
+                json={"handle": handle},
+                timeout=10,
+            )
+        except Exception:
+            pass  # best-effort cleanup on error; the real failure is the block upload
 
     def _db_read(self, dbfs_path: str, cfg: AqueductConfig) -> str:
         offset = 0
@@ -320,6 +345,10 @@ class DatabricksSubmitter(Submitter):
                 f"Job submit failed "
                 f"(status {exc.response.status_code}){detail}"
             ) from exc
+        except httpx.RequestError as exc:
+            raise DeployError(
+                f"Job submit could not reach the Databricks workspace: {exc}"
+            ) from exc
 
         run_id = r.json()["run_id"]
         logger.info("Submitted Databricks job run_id=%s", run_id)
@@ -362,6 +391,19 @@ class DatabricksSubmitter(Submitter):
                             module_id="_submitter",
                             status="error",
                             error=f"Poll failed: HTTP {exc.response.status_code}",
+                        ),
+                    ),
+                )
+            except httpx.RequestError as exc:
+                return ExecutionResult(
+                    blueprint_id="",
+                    run_id=job_id,
+                    status="error",
+                    module_results=(
+                        ModuleResult(
+                            module_id="_submitter",
+                            status="error",
+                            error=f"Poll could not reach the Databricks workspace: {exc}",
                         ),
                     ),
                 )

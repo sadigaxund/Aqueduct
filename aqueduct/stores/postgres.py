@@ -39,6 +39,7 @@ from aqueduct.stores.base import (
     DepotStore,
     ObservabilityStore,
     RelationalCursor,
+    StoreConnectionError,
     _RelationalDepotMixin,
 )
 from aqueduct.stores.ddl import DEPOT_KV_DDL
@@ -65,13 +66,17 @@ def _get_pool(dsn: str) -> Any:
         if existing is not None:
             return existing
         try:
+            import psycopg2  # type: ignore[import-not-found]
             from psycopg2.pool import ThreadedConnectionPool  # type: ignore[import-not-found]
         except ImportError as exc:
-            raise ImportError(
+            raise StoreConnectionError(
                 "Postgres stores backend requires psycopg2 — "
                 "install with `pip install aqueduct-core[postgres]`"
             ) from exc
-        pool = ThreadedConnectionPool(minconn=1, maxconn=8, dsn=dsn)
+        try:
+            pool = ThreadedConnectionPool(minconn=1, maxconn=8, dsn=dsn)
+        except psycopg2.OperationalError as exc:
+            raise StoreConnectionError(f"Postgres store unreachable: {exc}") from exc
         _POOLS[dsn] = pool
         return pool
 

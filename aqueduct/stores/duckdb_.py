@@ -21,6 +21,7 @@ from aqueduct.stores.base import (
     DepotStore,
     ObservabilityStore,
     RelationalCursor,
+    StoreConnectionError,
     _RelationalDepotMixin,
 )
 from aqueduct.stores.ddl import DEPOT_KV_DDL
@@ -46,11 +47,11 @@ def _connect_with_retry(path: Path):
             return duckdb.connect(str(path))
         except Exception as exc:  # noqa: BLE001 — only retry lock conflicts
             if "lock" not in str(exc).lower():
-                raise
+                raise StoreConnectionError(f"DuckDB store {path} could not be opened: {exc}") from exc
             last = exc
             time.sleep(min(delay, 1.0) + random.uniform(0, 0.05))
             delay *= 1.5
-    raise RuntimeError(
+    raise StoreConnectionError(
         f"DuckDB store {path} stayed locked by another process after retrying. "
         "Concurrent writers to one DuckDB file serialise — for parallel runs use a "
         f"postgres/redis depot or per-blueprint stores. (last error: {last})"

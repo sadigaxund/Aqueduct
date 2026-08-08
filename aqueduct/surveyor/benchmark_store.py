@@ -25,6 +25,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from aqueduct.errors import ConfigError
+
 if TYPE_CHECKING:
     from aqueduct.surveyor.scenario import ScenarioResult
 
@@ -126,7 +128,7 @@ class BenchmarkStore:
         path = getattr(bench_cfg, "path", None)
         if backend == "postgres":
             if not path:
-                raise ValueError(
+                raise ConfigError(
                     "stores.benchmark.backend=postgres requires stores.benchmark.path "
                     "(a libpq DSN, e.g. postgresql://user:pass@host/db)"
                 )

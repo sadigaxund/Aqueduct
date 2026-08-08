@@ -18,7 +18,7 @@ import logging
 import threading
 from typing import Any
 
-from aqueduct.stores.base import DepotStore
+from aqueduct.stores.base import DepotStore, StoreConnectionError
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ def _get_client(url: str) -> Any:
         try:
             import redis  # type: ignore[import-not-found]
         except ImportError as exc:
-            raise ImportError(
+            raise StoreConnectionError(
                 "Redis depot backend requires the redis-py package — "
                 "install with `pip install aqueduct-core[redis]`"
             ) from exc
@@ -89,8 +89,17 @@ class RedisDepotStore(DepotStore):
             return default
 
     def kv_put(self, key: str, value: str) -> None:
-        client = _get_client(self._url)
-        client.set(key, value)
+        # Unlike kv_get/kv_delete, a write failure must not be swallowed —
+        # returning silently would tell the caller its watermark/counter
+        # write succeeded when it did not. Surface it as one catchable type
+        # instead of a driver-specific redis.exceptions.* leaking raw.
+        try:
+            client = _get_client(self._url)
+            client.set(key, value)
+        except StoreConnectionError:
+            raise
+        except Exception as exc:
+            raise StoreConnectionError(f"RedisDepotStore.kv_put({key!r}) failed: {exc}") from exc
 
     def kv_delete(self, key: str) -> None:
         try:

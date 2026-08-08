@@ -3,7 +3,7 @@
 Covers:
 - BenchmarkStore dataclass construction (duckdb / postgres)
 - BenchmarkStore.from_config: duckdb + no path → default_store_path(scenarios_dir)
-- BenchmarkStore.from_config: postgres + no path → ValueError
+- BenchmarkStore.from_config: postgres + no path → ConfigError
 - BenchmarkStore.from_config: postgres + DSN → postgres store with correct label
 - BenchmarkStore.label: "postgres:benchmark" for postgres, file path for duckdb
 - persist_results / diff_latest accept BenchmarkStore OR legacy Path/str
@@ -135,9 +135,11 @@ class TestFromConfig:
         bs = BenchmarkStore.from_config(cfg, tmp_path)
         assert bs.location == path
 
-    def test_postgres_no_path_raises_value_error(self, tmp_path):
+    def test_postgres_no_path_raises_config_error(self, tmp_path):
+        from aqueduct.errors import ConfigError
+
         cfg = _cfg(backend="postgres", path=None)
-        with pytest.raises(ValueError, match="stores.benchmark.backend=postgres requires"):
+        with pytest.raises(ConfigError, match="stores.benchmark.backend=postgres requires"):
             BenchmarkStore.from_config(cfg, tmp_path)
 
     def test_postgres_with_dsn_returns_postgres_store(self, tmp_path):

@@ -22,6 +22,7 @@ def test_redis_missing_driver(monkeypatch):
     
     url = _redis_url()
     store = RedisDepotStore(url)
-    
-    with pytest.raises(ImportError, match=r"pip install aqueduct-core\[redis\]"):
+
+    from aqueduct.stores.base import StoreConnectionError
+    with pytest.raises(StoreConnectionError, match=r"pip install aqueduct-core\[redis\]"):
         store.kv_put("test", "val")

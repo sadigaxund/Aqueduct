@@ -174,11 +174,13 @@ def test_make_patch_store_local_reproduces_patches_dir(tmp_path):
 def test_make_blob_store_s3_builds_fsspec_backend():
     """An s3 location yields a FsspecBackend (fsspec is installed in CI's
     [object-store] env). With fsspec absent the constructor raises a clear
-    ImportError naming the extra."""
+    StoreConnectionError naming the extra."""
     import importlib.util
 
+    from aqueduct.stores.base import StoreConnectionError
+
     if importlib.util.find_spec("fsspec") is None:
-        with pytest.raises(ImportError, match="object-store"):
+        with pytest.raises(StoreConnectionError, match="object-store"):
             FsspecBackend("s3://bucket/x")
     else:
         blob = make_blob_store("s3", "s3://bucket/aqueduct", "/unused")

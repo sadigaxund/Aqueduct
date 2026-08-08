@@ -293,9 +293,11 @@ def benchmark(
     _persist = bench_cfg.persist
     _gate = bench_cfg.gate_on_regression
 
+    from aqueduct.errors import ConfigError
+
     try:
         bench_store = BenchmarkStore.from_config(bench_cfg, Path(scenarios_dir))
-    except ValueError as exc:
+    except ConfigError as exc:
         _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
@@ -415,7 +417,7 @@ def benchmark_diff_cmd(
         try:
             cfg = load_config(Path(config_path) if config_path else None)
             _bs = BenchmarkStore.from_config(cfg.stores.benchmark, Path("."))
-        except (ConfigError, ValueError) as exc:
+        except ConfigError as exc:
             _error(f"config error: {exc}")
             sys.exit(exit_codes.CONFIG_ERROR)
         if _bs.backend != "duckdb":
@@ -570,7 +572,7 @@ def benchmark_stats_cmd(
             store = BenchmarkStore(backend="duckdb", location=store_path_override)
         else:
             store = BenchmarkStore.from_config(cfg.stores.benchmark, anchor)
-    except ValueError as exc:
+    except ConfigError as exc:
         _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
