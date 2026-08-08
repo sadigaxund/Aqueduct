@@ -9,6 +9,45 @@ from pyspark.sql import SparkSession
 from aqueduct.executor.spark.session import make_spark_session
 
 
+def _snapshot_conf(spark):
+    """Snapshot every Spark conf key currently visible to the session.
+
+    ``RuntimeConfig.getAll`` (the obvious one-liner) is a PySpark **4.0+**
+    property — it does not exist on the pyspark 3.5 API surface at all
+    (confirmed by reading ``python/pyspark/sql/conf.py`` at tag ``v3.5.8``:
+    the class defines only ``get``/``set``/``unset``/``isModifiable``), so
+    using it here breaks the Legacy compat combo (python 3.12 / pyspark
+    3.5.8) with ``AttributeError: 'RuntimeConfig' object has no attribute
+    'getAll'`` for every test in this file.
+
+    The portable replacement is the bare SQL ``SET`` command
+    (``spark.sql("SET")``): it is a core SQL command implemented in
+    ``SetCommand.scala`` since long before Spark 3.5, and its no-argument
+    branch (``case None =>``) reads from the exact same JVM-side
+    ``SQLConf``-backed key set PySpark 4.x's ``getAll`` property reads
+    (``self._jconf.getAllAsJava()``) — verified by execution on the
+    installed pyspark 4.1.1: ``spark.sql("SET").collect()`` and
+    ``dict(spark.conf.getAll)`` return the IDENTICAL key set, zero keys
+    only on either side.
+
+    One divergence that *does* matter: ``SetCommand``'s ``case None``
+    branch passes its rows through ``SQLConf.redactOptions``, which masks
+    any key matching the ``spark.redaction.regex`` pattern (default catches
+    ``secret``/``password``/``token``/... in the key name) to the literal
+    string ``"*********(redacted)"`` — verified by execution: setting
+    ``spark.aqueduct.my_password`` and reading it back via
+    ``spark.sql("SET")`` returns the redacted placeholder, while
+    ``spark.conf.get("spark.aqueduct.my_password")`` returns the real
+    value. Snapshotting the VALUE straight from the ``SET`` row would
+    silently corrupt restore for any future test that mutates a
+    sensitively-named key — so ``SET`` is used only to enumerate the
+    portable KEY universe; each value is re-read with
+    ``spark.conf.get(key)`` (present on both 3.5 and 4.x, unredacted).
+    """
+    keys = (row[0] for row in spark.sql("SET").collect())
+    return {key: spark.conf.get(key) for key in keys}
+
+
 @pytest.fixture(autouse=True)
 def _restore_shared_session_conf(spark):
     """Every test below calls ``make_spark_session()`` directly to exercise
@@ -36,9 +75,9 @@ def _restore_shared_session_conf(spark):
     running later, regardless of which key a future test in this file
     mutates.
     """
-    before = dict(spark.conf.getAll)
+    before = _snapshot_conf(spark)
     yield
-    after = dict(spark.conf.getAll)
+    after = _snapshot_conf(spark)
     for key, value in after.items():
         if key in before and before[key] == value:
             continue
