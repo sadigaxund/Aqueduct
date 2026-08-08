@@ -37,12 +37,8 @@ def _extract_sql_lineage(
     Returns a list of dicts with keys:
       channel_id, output_column, source_table, source_column
     """
-    try:
-        import sqlglot
-        import sqlglot.expressions as exp
-    except ImportError:
-        logger.debug("sqlglot not available; skipping lineage extraction")
-        return []
+    import sqlglot
+    import sqlglot.expressions as exp
 
     rows: list[dict[str, str]] = []
 
@@ -152,20 +148,18 @@ def _functions_from_parsed_stmt(stmt: Any) -> set[str]:
 def referenced_function_names(sql: str) -> set[str] | None:
     """Every function name referenced anywhere in *sql* (a full statement).
 
-    Returns ``None`` when sqlglot is unavailable or *sql* fails to parse.
-    Callers MUST treat ``None`` as "cannot attribute" (fail closed) — never
-    as "no functions referenced". Used by the Phase 81 per-island capability
-    gate (``aqueduct/compiler/udf_attribution.py``) to attribute a registered
+    Returns ``None`` when *sql* fails to parse. Callers MUST treat ``None``
+    as "cannot attribute" (fail closed) — never as "no functions
+    referenced". Used by the Phase 81 per-island capability gate
+    (``aqueduct/compiler/udf_attribution.py``) to attribute a registered
     UDF to the island(s) whose SQL actually calls it, instead of gating
     every island against every UDF the Blueprint declares. Reuses the exact
     same sqlglot parse (``dialect="spark"``) `_extract_sql_lineage` above
     already runs — a second read of the same parse tree, not a second SQL
     parser (AGENTS.md: sqlglot is the one SQL parser).
     """
-    try:
-        import sqlglot
-    except ImportError:
-        return None
+    import sqlglot
+
     try:
         stmt = sqlglot.parse_one(sql, dialect="spark")
     except Exception as exc:
@@ -183,10 +177,8 @@ def referenced_function_names_in_expr(expr: str) -> set[str] | None:
     SAME sqlglot parser/walk handles it — still one parser, no bespoke
     fragment grammar bolted on beside it.
     """
-    try:
-        import sqlglot
-    except ImportError:
-        return None
+    import sqlglot
+
     try:
         stmt = sqlglot.parse_one(f"SELECT 1 WHERE ({expr})", dialect="spark")
     except Exception as exc:

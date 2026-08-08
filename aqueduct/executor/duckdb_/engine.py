@@ -20,7 +20,6 @@ module makes the seam easier to read.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 # Side effect: registers "duckdb" into aqueduct.executor.capabilities.CAPABILITY_REGISTRY.
@@ -76,15 +75,6 @@ _DUCKDB_EXECUTE_KWARGS: frozenset[str] = frozenset(
 )
 
 
-def load_executor() -> Callable:
-    """Return the DuckDB engine's ``execute()`` function.
-
-    Equivalent to ``get_protocol("duckdb").execute``. Imports
-    ``aqueduct.executor.duckdb_.executor`` lazily, only when actually called.
-    """
-    from aqueduct.executor.duckdb_.executor import execute
-
-    return execute
 
 
 def _execute(*args: Any, **kwargs: Any) -> ExecutionResult:
@@ -246,4 +236,4 @@ DUCKDB = ExecutorProtocol(
 register_protocol(DUCKDB)
 
 
-__all__ = ["load_executor", "DUCKDB"]
+__all__ = ["DUCKDB"]

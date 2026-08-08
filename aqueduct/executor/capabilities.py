@@ -424,7 +424,8 @@ def load_engines() -> None:
     named explicitly and no ``pyspark`` (or other engine runtime dep)
     required — entry-point modules are themselves declaration-only, deferring
     their actual executor import until called (see ``spark/engine.py``'s
-    ``load_executor()``).
+    ``_execute()``, which lazily imports ``aqueduct.executor.spark.executor``
+    inside the function body rather than at module scope).
 
     Raises:
         EnginePluginError: an entry point in the group failed to import. A

@@ -257,7 +257,8 @@ or Hudi `run_compaction`/`run_clean`, depending on the Egress `format`.
 Large payloads (`manifest_json`, `provenance_json`, `stack_trace`) are stored as
 Zstandard-compressed `.json.zst` files under `.aqueduct/observability/<bp>/blobs/<run_id>/`
 instead of inline in the DuckDB row. The DB column stores only the relative blob
-path. `blob_store.materialize()` transparently resolves blob paths to content on read.
+path. `BlobStore.materialize()` (`aqueduct.stores.object_store`) transparently
+resolves blob paths to content on read.
 
 ### `column_lineage`
 

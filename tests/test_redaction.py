@@ -331,8 +331,8 @@ def test_observability_redaction_surveyor(tmp_path):
     assert "[REDACTED]" in err_msg
     assert secret not in err_msg
     # stack_trace is a blob path (Phase 39) — materialize it
-    from aqueduct.surveyor.blob_store import materialize
-    stack = materialize(stack_path, tmp_path)
+    from aqueduct.stores.object_store import BlobStore, LocalBackend
+    stack = BlobStore(LocalBackend(tmp_path)).materialize(stack_path)
     assert "[REDACTED]" in stack
     assert secret not in stack
 

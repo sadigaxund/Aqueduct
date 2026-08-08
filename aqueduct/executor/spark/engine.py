@@ -28,7 +28,6 @@ by pulling it through ``ExecutorProtocol.prompt_rules``.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 # Side effect: registers "spark" into aqueduct.executor.capabilities.CAPABILITY_REGISTRY.
@@ -40,19 +39,6 @@ from aqueduct.executor.spark.type_render import render_spark_type
 
 if TYPE_CHECKING:
     from aqueduct.executor.models import ExecutionResult
-
-
-def load_executor() -> Callable:
-    """Return the Spark engine's ``execute()`` function.
-
-    Kept for backward compatibility with Step 1 callers; equivalent to
-    ``get_protocol("spark").execute``. Imports
-    ``aqueduct.executor.spark.executor`` (and therefore ``pyspark``) lazily,
-    only when actually called.
-    """
-    from aqueduct.executor.spark.executor import execute
-
-    return execute
 
 
 def _execute(*args: Any, **kwargs: Any) -> ExecutionResult:
@@ -175,4 +161,4 @@ SPARK = ExecutorProtocol(
 register_protocol(SPARK)
 
 
-__all__ = ["load_executor", "SPARK"]
+__all__ = ["SPARK"]

@@ -1329,45 +1329,47 @@ class TestConfidenceLogging:
 
 class TestBlobExternalisationIntegration:
     def test_externalise_writes_compressed_blob(self, tmp_path):
-        """blob_store.externalise writes a compressed blob and returns relative path."""
-        from aqueduct.surveyor.blob_store import externalise, materialize
+        """BlobStore.externalise writes a compressed blob and returns relative path."""
+        from aqueduct.stores.object_store import BlobStore, LocalBackend
 
         store_dir = tmp_path / "obs"
         store_dir.mkdir()
+        blob = BlobStore(LocalBackend(store_dir))
         value = '{"test": "large_json_content"}'
-        path = externalise(value, store_dir, "run-1", "manifest")
+        path = blob.externalise(value, "run-1", "manifest")
 
         assert path.startswith("blobs/run-1/manifest.json.zst")
         assert (store_dir / path).exists()
         # Verify we can read it back
-        restored = materialize(path, store_dir)
+        restored = blob.materialize(path)
         assert restored == value
 
     def test_externalise_empty_string_returns_unchanged(self, tmp_path):
         """externalise('', ...) returns '' unchanged (empty strings stay inline)."""
-        from aqueduct.surveyor.blob_store import externalise
-        assert externalise("", tmp_path, "r1", "x") == ""
+        from aqueduct.stores.object_store import BlobStore, LocalBackend
+        assert BlobStore(LocalBackend(tmp_path)).externalise("", "r1", "x") == ""
 
     def test_materialize_blob_path_returns_decompressed(self, tmp_path):
         """materialize loads and decompresses blob."""
-        from aqueduct.surveyor.blob_store import externalise, materialize
+        from aqueduct.stores.object_store import BlobStore, LocalBackend
 
         store_dir = tmp_path / "obs"
         store_dir.mkdir()
+        blob = BlobStore(LocalBackend(store_dir))
         original = '{"key": "value"}'
-        path = externalise(original, store_dir, "r2", "prov")
-        restored = materialize(path, store_dir)
+        path = blob.externalise(original, "r2", "prov")
+        restored = blob.materialize(path)
         assert restored == original
 
     def test_materialize_inline_data_passthrough(self, tmp_path):
         """materialize returns inline data unchanged."""
-        from aqueduct.surveyor.blob_store import materialize
-        assert materialize("inline text", tmp_path) == "inline text"
+        from aqueduct.stores.object_store import BlobStore, LocalBackend
+        assert BlobStore(LocalBackend(tmp_path)).materialize("inline text") == "inline text"
 
     def test_materialize_missing_blob_returns_path(self, tmp_path):
         """materialize on missing blob returns the path string (graceful fallback)."""
-        from aqueduct.surveyor.blob_store import materialize
-        result = materialize("blobs/missing.json.zst", tmp_path)
+        from aqueduct.stores.object_store import BlobStore, LocalBackend
+        result = BlobStore(LocalBackend(tmp_path)).materialize("blobs/missing.json.zst")
         assert result == "blobs/missing.json.zst"
 
     def _minimal_manifest(self, bp_id="bp-blob", name="blob-test") -> Manifest:
@@ -1439,8 +1441,8 @@ class TestBlobExternalisationIntegration:
 
         assert ctx is not None
         # manifest_json contains a blob path — materialize to get the original JSON
-        from aqueduct.surveyor.blob_store import materialize as _mat
-        materialized = _mat(str(ctx.manifest_json), store_dir)
+        from aqueduct.stores.object_store import BlobStore, LocalBackend
+        materialized = BlobStore(LocalBackend(store_dir)).materialize(str(ctx.manifest_json))
         import json as _json
         parsed = _json.loads(materialized)
         assert isinstance(parsed, dict)

@@ -256,9 +256,10 @@ def parse_dict(
         return str((_bp_dir / p).resolve())
 
     # Keys to anchor come from ``aqueduct.executor.path_keys`` (per-type
-    # registry), not a hardcoded tuple. Unknown types fall back to a
-    # blanket union for backward compatibility — shrink the fallback to
-    # ``()`` once every executor module type has an explicit entry there.
+    # registry), not a hardcoded tuple. Every module type now has an explicit
+    # row there (Pass C, 2026-08); an unknown type's fallback is already
+    # ``()`` — a structural safety net, not a source of real anchoring
+    # behaviour. See ``path_keys.py``'s own comment on ``_LEGACY_FALLBACK``.
     from aqueduct.executor.path_keys import get_path_keys as _get_path_keys
 
     def _anchor_paths(cfg: Any, module_type: str) -> Any:

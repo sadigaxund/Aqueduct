@@ -163,7 +163,16 @@ class BenchmarkStore:
 
 
 def _as_store(store: Path | str | BenchmarkStore) -> BenchmarkStore:
-    """Normalise a path/str (legacy DuckDB API) or a BenchmarkStore to a store."""
+    """Normalise a path/str (legacy DuckDB API) or a BenchmarkStore to a store.
+
+    The bare-path shape predates `BenchmarkStore` (Phase 52, 47eefbc) — every
+    release through 1.2.1 only ever accepted a DuckDB path here, so this stays
+    a real back-compat shim, not dead scaffolding. Removal condition: delete
+    once `tests/test_benchmark_store.py` (the pre-Phase-52 suite, which
+    exercises exactly this bare-path shape end to end) is retired or migrated
+    to construct a `BenchmarkStore` explicitly — that file's continued
+    existence is the signal a bare-path caller is still expected to work.
+    """
     if isinstance(store, BenchmarkStore):
         return store
     return BenchmarkStore(backend="duckdb", location=str(store))

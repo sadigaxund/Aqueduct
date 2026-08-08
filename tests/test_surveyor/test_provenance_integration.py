@@ -230,7 +230,7 @@ def test_surveyor_with_provenance_map_sets_provenance_json(tmp_path):
     materialize to read the actual content.
     """
     from aqueduct.surveyor.surveyor import Surveyor
-    from aqueduct.surveyor.blob_store import materialize
+    from aqueduct.stores.object_store import BlobStore, LocalBackend
 
     pmap = ProvenanceMap(
         blueprint_id="test.bp",
@@ -252,7 +252,7 @@ def test_surveyor_with_provenance_map_sets_provenance_json(tmp_path):
     ctx = surveyor.record(_make_execution_result())
     assert ctx is not None
     assert ctx.provenance_json is not None
-    raw = materialize(ctx.provenance_json, tmp_path)
+    raw = BlobStore(LocalBackend(tmp_path)).materialize(ctx.provenance_json)
     prov_data = json.loads(raw)
     assert isinstance(prov_data, dict)
     assert prov_data.get("blueprint_id") == "test.bp"
@@ -265,7 +265,7 @@ def test_surveyor_provenance_slice_contains_only_failed_module_and_context(tmp_p
     materialize to read the actual content.
     """
     from aqueduct.surveyor.surveyor import Surveyor
-    from aqueduct.surveyor.blob_store import materialize
+    from aqueduct.stores.object_store import BlobStore, LocalBackend
     from aqueduct.compiler.provenance import ProvenanceMap, ModuleProvenance, ValueProvenance
 
     pmap = ProvenanceMap(
@@ -291,7 +291,7 @@ def test_surveyor_provenance_slice_contains_only_failed_module_and_context(tmp_p
     ctx = surveyor.record(_make_execution_result(failed_module="m1"))
     assert ctx is not None
     assert ctx.provenance_json is not None
-    raw = materialize(ctx.provenance_json, tmp_path)
+    raw = BlobStore(LocalBackend(tmp_path)).materialize(ctx.provenance_json)
     prov = json.loads(raw)
     # Only the failed module should be in failed_module key
     assert prov.get("failed_module") is not None

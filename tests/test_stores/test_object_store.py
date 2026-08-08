@@ -2,7 +2,10 @@
 
 Pure-Python, no Spark, no network — the canonical example of a ``unit`` layer
 test. Covers the transport backend, the BlobStore/PatchStore semantics, the
-factories, the config model, and the back-compat ``surveyor/blob_store.py`` shim.
+factories, and the config model. The Phase 53 back-compat ``surveyor/
+blob_store.py`` shim (delegating to ``BlobStore``/``LocalBackend`` here) was
+removed once `git grep` found zero production callers left — see CHANGELOG
+``### Removed``.
 """
 
 from __future__ import annotations
@@ -106,22 +109,13 @@ def test_blobstore_missing_blob_falls_back_to_marker(tmp_path):
     assert blob.materialize(f"{BLOB_MARKER}ghost/x.json.zst") == f"{BLOB_MARKER}ghost/x.json.zst"
 
 
-def test_blob_marker_is_backcompat_with_legacy_shim(tmp_path):
-    """A blob written by the old surveyor.blob_store.externalise reads back
-    through the new BlobStore at the same marker (Phase 53 must not orphan
-    pre-existing DuckDB rows)."""
-    from aqueduct.surveyor.blob_store import externalise as legacy_ext
-
-    marker = legacy_ext("payload-text", tmp_path, "runZ", "stack")
+def test_blob_marker_matches_the_pre_phase_53_on_disk_layout(tmp_path):
+    """A blob written by BlobStore reads back through a fresh BlobStore at the
+    same marker (Phase 53's `local` backend is byte-identical to the historical
+    on-disk layout, so pre-existing DuckDB rows are never orphaned)."""
+    marker = BlobStore(LocalBackend(tmp_path)).externalise("payload-text", "runZ", "stack")
     assert marker == f"{BLOB_MARKER}runZ/stack.json.zst"
     assert BlobStore(LocalBackend(tmp_path)).materialize(marker) == "payload-text"
-
-
-def test_legacy_shim_roundtrip(tmp_path):
-    from aqueduct.surveyor.blob_store import externalise, materialize
-
-    marker = externalise("via-shim", tmp_path, "r", "prov")
-    assert materialize(marker, tmp_path) == "via-shim"
 
 
 # ── PatchStore ────────────────────────────────────────────────────────────────
