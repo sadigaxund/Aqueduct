@@ -9,6 +9,11 @@ try:
 except ImportError:
     SparkSession = None  # type: ignore[assignment,misc]
 
+try:
+    from pyspark.logger.logger import JSONFormatter as _PySparkJSONFormatter
+except ImportError:
+    _PySparkJSONFormatter = None  # type: ignore[assignment,misc]
+
 # `spark.sql.warehouse.dir` is a STATIC conf — it binds at the FIRST SparkSession
 # created in the process and is a no-op on every getOrCreate after. The health
 # probe below builds that first session, so the warehouse must be pinned HERE (and
@@ -400,6 +405,69 @@ def restore_cwd():
     original = os.getcwd()
     yield
     os.chdir(original)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _pyspark_json_formatter_sets_message():
+    """Patch a real leak in pyspark's own internals so it can never poison
+    ``caplog.records[i].message`` in any later test.
+
+    The FIRST time a real Spark ``AnalysisException`` carrying query context
+    is logged anywhere in the suite, ``pyspark/errors/exceptions/base.py::
+    _log_exception`` sets ``propagate = False`` on its internal
+    ``SQLQueryContextLogger`` / ``DataFrameQueryContextLogger`` loggers
+    (pre-created as genuine ``pyspark.logger.PySparkLogger`` instances by
+    ``aqueduct.executor.spark.session._mute_query_context_loggers`` — it needs
+    the real class so pyspark's later ``.exception(file=..., line=...)`` call
+    matches; see that function's docstring for ISSUE-046).
+
+    Once non-propagating, pytest's OWN ``_pytest.logging.catching_logs.__enter__``
+    (which attaches its capture handler directly to every non-propagating
+    logger, since records from one would otherwise never reach root) calls
+    ``.addHandler(self.handler)`` on them — and it does this again at the
+    start of EVERY phase of EVERY later test (setup, call, teardown each
+    re-enter ``catching_logs``), not once. ``PySparkLogger.addHandler``
+    unconditionally overwrites *whatever handler it is given*'s formatter
+    with a fresh ``pyspark.logger.logger.JSONFormatter()`` — repeatedly
+    re-mutating pytest's caplog handler in place for the rest of the pytest
+    session. Unlike a real ``logging.Formatter``, ``JSONFormatter.format()``
+    never sets ``record.message`` (that assignment is a stdlib
+    ``Formatter.format()`` side effect it doesn't replicate), so any later
+    ``caplog.records[i].message`` access raises ``AttributeError`` — order-
+    dependent on whether some earlier test happened to hit that pyspark
+    exception path first (confirmed via a traced ``Handler.setFormatter``:
+    the call lands at ``_pytest/logging.py``'s non-propagating-logger loop
+    dispatching into ``pyspark/logger/logger.py:163``).
+
+    Because the re-attachment happens again at the start of every phase —
+    including right before the test body itself runs — a fixture that
+    repairs a specific HANDLER instance always loses the race: pytest's own
+    "call"-phase ``catching_logs.__enter__`` re-corrupts it again after our
+    fixture's setup-phase code already ran and before the test body executes
+    (verified: restoring ``caplog.handler.formatter`` in a normal autouse
+    fixture did not fix the target failure). Patching the ``JSONFormatter``
+    CLASS itself — once, for the session — sidesteps that race entirely:
+    every *future* ``JSONFormatter()`` instance ``PySparkLogger.addHandler``
+    creates, no matter how many times it re-fires, uses this patched
+    ``format()``, which behaves exactly like pyspark's own formatting PLUS
+    the one missing stdlib side effect.
+    """
+    if _PySparkJSONFormatter is None:
+        yield
+        return
+
+    original_format = _PySparkJSONFormatter.format
+
+    def _format_and_set_message(self, record):
+        text = original_format(self, record)
+        record.message = record.getMessage()
+        return text
+
+    _PySparkJSONFormatter.format = _format_and_set_message
+    try:
+        yield
+    finally:
+        _PySparkJSONFormatter.format = original_format
 
 
 @pytest.fixture
