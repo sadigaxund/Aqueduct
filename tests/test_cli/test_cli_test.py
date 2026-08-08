@@ -105,15 +105,18 @@ tests: []
     assert "Blueprint not found" in result.output
 
 def test_cli_test_invalid_yaml(tmp_path):
-    import yaml
+    """Malformed test YAML must map to CONFIG_ERROR with an actual message —
+    previously this raised a raw, uncaught ``yaml.YAMLError`` (empty output,
+    exit code 1 only by Click/CliRunner's own unhandled-exception default,
+    not a real contract; see ``aqueduct/cli/project.py::test_cmd``'s
+    ``except yaml.YAMLError`` handler, added as part of the pyspark/duckdb
+    ExecuteError CLI-safety-net fix)."""
     bad_yaml = tmp_path / "bad.yml"
     bad_yaml.write_text("invalid: [", encoding="utf-8")
     runner = CliRunner()
     result = runner.invoke(cli, ["test", str(bad_yaml)])
-    assert result.exit_code == 1
-    # Click might wrap the exception or just show it in output
-    # Based on previous failure, result.output was empty and exception was in result
-    assert result.exception is not None
+    assert result.exit_code == 1, result.output
+    assert "not valid YAML" in result.output
 
 def test_cli_test_quiet(test_setup):
     runner = CliRunner()

@@ -60,7 +60,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 if TYPE_CHECKING:
     import duckdb
 
-from aqueduct.errors import AqueductError
+from aqueduct.errors import ExecuteError
 from aqueduct.executor.duckdb_.assert_ import (
     _AQ_ERROR_MODULE,
     _AQ_ERROR_MSG,
@@ -99,8 +99,11 @@ def _mr(**kwargs) -> ModuleResult:
 _T = TypeVar("_T")
 
 
-class ExecuteError(AqueductError):
-    """Raised for unrecoverable execution failures (config, unsupported type, etc.)."""
+# ExecuteError is engine-agnostic — defined in ``aqueduct.errors`` and
+# imported above (re-exported here, not redefined) so this executor raises
+# the SAME type Spark's does (and the CLI/orchestrator catch); see
+# ``aqueduct.errors.ExecuteError`` for why a private per-engine subclass was
+# a bug — the CLI's ``except ExecuteError`` never caught it.
 
 
 # Module types this executor actually dispatches — defense in depth, same as

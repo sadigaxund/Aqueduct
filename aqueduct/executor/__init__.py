@@ -4,6 +4,16 @@
 so that ``aqueduct.executor.path_keys`` (imported by the parser) and
 ``aqueduct.executor.models`` (imported by the surveyor) can be used
 without a Spark installation.
+
+``ExecuteError`` is engine-agnostic (``aqueduct.errors.ExecuteError``) and
+is resolved DIRECTLY from there, never via ``aqueduct.executor.spark``.
+Every registered engine (Spark, DuckDB, ...) raises this same type, so a
+caller can ``from aqueduct.executor import ExecuteError`` to catch any
+engine's setup failure without pulling in ``pyspark`` — the bug this
+comment guards against: this used to resolve through
+``aqueduct.executor.spark.executor``, so a DuckDB-only install crashed with
+a bare ``ImportError: No module named pyspark`` on ANY ``aqueduct run``,
+regardless of ``deployment.engine``.
 """
 
 from __future__ import annotations
@@ -37,7 +47,7 @@ def __getattr__(name: str):
         from aqueduct.executor.spark.executor import execute
         return execute
     if name == "ExecuteError":
-        from aqueduct.executor.spark.executor import ExecuteError
+        from aqueduct.errors import ExecuteError
         return ExecuteError
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

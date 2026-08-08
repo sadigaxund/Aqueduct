@@ -112,6 +112,8 @@ def test_cmd(
     """
     from pathlib import Path
 
+    import yaml
+
     from aqueduct.cli.style import error as _error
     from aqueduct.cli.style import success as _success
     from aqueduct.config import ConfigError, load_config
@@ -165,6 +167,17 @@ def test_cmd(
         )
     except TestSchemaError as exc:
         _error(f"test file error: {exc}")
+        sys.exit(exit_codes.CONFIG_ERROR)
+    except yaml.YAMLError as exc:
+        # `run_test_file` parses the test YAML with `yaml.safe_load` and has
+        # no schema validation ahead of it — a malformed file (not merely a
+        # SCHEMA problem, which is `TestSchemaError` above) raised this raw
+        # and uncaught before this handler existed, silently defaulting to
+        # whatever exit code Click/CliRunner happens to assign an unhandled
+        # exception rather than the documented CONFIG_ERROR contract (a
+        # malformed test file is the same class of problem as a malformed
+        # aqueduct.yml/Blueprint — exit_codes.py's own docstring).
+        _error(f"test file is not valid YAML: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
     finally:
         stop_spark_session(spark)

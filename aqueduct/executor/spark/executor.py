@@ -69,7 +69,7 @@ if TYPE_CHECKING:
 
 from datetime import UTC
 
-from aqueduct.errors import AqueductError
+from aqueduct.errors import ExecuteError
 from aqueduct.executor.models import (
     ExecutionResult,
     ExecutionStatus,
@@ -409,8 +409,10 @@ _SIGNAL_PORTS: frozenset[str] = frozenset({"signal"})
 _GATE_CLOSED: object = object()
 
 
-class ExecuteError(AqueductError):
-    """Raised for unrecoverable execution failures (config, unsupported type, etc.)."""
+# ExecuteError is engine-agnostic — defined in ``aqueduct.errors`` and
+# imported above (re-exported here, not redefined) so that DuckDB's executor
+# and this one raise the SAME type; see ``aqueduct.errors.ExecuteError`` for
+# why a private per-engine subclass was a bug, not a style choice.
 
 
 # ── DAG helpers ───────────────────────────────────────────────────────────────

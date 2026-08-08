@@ -38,7 +38,7 @@ same call it has always made. ``record_result=False`` lets the CLI call
 ``surveyor.record(result, exc=..., engine=result.failed_engine)`` itself,
 so a failed run is attributed to the ISLAND that failed rather than
 ``deployment.engine`` — the same shape the single-engine path already
-uses. This module's own ``AqueductError`` wrap around each island's
+uses. This module's own ``ExecuteError`` wrap around each island's
 ``execute()`` call (below) is what makes ``result.failed_engine`` reliable
 even for a structural failure (a cycle, a bad checkpoint) that raises
 rather than returning a ``ModuleResult``.
@@ -374,7 +374,7 @@ def run_polyglot(
         orchestrator must own by default, since it is the only caller that
         knows which island actually failed.
     """
-    from aqueduct.errors import AqueductError
+    from aqueduct.errors import ExecuteError
     from aqueduct.executor.protocol import call_execute
 
     manifest_h = _manifest_hash(manifest)
@@ -515,13 +515,16 @@ def run_polyglot(
                     explain_capture=explain_capture,
                     suppress=warnings_suppress,
                 )
-            except AqueductError as exc:
+            except ExecuteError as exc:
                 # A structural execution failure (cycle detection, a bad
                 # --from/--to selector, a missing resume checkpoint) raises
-                # rather than returning a ModuleResult — both engines' own
-                # `ExecuteError` subclass `AqueductError` (there is no
-                # shared `ExecuteError` base to import here without naming
-                # an engine, so this catches the common ancestor instead).
+                # rather than returning a ModuleResult — both engines now
+                # raise this SAME engine-agnostic `aqueduct.errors.ExecuteError`
+                # (previously each engine defined its own private
+                # `ExecuteError` subclass of `AqueductError`, so this handler
+                # had no shared type to import without naming an engine and
+                # caught the broader `AqueductError` instead — fixed as part
+                # of the ExecuteError unification, see `aqueduct/errors.py`).
                 # Without this, the exception would escape `run_polyglot()`
                 # entirely: no island/engine attribution, no spill-lifecycle
                 # bookkeeping below — exactly the gap the single-engine CLI

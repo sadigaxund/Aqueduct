@@ -146,3 +146,33 @@ class CapabilityScopeError(AqueductError):
 
 class ConfigError(AqueductError):
     """Raised when aqueduct.yml cannot be loaded or fails validation."""
+
+
+class ExecuteError(AqueductError):
+    """Raised for unrecoverable execution-setup failures — the Executor
+    layer's root error, mirroring ``ParseError`` (Parser) and
+    ``CompileError`` (Compiler) above: config errors surfaced at execute()
+    time, an unsupported module type, a cycle detected in the execution
+    graph, a missing ``--from``/``--to`` module, etc. Per-module failures are
+    NOT raised this way — each engine's ``execute()`` catches those
+    internally and reports them as ``ModuleResult(status="error", ...)``
+    (``aqueduct/executor/models.py``); this type is only for failures that
+    abort the run before/between modules.
+
+    EVERY registered engine raises this SAME type — never a private
+    per-engine subclass — so a cross-engine caller (the CLI, the healing
+    loop, ``aqueduct.executor.orchestrator``) can catch one type regardless
+    of which engine actually ran. Before this fix, Spark's and DuckDB's
+    executors each defined their OWN class named ``ExecuteError`` (identical
+    name, ``AqueductError`` subclass, but two distinct types that never
+    compared equal) — ``aqueduct/cli/run.py`` imported Spark's via
+    ``aqueduct.executor``'s lazy ``__getattr__`` and caught only that one, so
+    a DuckDB setup failure of the exact same shape passed through uncaught,
+    and merely importing the name for the ``except`` clause pulled in
+    ``pyspark`` on every engine's run. Both engine modules
+    (``aqueduct/executor/spark/executor.py``,
+    ``aqueduct/executor/duckdb_/executor.py``) now import this class rather
+    than defining their own, and ``aqueduct/executor/__init__.py`` resolves
+    the name directly from here (pyspark-free) instead of via the Spark
+    executor.
+    """

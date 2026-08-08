@@ -942,7 +942,81 @@ class _AqueductJsonLogFormatter:
         return _json.dumps(payload, default=str)
 
 
-@click.group(invoke_without_command=True, no_args_is_help=False)
+# ── Missing-optional-engine-extra hint ──────────────────────────────────────
+# The concrete bug this guards against: `deployment.engine: spark` selected
+# without the `[spark]` extra installed raises a bare `ModuleNotFoundError`
+# (pyspark) from deep inside a lazy engine wrapper — the SAME failure shape
+# as the duckdb-without-pyspark bug this CLI safety net (below) exists for,
+# just via the legitimate path (a real engine choice missing its runtime,
+# not an accidental cross-engine import). Kept as a small, explicit map
+# (rather than trying to derive it from `capabilities.yml`/entry points)
+# because it only needs to answer one question — "does this import name
+# belong to a KNOWN optional-extra runtime?" — and guessing wrong here would
+# produce a misleading hint, which is worse than the generic fallback below.
+_MISSING_EXTRA_BY_MODULE: dict[str, str] = {
+    "pyspark": "spark",
+    "delta": "spark",  # delta-spark's import name
+    "py4j": "spark",   # pyspark's own JVM-bridge dependency
+}
+
+
+def _missing_engine_extra(exc: BaseException) -> tuple[str, str] | None:
+    """If *exc* is an ``ImportError``/``ModuleNotFoundError`` for a module
+    that belongs to a known optional engine extra, return
+    ``(module_name, extra_name)``; else ``None``."""
+    if not isinstance(exc, ImportError):
+        return None
+    name = getattr(exc, "name", None) or ""
+    top = name.split(".")[0]
+    extra = _MISSING_EXTRA_BY_MODULE.get(top)
+    return (top, extra) if extra else None
+
+
+class _AqueductCLIGroup(click.Group):
+    """Last-resort safety net around the whole CLI dispatch (AGENTS.md "no
+    silent no-ops").
+
+    Click's own ``BaseCommand.main()`` only catches ``ClickException`` /
+    ``Abort`` / ``EOFError`` / ``KeyboardInterrupt``. Any OTHER exception
+    escaping a subcommand propagates as a raw, unstyled Python traceback in
+    a real terminal — and, under Click's own ``CliRunner`` (every test in
+    this suite, plus any Airflow/orchestrator caller that drives the CLI
+    in-process), is swallowed into exit code 1 with the exception recorded
+    on ``result.exception`` but NOTHING written to ``result.output`` —
+    genuinely silent from the caller's point of view. That is the exact
+    shape of the reported bug: ``aqueduct run`` on a duckdb-engine Blueprint,
+    pyspark not installed, crashed with ``exit: 1 | output len: 0``.
+
+    This is a NET, not a substitute for typed handling — every command
+    already converts its OWN expected failure modes (``ParseError``,
+    ``CompileError``, ``ConfigError``, ``ExecuteError``, ...) into a clean
+    message + the right ``exit_codes.*`` constant; this only catches what
+    slips through that, so the floor is "always some message, always a
+    documented exit code" rather than "always a perfectly specific one".
+    """
+
+    def invoke(self, ctx: click.Context) -> Any:
+        try:
+            return super().invoke(ctx)
+        except (SystemExit, KeyboardInterrupt, click.exceptions.Abort, click.ClickException):
+            raise
+        except Exception as exc:  # noqa: BLE001 — last-resort net, see class docstring
+            from aqueduct import exit_codes as _exit_codes
+
+            missing = _missing_engine_extra(exc)
+            if missing is not None:
+                _module, _extra = missing
+                click.echo(
+                    f"✗ {_module!r} is not installed — this engine needs the "
+                    f"matching extra: pip install aqueduct-core[{_extra}]",
+                    err=True,
+                )
+            else:
+                click.echo(f"✗ unexpected error: {exc}", err=True)
+            ctx.exit(_exit_codes.DATA_OR_RUNTIME)
+
+
+@click.group(cls=_AqueductCLIGroup, invoke_without_command=True, no_args_is_help=False)
 @click.version_option(
     version=_aqueduct_version,
     prog_name="aqueduct",
