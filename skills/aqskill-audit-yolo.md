@@ -111,6 +111,13 @@ Every unit agent prompt contains, verbatim-shaped:
 
 The orchestrator owns precision. Every candidate in every returned unit report must survive the gate before the report is persisted: re-read flagged rows, apply neutralizers, confirm at HEAD, drop hallucinated rows (the 5 modes), attach failure scenarios. Unit agents return candidates; the orchestrator is the final verdict. Do this with the strongest model available.
 
+**Apply the rejection ledger here.** Check every surviving candidate against
+`skills/audit-adjudicated.md` and drop matches unless the candidate brings NEW evidence (a
+reproduction the original adjudication lacked, or a code change since its date). **Detection
+agents must never be shown that file** — it would poison their recall and permanently bury any
+entry in it that is wrong. Blind re-reports are the signal that tells you whether the ledger is
+right and whether the audit is exhausted.
+
 ## Cross-unit handoffs — the cost of module isolation
 
 Per-unit scoping is what makes this skill precise, and it is also its one structural blind spot:
@@ -197,7 +204,11 @@ Per report, in order:
 1. Read it. Verify every finding at HEAD before believing it — all five hallucination modes,
    especially **stale** (mode 4).
 2. Fix what survives, top-down by severity. Stop when yield dies.
-3. `git mv` the report to `.dev/AUDITS/triaged/`. Note `.dev/` is gitignored, so this move is
+3. **Append every rejected finding to `skills/audit-adjudicated.md`** — `file:line`, one of its
+   six reason labels, the date, and enough of the reasoning that a future pass does not have to
+   re-derive it. A rejection that only lives inside a triaged report is a rejection the next
+   cycle will re-litigate. `MISATTRIBUTED` is never a drop: re-file it to the owning unit.
+4. `git mv` the report to `.dev/AUDITS/triaged/`. Note `.dev/` is gitignored, so this move is
    not committable — that is expected, not a failure.
 
 Non-negotiables for a triage agent, each learned by having it go wrong:
