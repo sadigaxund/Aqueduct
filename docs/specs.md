@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.50: Reference Document**
+**Version 2.51: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -249,12 +249,14 @@ Every Module regardless of type shares these fields:
 | **description** | Optional. Free-text explanation. Used in LLM context and UI. |
 | **tags** | Optional list of strings. Used for filtering and scoped search. |
 | **config** | Type-specific configuration block. |
-| **spillway** | Optional downstream Module ID to receive error-port output. |
+| **spillway** | Optional downstream Module ID to receive error-port output — authoring SUGAR for a `port: spillway` edge from this module (see below); not a second runtime mechanism. |
 | **depends_on** | Optional explicit upstream dependency list. |
 | **checkpoint** | Optional boolean. When true, output DataFrame is saved as Parquet for `--resume`. |
 | **enabled** | Optional boolean (default `true`); accepts `${ctx.*}` / `${ENV}` so context profiles can toggle it (coerced from true/false/1/0/yes/no/on/off). A disabled module still compiles but is skipped (⏭) at run time, and the disable **cascades**: every module consuming its output, via edges, `depends_on`, or Probe `attach_to`, is disabled too, transitively and uniformly (a join or union missing one input does not run partially). A disabled Arcade disables all its expanded children. Disabled modules are excluded from compile-time warnings. If the cascade disables every module, compilation fails. |
 | **retry** | Optional. Per-module override of the top-level `retry_policy:` block (2.8), see below. |
 | **engine** | Optional. A scalar execution-engine NAME (`spark`, `duckdb`) selecting which engine runs THIS module (2.34), see below. Distinct from the blueprint-level `engine:` BLOCK (§4.2, per-engine settings namespaced by engine name) — same word, two levels. |
+
+**`spillway:` field sugar (2.51).** `spillway: <target>` is authoring sugar for `edges: [{from: <this module>, to: <target>, port: spillway}]` — the Compiler expands it into that real edge at compile time (right after Arcade expansion, so a `spillway:` field set inside an Arcade's own sub-Blueprint is correctly namespaced first), the SAME and ONLY mechanism §4.4's spillway routing already documents. There is no behavioral difference between the two authoring forms; use whichever reads better for a given Blueprint. `Module.spillway` is validated at parse time (the target must exist) and is `None` on every module in the compiled Manifest once desugared — the edge is the sole runtime encoding. Conflict rule: a module carrying BOTH the `spillway:` field and an explicit `port: spillway` edge is fine when they name the SAME target (idempotent — no duplicate edge); naming a DIFFERENT target is a `CompileError` (never silently pick one).
 
 ### `config:` is a typed, per-module-type union (2.42)
 
@@ -336,7 +338,7 @@ edges:
 
 The label comes from the Assert rule's `error_type` field (falling back to the rule name, `freshness`, `sql_row`, `custom`) or `SpillwayCondition` for Channel `spillway_condition` rows. Multiple spillway edges from one module act as separate catch blocks; an edge without `error_types` is a catch-all; rows matching no edge are dropped. The filter is a lazy Spark transformation, zero extra actions. `error_types` on a non-spillway edge is a parse error, and `aqueduct doctor` warns when a filter entry matches no label declared in the Blueprint.
 
-> **⚠ `spillway_condition` without a spillway edge is dead code.** If a Channel sets `spillway_condition` but has no corresponding edge with `port: spillway`, the condition is silently ignored, all rows (including those matching the condition) flow to the main stream. The executor logs a warning at run time. This is not a compile error because the config alone is valid; it only becomes meaningful once wired.
+> **⚠ `spillway_condition` without a spillway edge is dead code.** If a Channel sets `spillway_condition` but has no corresponding edge with `port: spillway` — and no `spillway:` field sugar, §4.3, which desugars into exactly that edge — the condition is silently ignored, all rows (including those matching the condition) flow to the main stream. The executor logs a warning at run time (the compiler's `spillway_port_mismatch` warning catches the common case earlier). This is not a compile error because the config alone is valid; it only becomes meaningful once wired, by either authoring form.
 
 Every spillway row carries the system columns `_aq_error_module`, `_aq_error_type`, `_aq_error_msg`, `_aq_error_ts` (Assert rows additionally `_aq_error_rule`).
 

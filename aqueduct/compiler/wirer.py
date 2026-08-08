@@ -6,8 +6,15 @@ Probe wiring:
   No structural changes are made — Probes stay in the module list.
 
 Spillway wiring:
-  Validated during parsing (graph.validate_spillway_targets).
-  The wirer confirms that any edge with port='spillway' points to a real module.
+  The module-level `Module.spillway: <target>` field (docs/specs.md) is
+  authoring SUGAR, not a second runtime mechanism — `desugar_module_spillway`
+  below expands it into a real `port="spillway"` Edge, the ONE mechanism
+  every engine's executor actually reads (see its own docstring for why this
+  must run AFTER Arcade expansion). Target existence is validated during
+  parsing (graph.validate_spillway_targets, on the pre-expansion Blueprint);
+  the wirer's own `validate_spillway_edges` below re-confirms it post-
+  expansion/desugaring, the same as it does for every explicitly-authored
+  spillway edge.
 
 Regulator compile-away (P6 — Passive-by-default gates):
   A Regulator with no wired signal-port edge is passive and is compiled away.
@@ -15,6 +22,8 @@ Regulator compile-away (P6 — Passive-by-default gates):
 """
 
 from __future__ import annotations
+
+import dataclasses
 
 from aqueduct.errors import AqueductError
 from aqueduct.parser.models import Edge, Module, ModuleType
@@ -72,6 +81,77 @@ def _validate_custom_signals(probe: Module) -> None:
             custom_signal_source(sig)
         except ValueError as exc:
             raise WireError(f"Probe {probe.id!r}: {exc}") from exc
+
+
+def desugar_module_spillway(
+    modules: list[Module], edges: list[Edge]
+) -> tuple[list[Module], list[Edge]]:
+    """Expand `Module.spillway: <target>` authoring sugar into a real
+    `Edge(from_id=module.id, to_id=target, port="spillway")` — the ONLY
+    runtime mechanism spillway routing uses on either engine.
+
+    Before this function existed, `Module.spillway` was parsed, validated
+    (`parser.graph.validate_spillway_targets` — target must exist), remapped
+    through Arcade expansion (`compiler.expander`'s `id_map.get(m.spillway)`,
+    the same treatment `attach_to` gets), and serialized into the compiled
+    Manifest — but read by NO executor on either engine, ever. A correct
+    value did nothing; only a WRONG value was ever rejected. This closes
+    that gap by making the field desugar into the one mechanism (the edge)
+    that already works and is already tested — deliberately NOT a second
+    runtime path.
+
+    Must run AFTER Arcade expansion (`expand_arcades`), not before: a
+    `spillway:` field set on a module living inside an Arcade's own
+    sub-Blueprint only makes sense once that module has been namespaced
+    (`{arcade_id}__{child_id}`) and `m.spillway` has already been remapped
+    to match (`expander.py::_expand_single`) — operating on the raw,
+    pre-expansion module list would miss every Arcade-nested spillway sugar
+    field entirely (those modules do not exist in the flat list yet) and
+    would need a second, duplicated desugaring pass inside `expander.py`
+    itself. Running here, once, on the final flat module list handles a
+    top-level module and an Arcade-expanded one identically, with no
+    Arcade-awareness of its own.
+
+    Conflict handling — a module may ALSO carry an explicit `port="spillway"`
+    edge (the pre-existing, already-working authoring form):
+      - explicit edge to the SAME target as `spillway:` → idempotent no-op,
+        no duplicate edge is added (the explicit edge already covers it).
+      - explicit edge to a DIFFERENT target → `WireError` (never silently
+        pick one — a module cannot spill to two different places).
+
+    `Module.spillway` is CLEARED (`None`) on every module this touches,
+    whether a new edge was added or an identical one already existed — after
+    this step, the field carries no information the edge doesn't already
+    encode, so nothing downstream (Manifest serialization, a future
+    executor) can be tempted to read it as a second source of truth.
+    """
+    existing_spillway_targets: dict[str, set[str]] = {}
+    for e in edges:
+        if e.port == "spillway":
+            existing_spillway_targets.setdefault(e.from_id, set()).add(e.to_id)
+
+    new_modules: list[Module] = []
+    new_edges: list[Edge] = list(edges)
+    for m in modules:
+        if not m.spillway:
+            new_modules.append(m)
+            continue
+        targets = existing_spillway_targets.get(m.id, set())
+        if targets and m.spillway not in targets:
+            raise WireError(
+                f"Module {m.id!r} sets spillway={m.spillway!r} but already has "
+                f"an explicit spillway edge to a DIFFERENT target "
+                f"({sorted(targets)!r}) — a module cannot spill to two places. "
+                "Remove the `spillway:` field, point it at the same target as "
+                "the edge, or delete the conflicting edge."
+            )
+        if m.spillway not in targets:
+            new_edges.append(
+                Edge(from_id=m.id, to_id=m.spillway, port="spillway", injected=True)
+            )
+        # else: an identical explicit edge already exists — idempotent no-op.
+        new_modules.append(dataclasses.replace(m, spillway=None))
+    return new_modules, new_edges
 
 
 def validate_spillway_edges(modules: list[Module], edges: list[Edge]) -> None:

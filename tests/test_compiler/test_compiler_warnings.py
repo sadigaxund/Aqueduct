@@ -177,6 +177,92 @@ edges:
             _compile_yaml(yaml_str, tmp_path)
             assert not any("spillway_port_mismatch" in str(x.message) for x in w)
 
+    def test_spillway_sugar_field_with_condition_no_warn(self, tmp_path):
+        """The module-level `spillway:` field (authoring sugar) desugars into
+        the exact same edge `test_spillway_both_present_no_warn` above writes
+        explicitly — the mismatch warning must see it and stay silent, not
+        just tolerate an explicit edge. Guards the "must NOT fire when the
+        sugar supplied the edge" half of the requirement."""
+        yaml_str = """
+aqueduct: "1.0"
+id: test
+name: Test
+modules:
+  - id: in
+    type: Ingress
+    label: IN
+    config: {format: parquet, path: data}
+  - id: ch
+    type: Channel
+    label: CH
+    spillway: spill
+    config:
+      op: sql
+      query: SELECT * FROM in
+      spillway_condition: "id < 0"
+  - id: main
+    type: Egress
+    label: MAIN
+    config: {format: parquet, path: main, mode: overwrite}
+  - id: spill
+    type: Egress
+    label: SPILL
+    config: {format: parquet, path: spill, mode: overwrite}
+edges:
+  - from: in
+    to: ch
+  - from: ch
+    to: main
+        """
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always", AqueductWarning)
+            _compile_yaml(yaml_str, tmp_path)
+            assert not any("spillway_port_mismatch" in str(x.message) for x in w)
+
+    def test_spillway_sugar_field_without_condition_still_warns(self, tmp_path):
+        """The mismatch warning must keep working on the sugar path too — a
+        `spillway:` field with no `spillway_condition` produces an edge whose
+        DataFrame is always empty, exactly like the equivalent explicit-edge
+        mistake. Sugar must not create a blind spot for a genuine mismatch."""
+        yaml_str = """
+aqueduct: "1.0"
+id: test
+name: Test
+modules:
+  - id: in
+    type: Ingress
+    label: IN
+    config: {format: parquet, path: data}
+  - id: ch
+    type: Channel
+    label: CH
+    spillway: spill
+    config:
+      op: sql
+      query: SELECT * FROM in
+  - id: main
+    type: Egress
+    label: MAIN
+    config: {format: parquet, path: main, mode: overwrite}
+  - id: spill
+    type: Egress
+    label: SPILL
+    config: {format: parquet, path: spill, mode: overwrite}
+edges:
+  - from: in
+    to: ch
+  - from: ch
+    to: main
+        """
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always", AqueductWarning)
+            _compile_yaml(yaml_str, tmp_path)
+            assert any(
+                "spillway_port_mismatch" in str(x.message)
+                and "no spillway_condition" in str(x.message)
+                for x in w
+            )
+
     def test_incremental_channel_no_checkpoint_warns(self, tmp_path):
         yaml_str = """
 aqueduct: "1.0"

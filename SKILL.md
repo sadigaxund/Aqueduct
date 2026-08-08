@@ -129,7 +129,9 @@ ambiguous in a flat chain). A single-module Blueprint needs no edges.
 Every module: `id` (required, unique, fs-safe, **no `__`** — reserved for Arcade
 expansion), `label` (REQUIRED — human name), `type` (required), `config`
 (type-specific). Optional: `description`, `tags`, `spillway` (downstream id for
-error rows), `depends_on` (explicit upstream list), `checkpoint` (bool, for `--resume`),
+error rows — sugar for `{from: this, to: <id>, port: spillway}`; same edge, either
+authoring form, never both to a different target), `depends_on` (explicit upstream
+list), `checkpoint` (bool, for `--resume`),
 `enabled` (bool, default true; takes `${ctx.*}` so profiles can toggle it — a disabled
 module is skipped ⏭ at run time and the disable cascades to every downstream consumer),
 `retry` (2.8 — per-module override of the top-level `retry_policy:`; see below),

@@ -64,6 +64,7 @@ from aqueduct.compiler.type_surfaces import module_type_spellings, udf_return_ty
 from aqueduct.compiler.wirer import (
     WireError,
     compile_away_regulators,
+    desugar_module_spillway,
     validate_probe_source_edges,
     validate_probes,
     validate_spillway_edges,
@@ -284,8 +285,13 @@ def compile(  # noqa: A001
             raise CompileError(f"Arcade expansion failed: {exc}") from exc
     module_provenance.update(arcade_prov)
 
-    # ── 5. Validate Probes and Spillways ──────────────────────────────────────
+    # ── 5. Desugar `Module.spillway` into a real edge, validate Probes/Spillways ─
+    # Desugaring must run AFTER Arcade expansion (step 4) — see
+    # `desugar_module_spillway`'s docstring — and BEFORE the spillway/Assert-
+    # quarantine validations below, so a sugar-produced edge is validated
+    # exactly like an explicitly-authored one, with no special-casing.
     try:
+        modules, edges = desugar_module_spillway(modules, edges)
         validate_probes(modules)
         validate_probe_source_edges(modules, edges)
         validate_spillway_edges(modules, edges)
