@@ -5,7 +5,7 @@ over the Model Context Protocol on stdin/stdout, so MCP clients (Claude
 Desktop, IDEs) can query runs, lineage, patches, probe signals, doctor, and
 blueprint history. Local-only, no network transport in v1. Requires the
 optional `mcp` extra; guarded with find_spec + an install hint, mirroring
-`studio`'s textual gate.
+`dashboard`'s streamlit gate.
 """
 
 from __future__ import annotations

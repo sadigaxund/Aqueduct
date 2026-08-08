@@ -16,7 +16,7 @@ exactly this hand-off). The server is:
 - **SDK-gated.** The ``mcp`` SDK is a dev-tooling extra
   (``pip install aqueduct-core[mcp]``); this module's top level stays
   SDK-free — only ``serve()`` (and the private builders it calls) import it,
-  mirroring the ``studio``/``textual`` pattern. ``build_tool_declarations()``
+  mirroring the ``dashboard``/``streamlit`` pattern. ``build_tool_declarations()``
   is pure and importable on a base install.
 
 Tool handlers run synchronously on the event loop — acceptable for a local

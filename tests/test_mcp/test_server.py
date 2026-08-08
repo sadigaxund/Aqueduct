@@ -65,7 +65,7 @@ def test_declarations_are_json_schema_shaped():
 
 def test_server_module_top_level_is_sdk_free():
     """`import aqueduct.mcp` must work on a base install — the SDK import
-    lives inside serve()/_build_server() only (the studio/textual pattern)."""
+    lives inside serve()/_build_server() only (the dashboard/streamlit pattern)."""
     import aqueduct.mcp.server as srv
 
     for line in inspect.getsource(srv).splitlines():

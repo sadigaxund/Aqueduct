@@ -701,16 +701,15 @@ columns or aggregation tables:
 DuckDB: the functions iterate discovered per‑pipeline files. Postgres: a single
 schema‑scoped query. Both backends return the same shape.
 
-### Read‑only viewers
+### Read‑only viewer
 
-Two local, on‑demand observability viewers: neither runs in the data path:
+One local, on‑demand observability viewer; it does not run in the data path:
 
 | Viewer | Command | Extra | Description |
 |---|---|---|---|
 | Dashboard | `aqueduct dashboard` | `dashboard` (Streamlit + Plotly) | Fleet overview: cross‑blueprint runs, success/heal rates, per‑run module metrics, column‑lineage Sankey, doctor, config. Manual refresh; no background polling. |
-| Studio | `aqueduct studio` | `tui` (Textual) | Interactive TUI: run list, ad‑hoc SQL over the observability store, doctor, config, lineage. |
 
-Both are read‑only: they issue `SET read_only = true` on DuckDB and use a
+It is read‑only: it issues `SET read_only = true` on DuckDB and uses a
 read‑only connection on Postgres.
 
 ---

@@ -1,8 +1,7 @@
 """Shared read-time observability query layer (Phase 68).
 
-The ONE read layer behind every observability *viewer* — the frozen `aqueduct
-studio` TUI (`aqueduct/tui/data.py` re-exports from here), the Streamlit
-dashboard, and `report --json`. No duplication: each surface is rendering only;
+The ONE read layer behind every observability *viewer* — the Streamlit
+dashboard and `report --json`. No duplication: each surface is rendering only;
 all queries live here.
 
 Design rules:

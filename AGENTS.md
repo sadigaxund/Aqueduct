@@ -53,12 +53,11 @@ OpenLineage adds **no** extra — `httpx` is already a base dep.)
 **Documented exception — dev-tooling extras.** The two-axis rule governs
 *runtime-capability* deps (vendor SDKs / store backends used while a pipeline
 runs). A small separate class is allowed for **developer/inspection tooling that
-never runs in the data path**: `dev` (pytest/black/ruff), `tui` (`textual`, for
-`aqueduct studio`), `dashboard` (`streamlit`+`plotly`, for `aqueduct
-dashboard` — a local, read-only, on-demand observability viewer like the Spark
-UI), and `mcp` (the `mcp` SDK, for `aqueduct mcp serve` — the local stdio MCP
-diagnostics server over the read-only tool registry). These stay OUT of `all`
-and out of the runtime axes — a
+never runs in the data path**: `dev` (pytest/black/ruff), `dashboard`
+(`streamlit`+`plotly`, for `aqueduct dashboard` — a local, read-only, on-demand
+observability viewer like the Spark UI), and `mcp` (the `mcp` SDK, for `aqueduct
+mcp serve` — the local stdio MCP diagnostics server over the read-only tool
+registry). These stay OUT of `all` and out of the runtime axes — a
 pipeline never needs them, so bundling them into base/`all` would bloat headless
 Spark-driver / CI installs. This is the *only* sanctioned feature-named-extra
 category; it is not a loophole for runtime features (those still follow the axes).
@@ -358,7 +357,7 @@ their original modules.
 | `redis_.py` | Redis depot KV (high-QPS watermark reads) |
 | `object_store.py` | `ObjectStore` transport (local/fsspec `_Backend`) + `BlobStore` (zstd blobs) + `PatchStore` (patch lifecycle) + `make_blob_store`/`make_patch_store` factories |
 | `read.py` | Canonical backend-aware READ resolver (Phase 69): `resolve_duckdb_obs_path` (single source for the duckdb obs file — `cli._resolve_obs_db` delegates here) + `open_obs_read` (returns an `ObservabilityStore` for duckdb *or* postgres). All read commands must use it instead of raw `duckdb.connect` + hardcoded `.aqueduct/...` paths |
-| `queries.py` | The ONE read-time observability query layer (Phase 68) behind every viewer — `aqueduct studio` (via the `tui/data.py` re-export shim), the Streamlit dashboard, `report --json`, and the `aqueduct/tools/` registry. Row dataclasses (`RunRow`, `RunDetail`, `LineageRow`, `BlueprintHistoryEvent`, …) + `discover_stores`/`list_runs`/`run_detail`/`lineage`/`run_sql_readonly`/`patch_show`/`blueprint_history`/`git_blueprint_commits` (Phase 73 — the last is the only function here that shells out to `git log`, read-only, never raises). Backend-agnostic (`RelationalCursor`), no `textual`, no `pyspark`. New viewer query → add here, never inline SQL in a rendering surface |
+| `queries.py` | The ONE read-time observability query layer (Phase 68) behind every viewer — the Streamlit dashboard, `report --json`, and the `aqueduct/tools/` registry. Row dataclasses (`RunRow`, `RunDetail`, `LineageRow`, `BlueprintHistoryEvent`, …) + `discover_stores`/`list_runs`/`run_detail`/`lineage`/`run_sql_readonly`/`patch_show`/`blueprint_history`/`git_blueprint_commits` (Phase 73 — the last is the only function here that shells out to `git log`, read-only, never raises). Backend-agnostic (`RelationalCursor`), no `pyspark`. New viewer query → add here, never inline SQL in a rendering surface |
 
 ### `aqueduct/infra/` — Cross-layer infrastructure utilities (no domain logic)
 
@@ -512,7 +511,7 @@ keep working. Command families live in submodules:
 | `project.py` | `init`, `completion`, `test` |
 | `blueprint.py` | `blueprint` group: `history` (Phase 73 — chronological remediation timeline for one blueprint; merges `stores/queries.py::blueprint_history` with `git_blueprint_commits`; also registered as the `blueprint_history` tool in `aqueduct/tools/`) |
 | `dev.py` | `dev` group: `capabilities` sub-group (`scaffold`, `sync`, `check`, `docs`) — the SHIPPED engine-authoring tooling (Phase 78). Logic lives in `aqueduct/executor/capability_tooling.py`; this module is rendering + exit codes only |
-| `mcp.py` | `mcp` group: `serve` (Phase 74 — stdio MCP server over `aqueduct/tools/`; guards on `find_spec("mcp")` with an `[mcp]`-extra install hint, same pattern as `studio`/`textual`; the server itself lives in `aqueduct/mcp/server.py`) |
+| `mcp.py` | `mcp` group: `serve` (Phase 74 — stdio MCP server over `aqueduct/tools/`; guards on `find_spec("mcp")` with an `[mcp]`-extra install hint, same pattern as `dashboard`/`streamlit`; the server itself lives in `aqueduct/mcp/server.py`) |
 
 **Rules:** submodules import the group + non-patched helpers from `aqueduct.cli`;
 the 6 monkeypatched helpers (`_agent_usable`, `_resolve_obs_db`,
@@ -521,18 +520,6 @@ the 6 monkeypatched helpers (`_agent_usable`, `_resolve_obs_db`,
 `_aqcli._helper(...)` so test patch paths still bite. New commands go in the
 matching submodule (or a new one + a bottom-of-`__init__` re-export); new shared
 helpers go in `__init__`.
-
-### `aqueduct/tui/` — `aqueduct studio` interactive TUI (Phase 67)
-
-| Module | What it owns |
-|--------|--------------|
-| `data.py` | Re-export shim over `aqueduct/stores/queries.py` (the shared read layer, Phase 68) — keeps the frozen TUI's import paths working. **No `textual`, no `pyspark`.** New queries go in `stores/queries.py`, not here. |
-| `app.py` | The `textual` application (`StudioApp`, `run_studio`). Imports `textual` (the `tui` extra); only loaded after the CLI confirms the dep is installed. Rendering + event wiring only — all data via `data.py`. |
-
-The `studio` command lives in `cli/observability.py` and guards on
-`importlib.util.find_spec("textual")` before importing `app.py`, printing an
-"install aqueduct-core[tui]" hint otherwise. `tui/__init__.py` must stay
-`textual`-free so `import aqueduct.tui.data` works on a base install.
 
 ### `aqueduct/tools/` — internal, read-only diagnostics ToolRegistry (Phase 73)
 
@@ -822,7 +809,6 @@ push to `feat/**` or `phase/**`, and PRs into `main`/`feat/**`/`phase/**`.
 | `patch-tests` | `aqueduct/patch/**` or `tests/test_patch/**` | `pytest tests/test_patch/` |
 | `cli-tests` | `aqueduct/cli/**` or `tests/test_cli/**` | `pytest tests/test_cli/` |
 | `drift-tests` | `aqueduct/drift/**` or `tests/test_drift/**` | `pytest tests/test_drift/ -m "not spark"` |
-| `tui-tests` | `aqueduct/tui/**` or `tests/test_tui/**` | `pytest tests/test_tui/ -m "not spark"` |
 | `config-tests` | `aqueduct/config.py`, `redaction.py`, `secrets.py`, `warnings.py`, or their tests | `pytest tests/test_config.py ...` |
 | `stores-tests` | `aqueduct/stores/**`, `tests/test_stores/**`, `tests/test_depot/**` (PG + Redis services) | `pytest tests/test_stores/ tests/test_depot/ tests/test_benchmark_store.py` — no `-m` filter: this job is the ONLY pre-merge lane pointing at those two directories, so a `unit`-marked test living in either (mocked, no real PG/Redis touched) needs to run here too, alongside the genuinely-`integration` ones and the one `spark`-marked test |
 | `misc-tests` | `aqueduct/models.py`, `utils.py`, `lint.py`, `overrides.py`, `infra/module_loading.py`, `integrations/airflow/**`, `compiler/warnings/**`, `executor/spark/warnings/**`, `templates/default/aqueduct.yml.template`, `.github/workflows/**`, `requirements/**`, `pyproject.toml`, or their tests | `pytest tests/test_airflow.py tests/test_backlog.py tests/test_infra_http.py tests/test_lint.py tests/test_meta_ci.py tests/test_meta_quality.py tests/test_models.py tests/test_module_loading.py tests/test_overrides.py tests/test_utils.py tests/test_template_warning_sync.py -m "not spark"` — groups loose top-level `tests/test_*.py` files with no dedicated subdirectory/lane of their own (the same way `config-tests` already groups its own); none of these were referenced by path in any pre-merge job before, including `test_meta_ci.py` and `test_meta_quality.py` themselves |

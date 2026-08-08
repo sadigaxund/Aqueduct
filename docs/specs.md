@@ -1283,7 +1283,7 @@ failures return as structured MCP tool-call errors; they never terminate
 the server. `--config <aqueduct.yml>` scopes every tool call to one engine
 config (a client-supplied `config_path` argument wins). Requires the
 optional `mcp` dev-tooling extra: `pip install aqueduct-core[mcp]`, a
-local, on-demand diagnostic surface (like `studio`/`dashboard`), never part
+local, on-demand diagnostic surface (like `dashboard`), never part
 of the data path.
 
 **MCP is for external clients only.** The internal heal LLM (§8.12's

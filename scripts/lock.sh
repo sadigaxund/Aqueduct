@@ -39,7 +39,6 @@ uv pip compile pyproject.toml \
   --extra redis \
   --extra postgres \
   --extra mcp \
-  --extra tui \
   --extra dashboard \
   --extra duckdb \
   --output-file requirements/ci-py311.txt
