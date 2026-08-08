@@ -231,7 +231,8 @@ SQL form (upstream module ids are temp views; single-input upstream is also `__i
   label: "Cast + clean"
   config:
     op: sql
-    udfs: [clean_phone]    # UDF ids to register first (see UDF Registry)
+    # clean_phone is a udf_registry entry (see UDF Registry) — called by
+    # name directly in SQL; no per-Channel list, it's registered session-wide.
     query: |
       SELECT CAST(amount AS DECIMAL(18,2)) AS amount, clean_phone(phone) AS phone
       FROM dedup
@@ -373,7 +374,7 @@ udf_registry:
     class: com.example.GeoHashUDF
     return_type: STRING
 ```
-Reference UDFs in a Channel via `udfs: [clean_phone]` and call them in SQL. **Bodies are never inline** — always a module/jar pointer (so the healing LLM never sees code). Python `module:` resolves against a sibling `.py` file next to the blueprint before falling back to a normal import/PYTHONPATH lookup — same rule applies to Assert `custom` `fn:`, Probe `custom` `module:`, and `format: custom` DataSource `class:`.
+Call a registered UDF by name directly in Channel SQL (e.g. `clean_phone(phone)`) — every `udf_registry` entry registers session-wide, so any Channel's SQL may call any of them; there is no per-Channel scoping key. **Bodies are never inline** — always a module/jar pointer (so the healing LLM never sees code). Python `module:` resolves against a sibling `.py` file next to the blueprint before falling back to a normal import/PYTHONPATH lookup — same rule applies to Assert `custom` `fn:`, Probe `custom` `module:`, and `format: custom` DataSource `class:`.
 
 ## Type spellings (Ingress `schema_hint`, Channel `op: cast`, UDF `return_type`)
 Every column-type string is Aqueduct's own hub vocabulary (Arrow-borrowed semantics), not a raw engine DDL string — validated at compile time, not runtime.

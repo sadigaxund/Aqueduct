@@ -395,9 +395,11 @@ For SQL transformations:
   type: Channel
   config:
     op: sql
-    udfs: [clean_phone, parse_currency]
+    # clean_phone / parse_currency are udf_registry entries (§5.4): called
+    # by name directly in SQL, no per-Channel scoping key. Every entry
+    # registers session-wide, so any Channel's SQL may call any of them.
     query: |
-      SELECT CAST(amount AS DECIMAL(18,2)) AS amount, ...
+      SELECT parse_currency(amount) AS amount, clean_phone(phone) AS phone
       FROM dedup_orders
 ```
 
@@ -714,7 +716,7 @@ Assert rules are batched into 1-2 Spark actions (on DuckDB: one `rel.aggregate()
 | :- | :- | :- | :- |
 | Tier 0: Static | `${ctx.namespace.key}` | Parse time | Zero: substituted before Manifest is written |
 | Tier 1: Runtime function | `@aq.fn(args)` | Pre-job (Compiler) | Driver-only, milliseconds |
-| Tier 2: UDF | `udf_id` in `udfs:` list | Spark execution | Distributed: operates on DataFrame columns |
+| Tier 2: UDF | `udf_id` called by name in Channel SQL (§5.4 `udf_registry`) | Engine execution | Distributed: operates on DataFrame columns |
 
 ## **5.2 Tier 0: Static Context**
 
@@ -869,7 +871,7 @@ udf_registry:
 
 | Field | Applies to | Description |
 | :- | :- | :- |
-| `id` | all | UDF name as referenced in `udfs:` lists and SQL. Required. |
+| `id` | all | UDF name — called by this name directly in Channel SQL. Required. |
 | `lang` | all | `python` (default), `java`, or `scala`. |
 | `return_type` | all | Hub type spelling (§9) — Aqueduct's own portable vocabulary, not raw engine DDL (default `string`). |
 | `module` | python | Importable module path. Required for python. |
