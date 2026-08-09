@@ -888,11 +888,50 @@ class SparkEngineBlockSchema(BaseModel):
 class DuckDBEngineBlockSchema(BaseModel):
     """Blueprint-level DuckDB configuration (`engine.duckdb:` block, 2.0).
 
-    Empty today — see ``aqueduct.config.DuckDBEngineConfig`` for why no
-    field is declared until something actually reads it.
+    Mirrors ``aqueduct.config.DuckDBEngineConfig``, but only the per-pipeline
+    RESOURCE/TUNING knobs — ``memory_limit``/``threads``. A pipeline
+    plausibly needs more memory or more threads than the machine default,
+    and that is a property of the pipeline, not the deployment, so a
+    Blueprint-level override is meaningful.
+
+    Deliberately EXCLUDES the DEPLOYMENT/CONNECTION fields
+    (``database_path``, the ``s3_*`` credential/endpoint fields,
+    ``extension_repository``): those describe where and how THIS
+    installation connects (a persistent database file's location on this
+    machine, credentials, an internal extension mirror), not what this
+    pipeline needs. Same reasoning ``SparkEngineBlockSchema`` already
+    documents for omitting ``master_url`` — a Blueprint overriding a
+    credential secret name or an extension-mirror URL is a footgun, not a
+    feature.
+
+    Types/defaults mirror ``DuckDBEngineConfig`` exactly (``str | None`` /
+    ``int | None``, defaulting ``None``) so an unset field stays unset —
+    ``aqueduct.parser.parser._resolve_engine_block_raw``'s
+    ``exclude_unset=True`` depends on that to avoid clobbering the
+    ``aqueduct.yml``-level value with a spurious ``None``.
     """
 
     model_config = ConfigDict(extra="forbid")
+
+    memory_limit: str | None = Field(
+        default=None,
+        description=(
+            "DuckDB `SET memory_limit='<value>'` (e.g. '4GB'), merged with "
+            "the engine-level engine.duckdb.memory_limit from aqueduct.yml "
+            "(Blueprint wins). Unset leaves the aqueduct.yml value (or "
+            "DuckDB's own default) untouched."
+        ),
+    )
+    threads: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "DuckDB `SET threads=<value>`, merged with the engine-level "
+            "engine.duckdb.threads from aqueduct.yml (Blueprint wins). "
+            "Unset leaves the aqueduct.yml value (or DuckDB's own default) "
+            "untouched."
+        ),
+    )
 
 
 class EngineBlockSchema(BaseModel):

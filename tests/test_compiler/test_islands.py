@@ -120,8 +120,11 @@ def test_blueprint_engine_config_has_an_entry_for_every_registered_engine_block(
     )
     assert set(bp.engine_config) == {"spark", "duckdb"}
     assert bp.engine_config["spark"] == {"spark.sql.shuffle.partitions": 10}
-    # DuckDBEngineBlockSchema declares no fields yet — the generic derivation
-    # still produces an (empty) entry for it, never omits the key entirely.
+    # This Blueprint's `engine:` block never mentions `duckdb:` at all —
+    # the generic derivation still produces an (empty) entry for it (every
+    # registered engine gets a key), never omits it entirely, even though
+    # DuckDBEngineBlockSchema (2.54) now declares real fields (memory_limit/
+    # threads) a Blueprint COULD set.
     assert bp.engine_config["duckdb"] == {}
 
     manifest = ccompile(bp, engine="spark")

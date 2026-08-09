@@ -4,20 +4,21 @@
 The defect: the non-`conf` branch used to call `engine_block.model_dump()`
 with no arguments, which emits EVERY field the pydantic model declares —
 including ones the Blueprint author never wrote, each carrying its default
-(typically `None`). `DuckDBEngineBlockSchema` has zero fields today, so the
-bug is currently inert, but the moment it gains fields (the next task in
-this phase) a Blueprint that sets only ONE of them would produce
-`{"memory_limit": "8GB", "threads": None, ...}` for `Blueprint.engine_config
-["duckdb"]`, and `resolve_session_engine_config`'s Blueprint-wins merge
-would let those `None`s silently clobber real `aqueduct.yml`-level values
-the Blueprint never touched.
+(typically `None`). `DuckDBEngineBlockSchema` had zero fields when this
+test file was first written, so the bug was inert there; it now carries
+`memory_limit`/`threads` (2.54) — a Blueprint that sets only ONE of them
+would produce `{"memory_limit": "8GB", "threads": None}` for
+`Blueprint.engine_config["duckdb"]` without the fix, and
+`resolve_session_engine_config`'s Blueprint-wins merge would let that
+`None` silently clobber a real `aqueduct.yml`-level `threads` value the
+Blueprint never touched.
 
-Because the real `DuckDBEngineBlockSchema` has no fields to prove this
-against, these tests build a SYNTHETIC pydantic model with the shape the
-next task will give it (a couple of `X | None = None` fields) and call the
-fixed function directly — proving the mechanism (`model_dump(exclude_unset
-=True)`, keyed off `model_fields_set`) rather than today's accidentally-safe
-empty schema.
+`TestNonConfBranchExcludesUnsetFields`/`TestConfBranchUnaffected` below keep
+proving the mechanism against a SYNTHETIC stand-in model (independent of
+whatever fields the real schema happens to carry at any given time);
+`TestRealDuckDBEngineBlockSchema` proves the identical guarantee against the
+REAL `aqueduct.parser.schema.DuckDBEngineBlockSchema`, now that it has real
+fields to prove it against.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from aqueduct.parser.parser import _resolve_engine_block_raw
+from aqueduct.parser.schema import DuckDBEngineBlockSchema
 
 pytestmark = pytest.mark.unit
 
@@ -95,3 +97,33 @@ class TestConfBranchUnaffected:
     def test_empty_conf_dict_stays_empty(self):
         block = _FakeSparkEngineBlockSchema()
         assert _resolve_engine_block_raw(block) == {}
+
+
+class TestRealDuckDBEngineBlockSchema:
+    """Same guarantees as `TestNonConfBranchExcludesUnsetFields`, against the
+    REAL `DuckDBEngineBlockSchema` (2.54: `memory_limit`/`threads`) rather
+    than the synthetic stand-in above."""
+
+    def test_nothing_explicitly_set_returns_empty_dict(self):
+        block = DuckDBEngineBlockSchema()
+        assert _resolve_engine_block_raw(block) == {}
+
+    def test_one_field_explicitly_set_returns_only_that_field(self):
+        block = DuckDBEngineBlockSchema(memory_limit="8GB")
+        assert _resolve_engine_block_raw(block) == {"memory_limit": "8GB"}
+
+    def test_both_fields_explicitly_set_returns_both(self):
+        block = DuckDBEngineBlockSchema(memory_limit="8GB", threads=4)
+        assert _resolve_engine_block_raw(block) == {"memory_limit": "8GB", "threads": 4}
+
+    def test_field_explicitly_set_to_its_own_default_still_counts(self):
+        block = DuckDBEngineBlockSchema(memory_limit=None, threads=4)
+        assert _resolve_engine_block_raw(block) == {"memory_limit": None, "threads": 4}
+
+    def test_deployment_fields_rejected_extra_forbid(self):
+        """`database_path`/`s3_*`/`extension_repository` are deliberately
+        NOT on the Blueprint-level schema (deployment/connection concerns,
+        never a per-pipeline override) — `extra="forbid"` rejects them at
+        parse time rather than silently accepting and dropping them."""
+        with pytest.raises(Exception):
+            DuckDBEngineBlockSchema(database_path="/tmp/x.duckdb")

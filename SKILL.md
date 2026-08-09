@@ -57,6 +57,9 @@ engine:                                # optional — per-engine settings, names
   spark:
     conf:                             # merged with engine-level engine.spark.conf
       spark.sql.shuffle.partitions: 200
+  duckdb:                              # merged with engine-level engine.duckdb.*
+    memory_limit: "8GB"                # resource/tuning knobs only (memory_limit/threads) —
+    threads: 4                         # database_path/s3_*/extension_repository stay aqueduct.yml-only
 
 retry_policy: { max_attempts: 3 }     # optional
 

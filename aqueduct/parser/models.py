@@ -331,10 +331,10 @@ class Blueprint:
     # `spark_config:` dict pre-2.0, and was still a Spark-only
     # `spark_config` field here through 2.52 even after the YAML surface
     # went generic — see `aqueduct.parser.schema.EngineBlockSchema`). Every
-    # registered engine gets an entry (possibly `{}`, e.g. DuckDB's
-    # Blueprint-level block carries no fields yet — see
-    # `DuckDBEngineBlockSchema`), so a new engine's Blueprint-level knob
-    # needs no change here — `parser/parser.py` derives this dict
+    # registered engine gets an entry (possibly `{}` when the Blueprint sets
+    # none of that engine's fields, e.g. `DuckDBEngineBlockSchema`'s
+    # `memory_limit`/`threads`, 2.54), so a new engine's Blueprint-level
+    # knob needs no change here — `parser/parser.py` derives this dict
     # structurally from `EngineBlockSchema`'s own fields.
     engine_config: dict[str, dict[str, Any]] = field(default_factory=dict)
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)

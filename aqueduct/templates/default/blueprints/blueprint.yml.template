@@ -58,8 +58,9 @@ macros:
 # ── Engine config (blueprint-level overrides, 2.0) ─────────────────────────────
 #
 # Per-engine settings, namespaced by engine name — mirrors aqueduct.yml's
-# top-level engine: block exactly. Merged with the engine-level
-# engine.spark.conf at runtime; Blueprint values win on conflict.
+# top-level engine: block. Each engine's block is merged with that SAME
+# engine's engine.<name> config from aqueduct.yml at runtime; Blueprint
+# values win on conflict.
 #
 # Not to be confused with the per-module `engine:` FIELD (a scalar engine
 # NAME, e.g. `engine: duckdb`, set directly on a module below) — same word,
@@ -71,6 +72,15 @@ engine:
   spark:
     conf:
       spark.sql.shuffle.partitions: "200"
+  # duckdb:
+  #   memory_limit: "8GB"            # SET memory_limit=...; unset keeps the
+  #                                   # aqueduct.yml value (or DuckDB's own
+  #                                   # default, ~80% of system RAM)
+  #   threads: 4                     # SET threads=...; unset keeps the
+  #                                   # aqueduct.yml value (or all cores)
+  #   # Resource/tuning knobs only — deployment/connection settings
+  #   # (database_path, extension_repository, s3_*) are aqueduct.yml-only
+  #   # (engine.duckdb block there), never overridable per-Blueprint.
 
 
 # ── Retry policy (blueprint-level default) ─────────────────────────────────────

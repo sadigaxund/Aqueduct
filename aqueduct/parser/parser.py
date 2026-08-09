@@ -46,20 +46,19 @@ def _resolve_engine_block_raw(engine_block: Any) -> dict[str, Any]:
     sub-field (arbitrary `spark.*` keys) — that dict already contains only
     what the author typed, so it is returned as-is. Every other engine's
     block declares its session-affecting fields directly on the model
-    (`DuckDBEngineBlockSchema` is empty today, but this is written for the
-    shape it will have once fields land there), so `model_dump()` is the
-    generic per-engine bag — but it MUST be `exclude_unset=True`.
+    (`DuckDBEngineBlockSchema` carries `memory_limit`/`threads`, 2.54), so
+    `model_dump()` is the generic per-engine bag — but it MUST be
+    `exclude_unset=True`.
 
     Plain `model_dump()` (no args) emits EVERY declared field, including
     ones the author never wrote in the Blueprint, each carrying its
     pydantic default (typically `None`). A Blueprint that sets only ONE
-    field on a future non-Spark engine block would otherwise produce
-    `{"memory_limit": "8GB", "threads": None, ...}` for the rest, and
+    field on a non-Spark engine block (e.g. just `engine.duckdb.memory_limit`)
+    would otherwise produce `{"memory_limit": "8GB", "threads": None}`, and
     `aqueduct.executor.session_config.resolve_session_engine_config`'s merge
-    (Blueprint wins) would let those `None`s silently clobber real
-    `aqueduct.yml`-level values the Blueprint never touched — the exact
-    falsy/None trap AGENTS.md warns about, and a landmine invisible today
-    only because there is nothing yet to trip it on. `exclude_unset=True`
+    (Blueprint wins) would let that `None` silently clobber a real
+    `aqueduct.yml`-level `threads` value the Blueprint never touched — the
+    exact falsy/None trap AGENTS.md warns about. `exclude_unset=True`
     keeps only the fields pydantic's own `model_fields_set` says were
     actually provided — the same primitive
     `aqueduct.executor.config_leaves.explicitly_set_config_leaves` uses for

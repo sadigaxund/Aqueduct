@@ -205,6 +205,97 @@ class TestS3SecretResolution:
             con.close()
 
 
+class TestBlueprintLevelOverrideEndToEnd:
+    """Blueprint-level `engine.duckdb.memory_limit`/`threads` (2.54,
+    `DuckDBEngineBlockSchema`) reach a real DuckDB session and override the
+    `aqueduct.yml`-level value — the full path (parse -> compile ->
+    `resolve_session_engine_config` -> `_make_session`), not just the
+    isolated dict-merge unit tests in
+    `tests/test_executor/test_session_config.py` or the `_resolve_engine_
+    block_raw` unit tests in `tests/test_parser/test_engine_block_
+    resolution.py`."""
+
+    @staticmethod
+    def _compile(tmp_path, engine_yaml: str, name: str):
+        from aqueduct.compiler.compiler import compile as aq_compile
+        from aqueduct.parser.parser import parse
+
+        bp_file = tmp_path / f"{name}.yml"
+        bp_file.write_text(
+            f"aqueduct: '1.0'\nid: {name}\nname: {name}\n"
+            f"{engine_yaml}"
+            "modules:\n  - id: m\n    type: Ingress\n    label: M\n"
+            "    config: {format: csv, path: 'unused.csv'}\n"
+            "edges: []\n",
+            encoding="utf-8",
+        )
+        bp = parse(bp_file)
+        return aq_compile(bp, blueprint_path=bp_file, engine="duckdb")
+
+    def test_blueprint_memory_limit_overrides_aqueduct_yml(self, tmp_path):
+        from aqueduct.config import AqueductConfig, DuckDBEngineConfig, EngineConfig
+        from aqueduct.executor.session_config import resolve_session_engine_config
+
+        manifest = self._compile(
+            tmp_path, "engine:\n  duckdb:\n    memory_limit: '512MiB'\n", "bp_mem"
+        )
+        cfg = AqueductConfig(engine=EngineConfig(duckdb=DuckDBEngineConfig(memory_limit="4GB")))
+        engine_config = resolve_session_engine_config(cfg, "duckdb", manifest)
+        assert engine_config["memory_limit"] == "512MiB"  # Blueprint wins
+
+        con = _make_session(SessionSpec(blueprint_id="bp_mem", engine_config=engine_config))
+        try:
+            val = con.sql("SELECT current_setting('memory_limit')").fetchone()[0]
+            assert val == "512.0 MiB"
+        finally:
+            con.close()
+
+    def test_unset_blueprint_field_leaves_aqueduct_yml_value_intact(self, tmp_path):
+        """The Blueprint sets `memory_limit` but never mentions `threads` —
+        the `exclude_unset=True` guarantee (`_resolve_engine_block_raw`)
+        must keep `threads` at its `aqueduct.yml` value rather than
+        clobbering it with the field's `None` default."""
+        from aqueduct.config import AqueductConfig, DuckDBEngineConfig, EngineConfig
+        from aqueduct.executor.session_config import resolve_session_engine_config
+
+        manifest = self._compile(
+            tmp_path, "engine:\n  duckdb:\n    memory_limit: '512MiB'\n", "bp_partial"
+        )
+        cfg = AqueductConfig(
+            engine=EngineConfig(duckdb=DuckDBEngineConfig(memory_limit="4GB", threads=3))
+        )
+        engine_config = resolve_session_engine_config(cfg, "duckdb", manifest)
+        assert engine_config["memory_limit"] == "512MiB"  # Blueprint wins
+        assert engine_config["threads"] == 3  # untouched aqueduct.yml value survives
+
+        con = _make_session(SessionSpec(blueprint_id="bp_partial", engine_config=engine_config))
+        try:
+            val = con.sql("SELECT current_setting('threads')").fetchone()[0]
+            assert int(val) == 3
+        finally:
+            con.close()
+
+    def test_no_blueprint_engine_block_leaves_aqueduct_yml_value_intact(self, tmp_path):
+        """No `engine.duckdb:` block at all in the Blueprint -> the
+        aqueduct.yml value is used unchanged (empty-override no-op case)."""
+        from aqueduct.config import AqueductConfig, DuckDBEngineConfig, EngineConfig
+        from aqueduct.executor.session_config import resolve_session_engine_config
+
+        manifest = self._compile(tmp_path, "", "bp_none")
+        cfg = AqueductConfig(
+            engine=EngineConfig(duckdb=DuckDBEngineConfig(memory_limit="256MiB"))
+        )
+        engine_config = resolve_session_engine_config(cfg, "duckdb", manifest)
+        assert engine_config["memory_limit"] == "256MiB"
+
+        con = _make_session(SessionSpec(blueprint_id="bp_none", engine_config=engine_config))
+        try:
+            val = con.sql("SELECT current_setting('memory_limit')").fetchone()[0]
+            assert val == "256.0 MiB"
+        finally:
+            con.close()
+
+
 class TestEnsureExtension:
     def test_ensure_extension_wraps_install_failure(self, duckdb_con):
         """A bogus extension name fails fast (no such extension known) —
