@@ -705,6 +705,7 @@ columns or aggregation tables:
 | `failure_categories` | `dict[str, int]` | Count of failures grouped by `error_class` |
 | `heal_coverage` | `dict[str, int]` | Heals resolved by the signature memory cache (`memory`) vs the LLM (`agent`), per blueprint |
 | `blueprint_history` | `list[BlueprintHistoryEvent]` | One blueprint's store-side remediation timeline (heal run starts, patch apply/reject, outcomes), `aqueduct blueprint history` merges this with `git_blueprint_commits` for the full picture |
+| `gate_rejection_rates` | `dict[str, int]` | Count of `patch_simulation` rows with `status = 'fail'`, per `gate` (`lineage`/`sandbox`/`explain`). `warn`, `skip`, and `not_applicable` are not rejections — see the function's docstring for why. Falls back to `heal_attempts.gate_that_rejected` counts when `patch_simulation` is unavailable |
 
 DuckDB: the functions iterate discovered per‑pipeline files. Postgres: a single
 schema‑scoped query. Both backends return the same shape.

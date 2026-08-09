@@ -172,6 +172,66 @@ def _seed_module_metrics_store(path):
     c.close()
 
 
+# ── gate_rejection_rates: status vocabulary is pass/warn/fail/skip/
+# not_applicable, never 'passed' (Phase 81/82 cross-engine remediation
+# fixed a query that compared against a value no gate ever writes, so
+# EVERY row — including genuine passes — counted as a rejection). ─────────
+
+
+def _seed_patch_simulation(path, rows):
+    """rows: list[(gate, status)]."""
+    c = duckdb.connect(str(path))
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS patch_simulation (
+            id           VARCHAR PRIMARY KEY,
+            run_id       VARCHAR,
+            blueprint_id VARCHAR,
+            patch_id     VARCHAR NOT NULL,
+            gate         VARCHAR NOT NULL,
+            status       VARCHAR NOT NULL,
+            detail       VARCHAR,
+            sample_rows  BIGINT,
+            duration_ms  BIGINT,
+            recorded_at  VARCHAR NOT NULL
+        )
+        """
+    )
+    for i, (gate, status) in enumerate(rows):
+        c.execute(
+            "INSERT INTO patch_simulation VALUES "
+            "(?, 'r1', 'bp', ?, ?, ?, NULL, NULL, NULL, '2026-08-09')",
+            [f"sim-{i}", f"patch-{i}", gate, status],
+        )
+    c.close()
+
+
+def test_gate_rejection_rates_counts_only_fail(tmp_path, monkeypatch):
+    """A realistic spread across two gates: pass/warn/fail/skip/not_applicable.
+
+    Only 'fail' rows are rejections. 'warn' never blocks (lineage warn never
+    blocks; explain warn only blocks behind a config flag this table doesn't
+    capture). 'skip' is caller-treated acceptance
+    (`gates_passed = sandbox_res.status in ("pass", "skip")`).
+    'not_applicable' means the gate had nothing to check.
+    """
+    monkeypatch.chdir(tmp_path)
+    root = tmp_path / ".aqueduct" / "observability" / "bp"
+    root.mkdir(parents=True)
+    _seed_patch_simulation(root / "observability.db", [
+        ("lineage", "pass"),
+        ("lineage", "warn"),
+        ("lineage", "fail"),
+        ("lineage", "not_applicable"),
+        ("sandbox", "pass"),
+        ("sandbox", "skip"),
+        ("sandbox", "fail"),
+        ("sandbox", "fail"),
+    ])
+    rates = q.gate_rejection_rates(_cfg())
+    assert rates == {"lineage": 1, "sandbox": 2}
+
+
 def test_run_detail_merges_a_handoff_modules_two_metrics_rows(tmp_path):
     path = tmp_path / "observability.db"
     _seed_module_metrics_store(path)

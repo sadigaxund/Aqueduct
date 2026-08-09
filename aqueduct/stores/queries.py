@@ -1280,11 +1280,45 @@ def git_blueprint_commits(blueprint_path: str | Path) -> list[dict[str, Any]]:
 
 
 def gate_rejection_rates(cfg: Any, store_dir: str | None = None) -> dict[str, int]:
-    """Gate rejection counts across fleet (from patch_simulation or heal_attempts)."""
+    """Gate rejection counts across fleet, keyed by gate name.
+
+    Counts patch_simulation rows with status = 'fail' — the only status this
+    module's gates ever write that unambiguously means "this patch was
+    turned back." The full status vocabulary a gate can write is `pass` |
+    `warn` | `fail` | `skip` | `not_applicable` (see
+    `Surveyor.record_patch_simulation`); `fail` is deliberately the sole
+    value counted here:
+
+    - `warn` is NOT a rejection: the explain gate is warn-only unless
+      `agent.block_on_explain_regression` is set (a per-run config knob not
+      captured in this row), and a lineage `warn` never blocks at all.
+    - `skip` is explicitly acceptance, not rejection — the caller's own gate
+      check treats it that way (`gates_passed = sandbox_res.status in
+      ("pass", "skip")` in `cli/__init__.py::_run_patch_gates_inline`).
+    - `not_applicable` (lineage gate only, since the cross-engine
+      remediation) means the gate had nothing to check — informational,
+      never blocking, and never a rejection.
+
+    Falls back to `heal_attempts.gate_that_rejected` (COUNT per gate) when
+    the `patch_simulation` table is unavailable (e.g. an older store).
+
+    The query below GROUPs BY gate and returns `(gate, COUNT(*))` — matching
+    the `(label, count)` shape the row-accumulation loop expects (it is
+    shared with the `heal_attempts` fallback below). A prior version
+    selected `(gate, status)` with no aggregation; the loop then added the
+    STATUS STRING (`row[1]`) onto the running int total, raising `TypeError`
+    on the first row of any non-empty result. That exception was swallowed
+    by the `except Exception: continue` below, so the patch_simulation
+    branch never actually contributed data — every call silently fell
+    through to the heal_attempts fallback (or returned `{}` when that table
+    had no `gate_that_rejected` rows either), independent of the `!=
+    'passed'` predicate bug this function also had.
+    """
     agg: dict[str, int] = {}
     for h in discover_stores(cfg, store_dir=store_dir):
         for sql in (
-            "SELECT gate, status FROM patch_simulation WHERE status != 'passed'",
+            "SELECT gate, COUNT(*) FROM patch_simulation "
+            "WHERE status = 'fail' GROUP BY gate",
             "SELECT gate_that_rejected, COUNT(*) FROM heal_attempts "
             "WHERE gate_that_rejected IS NOT NULL GROUP BY gate_that_rejected",
         ):
