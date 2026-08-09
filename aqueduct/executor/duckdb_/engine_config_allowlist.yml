@@ -1,0 +1,26 @@
+# DuckDB's healing config-key allowlist — which `engine.duckdb.<field>`
+# entries the LLM's `set_engine_config` patch op may write.
+#
+# DuckDBEngineBlockSchema (aqueduct/parser/schema.py) declares typed fields
+# directly, not a free-form `conf` bag, so entries here are EXACT field
+# names (a glob pattern is rejected by the loader for this shape — see
+# aqueduct/executor/engine_config_allowlist.py). The Blueprint-level block
+# already excludes every deployment/connection field (`database_path`, the
+# `s3_*` credential/endpoint fields, `extension_repository`) by construction
+# — see DuckDBEngineBlockSchema's own docstring for why those aren't
+# Blueprint-level in the first place. That leaves exactly the two
+# resource/tuning knobs below; nothing else belongs on this list.
+#
+# Types are cross-checked against DuckDBEngineBlockSchema's own pydantic
+# annotations at load time (str | None for memory_limit, int | None for
+# threads) — a mismatch is a build-time EngineConfigAllowlistError, not a
+# silent divergence.
+
+engine: duckdb
+entries:
+  - pattern: memory_limit
+    type: size
+    range: ["128MB", "256GB"]
+  - pattern: threads
+    type: int
+    range: [1, 256]

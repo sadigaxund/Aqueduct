@@ -144,6 +144,56 @@ class CapabilityScopeError(AqueductError):
     """
 
 
+class EngineConfigAllowlistError(AqueductError):
+    """Raised when an engine's healing config-key allowlist
+    (``engine_config_allowlist.yml``) is missing, incomplete, or invalid.
+
+    The Blueprint-level ``engine.<name>`` block (``EngineBlockSchema`` in
+    ``aqueduct/parser/schema.py``) is NOT governed by the capability
+    framework — the leaf walker never included the engine-block schemas, so
+    ``spark.sql.shuffle.partitions`` and friends carry no capability leaf at
+    all. This allowlist is a SEPARATE governance file naming exactly which
+    ``set_engine_config`` keys/values the healing agent may propose, and it
+    is deliberately its own error type rather than reusing one of the three
+    capability-declaration types above:
+
+      - Different CONTENT: a key/type/range triple for one engine's config
+        surface, not a verdict for a Blueprint-grammar or ``aqueduct.yml``
+        leaf — ``capability_leaves.py``/``config_leaves.py`` never derive
+        this checklist, so there is no walker for a closure test to compare
+        against.
+      - Different FIX: editing the allowlist entry directly. There is no
+        ``aqueduct dev capabilities sync``/``scaffold`` equivalent for this
+        file (v1 ships no tooling for it), so pointing at that advice would
+        be actively wrong.
+      - Different CONSUMER: a future patch-apply gate (not yet wired — see
+        the module docstring), not ``aqueduct/compiler/capability_check.py``.
+
+    A direct ``AqueductError`` subclass, deliberately NOT derived from
+    ``CapabilityDeclarationError``/``CapabilityScopeError``/``EnginePluginError``
+    (or vice versa) — same reasoning as those three staying siblings: a
+    handler written for one must not silently swallow this and re-conflate
+    two states with different fixes.
+
+    ``keys`` carries the offending pattern/field name(s) (or the list of
+    engines with a missing file, for the presence guard), so a caller can
+    report them without re-parsing the message.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        engine: str = "",
+        path: str = "",
+        keys: list[str] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.engine = engine
+        self.path = path
+        self.keys = list(keys or [])
+
+
 class ConfigError(AqueductError):
     """Raised when aqueduct.yml cannot be loaded or fails validation."""
 
