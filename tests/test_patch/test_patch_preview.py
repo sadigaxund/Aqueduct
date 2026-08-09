@@ -230,6 +230,113 @@ class TestGate2Lineage:
         assert result.status == "pass"  # Wildcard in NEW outputs suppresses check
 
 
+class TestGate2NotApplicable:
+    """Regression coverage: a patch whose ops touch zero modules must report
+    a distinct `not_applicable` status, never the `pass` a checked-and-clean
+    patch also reports. Pre-fix, `run_lineage_gate` returned the
+    `LineageGateResult` dataclass's default `status="pass"` unchanged on this
+    path (see `preview.py`'s old early-return), which is indistinguishable
+    from "checked and found nothing" — exactly the silent no-op AGENTS.md
+    forbids."""
+
+    def test_set_spark_config_only_patch_is_not_applicable(self):
+        # set_spark_config carries only `key`/`value` — no `module_id`,
+        # `module` dict, or `from_id`/`to_id` — so touched_module_ids()
+        # always returns []. This is the exact op named in the defect
+        # report; any Blueprint (even empty) reproduces it, since the gate
+        # never even needs to look at the Blueprint on this path.
+        bp = {"modules": [], "edges": []}
+        spec = _patch(
+            {"op": "set_spark_config", "key": "spark.sql.shuffle.partitions", "value": "200"}
+        )
+
+        result = run_lineage_gate(bp, bp, spec)
+
+        assert result.status == "not_applicable"
+        assert result.status not in ("pass", "warn", "fail")
+        assert result.touched_modules == []
+        assert not result.warnings
+        # A short human-readable reason must accompany the status — an
+        # empty/absent reason would be the same silent-no-op bug wearing a
+        # new status name.
+        assert result.detail
+        assert "module" in result.detail.lower()
+
+    def test_touched_module_patch_still_reports_pass_not_not_applicable(self):
+        # A patch that DOES reference a module (unlike set_spark_config)
+        # must keep producing the gate's normal checked verdict — the fix
+        # must not widen `not_applicable` to cover patches that do have a
+        # lineage surface.
+        bp = {
+            "modules": [
+                {
+                    "id": "ch1",
+                    "type": "Channel",
+                    "config": {"op": "sql", "query": "SELECT a FROM m1"},
+                }
+            ],
+            "edges": [{"from": "m1", "to": "ch1"}],
+        }
+        spec = _patch(
+            {"op": "set_module_config_key", "module_id": "ch1", "key": "label", "value": "x"}
+        )
+
+        result = run_lineage_gate(bp, bp, spec)
+
+        assert result.status == "pass"
+        assert result.status != "not_applicable"
+        assert result.touched_modules == ["ch1"]
+
+    def test_touched_module_patch_with_regression_still_warns_not_not_applicable(self):
+        # Same guard as above, exercised against the WARN path (a real
+        # column-impact finding) rather than the clean-pass path, so both
+        # non-`not_applicable` outcomes are covered.
+        bp_before = {
+            "modules": [
+                {"id": "m1", "type": "Ingress", "config": {"format": "parquet", "path": "p"}},
+                {
+                    "id": "ch1",
+                    "type": "Channel",
+                    "config": {"op": "sql", "query": "SELECT a FROM m1"},
+                },
+                {
+                    "id": "ch2",
+                    "type": "Channel",
+                    "config": {"op": "sql", "query": "SELECT a FROM ch1"},
+                },
+            ],
+            "edges": [{"from": "m1", "to": "ch1"}, {"from": "ch1", "to": "ch2"}],
+        }
+        bp_after = {
+            "modules": [
+                {"id": "m1", "type": "Ingress", "config": {"format": "parquet", "path": "p"}},
+                {
+                    "id": "ch1",
+                    "type": "Channel",
+                    "config": {"op": "sql", "query": "SELECT a AS b FROM m1"},
+                },
+                {
+                    "id": "ch2",
+                    "type": "Channel",
+                    "config": {"op": "sql", "query": "SELECT a FROM ch1"},
+                },
+            ],
+            "edges": [{"from": "m1", "to": "ch1"}, {"from": "ch1", "to": "ch2"}],
+        }
+        spec = _patch(
+            {
+                "op": "replace_module_config",
+                "module_id": "ch1",
+                "config": {"op": "sql", "query": "SELECT a AS b FROM m1"},
+            }
+        )
+
+        result = run_lineage_gate(bp_before, bp_after, spec)
+
+        assert result.status == "warn"
+        assert result.status != "not_applicable"
+
+
 from pydantic import ValidationError
 
 from aqueduct.config import AgentConnectionConfig

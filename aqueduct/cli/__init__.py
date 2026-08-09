@@ -500,7 +500,16 @@ def _run_patch_gates_inline(  # noqa: F811
             patch_id=patch.patch_id,
             gate="lineage",
             status=lineage_res.status,
-            detail="; ".join(w.detail for w in lineage_res.warnings) or None,
+            # Structured findings win when present; otherwise fall back to
+            # the gate's own `detail` (populated on `not_applicable` — see
+            # `run_lineage_gate` — so the observability row still explains
+            # WHY, instead of a bare `not_applicable` with a null detail
+            # that looks identical to an unset field).
+            detail=(
+                "; ".join(w.detail for w in lineage_res.warnings)
+                or lineage_res.detail
+                or None
+            ),
             duration_ms=lineage_res.duration_ms,
             run_id=iteration_run_id,
             blueprint_id=blueprint_id,

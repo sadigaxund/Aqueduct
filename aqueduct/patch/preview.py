@@ -47,10 +47,19 @@ class LineageWarning:
 
 @dataclass
 class LineageGateResult:
-    status: str = "pass"  # "pass" | "warn" | "fail"
+    status: str = "pass"  # "pass" | "warn" | "fail" | "not_applicable"
     warnings: list[LineageWarning] = field(default_factory=list)
     touched_modules: list[str] = field(default_factory=list)
     duration_ms: int = 0
+    # Short human-readable reason. Populated on the `not_applicable` path (why
+    # the gate has no signal for this patch); the sibling gates
+    # (`SandboxGateResult`, `ExplainGateResult`) already carry an analogous
+    # `detail` field for their non-structured status explanation, so this
+    # follows the same vocabulary rather than overloading `warnings` — a
+    # `list[LineageWarning]` is typed and rendered specifically as *findings*
+    # (missing-column regressions), which an informational "nothing to check"
+    # state is not.
+    detail: str = ""
 
 
 @dataclass
@@ -176,14 +185,31 @@ def run_lineage_gate(
     `SELECT *` queries.
 
     Status:
-      `pass`  no findings
-      `warn`  at least one missing-column finding (default)
-      `fail`  reserved for future hard breakage classes (kept for caller policy)
+      `pass`            no findings
+      `warn`            at least one missing-column finding (default)
+      `fail`            reserved for future hard breakage classes (kept for caller policy)
+      `not_applicable`  the patch's operations touch zero modules — e.g.
+                        `set_spark_config`, whose only fields are `key`/
+                        `value`, carries no `module_id`/`module`/`from_id`/
+                        `to_id` for `touched_module_ids()` to extract. This
+                        means the gate has NO signal for this patch, which is
+                        distinct from having checked it and found nothing —
+                        collapsing the two into `pass` would silently claim a
+                        column-impact check that never ran. Informational
+                        only: it does not block the patch, exactly like the
+                        pre-existing default did not (see `detail` for why).
     """
     t0 = time.monotonic()
     result = LineageGateResult()
     result.touched_modules = touched_module_ids(patch_spec)
     if not result.touched_modules:
+        # Explicit, not a fallen-through default (AGENTS.md "No silent
+        # no-ops" / "Never make the break go away with a default"): a patch
+        # whose ops carry no module reference has no lineage surface for
+        # this gate to check at all, so it must not be indistinguishable
+        # from "checked and clean".
+        result.status = "not_applicable"
+        result.detail = "no module-lineage surface for this patch's ops"
         result.duration_ms = int((time.monotonic() - t0) * 1000)
         return result
 

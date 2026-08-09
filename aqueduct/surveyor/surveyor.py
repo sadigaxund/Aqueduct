@@ -766,7 +766,10 @@ class Surveyor:
         Args:
             patch_id:     PatchSpec identifier — matches `patches/applied/{id}.json`.
             gate:         `"lineage"` (lineage) or `"sandbox"` (sandbox replay).
-            status:       `"pass"` | `"fail"` | `"warn"` | `"skip"`.
+            status:       `"pass"` | `"fail"` | `"warn"` | `"skip"` |
+                          `"not_applicable"` (lineage gate only — the patch's
+                          ops touch zero modules, so the gate has no signal;
+                          informational, never blocking).
             detail:       Free-text reason — failing rule, missing column, etc.
             sample_rows:  Rows processed in the sandbox replay (NULL for gate2).
             duration_ms:  Wall-clock for the gate evaluation.

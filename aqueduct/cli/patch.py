@@ -279,6 +279,7 @@ def patch_preview(
                 "status": lineage_res.status,
                 "touched_modules": lineage_res.touched_modules,
                 "warnings": [w.__dict__ for w in lineage_res.warnings],
+                "detail": lineage_res.detail or None,
                 "duration_ms": lineage_res.duration_ms,
             },
         }
@@ -326,6 +327,10 @@ def patch_preview(
             _e(f"  {label}", err=False)
         elif status == "warn":
             _w(f"  {label}", err=False)
+        elif status == "not_applicable":
+            # Informational only — never an alarm, never a block (same
+            # non-blocking treatment `skip` already gets below).
+            _i(f"  {label}")
         else:
             _i(f"  {label}")
 
@@ -341,7 +346,9 @@ def patch_preview(
     click.echo(_dim("── Lineage gate (live sqlglot) ───────────────────────────────"))
     _gate_status_line(lineage_res.status)
     click.echo(f"  touched modules: {', '.join(lineage_res.touched_modules) or '(none)'}")
-    if lineage_res.warnings:
+    if lineage_res.status == "not_applicable":
+        click.echo(f"  · {lineage_res.detail}")
+    elif lineage_res.warnings:
         for w in lineage_res.warnings:
             click.echo(f"  ⚠ {w.detail}")
     else:

@@ -194,7 +194,14 @@ budget axis tripped before a valid patch landed), the CLI synthesises one
 One row per gate the patch went through. `gate` vocabulary: `lineage`,
 `sandbox`, `explain` (guardrail rejections are recorded in `heal_attempts`,
 not here). `status` is `pass` | `fail` | `warn` | `skip` (`skip` when
-`sandbox_mode: off` synthesises a pass-through row).
+`sandbox_mode: off` synthesises a pass-through row) | `not_applicable`
+(`lineage` gate only — the patch's operations touch zero modules, e.g. a
+`set_spark_config` op, which carries no module reference for the lineage
+gate's column-impact diff to run against. Distinct from `pass`: `pass`
+means the gate checked column consumers and found nothing broken,
+`not_applicable` means there was nothing for the gate to check at all.
+Informational — it does not block the patch, same as `skip`. `detail`
+carries the reason, e.g. "no module-lineage surface for this patch's ops").
 
 #### `patch_index` (1.2.x+)
 
