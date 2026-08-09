@@ -1,12 +1,29 @@
-"""Regression tests for the Phase 82 remediation defect: a heal retry that
-executes a patched Manifest was running on the SAME (pre-patch) execution
-session, so any engine/session config the patch changed had no effect on the
-retry — and the retry's failure got misattributed to the patch.
+"""Regression tests for two related session/manifest-mismatch defects:
 
-The fix (``aqueduct/cli/run.py``): before every heal retry that executes a
-patched manifest, close the current single-engine session and build a fresh
-one from the PATCHED manifest, re-resolved through
-``resolve_session_engine_config``.
+1. (Phase 82) A heal retry that executes a patched Manifest was running on
+   the SAME (pre-patch) execution session, so any engine/session config the
+   patch changed had no effect on the retry — and the retry's failure got
+   misattributed to the patch.
+2. (Cross-engine remediation) Phase 82's fix only rebuilt the session before
+   a PATCHED retry. It missed the other direction: the outer heal loop's
+   ``while True:`` re-executes the ORIGINAL, unpatched Manifest at the top
+   of every iteration to observe the current failure — including the
+   iteration right after a config-touching patch was judged a failure. That
+   baseline re-execution ran on whatever session the FAILED patch's retry
+   left behind, so a phantom config-caused failure (e.g. an OOM from a bad
+   ``memory_limit`` guess) got attributed to the UNPATCHED blueprint and
+   persisted as its error signature.
+
+The fix (``aqueduct/cli/run.py``'s ``_execute_target``, generalizing the
+Phase 82 fix and replacing the removed ``_rebuild_session_for_patch``):
+before EVERY single-engine execution (baseline re-executions as well as
+patch retries), compare the session-config fingerprint the target manifest
+would resolve (``session_config_fingerprint``,
+``aqueduct/executor/session_config.py``) against the one the live session
+was built from, and rebuild only on mismatch — so a manifest whose
+``engine_config`` didn't change reuses the live session for free, and one
+that did always gets a session built from ITS OWN config, regardless of
+whether it is the original manifest or a patched one.
 
 These tests are SEAM-level by design (mock
 ``aqueduct.executor.protocol.get_protocol`` rather than building a real
@@ -34,7 +51,7 @@ from aqueduct.agent.budget import StopReason
 from aqueduct.cli import cli
 from aqueduct.executor.models import ExecutionResult, ExecutionStatus, ModuleResult
 from aqueduct.executor.protocol import get_protocol as _real_get_protocol
-from aqueduct.patch.grammar import PatchSpec, SetEngineConfigOp
+from aqueduct.patch.grammar import PatchSpec, ReplaceModuleLabelOp, SetEngineConfigOp
 
 # The bare `aqueduct.executor.orchestrator` import above forces that module
 # to load NOW, at collection time, before any `@patch(
@@ -188,6 +205,32 @@ def _spark_config_patch(patch_id: str, value: str) -> AgentPatchResult:
     )
 
 
+def _benign_patch(patch_id: str, label: str) -> AgentPatchResult:
+    """A patch that touches ONLY a module label — no ``engine.*`` block, no
+    ``Manifest.engine_config`` entry at all. ``resolve_session_engine_config``
+    reads exclusively from ``cfg.engine.spark.conf`` and
+    ``manifest.engine_config`` — neither of which a ``replace_module_label``
+    op can touch — so this patch's ``session_config_fingerprint`` must be
+    IDENTICAL to the pre-patch manifest's, the "free when unchanged"
+    property under test.
+    """
+    patch_spec = PatchSpec(
+        patch_id=patch_id,
+        rationale="cosmetic label fix",
+        operations=[
+            ReplaceModuleLabelOp(op="replace_module_label", module_id="m1", label=label)
+        ],
+    )
+    return AgentPatchResult(
+        patch=patch_spec,
+        attempts=1,
+        stop_reason=StopReason.SOLVED,
+        tokens_in_total=10,
+        tokens_out_total=20,
+        attempt_records=[],
+    )
+
+
 def _assert_no_unexpected_crash(result) -> None:
     """These tests deliberately make ``execute()`` fail forever, so the run
     ALWAYS ends in the CLI's normal ``sys.exit(exit_codes.DATA_OR_RUNTIME)``
@@ -223,17 +266,21 @@ def test_heal_retry_rebuilds_session_from_patched_manifest(
     mock_get_protocol, mock_get_executor, mock_generate_patch, tmp_path
 ):
     """A single heal retry (max_patches=1) must build a NEW session whose
-    ``engine_config`` reflects the patched manifest, and must close the
-    PRE-patch session before doing so.
+    ``engine_config`` reflects the patched manifest, closing the pre-patch
+    session first — AND the outer loop's mandatory one-more baseline
+    re-execution (top of ``while True:``, right before ``patch_count >=
+    max_patches`` stops the loop) must rebuild AGAIN, back to the
+    UNPATCHED ``engine_config`` — never keep running on the failed patch's
+    config.
 
-    Verified to fail pre-fix: with the rebuild call removed (i.e. calling
-    ``_execute_target`` directly after ``_apply_patch_in_memory`` with no
-    ``_rebuild_session_for_patch`` in between — the exact pre-fix shape),
-    ``get_protocol().session_factory()`` is invoked exactly ONCE for the
-    whole run (only the initial ``_setup_surveyor`` build), so
-    ``len(fake_protocol.built_sessions) == 1`` and this test's `== 2`
-    assertion fails; the retry silently runs on the original session with
-    the original (unpatched) ``engine_config``.
+    Verified to fail pre-fix (this file's previous version, which called an
+    explicit ``_rebuild_session_for_patch`` only before the retry): that
+    mechanism produces exactly 2 builds (initial + 1 retry) for this
+    scenario — the baseline re-execution has no rebuild call site at all, so
+    it silently runs on the FAILED patch's session — making this test's
+    ``== 3`` assertion fail with ``got 2``, and the 3rd spec's
+    ``spark.sql.shuffle.partitions`` assertion fail with an ``IndexError``
+    (no 3rd build exists).
     """
     fake_protocol = _TrackingProtocol()
     mock_get_protocol.return_value = fake_protocol
@@ -243,24 +290,36 @@ def test_heal_retry_rebuilds_session_from_patched_manifest(
     result = _invoke(tmp_path, max_patches=1)
     _assert_no_unexpected_crash(result)
 
-    # Initial session (unpatched) + one retry rebuild.
-    assert len(fake_protocol.built_sessions) == 2, (
-        f"expected 2 session builds (initial + 1 retry), got "
-        f"{len(fake_protocol.built_sessions)}: engine_configs="
-        f"{[s.engine_config for s in fake_protocol.built_specs]}"
+    # Initial session (unpatched) + one retry rebuild (patched) + one more
+    # rebuild for the outer loop's mandatory baseline re-execution before it
+    # gives up (patch_count >= max_patches is checked AFTER that
+    # re-execution, not before it — see aqueduct/cli/run.py's `while True:`).
+    assert len(fake_protocol.built_sessions) == 3, (
+        f"expected 3 session builds (initial + 1 retry + 1 baseline "
+        f"re-execution rebuild), got {len(fake_protocol.built_sessions)}: "
+        f"engine_configs={[s.engine_config for s in fake_protocol.built_specs]}"
     )
 
-    initial_spec, retry_spec = fake_protocol.built_specs
+    initial_spec, retry_spec, baseline_reexec_spec = fake_protocol.built_specs
     assert "spark.sql.shuffle.partitions" not in initial_spec.engine_config
     assert retry_spec.engine_config.get("spark.sql.shuffle.partitions") == "99", (
         "the retry's SessionSpec.engine_config does not carry the patched "
         f"spark config key — got {retry_spec.engine_config}"
     )
+    # The invariant this fix adds: the baseline re-execution must NEVER run
+    # on the failed patch's config — it must be rebuilt back to what the
+    # ORIGINAL (unpatched) manifest resolves, byte-for-byte the initial spec.
+    assert "spark.sql.shuffle.partitions" not in baseline_reexec_spec.engine_config, (
+        "the baseline re-execution after the failed patch is still carrying "
+        f"the patched engine_config — got {baseline_reexec_spec.engine_config}"
+    )
+    assert baseline_reexec_spec.engine_config == initial_spec.engine_config
 
-    # The pre-patch session (built first) must be closed before the retry
-    # session gets used — proves a genuine teardown, not a getOrCreate()
-    # reuse that would silently keep the pre-patch conf alive.
+    # Every superseded session must be closed before the next one is built —
+    # proves genuine teardown at each step, not a getOrCreate() reuse that
+    # would silently keep a stale conf alive.
     assert fake_protocol.built_sessions[0] in fake_protocol.closed_sessions
+    assert fake_protocol.built_sessions[1] in fake_protocol.closed_sessions
 
 
 @patch("aqueduct.agent.generate_agent_patch")
@@ -271,13 +330,18 @@ def test_heal_rebuild_happens_on_every_iteration_not_only_the_first(
 ):
     """Two heal iterations (max_patches=2, each patch attempt still fails)
     must rebuild the session on BOTH retries, not just the first — the
-    unconditional-rebuild contract this fix commits to (no "first patch
-    only" shortcut).
+    unconditional-rebuild-on-mismatch contract this fix commits to (no
+    "first patch only" shortcut) — AND each retry's failure must be
+    followed by a baseline re-execution rebuilt back to the ORIGINAL
+    (unpatched) ``engine_config``, never left running on the config of
+    whichever patch just failed.
 
-    Verified to fail pre-fix the same way as the single-retry test: zero
-    rebuilds happen at all pre-fix, so ``built_sessions`` would stay at 1
-    instead of growing to 3, and neither retry's ``engine_config`` would
-    show its patch's key.
+    Verified to fail pre-fix (this file's previous version): the pre-fix
+    mechanism only rebuilds before a patch retry, never before a baseline
+    re-execution, so it produces exactly 3 builds for this scenario
+    (initial + 2 retries) — this test's ``== 5`` assertion would fail with
+    ``got 3``, and both ``baseline_reexecN`` unpacks below would raise
+    ``ValueError`` (not enough values to unpack).
     """
     fake_protocol = _TrackingProtocol()
     mock_get_protocol.return_value = fake_protocol
@@ -291,22 +355,78 @@ def test_heal_rebuild_happens_on_every_iteration_not_only_the_first(
     _assert_no_unexpected_crash(result)
 
     assert mock_generate_patch.call_count == 2
-    # Initial session + one rebuild per patch attempt.
-    assert len(fake_protocol.built_sessions) == 3, (
-        f"expected 3 session builds (initial + 2 retries), got "
+    # Initial session + (retry rebuild + baseline-reexec rebuild) per patch
+    # attempt — every patch failure is followed by the outer loop rebuilding
+    # BACK to the unpatched config for its mandatory baseline re-execution.
+    assert len(fake_protocol.built_sessions) == 5, (
+        f"expected 5 session builds (initial + 2x[retry + baseline "
+        f"re-execution]), got {len(fake_protocol.built_sessions)}: "
+        f"engine_configs={[s.engine_config for s in fake_protocol.built_specs]}"
+    )
+
+    initial, retry1, baseline_reexec1, retry2, baseline_reexec2 = fake_protocol.built_specs
+    assert retry1.engine_config.get("spark.sql.shuffle.partitions") == "11"
+    assert retry2.engine_config.get("spark.sql.shuffle.partitions") == "22"
+    # The invariant this fix adds: NEITHER baseline re-execution may still
+    # carry the patch that just failed — both must match the untouched
+    # initial config exactly.
+    assert baseline_reexec1.engine_config == initial.engine_config, (
+        "baseline re-execution after patch p1 failed is still carrying "
+        f"p1's engine_config — got {baseline_reexec1.engine_config}"
+    )
+    assert baseline_reexec2.engine_config == initial.engine_config, (
+        "baseline re-execution after patch p2 failed is still carrying "
+        f"p2's engine_config — got {baseline_reexec2.engine_config}"
+    )
+
+    # Every superseded session is closed before the NEXT one is built.
+    assert fake_protocol.built_sessions[0] in fake_protocol.closed_sessions
+    assert fake_protocol.built_sessions[1] in fake_protocol.closed_sessions
+    assert fake_protocol.built_sessions[2] in fake_protocol.closed_sessions
+    assert fake_protocol.built_sessions[3] in fake_protocol.closed_sessions
+
+
+@patch("aqueduct.agent.generate_agent_patch")
+@patch("aqueduct.executor.get_executor")
+@patch("aqueduct.executor.protocol.get_protocol")
+def test_patch_with_no_session_config_change_causes_no_rebuild(
+    mock_get_protocol, mock_get_executor, mock_generate_patch, tmp_path
+):
+    """A patch that never touches ``engine.*``/``Manifest.engine_config``
+    (here, ``replace_module_label``) must cause ZERO session rebuilds —
+    neither for its own retry nor for the baseline re-execution that
+    follows its failure. This is the "free when unchanged" property the
+    fingerprint check exists to guarantee: a config-irrelevant patch must
+    never pay for tearing down and rebuilding a (potentially expensive,
+    e.g. Spark JVM) session.
+
+    Verified to fail pre-fix (this file's previous version): the pre-fix
+    ``_rebuild_session_for_patch`` was UNCONDITIONAL — it rebuilt before
+    every patch retry regardless of what the patch's operations actually
+    touched (by design, to stay exclusion-safe against future ops — see its
+    removed docstring) — so it still produced 2 builds (initial + 1
+    unconditional retry rebuild) for this exact scenario, and this test's
+    ``== 1`` assertion fails with ``got 2``.
+    """
+    fake_protocol = _TrackingProtocol()
+    mock_get_protocol.return_value = fake_protocol
+    mock_get_executor.return_value = MagicMock(return_value=_failing_result())
+    mock_generate_patch.return_value = _benign_patch("p1", "M1 relabeled")
+
+    result = _invoke(tmp_path, max_patches=1)
+    _assert_no_unexpected_crash(result)
+
+    assert len(fake_protocol.built_sessions) == 1, (
+        f"expected 1 session build (initial only — the label patch never "
+        f"touches session-determining config, so neither its retry nor the "
+        f"baseline re-execution after it fails should rebuild), got "
         f"{len(fake_protocol.built_sessions)}: engine_configs="
         f"{[s.engine_config for s in fake_protocol.built_specs]}"
     )
-
-    _initial, retry1, retry2 = fake_protocol.built_specs
-    assert retry1.engine_config.get("spark.sql.shuffle.partitions") == "11"
-    assert retry2.engine_config.get("spark.sql.shuffle.partitions") == "22"
-
-    # Each session is closed before the NEXT one is built — session[0]
-    # closed before session[1] exists to be used, session[1] closed before
-    # session[2].
-    assert fake_protocol.built_sessions[0] in fake_protocol.closed_sessions
-    assert fake_protocol.built_sessions[1] in fake_protocol.closed_sessions
+    assert fake_protocol.closed_sessions == [], (
+        "no session should ever have been closed — the one session built "
+        f"is reused throughout. Closed: {fake_protocol.closed_sessions!r}"
+    )
 
 
 @patch("aqueduct.agent.generate_agent_patch")

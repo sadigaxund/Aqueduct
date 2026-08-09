@@ -21,6 +21,7 @@ from aqueduct.compiler.models import Manifest
 from aqueduct.config import AqueductConfig, DuckDBEngineConfig, EngineConfig, SparkEngineConfig
 from aqueduct.executor.session_config import (
     resolve_session_engine_config,
+    session_config_fingerprint,
     session_secrets_options,
 )
 
@@ -111,6 +112,78 @@ class TestUnregisteredEngineOnConfig:
         manifest = _manifest({"flink": {"some.key": "value"}})
         result = resolve_session_engine_config(cfg, "flink", manifest)
         assert result == {}
+
+
+class TestSessionConfigFingerprint:
+    """Unit coverage for the cross-engine-remediation fingerprint: the
+    ``aqueduct/cli/run.py`` session-rebuild-on-mismatch check (see
+    ``tests/test_cli/test_cli_run_heal_session_rebuild.py`` for the
+    CLI-level seam tests) is only correct if this function is (a)
+    deterministic for an unchanged input and (b) actually sensitive to
+    every way ``resolve_session_engine_config``'s output can change."""
+
+    def test_deterministic_for_the_same_input(self):
+        cfg = AqueductConfig(
+            engine=EngineConfig(
+                spark=SparkEngineConfig(conf={"spark.sql.shuffle.partitions": "100"})
+            )
+        )
+        manifest = _manifest({"spark": {"a": "1"}})
+        fp1 = session_config_fingerprint(cfg, "spark", manifest)
+        fp2 = session_config_fingerprint(cfg, "spark", manifest)
+        assert fp1 == fp2
+
+    def test_key_order_does_not_affect_the_fingerprint(self):
+        """A dict built with keys in a different order must still fingerprint
+        identically — the whole point of a canonical (sorted-key) encoding."""
+        cfg = AqueductConfig()
+        manifest_a = _manifest({"spark": {"a": "1", "b": "2"}})
+        manifest_b = _manifest({"spark": {"b": "2", "a": "1"}})
+        assert session_config_fingerprint(
+            cfg, "spark", manifest_a
+        ) == session_config_fingerprint(cfg, "spark", manifest_b)
+
+    def test_changed_blueprint_engine_config_changes_the_fingerprint(self):
+        """The property the rebuild-on-mismatch check depends on: a
+        ``set_engine_config``-shaped change to ``Manifest.engine_config``
+        (the only thing that can differ between two manifests compiled from
+        the same ``aqueduct.yml`` within one run) must change the
+        fingerprint."""
+        cfg = AqueductConfig(
+            engine=EngineConfig(
+                spark=SparkEngineConfig(conf={"spark.sql.shuffle.partitions": "100"})
+            )
+        )
+        original = _manifest({})
+        patched = _manifest({"spark": {"spark.sql.shuffle.partitions": "999"}})
+        assert session_config_fingerprint(cfg, "spark", original) != session_config_fingerprint(
+            cfg, "spark", patched
+        )
+
+    def test_unchanged_blueprint_engine_config_reproduces_the_original_fingerprint(self):
+        """The "free when unchanged" property: a manifest with NO
+        Blueprint-level override reproduces the exact fingerprint of another
+        manifest with no override, even if they are different Manifest
+        objects (e.g. the original vs. a re-parsed copy of the same
+        blueprint) — the case that must NOT trigger a session rebuild."""
+        cfg = AqueductConfig(
+            engine=EngineConfig(
+                spark=SparkEngineConfig(conf={"spark.sql.shuffle.partitions": "100"})
+            )
+        )
+        manifest_1 = _manifest({})
+        manifest_2 = _manifest({})
+        assert session_config_fingerprint(cfg, "spark", manifest_1) == session_config_fingerprint(
+            cfg, "spark", manifest_2
+        )
+
+    def test_changed_aqueduct_yml_engine_conf_changes_the_fingerprint(self):
+        cfg_a = AqueductConfig(engine=EngineConfig(spark=SparkEngineConfig(conf={"a": "1"})))
+        cfg_b = AqueductConfig(engine=EngineConfig(spark=SparkEngineConfig(conf={"a": "2"})))
+        manifest = _manifest({})
+        assert session_config_fingerprint(cfg_a, "spark", manifest) != session_config_fingerprint(
+            cfg_b, "spark", manifest
+        )
 
 
 class TestSessionSecretsOptions:

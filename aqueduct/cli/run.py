@@ -602,15 +602,22 @@ def _do_compile(
 
 
 class _SessionHolder:
-    """Mutable single-slot box for the run's CURRENT single-engine session.
+    """Mutable single-slot box for the run's CURRENT single-engine session,
+    plus the fingerprint of the config it was built from.
 
-    A heal retry that executes a patched Manifest must close the pre-patch
-    session and build a fresh one so an engine-config change the patch made
-    (e.g. a ``set_engine_config`` op) actually reaches the retry — see
-    ``_rebuild_session_for_patch`` in the ``run`` command below (Phase 82
-    remediation). Two independent consumers need to observe whichever
-    session is CURRENT at the moment they run, never the one that existed
-    when they were defined:
+    ``_execute_target`` (below) rebuilds the session whenever the manifest it
+    is about to execute would resolve a DIFFERENT ``engine_config`` than the
+    one the LIVE session carries — never execute a Manifest on a session
+    built from a different Manifest (cross-engine remediation; see
+    ``session_config_fingerprint`` in ``aqueduct/executor/session_config.py``
+    for what goes into that comparison and why). This subsumes the earlier
+    Phase 82 fix (``_rebuild_session_for_patch``, since removed), which only
+    rebuilt before a PATCHED retry — it never caught the matching bug in the
+    other direction: the outer heal loop's baseline re-execution of the
+    ORIGINAL manifest, at the top of ``while True:``, running on whatever
+    session a FAILED patch left behind. Two independent consumers need to
+    observe whichever session is CURRENT at the moment they run, never the
+    one that existed when they were defined:
 
       - the ``atexit`` closer registered in ``_setup_surveyor`` — a plain
         ``atexit.register(lambda: close(session))`` closing over a local
@@ -634,10 +641,16 @@ class _SessionHolder:
     it points at.
     """
 
-    __slots__ = ("session",)
+    __slots__ = ("session", "engine_config_fingerprint")
 
-    def __init__(self, session: object = None) -> None:
+    def __init__(
+        self, session: object = None, engine_config_fingerprint: str | None = None
+    ) -> None:
         self.session = session
+        # The fingerprint the CURRENT `.session` was built from — `None`
+        # until a single-engine session is actually built (never set for a
+        # polyglot run, which never builds one through this holder at all).
+        self.engine_config_fingerprint = engine_config_fingerprint
 
 
 @_dc_frozen(frozen=True)
@@ -1042,10 +1055,14 @@ def _setup_surveyor(
         from aqueduct.executor.protocol import SessionSpec, get_protocol
         from aqueduct.executor.session_config import (
             resolve_session_engine_config,
+            session_config_fingerprint,
             session_secrets_options,
         )
 
         _protocol = get_protocol(engine)
+        _session_holder.engine_config_fingerprint = session_config_fingerprint(
+            cfg, engine, manifest
+        )
         _session_holder.session = _protocol.session_factory()(
             SessionSpec(
                 blueprint_id=manifest.blueprint_id,
@@ -1060,12 +1077,13 @@ def _setup_surveyor(
         import atexit
 
         _close_session = _protocol.session_closer()
-        # Closes over `_session_holder`, not `session` — a later heal-retry
-        # rebuild (`run()`'s `_rebuild_session_for_patch`) mutates the
-        # holder's `.session` attribute from a DIFFERENT function's scope
-        # (this function has already returned by then), so reading
-        # `_session_holder.session` here at exit time is the only way this
-        # closer ever sees a rebuilt session instead of the original one.
+        # Closes over `_session_holder`, not `session` — a later
+        # `_execute_target` rebuild (see its docstring below) mutates the
+        # holder's `.session`/`.engine_config_fingerprint` attributes from a
+        # DIFFERENT function's scope (this function has already returned by
+        # then), so reading `_session_holder.session` here at exit time is
+        # the only way this closer ever sees a rebuilt session instead of
+        # the original one.
         atexit.register(lambda: _close_session(_session_holder.session))
 
     return _SurveyorSetupResult(
@@ -1599,11 +1617,12 @@ def run(
         _obs_store = _ssr._obs_store
         _patch_store = _ssr._patch_store
         # Every consumer below reads the CURRENT session off this one
-        # holder (never a plain `session` local) — a heal retry that
-        # executes a patched manifest rebuilds the session in place via
-        # `_rebuild_session_for_patch` (see the `_execute_target` call
-        # sites below), and every reader must observe that rebuild, not a
-        # value captured once at setup time (Phase 82 remediation).
+        # holder (never a plain `session` local) — `_execute_target` (below)
+        # rebuilds the session in place, on a config-fingerprint mismatch,
+        # before EVERY single-engine execution it performs (baseline
+        # re-executions as well as patch retries), and every reader must
+        # observe that rebuild, not a value captured once at setup time
+        # (cross-engine remediation, generalizing the Phase 82 fix).
         _session_holder = _ssr.session_holder
         bundle = _ssr.bundle
         depot = _ssr.depot
@@ -1918,9 +1937,69 @@ def run(
             ``ModuleResult`` inside ``run_polyglot()`` itself (see its
             ``AqueductError`` wrap), so ``execute_exc`` is always ``None``
             on that path.
+
+            **Session-fingerprint guard (cross-engine remediation).** Before
+            the single-engine branch executes, it compares the session
+            fingerprint *target_manifest* would resolve
+            (``session_config_fingerprint``, in
+            ``aqueduct/executor/session_config.py``) against the one
+            ``_session_holder.session`` was actually built from, rebuilding
+            only on mismatch. This is the ONE funnel every single-engine
+            execution in this run passes through — the outer heal loop's
+            baseline re-execution at the top of ``while True:`` AND every
+            patch retry — so it catches both directions of the invariant
+            "never execute a Manifest on a session built from a DIFFERENT
+            Manifest": a patch retry whose ``set_engine_config`` op the
+            pre-patch session hasn't picked up, AND (the bug this check adds
+            over the earlier Phase 82 fix) the next baseline re-execution of
+            the ORIGINAL manifest running on whatever session a FAILED
+            patch's retry left behind. A mismatch-free call (nothing
+            session-relevant changed) costs one fingerprint recompute and no
+            rebuild — a Spark JVM is never torn down for a patch that never
+            touched engine config. This subsumes the removed
+            ``_rebuild_session_for_patch`` — a Manifest change is now always
+            observed exactly once, at the point of execution, instead of at
+            two separate explicit call sites that could disagree.
             """
             if len(target_manifest.islands) <= 1:
-                from aqueduct.executor.protocol import filter_execute_kwargs
+                from aqueduct.executor.protocol import (
+                    SessionSpec,
+                    filter_execute_kwargs,
+                    get_protocol,
+                )
+                from aqueduct.executor.session_config import (
+                    resolve_session_engine_config,
+                    session_config_fingerprint,
+                    session_secrets_options,
+                )
+
+                _target_fingerprint = session_config_fingerprint(cfg, engine, target_manifest)
+                if (
+                    _session_holder.session is not None
+                    and _session_holder.engine_config_fingerprint != _target_fingerprint
+                ):
+                    _protocol = get_protocol(engine)
+                    # Stop the STALE session before building the new one — a
+                    # `getOrCreate()`-style reuse without a genuine teardown
+                    # first would silently hand back the same live session
+                    # (the exact no-op-that-looks-like-a-fix this rebuild
+                    # exists to avoid). See `make_spark_session` — most
+                    # engine config (definitely anything `set_engine_config`
+                    # changes) has no effect on an already-running session.
+                    _protocol.session_closer()(_session_holder.session)
+                    _session_holder.session = _protocol.session_factory()(
+                        SessionSpec(
+                            blueprint_id=target_manifest.blueprint_id,
+                            engine_config=resolve_session_engine_config(
+                                cfg, engine, target_manifest
+                            ),
+                            master_url=master_url,
+                            quiet_startup=not verbose,
+                            timezone=cfg.timezone,
+                            engine_options=session_secrets_options(cfg, target_manifest),
+                        )
+                    )
+                    _session_holder.engine_config_fingerprint = _target_fingerprint
 
                 try:
                     _filtered = filter_execute_kwargs(
@@ -1982,64 +2061,6 @@ def run(
                 record_result=False,
             )
             return polyglot_result, None
-
-        def _rebuild_session_for_patch(target_manifest) -> None:
-            """Close the current single-engine session and build a fresh one
-            from *target_manifest* — the PATCHED manifest a heal iteration
-            is about to retry-execute (Phase 82 remediation).
-
-            Unconditional: every call site that executes a patch's retry
-            calls this FIRST, regardless of which op(s) the patch contained.
-            Rebuilding only when a config-shaped op is detected would be an
-            include-list over the (open, growing) set of patch ops — the
-            exact shape AGENTS.md's "classify by what you EXCLUDE" rule
-            bans, and the same shape as the shipped Junction-port bug it
-            cites. Any future op that changes engine/session state would
-            silently miss an op-type allowlist; it can never miss an
-            unconditional rebuild.
-
-            Without this, the retry runs on the SAME session the pre-patch
-            run built. That is not merely stale — for Spark specifically,
-            ``SparkSession.builder.getOrCreate()`` returns the ACTIVE
-            session and only hot-applies a narrow set of runtime-modifiable
-            SQL confs; most engine config (and definitely anything a patch
-            changes via ``set_engine_config``) has no effect on an
-            already-running session. So a patch that fixes the failure by
-            changing engine config would silently retry against the
-            UNCHANGED pre-patch config, fail again, and get misattributed
-            as a bad patch (`_stage_failed_patch` files it as a failure).
-            See ``aqueduct/executor/spark/session.py::make_spark_session``.
-
-            No-op when this run never built an eager single-engine session
-            in the first place (`_session_holder.session is None` — the
-            polyglot path, `len(manifest.islands) > 1`, which never reaches
-            here: `run_polyglot()` already opens a fresh session per island
-            on every call, so there is nothing to close or rebuild).
-            """
-            if _session_holder.session is None:
-                return
-            from aqueduct.executor.protocol import SessionSpec, get_protocol
-            from aqueduct.executor.session_config import (
-                resolve_session_engine_config,
-                session_secrets_options,
-            )
-
-            _protocol = get_protocol(engine)
-            # Stop the PRE-patch session before building the new one — a
-            # `getOrCreate()`-style reuse without a genuine teardown first
-            # would silently hand back the same live session (the exact
-            # no-op-that-looks-like-a-fix this rebuild exists to avoid).
-            _protocol.session_closer()(_session_holder.session)
-            _session_holder.session = _protocol.session_factory()(
-                SessionSpec(
-                    blueprint_id=target_manifest.blueprint_id,
-                    engine_config=resolve_session_engine_config(cfg, engine, target_manifest),
-                    master_url=master_url,
-                    quiet_startup=not verbose,
-                    timezone=cfg.timezone,
-                    engine_options=session_secrets_options(cfg, target_manifest),
-                )
-            )
 
         while True:
             # `iteration_run_id` is the per-iteration uuid used as `run_id`
@@ -2740,7 +2761,10 @@ def run(
                         )
                     if _nm is None:
                         return None, None, None
-                    _rebuild_session_for_patch(_nm)
+                    # `_execute_target` itself rebuilds the session on a
+                    # fingerprint mismatch — no separate rebuild call needed
+                    # here (see its docstring; subsumes the removed
+                    # `_rebuild_session_for_patch`).
                     _r2, _exc2 = _execute_target(
                         _nm,
                         run_id=str(uuid.uuid4()),
@@ -3400,7 +3424,10 @@ def run(
                         model_cascade_position=_cascade_pos,
                     )
                     break
-                _rebuild_session_for_patch(new_manifest)
+                # `_execute_target` itself rebuilds the session on a
+                # fingerprint mismatch — no separate rebuild call needed
+                # here (see its docstring; subsumes the removed
+                # `_rebuild_session_for_patch`).
                 result2, _exc2 = _execute_target(
                     new_manifest,
                     run_id=str(uuid.uuid4()),

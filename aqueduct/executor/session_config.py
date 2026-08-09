@@ -23,12 +23,18 @@ shared home that respects the layer direction — ``patch/`` importing from
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from aqueduct.config import AqueductConfig
 
-__all__ = ["resolve_session_engine_config", "session_secrets_options"]
+__all__ = [
+    "resolve_session_engine_config",
+    "session_config_fingerprint",
+    "session_secrets_options",
+]
 
 
 def resolve_session_engine_config(
@@ -71,6 +77,42 @@ def resolve_session_engine_config(
     if engine_cfg is None:
         return {}
     return {**engine_cfg.model_dump(), **blueprint_override}
+
+
+def session_config_fingerprint(cfg: AqueductConfig, engine: str, manifest: Any) -> str:
+    """Deterministic fingerprint of the session-determining config for one
+    (``cfg``, ``engine``, ``manifest``) triple — the thing a live engine
+    session was built FROM, cheap to recompute and compare on every
+    execution so a session built from one Manifest is never reused to
+    execute a DIFFERENT Manifest (cross-engine remediation).
+
+    Deliberately narrow: it hashes ONLY ``resolve_session_engine_config``'s
+    output, not every ``SessionSpec`` field. Within one ``aqueduct run``
+    process, ``cfg`` is loaded exactly once (a heal patch rewrites the
+    in-memory ``Manifest`` it retries, never ``aqueduct.yml``) and the run's
+    target ``engine`` never changes either — so ``master_url``
+    (``cfg.engine.<x>.master_url``), ``timezone`` (``cfg.timezone``), and
+    ``engine_options``/``session_secrets_options`` (``cfg.secrets.*`` plus
+    ``manifest.base_dir``, which stays the patched blueprint's own directory
+    across every heal iteration) are all constant for the run's lifetime and
+    would only add dead weight to the comparison. ``engine_config`` is the
+    ONE part that can differ between two Manifests in the same run: the
+    ``set_engine_config`` PatchSpec op is the only op that rewrites
+    ``Manifest.engine_config``, and ``resolve_session_engine_config`` is
+    exactly the function that folds it in (Blueprint-level override on top
+    of the engine's ``aqueduct.yml`` config). Any future session-determining
+    field must be added HERE (not layered on as a separate check elsewhere)
+    to stay exclusion-safe — see the "classify by what you EXCLUDE" rule in
+    AGENTS.md.
+
+    Equal ``resolve_session_engine_config()`` output, for the SAME (cfg,
+    engine) pair, always produces the same fingerprint — the property the
+    session-rebuild-on-mismatch check at the execution funnel depends on to
+    stay a no-op when nothing session-relevant changed.
+    """
+    resolved = resolve_session_engine_config(cfg, engine, manifest)
+    canonical = json.dumps(resolved, sort_keys=True, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def session_secrets_options(cfg: AqueductConfig, manifest: Any) -> dict[str, Any]:
