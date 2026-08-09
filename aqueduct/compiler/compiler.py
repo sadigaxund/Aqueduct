@@ -622,7 +622,11 @@ def compile(  # noqa: A001
     # (spark.sql.execution.pythonUDF.arrow.enabled, Spark 3.5+) — then the
     # claim simply isn't true and the warning would be noise.
     _arrow_udf_enabled = (
-        str(blueprint.spark_config.get("spark.sql.execution.pythonUDF.arrow.enabled", "")).lower()
+        str(
+            blueprint.engine_config.get("spark", {}).get(
+                "spark.sql.execution.pythonUDF.arrow.enabled", ""
+            )
+        ).lower()
         == "true"
     )
     if not _arrow_udf_enabled:
@@ -770,7 +774,7 @@ def compile(  # noqa: A001
         modules=tuple(_all_modules),
         hooks=blueprint.hooks,
         edges=tuple(edges),
-        spark_config=dict(blueprint.spark_config),
+        engine_config={k: dict(v) for k, v in blueprint.engine_config.items()},
         retry_policy=blueprint.retry_policy,
         agent=blueprint.agent,
         udf_registry=_resolve_udf_params_tier1(blueprint.udf_registry, registry),

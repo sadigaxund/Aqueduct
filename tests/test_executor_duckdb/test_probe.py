@@ -320,7 +320,7 @@ def test_module_type_probe_driven_through_execute(duckdb_con, tmp_path):
         _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}),
     )
     edges = (Edge(from_id="ing", to_id="eg", port="main"),)
-    manifest = Manifest(blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={})
+    manifest = Manifest(blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={})
     result = execute(manifest, duckdb_con, run_id="r_probe_e2e", store_dir=tmp_path)
     assert result.status == ExecutionStatus.SUCCESS
     statuses = {r.module_id: r.status for r in result.module_results}
@@ -340,7 +340,7 @@ def test_probe_skipped_when_attach_to_unresolved_no_store_dir(duckdb_con, tmp_pa
         _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}),
     )
     edges = (Edge(from_id="ing", to_id="eg", port="main"),)
-    manifest = Manifest(blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={})
+    manifest = Manifest(blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={})
     result = execute(manifest, duckdb_con, run_id="r_probe_no_store", store_dir=None)
     assert result.status == ExecutionStatus.SUCCESS
     statuses = {r.module_id: r.status for r in result.module_results}
@@ -369,7 +369,7 @@ def test_regulator_gated_by_probe_threshold_end_to_end(duckdb_con, tmp_path):
         Edge(from_id="gate_probe", to_id="reg", port="signal"),
         Edge(from_id="reg", to_id="eg", port="main"),
     )
-    manifest = Manifest(blueprint_id="bp_gate", context={}, modules=modules, edges=edges, spark_config={})
+    manifest = Manifest(blueprint_id="bp_gate", context={}, modules=modules, edges=edges, engine_config={})
 
     surveyor = Surveyor(manifest, store_dir=tmp_path, engine="duckdb")
     run_id = "r_gate_closed"
@@ -402,7 +402,7 @@ def test_regulator_gated_by_probe_threshold_open_end_to_end(duckdb_con, tmp_path
         Edge(from_id="gate_probe", to_id="reg", port="signal"),
         Edge(from_id="reg", to_id="eg", port="main"),
     )
-    manifest = Manifest(blueprint_id="bp_gate_open", context={}, modules=modules, edges=edges, spark_config={})
+    manifest = Manifest(blueprint_id="bp_gate_open", context={}, modules=modules, edges=edges, engine_config={})
 
     surveyor = Surveyor(manifest, store_dir=tmp_path, engine="duckdb")
     run_id = "r_gate_open"
@@ -429,7 +429,7 @@ def test_config_probes_sampling_knobs_threaded_through_execute(duckdb_con, tmp_p
         _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}),
     )
     edges = (Edge(from_id="ing", to_id="eg", port="main"),)
-    manifest = Manifest(blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={})
+    manifest = Manifest(blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={})
     sampling = ProbeSampling(max_sample_rows=5, default_sample_fraction=0.1)
     result = execute(manifest, duckdb_con, run_id="r_sampling", store_dir=tmp_path, sampling=sampling)
     assert result.status == ExecutionStatus.SUCCESS
@@ -449,7 +449,7 @@ def test_config_danger_allow_full_probe_actions_gates_via_block_full_actions(duc
         _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}),
     )
     edges = (Edge(from_id="ing", to_id="eg", port="main"),)
-    manifest = Manifest(blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={})
+    manifest = Manifest(blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={})
     result = execute(manifest, duckdb_con, run_id="r_blocked", store_dir=tmp_path, block_full_actions=True)
     assert result.status == ExecutionStatus.SUCCESS
     payload = _last_signal(duckdb_con, tmp_path, "r_blocked", "probe1", "null_rates")

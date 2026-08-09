@@ -98,7 +98,34 @@ def test_module_engine_field_and_blueprint_engine_block_coexist():
         base_dir=Path("/tmp"),
     )
     assert bp.modules[0].engine == "spark"
-    assert bp.spark_config == {"spark.sql.shuffle.partitions": 10}
+    assert bp.engine_config["spark"] == {"spark.sql.shuffle.partitions": 10}
+
+
+def test_blueprint_engine_config_has_an_entry_for_every_registered_engine_block():
+    """`Blueprint.engine_config`/`Manifest.engine_config` is derived
+    GENERICALLY off `EngineBlockSchema`'s own fields (Phase 82 remediation:
+    the `spark_config` -> `engine_config` rename) — every engine named in
+    the `engine:` block gets a dict entry, not just `spark`, even when that
+    engine (DuckDB today) declares no Blueprint-level fields yet."""
+    bp = parse_dict(
+        {
+            "aqueduct": "1.0", "id": "bp", "name": "t",
+            "modules": [
+                {"id": "in", "label": "in", "type": "Ingress",
+                 "config": {"format": "csv", "path": "/tmp/x.csv"}},
+            ],
+            "engine": {"spark": {"conf": {"spark.sql.shuffle.partitions": 10}}},
+        },
+        base_dir=Path("/tmp"),
+    )
+    assert set(bp.engine_config) == {"spark", "duckdb"}
+    assert bp.engine_config["spark"] == {"spark.sql.shuffle.partitions": 10}
+    # DuckDBEngineBlockSchema declares no fields yet — the generic derivation
+    # still produces an (empty) entry for it, never omits the key entirely.
+    assert bp.engine_config["duckdb"] == {}
+
+    manifest = ccompile(bp, engine="spark")
+    assert manifest.engine_config == bp.engine_config
 
 
 # ── Rule 1: explicit pin wins ────────────────────────────────────────────────

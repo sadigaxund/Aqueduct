@@ -192,7 +192,7 @@ def test_egress_writes_module_metrics_on_success(spark, tmp_path: Path):
         ),
         edges=(Edge(from_id="ing", to_id="egr", port="main"),),
         context={},
-        spark_config={},
+        engine_config={},
     )
 
     result = execute(manifest, spark, run_id="run-mm1", store_dir=store_dir)
@@ -324,7 +324,7 @@ def test_execute_use_observe_false(spark, tmp_path):
         ),
         edges=(Edge(from_id="ing", to_id="egr", port="main"),),
         context={},
-        spark_config={},
+        engine_config={},
     )
 
     result = execute(manifest, spark, run_id="run-obs-false", store_dir=store_dir, use_observe=False)

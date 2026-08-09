@@ -58,7 +58,7 @@ def test_no_ops_when_nothing_requested():
 
 def _iceberg_manifest(spark_config):
     m = NS(type=ModuleType.Ingress, config={"format": "iceberg", "path": "x"}, id="load")
-    return NS(modules=[m], spark_config=spark_config)
+    return NS(modules=[m], engine_config={"spark": spark_config})
 
 
 def test_doctor_warns_when_iceberg_has_no_catalog():
@@ -76,4 +76,4 @@ def test_doctor_quiet_when_catalog_present():
 def test_doctor_quiet_when_no_iceberg_module():
     from aqueduct.doctor import _check_iceberg_catalog
     m = NS(type=ModuleType.Ingress, config={"format": "parquet", "path": "x"}, id="load")
-    assert _check_iceberg_catalog(NS(modules=[m], spark_config={})) == []
+    assert _check_iceberg_catalog(NS(modules=[m], engine_config={"spark": {}})) == []

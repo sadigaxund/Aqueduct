@@ -29,7 +29,7 @@ def independent_manifest(tmp_path):
         modules=(m_a, m_b, m_c, m_d),
         edges=edges,
         context={"a": str(tmp_path / "a.parquet"), "c": str(tmp_path / "c.parquet")},
-        spark_config={}
+        engine_config={}
     )
     return manifest
 
@@ -82,7 +82,7 @@ def test_execute_parallel_single_component_serial(tmp_path, spark):
         ),
         edges=(Edge(from_id="A", to_id="B", port="main"),),
         context={},
-        spark_config={}
+        engine_config={}
     )
     
     spark.createDataFrame([(1, "a")], ["id", "val"]).write.parquet(str(tmp_path / "a.parquet"))

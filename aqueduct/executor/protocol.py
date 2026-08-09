@@ -128,11 +128,15 @@ class SessionSpec:
     Attributes:
         blueprint_id: Used as the session's app/label where an engine has one
             (Spark app name). Always available (every Manifest has one).
-        engine_config: The engine's own config bag — Spark's merged conf
-            (``{**cfg.engine.spark.conf, **manifest.spark_config}``) for the
-            Spark engine; ``{}`` (ignored) for DuckDB this stage. A future
-            DuckDB knob would be read from ``cfg.engine.duckdb`` and passed
-            through here.
+        engine_config: The engine's own config bag, resolved by
+            ``aqueduct.executor.session_config.resolve_session_engine_config``
+            — that engine's ``aqueduct.yml``-level config (``cfg.engine.<name>``)
+            merged with its Blueprint-level override
+            (``manifest.engine_config[<name>]``), Blueprint wins, for every
+            registered engine alike. Spark's bag is its merged ``conf`` dict;
+            DuckDB's is ``cfg.engine.duckdb`` (``memory_limit``/``threads``/
+            ``database_path``/``s3_*``/...) similarly overridable per
+            Blueprint.
         master_url: Cluster/connection URL for engines that submit to one
             (Spark). Meaningless and ignored for a single-node engine.
         quiet: Full log suppression during and after session startup (health

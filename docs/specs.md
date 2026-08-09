@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.52: Reference Document**
+**Version 2.53: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -1656,6 +1656,8 @@ spark_config:                      engine:
 ```
 
 `engine.spark.conf` at both levels merge the same way `spark_config` always did (Blueprint wins on conflict). The `set_spark_config` PatchSpec op (§8) is unchanged by name; only its write target moved to `engine.spark.conf.<key>`.
+
+**This merge is engine-generic, not a Spark special case (2.53).** `aqueduct.executor.session_config.resolve_session_engine_config` layers a Blueprint's `engine.<name>:` block over that engine's `aqueduct.yml`-level `engine.<name>:` config, Blueprint wins, for EVERY registered engine — the same rule Spark has always documented above, implemented once and shared. Through 2.52 the internal Manifest carrier for this was still named `spark_config` and read only on Spark's session-build path, so a Blueprint-level `engine.duckdb:` override had nowhere to go: DuckDB always got its `aqueduct.yml` config only, with no way for a Blueprint to override it. The internal carrier (never a YAML-facing name — this Blueprint/Manifest field is plumbing, not part of the grammar documented here) is now `engine_config: dict[str, dict]`, keyed by engine name, populated for every engine named in the `engine:` block, empty for one with nothing to declare (DuckDB's Blueprint-level block has no fields yet — see the `engine.duckdb:` block below). A future field added there participates in the same Blueprint-wins merge automatically.
 
 ### The `engine.duckdb:` block — session config + remote storage (2.41)
 

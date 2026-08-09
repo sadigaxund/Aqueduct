@@ -962,7 +962,7 @@ def test_full_pipeline_ingress_channel_egress(duckdb_con, tmp_path):
         context={},
         modules=modules,
         edges=edges,
-        spark_config={},
+        engine_config={},
     )
 
     result = execute(manifest, duckdb_con, run_id="r1")
@@ -985,7 +985,7 @@ def test_unsupported_module_type_raises_execute_error(duckdb_con):
     # unit test does) is exactly the "module type this executor cannot run"
     # case _SUPPORTED_TYPES exists to catch as defense in depth.
     modules = (_module("a", "Arcade", {}),)
-    manifest = Manifest(blueprint_id="bp", context={}, modules=modules, edges=(), spark_config={})
+    manifest = Manifest(blueprint_id="bp", context={}, modules=modules, edges=(), engine_config={})
     with pytest.raises(ExecuteError, match="not supported"):
         execute(manifest, duckdb_con, run_id="r2")
 
@@ -1024,7 +1024,7 @@ def test_module_type_junction_driven_through_execute(duckdb_con, tmp_path):
         Edge(from_id="j", to_id="eg_lo", port="lo"),
     )
     manifest = Manifest(
-        blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={}
+        blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={}
     )
     result = execute(manifest, duckdb_con, run_id="r_junction")
     assert result.status == ExecutionStatus.SUCCESS
@@ -1048,7 +1048,7 @@ def test_module_type_funnel_driven_through_execute(duckdb_con, tmp_path):
         Edge(from_id="f", to_id="eg", port="main"),
     )
     manifest = Manifest(
-        blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={}
+        blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={}
     )
     result = execute(manifest, duckdb_con, run_id="r_funnel")
     assert result.status == ExecutionStatus.SUCCESS
@@ -1069,7 +1069,7 @@ def test_module_type_regulator_driven_through_execute_gate_open(duckdb_con, tmp_
         Edge(from_id="reg", to_id="eg", port="main"),
     )
     manifest = Manifest(
-        blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={}
+        blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={}
     )
     result = execute(manifest, duckdb_con, run_id="r_reg_open")
     assert result.status == ExecutionStatus.SUCCESS
@@ -1094,7 +1094,7 @@ def test_module_type_regulator_driven_through_execute_gate_closed_skips(duckdb_c
         Edge(from_id="reg", to_id="eg", port="main"),
     )
     manifest = Manifest(
-        blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={}
+        blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={}
     )
     surveyor = MagicMock()
     surveyor.evaluate_regulator.return_value = False
@@ -1131,7 +1131,7 @@ def test_feature_spillway_driven_through_execute(duckdb_con, tmp_path):
         Edge(from_id="ch", to_id="eg_spill", port="spillway"),
     )
     manifest = Manifest(
-        blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={}
+        blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={}
     )
     result = execute(manifest, duckdb_con, run_id="r_spillway")
     assert result.status == ExecutionStatus.SUCCESS
@@ -1172,7 +1172,7 @@ def test_typed_spillway_edge_from_channel_does_not_raise_binder_error(duckdb_con
         ),
     )
     manifest = Manifest(
-        blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={}
+        blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={}
     )
     result = execute(manifest, duckdb_con, run_id="r_typed_spillway")
     assert result.status == ExecutionStatus.SUCCESS
@@ -1193,7 +1193,7 @@ def test_feature_checkpoint_driven_through_execute(duckdb_con, tmp_path):
         context={},
         modules=modules,
         edges=edges,
-        spark_config={},
+        engine_config={},
         checkpoint=True,
     )
 
@@ -1255,7 +1255,7 @@ def test_module_retry_driven_through_execute(duckdb_con, tmp_path, monkeypatch):
     )
     edges = (Edge(from_id="ing", to_id="ch", port="main"),)
     manifest = Manifest(
-        blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={}
+        blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={}
     )
 
     # Swap Ingress for a direct relation registration to avoid a real file read.
@@ -1305,7 +1305,7 @@ def test_module_retry_exhausted_fails_run(duckdb_con, monkeypatch):
     )
     edges = (Edge(from_id="ing", to_id="ch", port="main"),)
     manifest = Manifest(
-        blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={}
+        blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={}
     )
 
     result = execute(manifest, duckdb_con, run_id="r_retry_exhausted")

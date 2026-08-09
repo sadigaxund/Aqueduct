@@ -341,7 +341,8 @@ def run_sandbox_gate(
     and pass the real target engine rather than silently falling back to
     Spark, which is exactly the bug this signature closes (Phase 79). Callers
     resolve it the same way ``Surveyor``/``FailureContext`` do —
-    ``cfg.deployment.engine`` / ``manifest.spark_config.get("deployment_engine")``.
+    ``cfg.deployment.engine`` (or, for a polyglot Manifest, the touched
+    island's own ``.engine``).
 
     ``cfg`` (an ``AqueductConfig``) is REQUIRED (no default) — every
     production caller (``aqueduct/cli/patch.py``'s ``patch preview
@@ -351,11 +352,12 @@ def run_sandbox_gate(
     that session's ``SessionSpec.engine_config``/``engine_options`` through
     the SAME ``aqueduct.executor.session_config.resolve_session_engine_config``
     / ``session_secrets_options`` helpers ``aqueduct run`` uses — closing the
-    gap where a DuckDB sandbox replay used to see ``sandboxed_manifest.
-    spark_config`` (a Spark-only field, always ``{}`` for a non-Spark target)
-    regardless of ``engine.duckdb.*`` (memory_limit/threads/database_path/
-    extension_repository/s3_*) or any httpfs/secrets wiring a real
-    ``engine=="duckdb"`` run would have applied. Ignored when
+    gap where a DuckDB sandbox replay used to see NONE of ``engine.duckdb.*``
+    (memory_limit/threads/database_path/extension_repository/s3_*) or any
+    httpfs/secrets wiring a real ``engine=="duckdb"`` run would have applied
+    (the resolver used to read ``manifest.spark_config`` on a Spark-only
+    branch and fall through to nothing for every other engine — see
+    ``resolve_session_engine_config``'s own docstring). Ignored when
     ``spark_session`` is given — that session was already built (with
     whatever config its own builder resolved) by the caller.
 
@@ -493,10 +495,11 @@ def run_sandbox_gate(
                     SessionSpec(
                         blueprint_id=f"aqueduct.sandbox.{patch_id}",
                         # Resolved through the SAME per-engine helper
-                        # `aqueduct run` uses — NOT
-                        # `sandboxed_manifest.spark_config` (a Spark-only
-                        # field that is always `{}` for any other engine),
-                        # which used to make a DuckDB sandbox replay see
+                        # `aqueduct run` uses (Blueprint-level
+                        # `manifest.engine_config[engine]` layered over
+                        # `cfg.engine.<engine>`, Blueprint wins, for every
+                        # registered engine) — not a Spark-only shortcut
+                        # that used to make a DuckDB sandbox replay see
                         # NONE of `engine.duckdb.*` regardless of what a
                         # real run would apply.
                         engine_config=resolve_session_engine_config(cfg, engine, manifest),

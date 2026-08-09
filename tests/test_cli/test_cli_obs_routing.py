@@ -121,7 +121,7 @@ def test_heal_command_per_pipeline_routing(tmp_path):
         modules=(),
         edges=(),
         context={},
-        spark_config={}
+        engine_config={}
     )
     
     surveyor = Surveyor(manifest, store_dir=p1_dir, engine="spark")

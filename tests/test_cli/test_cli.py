@@ -434,7 +434,7 @@ edges: []
         s = Surveyor(
             Manifest(
                 blueprint_id="heal_cli", name="heal_cli",
-                context={}, modules=(), edges=(), spark_config={},
+                context={}, modules=(), edges=(), engine_config={},
             ),
             tmp_path / "heal_cli",
          engine="spark",)

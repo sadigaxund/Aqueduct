@@ -47,7 +47,7 @@ def _manifest(modules):
         context={},
         modules=tuple(modules),
         edges=(),
-        spark_config={},
+        engine_config={},
     )
 
 

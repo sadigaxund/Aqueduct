@@ -19,7 +19,7 @@ def manifest():
         modules=(),
         edges=(),
         context={},
-        spark_config={}
+        engine_config={}
     )
 
 def test_aggressive_iteration_recording(manifest, tmp_path):

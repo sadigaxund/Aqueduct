@@ -209,7 +209,7 @@ def test_record_healing_outcome_persists_failure_signature(tmp_path):
     from aqueduct.compiler.models import Manifest
     from aqueduct.surveyor.surveyor import Surveyor
 
-    manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), spark_config={})
+    manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), engine_config={})
     store_dir = tmp_path / "obs"
     store_dir.mkdir()
     surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
@@ -238,7 +238,7 @@ def test_record_healing_outcome_defaults_resolution_llm(tmp_path):
     from aqueduct.compiler.models import Manifest
     from aqueduct.surveyor.surveyor import Surveyor
 
-    manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), spark_config={})
+    manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), engine_config={})
     store_dir = tmp_path / "obs2"
     store_dir.mkdir()
     surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
@@ -262,7 +262,7 @@ def test_successful_patch_ids_returns_matching_patches(tmp_path):
     from aqueduct.compiler.models import Manifest
     from aqueduct.surveyor.surveyor import Surveyor
 
-    manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), spark_config={})
+    manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), engine_config={})
     store_dir = tmp_path / "obs3"
     store_dir.mkdir()
     surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
@@ -290,7 +290,7 @@ def test_successful_patch_ids_empty_on_store_error(tmp_path):
     from aqueduct.compiler.models import Manifest
     from aqueduct.surveyor.surveyor import Surveyor
 
-    manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), spark_config={})
+    manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), engine_config={})
     surveyor = Surveyor(manifest, store_dir=tmp_path / "missing", engine="spark")
     # start() never called → _observability is None
     ids = surveyor.successful_patch_ids()
@@ -320,7 +320,7 @@ def test_record_healing_outcome_persists_model_cascade_position(tmp_path):
     from aqueduct.compiler.models import Manifest
     from aqueduct.surveyor.surveyor import Surveyor
 
-    manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), spark_config={})
+    manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), engine_config={})
     store_dir = tmp_path / "obs_cp"
     store_dir.mkdir()
     surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
@@ -350,7 +350,7 @@ def test_record_healing_outcome_defaults_model_cascade_position_none(tmp_path):
     from aqueduct.compiler.models import Manifest
     from aqueduct.surveyor.surveyor import Surveyor
 
-    manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), spark_config={})
+    manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), engine_config={})
     store_dir = tmp_path / "obs_cp_dflt"
     store_dir.mkdir()
     surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
@@ -379,7 +379,7 @@ def test_record_healing_outcome_persists_cascade_model(tmp_path):
     from aqueduct.compiler.models import Manifest
     from aqueduct.surveyor.surveyor import Surveyor
 
-    manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), spark_config={})
+    manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), engine_config={})
     store_dir = tmp_path / "obs_cp"
     store_dir.mkdir()
     surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")

@@ -66,7 +66,7 @@ def test_surveyor_upserts_duckdb(tmp_path):
     """Verify ON CONFLICT (pk) DO UPDATE works on DuckDB on re-running same run_id."""
     manifest = Manifest(
         blueprint_id="bp_test", name="Test", description="", aqueduct_version="1.0",
-        context={}, spark_config={}, retry_policy=RetryPolicy(), agent=None,
+        context={}, engine_config={}, retry_policy=RetryPolicy(), agent=None,
         udf_registry={}, macros={}, checkpoint=False,
         provenance_map=ProvenanceMap(blueprint_id="bp_test", blueprint_path="", modules={}, context={}),
         inputs_fingerprint={},
@@ -103,7 +103,7 @@ def test_surveyor_upserts_postgres():
     
     manifest = Manifest(
         blueprint_id="bp_test", name="Test", description="", aqueduct_version="1.0",
-        context={}, spark_config={}, retry_policy=RetryPolicy(), agent=None,
+        context={}, engine_config={}, retry_policy=RetryPolicy(), agent=None,
         udf_registry={}, macros={}, checkpoint=False,
         provenance_map=ProvenanceMap(blueprint_id="bp_test", blueprint_path="", modules={}, context={}),
         inputs_fingerprint={},
@@ -172,7 +172,7 @@ def test_phase33_matrix_postgres_redis(spark, tmp_path):
     
     manifest = Manifest(
         blueprint_id="bp_p33", name="P33", description="", aqueduct_version="1.0",
-        context={}, spark_config={}, retry_policy=RetryPolicy(), agent=None,
+        context={}, engine_config={}, retry_policy=RetryPolicy(), agent=None,
         udf_registry={}, macros={}, checkpoint=False,
         provenance_map=ProvenanceMap(blueprint_id="bp_p33", blueprint_path="", modules={}, context={}),
         inputs_fingerprint={},

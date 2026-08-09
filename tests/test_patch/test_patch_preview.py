@@ -434,7 +434,7 @@ edges: []
                 context={},
                 modules=(),
                 edges=(),
-                spark_config={},
+                engine_config={},
             )
             mock_compile.return_value = real_manifest
             mock_exec_fn = MagicMock(return_value=MagicMock(status="success", module_results=()))
@@ -516,7 +516,7 @@ edges:
                 context={},
                 modules=(),
                 edges=(),
-                spark_config={},
+                engine_config={},
             )
             mock_compile.return_value = real_manifest
             mock_exec_fn = MagicMock(return_value=MagicMock(status="success", module_results=()))

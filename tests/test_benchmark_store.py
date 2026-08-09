@@ -343,7 +343,7 @@ def _make_manifest():
         modules=(),
         edges=(),
         context={},
-        spark_config={},
+        engine_config={},
     )
 
 

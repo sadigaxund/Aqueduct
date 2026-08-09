@@ -42,7 +42,7 @@ def _manifest(modules, udf_registry=()):
         context={},
         modules=tuple(modules),
         edges=(),
-        spark_config={},
+        engine_config={},
         udf_registry=tuple(udf_registry),
     )
 
@@ -222,6 +222,6 @@ def test_supported_module_and_no_udf_is_clean_on_duckdb():
             _module("e", "Egress", {"format": "parquet", "path": "o.parquet", "mode": "overwrite"}),
         ),
         edges=(Edge(from_id="i", to_id="c"), Edge(from_id="c", to_id="e")),
-        spark_config={},
+        engine_config={},
     )
     assert check_capabilities(m, engine="duckdb") == []

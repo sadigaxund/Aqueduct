@@ -1482,8 +1482,10 @@ def run(
                 )
                 sys.exit(exit_codes.CONFIG_ERROR)
 
+            from aqueduct.executor.session_config import resolve_session_engine_config
+
             sandboxed_manifest, egress_targets = build_sandbox_manifest(manifest, sample)
-            merged_spark_config = {**cfg.engine.spark.conf, **manifest.spark_config}
+            merged_spark_config = resolve_session_engine_config(cfg, "spark", manifest)
             sandbox_run_id = (
                 f"sandbox-{run_id or uuid.uuid4().hex}"  # full uuid — queryable, no collisions
             )

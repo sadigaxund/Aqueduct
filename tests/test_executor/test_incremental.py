@@ -24,7 +24,7 @@ def create_manifest(modules, edges):
         context={},
         modules=tuple(modules),
         edges=tuple(edges),
-        spark_config={},
+        engine_config={},
         retry_policy=RetryPolicy(),
         agent=None,
         udf_registry={},

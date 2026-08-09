@@ -63,8 +63,9 @@ pytestmark = pytest.mark.integration
 
 # `set_spark_config` writes into the Blueprint's `engine.spark.conf` block,
 # which is the ONE thing `resolve_session_engine_config` folds a patch's
-# effect into for Spark (`{**cfg.engine.spark.conf, **manifest.spark_config}`
-# — see `aqueduct/executor/session_config.py`). It is the only patch op that
+# effect into for Spark (`{**cfg.engine.spark.conf,
+# **manifest.engine_config.get("spark", {})}` — see
+# `aqueduct/executor/session_config.py`). It is the only patch op that
 # can make a retry's `SessionSpec.engine_config` observably differ from the
 # pre-patch run's, which is exactly what these tests need to prove the
 # rebuild happened for real (not just "a session object changed identity").

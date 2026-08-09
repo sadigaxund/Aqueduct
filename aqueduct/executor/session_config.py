@@ -38,30 +38,39 @@ def resolve_session_engine_config(
 ) -> dict[str, Any]:
     """Build one engine's ``SessionSpec.engine_config`` dict.
 
-    Spark keeps its existing precedence (``engine.spark.conf`` merged with
-    the Blueprint's own ``spark_config`` override, Blueprint wins) — that is
-    Spark's own documented session-config merge, not a generic shape every
-    engine shares. Every OTHER registered engine (``duckdb``, ...) gets its
-    own ``engine.<name>`` sub-model dumped to a flat dict via
-    ``model_dump()`` — whatever fields THAT engine declares
+    Every registered engine gets the SAME precedence: the engine's
+    ``aqueduct.yml``-level config, overridden by that engine's entry in the
+    Blueprint's ``Manifest.engine_config`` (Blueprint wins on a key
+    conflict) — this used to be Spark's own special-cased merge
+    (``engine.spark.conf`` + ``manifest.spark_config``) with every other
+    engine silently getting ONLY its ``aqueduct.yml`` config and no way for
+    a Blueprint to override it. That was the bug (Phase 82 remediation):
+    Spark keeps its ``conf``-nested free-form bag (arbitrary ``spark.*``
+    keys), every OTHER registered engine (``duckdb``, ...) gets its own
+    ``engine.<name>`` sub-model dumped to a flat dict via ``model_dump()``
+    — whatever fields THAT engine declares
     (``memory_limit``/``threads``/``database_path``/``s3_*``/... for
-    DuckDB) flow through to ``_make_session`` automatically; a new engine
-    needs no change here.
+    DuckDB) flow through to ``_make_session`` automatically — but BOTH
+    branches now layer ``manifest.engine_config.get(engine, {})`` on top,
+    Blueprint winning, for every engine alike.
 
     Every caller that builds a real execution session for an engine — the
     ``aqueduct run`` path (single-engine and polyglot) AND the patch preview
     sandbox gate — MUST resolve ``engine_config`` through this function.
     Building ``SessionSpec.engine_config`` any other way (e.g. hardcoding
     ``manifest.spark_config`` regardless of the target engine, the bug this
-    function was extracted to fix — Phase 82 remediation) silently discards
-    every ``engine.<name>.*`` field a non-Spark engine declares.
+    function was originally extracted to fix — Phase 82 remediation)
+    silently discards every ``engine.<name>.*`` field a non-Spark engine
+    declares, and — before this generalization — silently discarded any
+    Blueprint-level override for a non-Spark engine too.
     """
+    blueprint_override = manifest.engine_config.get(engine, {})
     if engine == "spark":
-        return {**cfg.engine.spark.conf, **manifest.spark_config}
+        return {**cfg.engine.spark.conf, **blueprint_override}
     engine_cfg = getattr(cfg.engine, engine, None)
     if engine_cfg is None:
         return {}
-    return engine_cfg.model_dump()
+    return {**engine_cfg.model_dump(), **blueprint_override}
 
 
 def session_secrets_options(cfg: AqueductConfig, manifest: Any) -> dict[str, Any]:

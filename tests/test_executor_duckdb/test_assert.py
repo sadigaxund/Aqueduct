@@ -452,7 +452,7 @@ def test_module_type_assert_driven_through_execute_quarantine(duckdb_con, tmp_pa
         Edge(from_id="gate", to_id="eg_spill", port="spillway"),
     )
     manifest = Manifest(
-        blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={}
+        blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={}
     )
     result = execute(manifest, duckdb_con, run_id="r_assert")
     assert result.status == ExecutionStatus.SUCCESS
@@ -483,7 +483,7 @@ def test_module_type_assert_driven_through_execute_abort(duckdb_con, tmp_path):
         Edge(from_id="gate", to_id="eg", port="main"),
     )
     manifest = Manifest(
-        blueprint_id="bp", context={}, modules=modules, edges=edges, spark_config={}
+        blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={}
     )
     result = execute(manifest, duckdb_con, run_id="r_assert_abort")
     assert result.status == ExecutionStatus.ERROR

@@ -132,7 +132,7 @@ class TestSurveyorBlueprintSourceYaml:
         bp_path = tmp_path / "blueprint.yml"
         bp_path.write_text("id: my_blueprint\nname: Test", encoding="utf-8")
 
-        manifest = Manifest(blueprint_id="b1", name="test", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), spark_config={})
+        manifest = Manifest(blueprint_id="b1", name="test", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), engine_config={})
         surveyor = Surveyor(manifest, store_dir=tmp_path, blueprint_path=bp_path, engine="spark")
         surveyor.start("r1")
 
@@ -153,7 +153,7 @@ class TestSurveyorBlueprintSourceYaml:
         from aqueduct.compiler.models import Manifest
         from aqueduct.executor.models import ExecutionResult, ModuleResult
 
-        manifest = Manifest(blueprint_id="b1", name="test", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), spark_config={})
+        manifest = Manifest(blueprint_id="b1", name="test", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), engine_config={})
         surveyor = Surveyor(manifest, store_dir=tmp_path, blueprint_path=None, engine="spark")
         surveyor.start("r1")
 
@@ -174,7 +174,7 @@ class TestSurveyorStores:
         from aqueduct.stores import StoreBundle
         from aqueduct.stores.duckdb_ import DuckDBObservabilityStore, DuckDBDepotStore
         
-        manifest = Manifest(blueprint_id="b1", name="test", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), spark_config={})
+        manifest = Manifest(blueprint_id="b1", name="test", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), engine_config={})
         
         obs = DuckDBObservabilityStore(tmp_path / "observability.db")
         depot = DuckDBDepotStore(tmp_path / "depot.db")
@@ -188,7 +188,7 @@ class TestSurveyorStores:
         from aqueduct.compiler.models import Manifest
         from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
         
-        manifest = Manifest(blueprint_id="b1", name="test", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), spark_config={})
+        manifest = Manifest(blueprint_id="b1", name="test", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), engine_config={})
         
         surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
         surveyor.start("r1")
@@ -254,7 +254,7 @@ class TestRecordHealAttempt:
         from aqueduct.agent.signature import make_signature
 
         s = Surveyor(
-            Manifest(blueprint_id="bp1", name="name", context={}, modules=(), edges=(), spark_config={}),
+            Manifest(blueprint_id="bp1", name="name", context={}, modules=(), edges=(), engine_config={}),
             tmp_path,
          engine="spark",)
         s.start("run1")
@@ -282,7 +282,7 @@ class TestRecordHealAttempt:
         from aqueduct.agent.budget import AttemptRecord, StopReason
 
         s = Surveyor(
-            Manifest(blueprint_id="bp1", name="name", context={}, modules=(), edges=(), spark_config={}),
+            Manifest(blueprint_id="bp1", name="name", context={}, modules=(), edges=(), engine_config={}),
             tmp_path,
          engine="spark",)
         s.start("run1")
@@ -302,7 +302,7 @@ class TestRecordHealAttempt:
         from unittest.mock import patch
 
         s = Surveyor(
-            Manifest(blueprint_id="bp1", name="name", context={}, modules=(), edges=(), spark_config={}),
+            Manifest(blueprint_id="bp1", name="name", context={}, modules=(), edges=(), engine_config={}),
             tmp_path,
          engine="spark",)
         s.start("run1")
@@ -320,7 +320,7 @@ class TestRecordHealAttempt:
         from aqueduct.agent import PROMPT_VERSION
 
         s = Surveyor(
-            Manifest(blueprint_id="bp1", name="name", context={}, modules=(), edges=(), spark_config={}),
+            Manifest(blueprint_id="bp1", name="name", context={}, modules=(), edges=(), engine_config={}),
             tmp_path,
          engine="spark",)
         s.start("run1")
@@ -506,7 +506,7 @@ class TestPhase35SurveyorMigration:
     def test_fresh_db_includes_new_columns(self, tmp_path):
         from aqueduct.surveyor.surveyor import Surveyor
         from aqueduct.compiler.models import Manifest
-        s = Surveyor(Manifest(blueprint_id="bp1", name="name", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), spark_config={}), tmp_path, engine="spark")
+        s = Surveyor(Manifest(blueprint_id="bp1", name="name", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), engine_config={}), tmp_path, engine="spark")
         s.start("run1")
         
         with s._observability.connect() as cur:
@@ -594,7 +594,7 @@ class TestPhase35SurveyorMigrationFresh:
 
         s = Surveyor(
             Manifest(blueprint_id="bp1", name="n", context={},
-                     modules=(), edges=(), spark_config={}),
+                     modules=(), edges=(), engine_config={}),
             tmp_path,
          engine="spark",)
         s.start("run1")
@@ -614,7 +614,7 @@ def _make_surveyor(tmp_path):
 
     s = Surveyor(
         Manifest(blueprint_id="bp_rec", name="n", context={},
-                 modules=(), edges=(), spark_config={}),
+                 modules=(), edges=(), engine_config={}),
         tmp_path,
      engine="spark",)
     return s

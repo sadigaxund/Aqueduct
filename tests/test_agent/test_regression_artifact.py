@@ -58,7 +58,7 @@ def _manifest(modules: list[Module], edges: list[Edge]) -> Manifest:
         context={},
         modules=tuple(modules),
         edges=tuple(edges),
-        spark_config={},
+        engine_config={},
     )
 
 

@@ -325,11 +325,18 @@ class Blueprint:
     modules: tuple[Module, ...]
     edges: tuple[Edge, ...]
     description: str = ""
-    # NOTE (2.0): sourced from the YAML `engine.spark.conf:` key (was the
-    # top-level `spark_config:` block pre-2.0) — see
-    # `aqueduct.parser.schema.BlueprintSchema.engine`. Field name kept as-is:
-    # engine-agnostic AST plumbing, not the user-facing authoring contract.
-    spark_config: dict[str, Any] = field(default_factory=dict)
+    # Per-engine Blueprint-level session config, keyed by engine name (e.g.
+    # {"spark": {"spark.sql.shuffle.partitions": "200"}, "duckdb": {...}}) —
+    # sourced from the YAML `engine.<name>:` block (was a single top-level
+    # `spark_config:` dict pre-2.0, and was still a Spark-only
+    # `spark_config` field here through 2.52 even after the YAML surface
+    # went generic — see `aqueduct.parser.schema.EngineBlockSchema`). Every
+    # registered engine gets an entry (possibly `{}`, e.g. DuckDB's
+    # Blueprint-level block carries no fields yet — see
+    # `DuckDBEngineBlockSchema`), so a new engine's Blueprint-level knob
+    # needs no change here — `parser/parser.py` derives this dict
+    # structurally from `EngineBlockSchema`'s own fields.
+    engine_config: dict[str, dict[str, Any]] = field(default_factory=dict)
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
     agent: AgentConfig = field(default_factory=AgentConfig)
     udf_registry: tuple[dict[str, Any], ...] = ()

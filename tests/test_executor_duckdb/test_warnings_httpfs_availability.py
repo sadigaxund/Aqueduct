@@ -18,7 +18,7 @@ pytestmark = pytest.mark.duckdb
 
 
 def _manifest(*modules: Module) -> Manifest:
-    return Manifest(blueprint_id="bp", context={}, modules=tuple(modules), edges=(), spark_config={})
+    return Manifest(blueprint_id="bp", context={}, modules=tuple(modules), edges=(), engine_config={})
 
 
 def _ingress(path: str) -> Module:
@@ -94,7 +94,7 @@ class TestWiredThroughExecute:
             lambda manifest, con, suppress=None: [(RULE_ID, "sentinel warning text")],
         )
         con_local = __import__("duckdb").connect(":memory:")
-        manifest = Manifest(blueprint_id="bp", context={}, modules=(), edges=(), spark_config={})
+        manifest = Manifest(blueprint_id="bp", context={}, modules=(), edges=(), engine_config={})
         with _w.catch_warnings(record=True) as caught:
             _w.simplefilter("always")
             execute(manifest, con_local)
@@ -111,7 +111,7 @@ class TestWiredThroughExecute:
             lambda manifest, con, suppress=None: [(RULE_ID, "sentinel warning text")],
         )
         con_local = __import__("duckdb").connect(":memory:")
-        manifest = Manifest(blueprint_id="bp", context={}, modules=(), edges=(), spark_config={})
+        manifest = Manifest(blueprint_id="bp", context={}, modules=(), edges=(), engine_config={})
         with _w.catch_warnings(record=True) as caught:
             _w.simplefilter("always")
             execute(manifest, con_local, warnings_silence_all=True)

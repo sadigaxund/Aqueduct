@@ -864,7 +864,7 @@ def _check_iceberg_catalog(manifest: Any) -> list[CheckResult]:
     if not uses_iceberg:
         return results
 
-    bp_spark = getattr(manifest, "spark_config", {}) or {}
+    bp_spark = (getattr(manifest, "engine_config", {}) or {}).get("spark", {}) or {}
     has_catalog = any(str(k).startswith("spark.sql.catalog.") for k in bp_spark)
     if not has_catalog:
         results.append(CheckResult(

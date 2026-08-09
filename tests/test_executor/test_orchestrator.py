@@ -49,7 +49,7 @@ def _manifest(modules, edges, islands):
         context={},
         modules=tuple(modules),
         edges=tuple(edges),
-        spark_config={},
+        engine_config={},
         islands=tuple(islands),
     )
 

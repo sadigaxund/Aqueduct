@@ -378,7 +378,7 @@ class TestOnExhaustionAlertOnlyIntegration:
                 Edge(from_id="good_src", to_id="sink", port="main"),
             ),
             context={},
-            spark_config={},
+            engine_config={},
         )
 
         result = execute(manifest, spark)

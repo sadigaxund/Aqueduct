@@ -111,7 +111,7 @@ def test_execute_persists_into_postgres(spark, tmp_path):
 
     manifest = Manifest(
         blueprint_id="bp_e2e", name="E2E", description="", aqueduct_version="1.0",
-        context={}, spark_config={}, retry_policy=RetryPolicy(), agent=None,
+        context={}, engine_config={}, retry_policy=RetryPolicy(), agent=None,
         udf_registry={}, macros={}, checkpoint=False,
         provenance_map=ProvenanceMap(blueprint_id="bp_e2e", blueprint_path="", modules={}, context={}),
         inputs_fingerprint={},

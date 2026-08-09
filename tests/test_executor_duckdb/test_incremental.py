@@ -36,7 +36,7 @@ def _module(id_, type_, config, **kw):
 
 
 def _manifest(modules, edges):
-    return Manifest(blueprint_id="test_bp", context={}, modules=modules, edges=edges, spark_config={})
+    return Manifest(blueprint_id="test_bp", context={}, modules=modules, edges=edges, engine_config={})
 
 
 def _write_parquet(con, tmp_path, name, rows_sql):

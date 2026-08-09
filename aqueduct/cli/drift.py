@@ -110,10 +110,11 @@ def drift(
     manifest_json = _json.dumps(manifest.to_dict())
 
     # ── Spark session (metadata-only reads — no actions) ───────────────────────
+    from aqueduct.executor.session_config import resolve_session_engine_config
     from aqueduct.executor.spark.ingress import read_source_schema
     from aqueduct.executor.spark.session import make_spark_session
 
-    merged_spark_config = {**cfg.engine.spark.conf, **manifest.spark_config}
+    merged_spark_config = resolve_session_engine_config(cfg, "spark", manifest)
     session = make_spark_session(manifest.blueprint_id, merged_spark_config, master_url=cfg.engine.spark.master_url)
 
     results: list[dict[str, Any]] = []

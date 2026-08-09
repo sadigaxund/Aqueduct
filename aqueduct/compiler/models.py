@@ -29,7 +29,14 @@ class Manifest:
     context: dict[str, str]
     modules: tuple[Module, ...]
     edges: tuple[Edge, ...]
-    spark_config: dict[str, Any]
+    # Per-engine Blueprint-level session config, keyed by engine name — see
+    # `aqueduct.parser.models.Blueprint.engine_config` (copied through
+    # verbatim by the compiler). Consumed by
+    # `aqueduct.executor.session_config.resolve_session_engine_config`,
+    # which merges `engine_config[<engine>]` over that engine's
+    # `aqueduct.yml`-level config (Blueprint wins), for EVERY registered
+    # engine — not just Spark.
+    engine_config: dict[str, dict[str, Any]]
     # Optional — defaulted so tests can construct minimal Manifests
     name: str = ""
     description: str = ""
@@ -114,7 +121,7 @@ class Manifest:
                 }
                 for e in self.edges
             ],
-            "spark_config": self.spark_config,
+            "engine_config": self.engine_config,
             "retry_policy": {
                 "max_attempts": self.retry_policy.max_attempts,
                 "backoff_strategy": self.retry_policy.backoff_strategy,

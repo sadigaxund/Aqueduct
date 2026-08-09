@@ -747,7 +747,7 @@ class TestSurveyorLlmIntegration:
             modules=(),
             edges=(),
             context={},
-            spark_config={},
+            engine_config={},
             agent=AgentConfig(approval_mode=approval),
         )
 
@@ -1380,7 +1380,7 @@ class TestBlobExternalisationIntegration:
             modules=(),
             edges=(),
             context={},
-            spark_config={},
+            engine_config={},
         )
 
     def test_surveyor_record_stores_blob_path_in_db(self, tmp_path):

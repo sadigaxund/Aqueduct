@@ -347,7 +347,7 @@ def test_regulator_timeout_opens_mid_poll(spark, tmp_path):
             Edge(from_id="r1", to_id="out1", port="main"),
             Edge(from_id="p1", to_id="r1", port="signal"),
         ),
-        spark_config={},
+        engine_config={},
     )
 
     surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
@@ -427,7 +427,7 @@ def test_regulator_timeout_reaches_limit_aborts(spark, tmp_path):
             Edge(from_id="in1", to_id="r1", port="main"),
             Edge(from_id="p1", to_id="r1", port="signal"),
         ),
-        spark_config={},
+        engine_config={},
     )
 
     surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
@@ -519,7 +519,7 @@ def test_parallel_multi_tree_probe_integration(spark, tmp_path):
             Edge(from_id="ch1", to_id="out1", port="main"),
             Edge(from_id="in2", to_id="out2", port="main"),
         ),
-        spark_config={},
+        engine_config={},
     )
 
     surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")

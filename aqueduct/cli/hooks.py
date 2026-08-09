@@ -17,19 +17,21 @@ Entry types (parser guarantees exactly one per entry):
                       compiling + executing the target in THIS process,
                       reusing the live engine session (session reuse — no
                       self-healing loop for the chained target; falls back
-                      to the subprocess path when the target's
-                      `engine.spark.conf` is non-empty, since merging two
-                      Blueprints' Spark configs into one live session isn't
-                      generally safe). The target is compiled and executed
-                      through the PARENT's engine (whatever `session`
-                      belongs to) — its own `deployment.engine` is not
-                      consulted, matching the parent session is the point of
-                      reuse. Also falls back — with a visible
+                      to the subprocess path when the target sets a
+                      Blueprint-level `engine.<engine>:` config block for
+                      THIS engine (whatever `session` belongs to), since
+                      merging two Blueprints' engine configs into one live
+                      session isn't generally safe). The target is compiled
+                      and executed through the PARENT's engine (whatever
+                      `session` belongs to) — its own `deployment.engine` is
+                      not consulted, matching the parent session is the
+                      point of reuse. Also falls back — with a visible
                       `[hook_in_process_unavailable]` warning line, unlike
-                      the silent Spark-conf fallback above — when the caller
-                      has no single live session at all: a polyglot run's
-                      per-island sessions are already closed by the time
-                      hooks fire, so there is never one session to reuse.
+                      the silent engine-config fallback above — when the
+                      caller has no single live session at all: a polyglot
+                      run's per-island sessions are already closed by the
+                      time hooks fire, so there is never one session to
+                      reuse.
   webhook: <url|map>  Fire-and-forget POST via the same endpoint model as
                       the engine-level `webhooks:` block (payload templating
                       included) — `aqueduct.surveyor.webhook.fire_webhook`.
@@ -246,7 +248,8 @@ def run_hooks(
                 if handled:
                     continue
                 # Fell back to subprocess (target had a non-empty
-                # engine.spark.conf) — build the same argv as the default path.
+                # engine.<engine>.* config block) — build the same argv as
+                # the default path.
             elif h.in_process and session is None:
                 # No single live session to reuse — a polyglot run's island
                 # sessions are already closed by the time hooks fire (there
@@ -333,7 +336,9 @@ def _run_in_process_blueprint_hook(
 
     Returns True when the in-process path handled the entry (success or
     failure — both terminal for this entry); False to signal "fall back to
-    the subprocess path" (only when the target's engine.spark.conf is non-empty).
+    the subprocess path" (only when the target sets a Blueprint-level
+    `engine.<engine>:` config block for the engine THIS hook chain is
+    running on — a different engine's block is irrelevant to `session`).
     """
     from aqueduct.parser.parser import parse as _parse
 
@@ -343,15 +348,15 @@ def _run_in_process_blueprint_hook(
         warn(f"[hook_failed] {label} — parse error: {exc}")
         return True
 
-    if t_bp.spark_config:
-        # Safe subset per design: two Blueprints' engine.spark.conf may conflict
-        # in a shared live session (e.g. differing shuffle partitions) —
-        # fall back to the isolated subprocess path instead of guessing at
-        # a merge policy. (No pyspark import needed on this branch — keeps
-        # the fallback usable on a [spark]-less install too.)
+    if t_bp.engine_config.get(engine):
+        # Safe subset per design: two Blueprints' engine.<engine>.* config may
+        # conflict in a shared live session (e.g. differing shuffle
+        # partitions) — fall back to the isolated subprocess path instead of
+        # guessing at a merge policy. (No pyspark import needed on this
+        # branch — keeps the fallback usable on a [spark]-less install too.)
         from aqueduct.cli.style import info as _info
         _info(
-            f"[hook_inprocess_fallback] {label} — target sets engine.spark.conf, "
+            f"[hook_inprocess_fallback] {label} — target sets engine.{engine}.* config, "
             "falling back to subprocess (session config would conflict)"
         )
         return False

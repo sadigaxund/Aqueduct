@@ -42,7 +42,7 @@ def _manifest(modules: list[Module], edges: list[Edge]) -> Manifest:
         context={},
         modules=tuple(modules),
         edges=tuple(edges),
-        spark_config={},
+        engine_config={},
     )
 
 
@@ -252,12 +252,12 @@ class TestReturnType:
         assert {mod.id for mod in m.modules} == orig_module_ids
         assert len(m.edges) == orig_edge_count
 
-    def test_blueprint_id_and_spark_config_preserved(self):
+    def test_blueprint_id_and_engine_config_preserved(self):
         m = _manifest(
             [_module("in1", "Ingress", format="parquet", path="/p")],
             [],
         )
-        m = dataclasses.replace(m, spark_config={"key": "val"})
+        m = dataclasses.replace(m, engine_config={"spark": {"key": "val"}})
         sandboxed, _ = build_sandbox_manifest(m, sample_rows=0)
         assert sandboxed.blueprint_id == "test.bp"
-        assert sandboxed.spark_config == {"key": "val"}
+        assert sandboxed.engine_config == {"spark": {"key": "val"}}

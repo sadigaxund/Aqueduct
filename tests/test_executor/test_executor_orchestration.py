@@ -37,7 +37,7 @@ def minimal_manifest(tmp_path):
             Edge(from_id="in", to_id="out", port="main"),
         ),
         context={},
-        spark_config={}
+        engine_config={}
     )
 
 
@@ -80,7 +80,7 @@ def test_execute_unsupported_module_type(spark: SparkSession):
         modules=(Module(id="m1", type="Spillway", label="S1", config={}),),
         edges=(),
         context={},
-        spark_config={}
+        engine_config={}
     )
     with pytest.raises(ExecuteError, match="Module type 'Spillway' .* is not supported"):
         execute(manifest, spark)
@@ -103,7 +103,7 @@ def test_execute_channel_linear(spark: SparkSession, tmp_path):
             Edge(from_id="chan", to_id="out", port="main"),
         ),
         context={},
-        spark_config={}
+        engine_config={}
     )
 
     result = execute(manifest, spark)
@@ -138,7 +138,7 @@ def test_execute_channel_multi_input(spark: SparkSession, tmp_path):
             Edge(from_id="chan", to_id="out", port="main"),
         ),
         context={},
-        spark_config={}
+        engine_config={}
     )
 
     result = execute(manifest, spark)
@@ -160,7 +160,7 @@ def test_execute_channel_error(spark: SparkSession, tmp_path):
         ),
         edges=(Edge(from_id="in", to_id="chan", port="main"),),
         context={},
-        spark_config={}
+        engine_config={}
     )
 
     result = execute(manifest, spark)
@@ -177,7 +177,7 @@ def test_execute_channel_missing_upstream_edge(spark: SparkSession):
         ),
         edges=(),
         context={},
-        spark_config={}
+        engine_config={}
     )
 
     result = execute(manifest, spark)
@@ -191,7 +191,7 @@ def test_execute_ingress_error(spark: SparkSession):
         modules=(Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": "/ghost"}),),
         edges=(),
         context={},
-        spark_config={}
+        engine_config={}
     )
     result = execute(manifest, spark)
 
@@ -212,7 +212,7 @@ def test_execute_egress_error(spark: SparkSession, tmp_path):
         ),
         edges=(Edge(from_id="in", to_id="out", port="main"),),
         context={},
-        spark_config={}
+        engine_config={}
     )
     result = execute(manifest, spark)
 
@@ -227,7 +227,7 @@ def test_execute_missing_upstream_edge(spark: SparkSession, tmp_path):
         modules=(Module(id="out", type="Egress", label="Out", config={"format": "parquet", "path": "/foo"}),),
         edges=(),
         context={},
-        spark_config={}
+        engine_config={}
     )
     result = execute(manifest, spark)
 
@@ -258,7 +258,7 @@ def test_execute_cycle_in_manifest(spark: SparkSession):
             Edge(from_id="m2", to_id="m1", port="main"),
         ),
         context={},
-        spark_config={}
+        engine_config={}
     )
     with pytest.raises(ExecuteError, match="Cycle detected"):
         execute(manifest, spark)
@@ -277,7 +277,7 @@ def test_execute_junction_error_no_main_edge(spark: SparkSession):
         ),
         edges=(),
         context={},
-        spark_config={}
+        engine_config={}
     )
     result = execute(manifest, spark)
     assert result.status == "error"
@@ -297,7 +297,7 @@ def test_execute_junction_exec_error(spark: SparkSession, tmp_path):
         ),
         edges=(Edge(from_id="m1", to_id="j1", port="main"),),
         context={},
-        spark_config={}
+        engine_config={}
     )
     result = execute(manifest, spark)
     assert result.status == "error"
@@ -335,7 +335,7 @@ def test_execute_junction_conditional(spark: SparkSession, tmp_path):
             Edge(from_id="jn",  to_id="out_odd",   port="odd"),
         ),
         context={},
-        spark_config={}
+        engine_config={}
     )
 
     result = execute(manifest, spark)
@@ -371,7 +371,7 @@ def test_execute_junction_broadcast(spark: SparkSession, tmp_path):
             Edge(from_id="jn", to_id="out_b", port="b"),
         ),
         context={},
-        spark_config={}
+        engine_config={}
     )
 
     result = execute(manifest, spark)
@@ -394,7 +394,7 @@ def test_execute_funnel_error_no_data_edge(spark: SparkSession):
         ),
         edges=(),
         context={},
-        spark_config={}
+        engine_config={}
     )
     result = execute(manifest, spark)
     assert result.status == "error"
@@ -418,7 +418,7 @@ def test_execute_funnel_exec_error(spark: SparkSession, tmp_path):
             Edge(from_id="in", to_id="f1", port="main"),
         ),
         context={},
-        spark_config={}
+        engine_config={}
     )
     result = execute(manifest, spark)
     assert result.status == "error"
@@ -448,7 +448,7 @@ def test_execute_funnel_union_all(spark: SparkSession, tmp_path):
             Edge(from_id="f1",  to_id="out", port="main"),
         ),
         context={},
-        spark_config={}
+        engine_config={}
     )
 
     result = execute(manifest, spark)
@@ -487,7 +487,7 @@ def test_execute_junction_to_funnel_roundtrip(spark: SparkSession, tmp_path):
             Edge(from_id="f1", to_id="out", port="main"),
         ),
         context={},
-        spark_config={}
+        engine_config={}
     )
 
     result = execute(manifest, spark)
@@ -517,7 +517,7 @@ def test_execute_probe_appended_last(spark: SparkSession, tmp_path):
             Edge(from_id="in", to_id="out", port="main"),
         ),
         context={},
-        spark_config={}
+        engine_config={}
     )
     result = execute(manifest, spark)
     assert result.status == "success"
@@ -540,7 +540,7 @@ def test_execute_probe_missing_attach_to(spark: SparkSession, tmp_path):
             Edge(from_id="in", to_id="out", port="main"),
         ),
         context={},
-        spark_config={}
+        engine_config={}
     )
     result = execute(manifest, spark)
     assert result.status == "success"
@@ -559,7 +559,7 @@ def test_execute_probe_failure_ignores(spark: SparkSession, tmp_path):
         ),
         edges=(),
         context={},
-        spark_config={}
+        engine_config={}
     )
     # store_dir is None => probe will fail to create DB, but blueprint should stay success
     result = execute(manifest, spark, store_dir=None)
@@ -584,7 +584,7 @@ def test_execute_regulator_open_gate_no_surveyor(spark: SparkSession, tmp_path):
             Edge(from_id="in", to_id="reg", port="main"),
             Edge(from_id="reg", to_id="out", port="main"),
         ),
-        context={}, spark_config={}
+        context={}, engine_config={}
     )
     result = execute(manifest, spark)
     assert result.status == "success"
@@ -609,7 +609,7 @@ def test_execute_regulator_open_gate_surveyor_true(spark: SparkSession, tmp_path
             Edge(from_id="in", to_id="reg", port="main"),
             Edge(from_id="reg", to_id="out", port="main"),
         ),
-        context={}, spark_config={}
+        context={}, engine_config={}
     )
     result = execute(manifest, spark, surveyor=MockSurveyor())
     assert result.status == "success"
@@ -632,7 +632,7 @@ def test_execute_regulator_closed_gate_skip(spark: SparkSession, tmp_path):
         edges=(
             Edge(from_id="in", to_id="reg", port="main"),
         ),
-        context={}, spark_config={}
+        context={}, engine_config={}
     )
     result = execute(manifest, spark, surveyor=MockSurveyor())
     assert result.status == "success"
@@ -654,7 +654,7 @@ def test_execute_regulator_closed_gate_abort(spark: SparkSession, tmp_path):
         edges=(
             Edge(from_id="in", to_id="reg", port="main"),
         ),
-        context={}, spark_config={}
+        context={}, engine_config={}
     )
     result = execute(manifest, spark, surveyor=MockSurveyor())
     assert result.status == "error"
@@ -677,7 +677,7 @@ def test_execute_regulator_closed_gate_trigger_agent(spark: SparkSession, tmp_pa
         edges=(
             Edge(from_id="in", to_id="reg", port="main"),
         ),
-        context={}, spark_config={}
+        context={}, engine_config={}
     )
     result = execute(manifest, spark, surveyor=MockSurveyor())
     assert result.status == "error"
@@ -702,7 +702,7 @@ def test_execute_regulator_downstream_skipped(spark: SparkSession, tmp_path):
             Edge(from_id="in", to_id="reg", port="main"),
             Edge(from_id="reg", to_id="out", port="main"),
         ),
-        context={}, spark_config={}
+        context={}, engine_config={}
     )
     result = execute(manifest, spark, surveyor=MockSurveyor())
     assert result.status == "success"
@@ -716,7 +716,7 @@ def test_execute_regulator_no_main_edge(spark: SparkSession):
             Module(id="reg", type="Regulator", label="Reg", config={}),
         ),
         edges=(),
-        context={}, spark_config={}
+        context={}, engine_config={}
     )
     result = execute(manifest, spark)
     assert result.status == "error"
@@ -747,7 +747,7 @@ def test_execute_udf_integration(spark: SparkSession, tmp_path, monkeypatch):
             Edge(from_id="in", to_id="chan", port="main"),
             Edge(from_id="chan", to_id="out", port="main"),
         ),
-        context={}, spark_config={},
+        context={}, engine_config={},
         udf_registry=({"id": "my_concat", "lang": "python", "module": "my_udfs", "return_type": "string"},)
     )
     import sys
@@ -766,7 +766,7 @@ def test_execute_udf_integration(spark: SparkSession, tmp_path, monkeypatch):
 def test_execute_udf_registry_error(spark: SparkSession, tmp_path):
     manifest = Manifest(
         blueprint_id="test.udf_err",
-        modules=(), edges=(), context={}, spark_config={},
+        modules=(), edges=(), context={}, engine_config={},
         udf_registry=({"lang": "python", "module": "my_udfs"},)
     )
     with pytest.raises(ExecuteError, match="missing required 'id'"):
@@ -799,7 +799,7 @@ def test_execute_spillway_edge_and_condition(spark: SparkSession, tmp_path):
             Edge(from_id="chan", to_id="out_main", port="main"),
             Edge(from_id="chan", to_id="out_spill", port="spillway"),
         ),
-        context={}, spark_config={}
+        context={}, engine_config={}
     )
     result = execute(manifest, spark)
     assert result.status == "success"
@@ -837,7 +837,7 @@ def test_execute_spillway_condition_no_edge(spark: SparkSession, tmp_path, caplo
             Edge(from_id="in", to_id="chan", port="main"),
             Edge(from_id="chan", to_id="out", port="main"),
         ),
-        context={}, spark_config={}
+        context={}, engine_config={}
     )
     result = execute(manifest, spark)
     assert result.status == "success"
@@ -869,7 +869,7 @@ def test_execute_spillway_edge_no_condition(spark: SparkSession, tmp_path, caplo
             Edge(from_id="chan", to_id="out_main", port="main"),
             Edge(from_id="chan", to_id="out_spill", port="spillway"),
         ),
-        context={}, spark_config={}
+        context={}, engine_config={}
     )
     result = execute(manifest, spark)
     assert result.status == "success"
@@ -896,7 +896,7 @@ def test_execute_ingress_retry_success(spark: SparkSession, tmp_path, monkeypatc
         edges=(
             Edge(from_id="in", to_id="out", port="main"),
         ),
-        context={}, spark_config={},
+        context={}, engine_config={},
         retry_policy=RetryPolicy(max_attempts=3, backoff_strategy="fixed", backoff_base_seconds=0),
     )
     
@@ -944,7 +944,7 @@ def test_per_module_on_failure_overrides_manifest_policy(spark: SparkSession, tm
         ),
         edges=(Edge(from_id="in", to_id="out", port="main"),),
         context={},
-        spark_config={},
+        engine_config={},
         retry_policy=RetryPolicy(max_attempts=1),  # blueprint default = no retry
     )
 
@@ -978,7 +978,7 @@ def _minimal_manifest_with_checkpoint(in_path, out_path, checkpoint=False):
         ),
         edges=(Edge(from_id="src", to_id="sink", port="main"),),
         context={},
-        spark_config={},
+        engine_config={},
         checkpoint=False,  # per-module controlled by `checkpoint` param
     )
 
@@ -997,7 +997,7 @@ def test_checkpoint_disabled_by_default(spark: SparkSession, tmp_path):
         ),
         edges=(Edge(from_id="src", to_id="sink", port="main"),),
         context={},
-        spark_config={},
+        engine_config={},
     )
     result = execute(manifest, spark, store_dir=store_dir)
     assert result.status == "success"
@@ -1018,7 +1018,7 @@ def test_checkpoint_blueprint_level_writes_parquet_and_marker(spark: SparkSessio
         ),
         edges=(Edge(from_id="src", to_id="sink", port="main"),),
         context={},
-        spark_config={},
+        engine_config={},
         checkpoint=True,
     )
     result = execute(manifest, spark, run_id="run-001", store_dir=store_dir)
@@ -1052,7 +1052,7 @@ def test_checkpoint_per_module_only_checkpoints_flagged_module(spark: SparkSessi
         ),
         edges=(Edge(from_id="src", to_id="sink", port="main"),),
         context={},
-        spark_config={},
+        engine_config={},
         checkpoint=False,
     )
     result = execute(manifest, spark, run_id="run-002", store_dir=store_dir)
@@ -1093,7 +1093,7 @@ def test_resume_skips_completed_module_and_reloads_dataframe(spark: SparkSession
         ),
         edges=(Edge(from_id="src", to_id="sink", port="main"),),
         context={},
-        spark_config={},
+        engine_config={},
     )
     # Resume: src loaded from checkpoint; sink executes normally
     r2 = execute(manifest, spark, run_id="run-r2", store_dir=store_dir, resume_run_id="prev-run")
@@ -1117,7 +1117,7 @@ def test_resume_missing_run_id_raises_execute_error(spark: SparkSession, tmp_pat
         ),
         edges=(Edge(from_id="src", to_id="sink", port="main"),),
         context={},
-        spark_config={},
+        engine_config={},
     )
     with pytest.raises(ExecuteError, match="no checkpoints"):
         execute(manifest, spark, store_dir=store_dir, resume_run_id="nonexistent-run")
@@ -1139,7 +1139,7 @@ def test_resume_mismatched_manifest_warns_and_continues(spark: SparkSession, tmp
         ),
         edges=(Edge(from_id="src", to_id="sink", port="main"),),
         context={},
-        spark_config={},
+        engine_config={},
         checkpoint=True,
     )
     r1 = execute(manifest, spark, run_id="run-hash1", store_dir=store_dir)
@@ -1158,7 +1158,7 @@ def test_resume_mismatched_manifest_warns_and_continues(spark: SparkSession, tmp
         ),
         edges=(Edge(from_id="src", to_id="sink", port="main"),),
         context={},
-        spark_config={},
+        engine_config={},
         checkpoint=True,
     )
     with caplog.at_level(logging.WARNING, logger="aqueduct.executor.spark.executor"):
@@ -1188,7 +1188,7 @@ def test_per_module_on_failure_abort_stops_blueprint(spark: SparkSession, tmp_pa
         ),
         edges=(Edge(from_id="src", to_id="sink", port="main"),),
         context={},
-        spark_config={},
+        engine_config={},
         retry_policy=RetryPolicy(max_attempts=1),
     )
 
@@ -1232,7 +1232,7 @@ def test_checkpoint_channel_writes_data_and_marker(spark: SparkSession, tmp_path
             Edge(from_id="ch", to_id="sink", port="main"),
         ),
         context={},
-        spark_config={},
+        engine_config={},
     )
     result = execute(manifest, spark, run_id="run-ch", store_dir=store_dir)
     assert result.status == "success"
@@ -1271,7 +1271,7 @@ def test_checkpoint_funnel_writes_data_and_marker(spark: SparkSession, tmp_path)
             Edge(from_id="fn", to_id="sink", port="main"),
         ),
         context={},
-        spark_config={},
+        engine_config={},
     )
     result = execute(manifest, spark, run_id="run-fn", store_dir=store_dir)
     assert result.status == "success"
@@ -1314,7 +1314,7 @@ def test_checkpoint_junction_writes_branches(spark: SparkSession, tmp_path):
             Edge(from_id="jn", to_id="egr_eu", port="eu"),
         ),
         context={},
-        spark_config={},
+        engine_config={},
     )
     result = execute(manifest, spark, run_id="run-jn", store_dir=store_dir)
     assert result.status == "success"
@@ -1342,7 +1342,7 @@ def test_checkpoint_write_failure_non_fatal(spark: SparkSession, tmp_path, monke
         ),
         edges=(Edge(from_id="src", to_id="sink", port="main"),),
         context={},
-        spark_config={},
+        engine_config={},
     )
 
     # Patch DataFrame.write.parquet to raise on the checkpoint write but not the egress write
@@ -1387,7 +1387,7 @@ def test_execute_assert_gate_closed_upstream(spark: SparkSession, tmp_path):
             Edge(from_id="reg", to_id="ast", port="main"),
             Edge(from_id="ast", to_id="out", port="main"),
         ),
-        context={}, spark_config={}
+        context={}, engine_config={}
     )
     result = execute(manifest, spark, surveyor=MockSurveyor())
     assert result.status == "success"
@@ -1413,7 +1413,7 @@ def test_execute_assert_no_spillway_edge_discards(spark: SparkSession, tmp_path,
             Edge(from_id="in", to_id="ast", port="main"),
             Edge(from_id="ast", to_id="out", port="main"),
         ),
-        context={}, spark_config={}
+        context={}, engine_config={}
     )
     
     import logging
@@ -1440,7 +1440,7 @@ def test_execute_assert_end_to_end_abort(spark: SparkSession, tmp_path):
         edges=(
             Edge(from_id="in", to_id="ast", port="main"),
         ),
-        context={}, spark_config={}
+        context={}, engine_config={}
     )
     result = execute(manifest, spark)
     assert result.status == "error"
@@ -1468,7 +1468,7 @@ def test_execute_assert_non_assert_error_fails_cleanly(spark: SparkSession, tmp_
         edges=(
             Edge(from_id="in", to_id="ast", port="main"),
         ),
-        context={}, spark_config={}
+        context={}, engine_config={}
     )
     result = execute(manifest, spark)
     assert result.status == "error"
@@ -1498,7 +1498,7 @@ def test_execute_assert_end_to_end_quarantine(spark: SparkSession, tmp_path):
             Edge(from_id="ast", to_id="out_main", port="main"),
             Edge(from_id="ast", to_id="out_spill", port="spillway"),
         ),
-        context={}, spark_config={}
+        context={}, engine_config={}
     )
     result = execute(manifest, spark)
     assert result.status == "success"
@@ -1538,7 +1538,7 @@ def test_execute_assert_custom_rule_no_quarantine_rows_still_feeds_spillway(spar
             Edge(from_id="ast", to_id="out_main", port="main"),
             Edge(from_id="ast", to_id="out_spill", port="spillway"),
         ),
-        context={}, spark_config={},
+        context={}, engine_config={},
         base_dir=str(tmp_path),
     )
     result = execute(manifest, spark)
@@ -1688,7 +1688,7 @@ class TestRegulatorTriggerAgentPropagation:
                 Edge(from_id="gate", to_id="sink", port="main"),
             ),
             context={},
-            spark_config={},
+            engine_config={},
         )
 
         result = execute(manifest, spark, surveyor=_ClosedSurveyor())
@@ -1716,7 +1716,7 @@ def test_checkpoint_root_override_bypasses_store_dir(spark: SparkSession, tmp_pa
         ),
         edges=(Edge(from_id="src", to_id="sink", port="main"),),
         context={},
-        spark_config={},
+        engine_config={},
         checkpoint=True,
     )
     result = execute(
@@ -1746,7 +1746,7 @@ def test_checkpoint_root_override_used_for_resume(spark: SparkSession, tmp_path)
         ),
         edges=(Edge(from_id="src", to_id="sink", port="main"),),
         context={},
-        spark_config={},
+        engine_config={},
         checkpoint=True,
     )
     first = execute(
@@ -1781,7 +1781,7 @@ def test_checkpoint_root_resume_missing_raises(spark: SparkSession, tmp_path):
         ),
         edges=(Edge(from_id="src", to_id="sink", port="main"),),
         context={},
-        spark_config={},
+        engine_config={},
         checkpoint=True,
     )
     with pytest.raises(ExecuteError, match="has no checkpoints"):

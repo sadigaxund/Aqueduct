@@ -24,7 +24,7 @@ def manifest():
         modules=(),
         edges=(),
         context={},
-        spark_config={}
+        engine_config={}
     )
 
 
@@ -225,13 +225,13 @@ def test_surveyor_get_probe_signal_filtered(manifest, tmp_path):
 
 def test_surveyor_regulator_no_start(tmp_path):
     from aqueduct.compiler.models import Manifest
-    manifest = Manifest(blueprint_id="p", modules=(), edges=(), context={}, spark_config={})
+    manifest = Manifest(blueprint_id="p", modules=(), edges=(), context={}, engine_config={})
     surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     assert surveyor.evaluate_regulator("reg1") is True
 
 def test_surveyor_regulator_no_signal_port_edge(tmp_path):
     from aqueduct.compiler.models import Manifest
-    manifest = Manifest(blueprint_id="p", modules=(), edges=(), context={}, spark_config={})
+    manifest = Manifest(blueprint_id="p", modules=(), edges=(), context={}, engine_config={})
     surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     surveyor.start("run1")
     assert surveyor.evaluate_regulator("reg1") is True
@@ -243,7 +243,7 @@ def test_surveyor_regulator_no_signals_db(tmp_path):
         blueprint_id="p1",
         modules=(),
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
-        context={}, spark_config={}
+        context={}, engine_config={}
     )
     surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     surveyor.start("run1")
@@ -262,7 +262,7 @@ def test_surveyor_regulator_no_rows(tmp_path):
     manifest = Manifest(
         blueprint_id="p1", modules=(),
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
-        context={}, spark_config={}
+        context={}, engine_config={}
     )
     surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     surveyor.start("run1")
@@ -282,7 +282,7 @@ def test_surveyor_regulator_no_passed_key(tmp_path):
     manifest = Manifest(
         blueprint_id="p1", modules=(),
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
-        context={}, spark_config={}
+        context={}, engine_config={}
     )
     surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     surveyor.start("run1")
@@ -302,7 +302,7 @@ def test_surveyor_regulator_passed_none(tmp_path):
     manifest = Manifest(
         blueprint_id="p1", modules=(),
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
-        context={}, spark_config={}
+        context={}, engine_config={}
     )
     surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     surveyor.start("run1")
@@ -322,7 +322,7 @@ def test_surveyor_regulator_passed_false(tmp_path):
     manifest = Manifest(
         blueprint_id="p1", modules=(),
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
-        context={}, spark_config={}
+        context={}, engine_config={}
     )
     surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     surveyor.start("run1")
@@ -342,7 +342,7 @@ def test_surveyor_regulator_passed_true(tmp_path):
     manifest = Manifest(
         blueprint_id="p1", modules=(),
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
-        context={}, spark_config={}
+        context={}, engine_config={}
     )
     surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     surveyor.start("run1")
@@ -363,7 +363,7 @@ def test_surveyor_regulator_uses_newest_row(tmp_path):
     manifest = Manifest(
         blueprint_id="p1", modules=(),
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
-        context={}, spark_config={}
+        context={}, engine_config={}
     )
     surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     surveyor.start("run1")
@@ -378,7 +378,7 @@ def test_surveyor_regulator_duckdb_exception(tmp_path):
     manifest = Manifest(
         blueprint_id="p1", modules=(),
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
-        context={}, spark_config={}
+        context={}, engine_config={}
     )
     surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     surveyor.start("run1")
@@ -406,7 +406,7 @@ def test_surveyor_regulator_respects_overrides(tmp_path):
     manifest = Manifest(
         blueprint_id="p1", modules=(),
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
-        context={}, spark_config={}
+        context={}, engine_config={}
     )
     surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     surveyor.start("run1")

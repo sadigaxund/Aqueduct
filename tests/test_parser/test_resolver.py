@@ -167,7 +167,7 @@ class TestContextResolution:
             "edges: []\n"
         )
         bp = parse(bp_file)
-        assert bp.spark_config["spark.jars.packages"] == "org.example:pkg:1.0"
+        assert bp.engine_config["spark"]["spark.jars.packages"] == "org.example:pkg:1.0"
 
     def test_macros_env_resolved_jinja_placeholder_untouched(self, tmp_path, monkeypatch):
         """macros: ${AQ_REGION:-US} resolved; {{ param }} left for the compiler."""
@@ -195,7 +195,7 @@ class TestContextResolution:
             "edges: []\n"
         )
         bp = parse(good)
-        assert bp.spark_config["spark.sql.warehouse.dir"] == "/data/wh"
+        assert bp.engine_config["spark"]["spark.sql.warehouse.dir"] == "/data/wh"
 
     def test_spark_config_undefined_ctx_raises_parseerror(self, tmp_path):
         """Undefined non-reserved ${ctx.x} in engine.spark.conf → ParseError (ISSUE-027 fixed)."""

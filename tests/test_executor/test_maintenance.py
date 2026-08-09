@@ -89,7 +89,7 @@ def test_egress_with_maintenance_block_calls_run_maintenance(spark, tmp_path):
 
     manifest = Manifest(
         blueprint_id="bp1", name="Test", description="", aqueduct_version="1.0",
-        context={}, spark_config={}, retry_policy=RetryPolicy(), agent=None,
+        context={}, engine_config={}, retry_policy=RetryPolicy(), agent=None,
         udf_registry={}, macros={}, checkpoint=False,
         provenance_map=ProvenanceMap(blueprint_id="bp1", blueprint_path="", modules={}, context={}),
         inputs_fingerprint={},
@@ -126,7 +126,7 @@ def test_egress_without_maintenance_block_no_call(spark, tmp_path):
 
     manifest = Manifest(
         blueprint_id="bp2", name="Test", description="", aqueduct_version="1.0",
-        context={}, spark_config={}, retry_policy=RetryPolicy(), agent=None,
+        context={}, engine_config={}, retry_policy=RetryPolicy(), agent=None,
         udf_registry={}, macros={}, checkpoint=False,
         provenance_map=ProvenanceMap(blueprint_id="bp2", blueprint_path="", modules={}, context={}),
         inputs_fingerprint={},
@@ -165,7 +165,7 @@ def test_maintenance_timing_written_to_obs_db(spark, tmp_path):
 
     manifest = Manifest(
         blueprint_id="bp_obs", name="Test", description="", aqueduct_version="1.0",
-        context={}, spark_config={}, retry_policy=RetryPolicy(), agent=None,
+        context={}, engine_config={}, retry_policy=RetryPolicy(), agent=None,
         udf_registry={}, macros={}, checkpoint=False,
         provenance_map=ProvenanceMap(blueprint_id="bp_obs", blueprint_path="", modules={}, context={}),
         inputs_fingerprint={},

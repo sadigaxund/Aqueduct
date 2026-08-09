@@ -37,6 +37,39 @@ from aqueduct.parser.resolver import build_context_map, resolve_value
 from aqueduct.parser.schema import BlueprintSchema
 
 
+def _resolve_engine_block_raw(engine_block: Any) -> dict[str, Any]:
+    """One engine's Blueprint-level `engine.<name>:` block → the raw dict
+    that becomes `Blueprint.engine_config[<name>]`, BEFORE Tier-0
+    (`${ENV}`/`${ctx.*}`) resolution.
+
+    Spark's block nests its free-form session properties under a `conf:`
+    sub-field (arbitrary `spark.*` keys) — that dict already contains only
+    what the author typed, so it is returned as-is. Every other engine's
+    block declares its session-affecting fields directly on the model
+    (`DuckDBEngineBlockSchema` is empty today, but this is written for the
+    shape it will have once fields land there), so `model_dump()` is the
+    generic per-engine bag — but it MUST be `exclude_unset=True`.
+
+    Plain `model_dump()` (no args) emits EVERY declared field, including
+    ones the author never wrote in the Blueprint, each carrying its
+    pydantic default (typically `None`). A Blueprint that sets only ONE
+    field on a future non-Spark engine block would otherwise produce
+    `{"memory_limit": "8GB", "threads": None, ...}` for the rest, and
+    `aqueduct.executor.session_config.resolve_session_engine_config`'s merge
+    (Blueprint wins) would let those `None`s silently clobber real
+    `aqueduct.yml`-level values the Blueprint never touched — the exact
+    falsy/None trap AGENTS.md warns about, and a landmine invisible today
+    only because there is nothing yet to trip it on. `exclude_unset=True`
+    keeps only the fields pydantic's own `model_fields_set` says were
+    actually provided — the same primitive
+    `aqueduct.executor.config_leaves.explicitly_set_config_leaves` uses for
+    exactly this explicit-vs-default distinction.
+    """
+    if "conf" in type(engine_block).model_fields:
+        return dict(engine_block.conf)
+    return engine_block.model_dump(exclude_unset=True)
+
+
 def _hook_entry(h) -> HookEntry:
     """HookEntrySchema → HookEntry (kind + verbatim value)."""
     for kind in ("blueprint", "webhook", "command"):
@@ -444,19 +477,25 @@ def parse_dict(
         raise ParseError(f"agent config resolution failed: {exc}") from exc
 
     # Tier-0 resolution applies here too (parity with module config /
-    # context_override) — ${ENV:-default} / ${ctx.*} in engine.spark.conf and
-    # macros must be substituted, Spark/macros do no var expansion (ISSUE-027).
-    # Wrapped so a bad ${ctx.*} surfaces as ParseError, not raw ValueError.
-    # NOTE (2.0): the YAML-facing key is `engine.spark.conf:` (was the
-    # top-level `spark_config:` block); the internal `Blueprint.spark_config`
-    # dataclass field keeps its pre-2.0 name — it is engine-agnostic AST
-    # plumbing, not part of the Blueprint-authoring contract this rename
-    # covers, and only Spark reads it today.
+    # context_override) — ${ENV:-default} / ${ctx.*} in every engine's
+    # `engine.<name>:` block and in macros must be substituted, Spark/macros
+    # do no var expansion (ISSUE-027). Wrapped so a bad ${ctx.*} surfaces as
+    # ParseError, not raw ValueError.
+    #
+    # Built GENERICALLY off `EngineBlockSchema`'s own fields, one entry per
+    # registered engine block — never a hardcoded `validated.engine.spark`
+    # read. See `_resolve_engine_block_raw` for why the non-`conf` branch
+    # must use `exclude_unset=True` (explicit-vs-default fields), not a
+    # plain `model_dump()`.
     try:
-        resolved_spark_config = resolve_value(dict(validated.engine.spark.conf), ctx_map)
+        resolved_engine_config: dict[str, dict[str, Any]] = {}
+        for _engine_name in type(validated.engine).model_fields:
+            _engine_block = getattr(validated.engine, _engine_name)
+            _raw = _resolve_engine_block_raw(_engine_block)
+            resolved_engine_config[_engine_name] = resolve_value(_raw, ctx_map)
         resolved_macros = resolve_value(dict(validated.macros), ctx_map)
     except (ValueError, ParseError) as exc:
-        raise ParseError(f"engine.spark.conf / macros resolution failed: {exc}") from exc
+        raise ParseError(f"engine.<name> / macros resolution failed: {exc}") from exc
 
     return Blueprint(
         aqueduct_version=validated.aqueduct,
@@ -466,7 +505,7 @@ def parse_dict(
         context=ContextRegistry(values=ctx_map),
         modules=modules,
         edges=edges,
-        spark_config=resolved_spark_config,
+        engine_config=resolved_engine_config,
         retry_policy=retry_policy,
         agent=agent,
         # UdfSchema → plain dicts (the compiler/executor consume dicts via .get()).

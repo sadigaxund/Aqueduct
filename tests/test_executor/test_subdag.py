@@ -92,7 +92,7 @@ class TestSubDagSelectors:
                 Edge(from_id="ch", to_id="eg"),
             ),
             context={},
-            spark_config={},
+            engine_config={},
         )
 
         result = execute(manifest, spark, to_module="ch")
