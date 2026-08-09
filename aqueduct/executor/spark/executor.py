@@ -824,6 +824,7 @@ def execute(
     """
     from aqueduct.executor.spark.probe import ProbeSampling, execute_probe
     from aqueduct.executor.spark.udf import UDFError, register_udfs
+    from aqueduct.warnings import emit as _aq_emit
 
     run_id = run_id or str(uuid.uuid4())
 
@@ -859,18 +860,18 @@ def execute(
             stored_hash = stored_hash_path.read_text(encoding="utf-8").strip()
             current_hash = _manifest_hash(manifest)
             if stored_hash != current_hash:
-                logger.warning(
-                    "[runtime_resume_hash_changed] Resuming run %r: Manifest has "
-                    "changed since original run (hash %s → %s). Checkpoint data "
-                    "may be stale.",
-                    resume_run_id, stored_hash, current_hash,
+                _aq_emit(
+                    "runtime_resume_hash_changed",
+                    f"Resuming run {resume_run_id!r}: Manifest has changed since "
+                    f"original run (hash {stored_hash} → {current_hash}). "
+                    "Checkpoint data may be stale.",
+                    suppress=warnings_suppress,
                 )
 
     # ── Phase 30a tier 2 — session-startup warnings (JAR availability, ...) ──
     if not warnings_silence_all:
         try:
             from aqueduct.executor.spark.warnings import run_all as _run_session_warnings
-            from aqueduct.warnings import emit as _aq_emit
             for _rid, _msg in _run_session_warnings(manifest, spark, suppress=warnings_suppress):
                 _aq_emit(_rid, _msg, suppress=warnings_suppress)
         except Exception:

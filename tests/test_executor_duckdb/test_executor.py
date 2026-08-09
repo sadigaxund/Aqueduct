@@ -1217,6 +1217,131 @@ def test_feature_checkpoint_driven_through_execute(duckdb_con, tmp_path):
     assert duckdb_con.read_parquet(out_path).fetchall() == [(1,)]
 
 
+def test_resume_mismatched_manifest_warns_and_continues(duckdb_con, tmp_path):
+    """DuckDB writes ``_manifest_hash`` into the checkpoint dir on every
+    checkpointed run but, before this fix, never read it back on
+    ``--resume`` — a Manifest that had changed since the checkpointed run
+    was silently reused with no signal at all (unlike Spark, which at
+    least warns). Tampering with the stored hash and resuming must now
+    surface a suppressible ``runtime_resume_hash_changed`` AqueductWarning
+    while still completing the run (permissive-resume semantics, matching
+    Spark: warn, then proceed — never refuse).
+
+    Pre-fix, this test failed: no read of ``_manifest_hash`` existed at
+    all on the resume path, so ``execute()`` raised no warning of any kind
+    and ``caught`` was empty.
+    """
+    import warnings as _w
+
+    src_path = _write_parquet(duckdb_con, tmp_path, "src", "SELECT 1 AS a")
+    out_path = str(tmp_path / "out.parquet")
+    checkpoint_root = tmp_path / "checkpoints"
+    modules = (
+        _module("ing", "Ingress", {"format": "parquet", "path": src_path}, checkpoint=True),
+        _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}),
+    )
+    edges = (Edge(from_id="ing", to_id="eg", port="main"),)
+    manifest = Manifest(
+        blueprint_id="test.hash_mismatch",
+        context={},
+        modules=modules,
+        edges=edges,
+        engine_config={},
+        checkpoint=True,
+    )
+    r1 = execute(manifest, duckdb_con, run_id="r_hash1", checkpoint_root=checkpoint_root)
+    assert r1.status == ExecutionStatus.SUCCESS
+
+    # Tamper with the stored hash to force a mismatch.
+    hash_file = checkpoint_root / "r_hash1" / "_manifest_hash"
+    hash_file.write_text("000000000000", encoding="utf-8")
+
+    out_path2 = str(tmp_path / "out2.parquet")
+    modules2 = (
+        _module("ing", "Ingress", {"format": "parquet", "path": src_path}, checkpoint=True),
+        _module("eg", "Egress", {"format": "parquet", "path": out_path2, "mode": "overwrite"}),
+    )
+    manifest2 = Manifest(
+        blueprint_id="test.hash_mismatch",
+        context={},
+        modules=modules2,
+        edges=edges,
+        engine_config={},
+        checkpoint=True,
+    )
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        r2 = execute(
+            manifest2,
+            duckdb_con,
+            run_id="r_hash2",
+            checkpoint_root=checkpoint_root,
+            resume_run_id="r_hash1",
+        )
+    assert r2.status == ExecutionStatus.SUCCESS
+    assert any(
+        "runtime_resume_hash_changed" in str(w.message) and "changed" in str(w.message)
+        for w in caught
+    )
+
+
+def test_resume_mismatched_manifest_warning_is_suppressible(duckdb_con, tmp_path):
+    """The documented suppression workflow (``warnings.suppress`` /
+    ``--suppress-warning`` → ``warnings_suppress=`` on ``execute()``) must
+    silence ``runtime_resume_hash_changed`` — proving the fix routes
+    through ``aqueduct.warnings.emit()`` rather than a bare ``logger.warning``
+    that the suppress list can never reach."""
+    import warnings as _w
+
+    src_path = _write_parquet(duckdb_con, tmp_path, "src", "SELECT 1 AS a")
+    out_path = str(tmp_path / "out.parquet")
+    checkpoint_root = tmp_path / "checkpoints"
+    modules = (
+        _module("ing", "Ingress", {"format": "parquet", "path": src_path}, checkpoint=True),
+        _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}),
+    )
+    edges = (Edge(from_id="ing", to_id="eg", port="main"),)
+    manifest = Manifest(
+        blueprint_id="test.hash_mismatch_suppressed",
+        context={},
+        modules=modules,
+        edges=edges,
+        engine_config={},
+        checkpoint=True,
+    )
+    r1 = execute(manifest, duckdb_con, run_id="r_sup1", checkpoint_root=checkpoint_root)
+    assert r1.status == ExecutionStatus.SUCCESS
+
+    hash_file = checkpoint_root / "r_sup1" / "_manifest_hash"
+    hash_file.write_text("000000000000", encoding="utf-8")
+
+    out_path2 = str(tmp_path / "out2.parquet")
+    modules2 = (
+        _module("ing", "Ingress", {"format": "parquet", "path": src_path}, checkpoint=True),
+        _module("eg", "Egress", {"format": "parquet", "path": out_path2, "mode": "overwrite"}),
+    )
+    manifest2 = Manifest(
+        blueprint_id="test.hash_mismatch_suppressed",
+        context={},
+        modules=modules2,
+        edges=edges,
+        engine_config={},
+        checkpoint=True,
+    )
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        r2 = execute(
+            manifest2,
+            duckdb_con,
+            run_id="r_sup2",
+            checkpoint_root=checkpoint_root,
+            resume_run_id="r_sup1",
+            warnings_suppress={"runtime_resume_hash_changed"},
+        )
+    assert r2.status == ExecutionStatus.SUCCESS
+    assert not any("runtime_resume_hash_changed" in str(w.message) for w in caught)
+
+
 # ── Engine-invariant proof: retry_policy / module retry driven through the
 # duckdb executor's own _with_retry, via a real execute() run ─────────────
 

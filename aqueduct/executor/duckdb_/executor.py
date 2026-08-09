@@ -467,6 +467,8 @@ def execute(
     Raises:
         ExecuteError: Unsupported module type, cycle detected.
     """
+    from aqueduct.warnings import emit as _aq_emit
+
     run_id = run_id or str(uuid.uuid4())
 
     checkpoints_base: Path | None = checkpoint_root if checkpoint_root else (
@@ -484,6 +486,27 @@ def execute(
         resume_dir = checkpoints_base / resume_run_id
         if not resume_dir.exists():
             raise ExecuteError(f"Resume run_id={resume_run_id!r} has no checkpoints at {resume_dir}")
+        # Mirrors executor/spark/executor.py's resume-hash comparison: a
+        # checkpoint dir's stored `_manifest_hash` (written above, on the
+        # ORIGINAL run) is compared against this run's Manifest hash. This
+        # engine writes that file on every checkpointed run but, until now,
+        # never read it back on resume — checkpoints from a different
+        # Manifest were silently reused with no signal at all. Same
+        # permissive policy as Spark: warn, then proceed (module checkpoint
+        # reuse is deliberately permissive; only the island handoff spill
+        # path is strict).
+        stored_hash_path = resume_dir / "_manifest_hash"
+        if stored_hash_path.exists():
+            stored_hash = stored_hash_path.read_text(encoding="utf-8").strip()
+            current_hash = _manifest_hash(manifest)
+            if stored_hash != current_hash:
+                _aq_emit(
+                    "runtime_resume_hash_changed",
+                    f"Resuming run {resume_run_id!r}: Manifest has changed since "
+                    f"original run (hash {stored_hash} → {current_hash}). "
+                    "Checkpoint data may be stale.",
+                    suppress=warnings_suppress,
+                )
 
     # ── Session-startup warnings (httpfs availability, ...) ──────────────
     # Mirrors executor/spark/executor.py's tier-2 session-startup pass.
@@ -493,7 +516,6 @@ def execute(
     if not warnings_silence_all:
         try:
             from aqueduct.executor.duckdb_.warnings import run_all as _run_session_warnings
-            from aqueduct.warnings import emit as _aq_emit
             for _rid, _msg in _run_session_warnings(manifest, con, suppress=warnings_suppress):
                 _aq_emit(_rid, _msg, suppress=warnings_suppress)
         except Exception:

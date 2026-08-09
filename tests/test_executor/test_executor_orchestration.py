@@ -1095,8 +1095,17 @@ def test_resume_skips_completed_module_and_reloads_dataframe(spark: SparkSession
         context={},
         engine_config={},
     )
-    # Resume: src loaded from checkpoint; sink executes normally
-    r2 = execute(manifest, spark, run_id="run-r2", store_dir=store_dir, resume_run_id="prev-run")
+    # Resume: src loaded from checkpoint; sink executes normally. The
+    # hand-written "aabbccdd1234" sentinel above never matches this
+    # manifest's real hash, so this also exercises (without asserting on)
+    # the runtime_resume_hash_changed warning — see
+    # test_resume_mismatched_manifest_warns_and_continues for the
+    # dedicated assertion.
+    import warnings as _w
+
+    with _w.catch_warnings():
+        _w.simplefilter("ignore")
+        r2 = execute(manifest, spark, run_id="run-r2", store_dir=store_dir, resume_run_id="prev-run")
     assert r2.status == "success"
     src_result = next(mr for mr in r2.module_results if mr.module_id == "src")
     assert src_result.status == "success"
@@ -1123,8 +1132,15 @@ def test_resume_missing_run_id_raises_execute_error(spark: SparkSession, tmp_pat
         execute(manifest, spark, store_dir=store_dir, resume_run_id="nonexistent-run")
 
 
-def test_resume_mismatched_manifest_warns_and_continues(spark: SparkSession, tmp_path, caplog):
-    import logging
+def test_resume_mismatched_manifest_warns_and_continues(spark: SparkSession, tmp_path):
+    """The stored ``_manifest_hash`` mismatch must surface as a real,
+    suppressible ``runtime_resume_hash_changed`` AqueductWarning — not a
+    bare ``logger.warning`` that ``warnings.suppress``/``--suppress-warning``
+    can never reach and that never shows up in ``ModuleResult``/the
+    persisted run record. Routing through ``aqueduct.warnings.emit()`` is
+    what makes this observable via ``warnings.catch_warnings`` instead of
+    ``caplog``."""
+    import warnings as _w
 
     in_path = str(tmp_path / "in.parquet")
     spark.range(4).write.parquet(in_path)
@@ -1161,11 +1177,69 @@ def test_resume_mismatched_manifest_warns_and_continues(spark: SparkSession, tmp
         engine_config={},
         checkpoint=True,
     )
-    with caplog.at_level(logging.WARNING, logger="aqueduct.executor.spark.executor"):
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
         r2 = execute(manifest2, spark, run_id="run-hash2", store_dir=store_dir, resume_run_id="run-hash1")
 
     assert r2.status == "success"
-    assert any("changed" in rec.getMessage() for rec in caplog.records)
+    assert any(
+        "runtime_resume_hash_changed" in str(w.message) and "changed" in str(w.message)
+        for w in caught
+    )
+
+
+def test_resume_mismatched_manifest_warning_is_suppressible(spark: SparkSession, tmp_path):
+    """The documented suppression workflow (``warnings.suppress`` /
+    ``--suppress-warning`` → ``warnings_suppress=`` on ``execute()``) must
+    silence ``runtime_resume_hash_changed``."""
+    import warnings as _w
+
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(4).write.parquet(in_path)
+    out_path = str(tmp_path / "out.parquet")
+    store_dir = tmp_path / "store"
+
+    manifest = Manifest(
+        blueprint_id="test.hash_mismatch_suppressed",
+        modules=(
+            Module(id="src", type="Ingress", label="Src", config={"format": "parquet", "path": in_path}),
+            Module(id="sink", type="Egress", label="Sink", config={"format": "parquet", "path": out_path}),
+        ),
+        edges=(Edge(from_id="src", to_id="sink", port="main"),),
+        context={},
+        engine_config={},
+        checkpoint=True,
+    )
+    r1 = execute(manifest, spark, run_id="run-sup1", store_dir=store_dir)
+    assert r1.status == "success"
+
+    hash_file = store_dir / "checkpoints" / "run-sup1" / "_manifest_hash"
+    hash_file.write_text("000000000000", encoding="utf-8")
+
+    out_path2 = str(tmp_path / "out2.parquet")
+    manifest2 = Manifest(
+        blueprint_id="test.hash_mismatch_suppressed",
+        modules=(
+            Module(id="src", type="Ingress", label="Src", config={"format": "parquet", "path": in_path}),
+            Module(id="sink", type="Egress", label="Sink", config={"format": "parquet", "path": out_path2}),
+        ),
+        edges=(Edge(from_id="src", to_id="sink", port="main"),),
+        context={},
+        engine_config={},
+        checkpoint=True,
+    )
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        r2 = execute(
+            manifest2,
+            spark,
+            run_id="run-sup2",
+            store_dir=store_dir,
+            resume_run_id="run-sup1",
+            warnings_suppress={"runtime_resume_hash_changed"},
+        )
+    assert r2.status == "success"
+    assert not any("runtime_resume_hash_changed" in str(w.message) for w in caught)
 
 
 def test_per_module_on_failure_abort_stops_blueprint(spark: SparkSession, tmp_path, monkeypatch):
