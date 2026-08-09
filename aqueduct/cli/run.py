@@ -601,6 +601,45 @@ def _do_compile(
     )
 
 
+class _SessionHolder:
+    """Mutable single-slot box for the run's CURRENT single-engine session.
+
+    A heal retry that executes a patched Manifest must close the pre-patch
+    session and build a fresh one so an engine-config change the patch made
+    (e.g. a ``set_spark_config`` op) actually reaches the retry — see
+    ``_rebuild_session_for_patch`` in the ``run`` command below (Phase 82
+    remediation). Two independent consumers need to observe whichever
+    session is CURRENT at the moment they run, never the one that existed
+    when they were defined:
+
+      - the ``atexit`` closer registered in ``_setup_surveyor`` — a plain
+        ``atexit.register(lambda: close(session))`` closing over a local
+        variable would freeze on whatever session existed when
+        ``_setup_surveyor`` returned (that function's own ``session`` name
+        is a dead alias by the time a heal retry rebuilds one), so the
+        pre-patch session would leak (never closed) and the rebuilt one
+        would double-close nothing;
+      - every session consumer inside the ``run`` command itself
+        (``_execute_target``, the terminal ``on_success``/``on_failure``
+        hooks, the agentic ``ToolBox``) — reading a bare local ``session``
+        variable would work for these (ordinary late-binding closure
+        semantics inside the SAME function), but mixing "read the holder"
+        and "read the local var" is the kind of inconsistency this class
+        exists to rule out; every consumer reads ``.session`` off ONE
+        shared instance instead.
+
+    A frozen dataclass field (``_SurveyorSetupResult.session_holder``) can
+    hold a reference to this mutable object without violating that
+    dataclass's own immutability — only the REFERENCE is frozen, not what
+    it points at.
+    """
+
+    __slots__ = ("session",)
+
+    def __init__(self, session: object = None) -> None:
+        self.session = session
+
+
 @_dc_frozen(frozen=True)
 class _SurveyorSetupResult:
     """Return-type bundle for ``_setup_surveyor`` — surveyor, session, agent config, etc."""
@@ -630,7 +669,7 @@ class _SurveyorSetupResult:
     surveyor: object
     _obs_store: object
     _patch_store: object
-    session: object
+    session_holder: object  # _SessionHolder — see class docstring above
     bundle: object
     depot: object
     _r: object  # click.style rule for banner
@@ -993,12 +1032,12 @@ def _setup_surveyor(
     # finishes (see `aqueduct/executor/orchestrator.py`). Building one more
     # session here for `deployment.engine` (the run's nominal default, not
     # necessarily any island's actual engine) would be wasted work at best
-    # and a stray, never-closed-until-atexit session at worst. `session`
-    # stays None for the rest of this run — every downstream consumer
-    # (hooks' in-process fallback, the agentic ToolBox's `spark_session`)
-    # already treats a missing session as "no live session to reuse", the
-    # same fallback a single-engine run never exercises.
-    session = None
+    # and a stray, never-closed-until-atexit session at worst.
+    # `_session_holder.session` stays None for the rest of this run — every
+    # downstream consumer (hooks' in-process fallback, the agentic ToolBox's
+    # `spark_session`) already treats a missing session as "no live session
+    # to reuse", the same fallback a single-engine run never exercises.
+    _session_holder = _SessionHolder(None)
     if len(manifest.islands) <= 1:
         from aqueduct.executor.protocol import SessionSpec, get_protocol
         from aqueduct.executor.session_config import (
@@ -1007,7 +1046,7 @@ def _setup_surveyor(
         )
 
         _protocol = get_protocol(engine)
-        session = _protocol.session_factory()(
+        _session_holder.session = _protocol.session_factory()(
             SessionSpec(
                 blueprint_id=manifest.blueprint_id,
                 engine_config=resolve_session_engine_config(cfg, engine, manifest),
@@ -1021,7 +1060,13 @@ def _setup_surveyor(
         import atexit
 
         _close_session = _protocol.session_closer()
-        atexit.register(lambda: _close_session(session))
+        # Closes over `_session_holder`, not `session` — a later heal-retry
+        # rebuild (`run()`'s `_rebuild_session_for_patch`) mutates the
+        # holder's `.session` attribute from a DIFFERENT function's scope
+        # (this function has already returned by then), so reading
+        # `_session_holder.session` here at exit time is the only way this
+        # closer ever sees a rebuilt session instead of the original one.
+        atexit.register(lambda: _close_session(_session_holder.session))
 
     return _SurveyorSetupResult(
         resolved_store_dir=resolved_store_dir,
@@ -1049,7 +1094,7 @@ def _setup_surveyor(
         surveyor=surveyor,
         _obs_store=_obs_store,
         _patch_store=_patch_store,
-        session=session,
+        session_holder=_session_holder,
         bundle=bundle,
         depot=depot,
         _r=_r,
@@ -1551,7 +1596,13 @@ def run(
         surveyor = _ssr.surveyor
         _obs_store = _ssr._obs_store
         _patch_store = _ssr._patch_store
-        session = _ssr.session
+        # Every consumer below reads the CURRENT session off this one
+        # holder (never a plain `session` local) — a heal retry that
+        # executes a patched manifest rebuilds the session in place via
+        # `_rebuild_session_for_patch` (see the `_execute_target` call
+        # sites below), and every reader must observe that rebuild, not a
+        # value captured once at setup time (Phase 82 remediation).
+        _session_holder = _ssr.session_holder
         bundle = _ssr.bundle
         depot = _ssr.depot
 
@@ -1603,7 +1654,7 @@ def run(
                 blueprint_path=blueprint,
                 allow_command_hooks=cfg.danger.allow_command_hooks,
                 failure_ctx=ctx,
-                session=session,
+                session=_session_holder.session,
                 engine=engine,
             )
 
@@ -1875,7 +1926,7 @@ def run(
                         dict(kw, run_id=run_id, resume_run_id=resume_run_id),
                         suppress=cfg.warnings.suppress,
                     )
-                    return execute(target_manifest, session, **_filtered), None
+                    return execute(target_manifest, _session_holder.session, **_filtered), None
                 except ExecuteError as exc:
                     return (
                         ExecutionResult(
@@ -1929,6 +1980,64 @@ def run(
                 record_result=False,
             )
             return polyglot_result, None
+
+        def _rebuild_session_for_patch(target_manifest) -> None:
+            """Close the current single-engine session and build a fresh one
+            from *target_manifest* — the PATCHED manifest a heal iteration
+            is about to retry-execute (Phase 82 remediation).
+
+            Unconditional: every call site that executes a patch's retry
+            calls this FIRST, regardless of which op(s) the patch contained.
+            Rebuilding only when a config-shaped op is detected would be an
+            include-list over the (open, growing) set of patch ops — the
+            exact shape AGENTS.md's "classify by what you EXCLUDE" rule
+            bans, and the same shape as the shipped Junction-port bug it
+            cites. Any future op that changes engine/session state would
+            silently miss an op-type allowlist; it can never miss an
+            unconditional rebuild.
+
+            Without this, the retry runs on the SAME session the pre-patch
+            run built. That is not merely stale — for Spark specifically,
+            ``SparkSession.builder.getOrCreate()`` returns the ACTIVE
+            session and only hot-applies a narrow set of runtime-modifiable
+            SQL confs; most engine config (and definitely anything a patch
+            changes via ``set_spark_config``) has no effect on an
+            already-running session. So a patch that fixes the failure by
+            changing engine config would silently retry against the
+            UNCHANGED pre-patch config, fail again, and get misattributed
+            as a bad patch (`_stage_failed_patch` files it as a failure).
+            See ``aqueduct/executor/spark/session.py::make_spark_session``.
+
+            No-op when this run never built an eager single-engine session
+            in the first place (`_session_holder.session is None` — the
+            polyglot path, `len(manifest.islands) > 1`, which never reaches
+            here: `run_polyglot()` already opens a fresh session per island
+            on every call, so there is nothing to close or rebuild).
+            """
+            if _session_holder.session is None:
+                return
+            from aqueduct.executor.protocol import SessionSpec, get_protocol
+            from aqueduct.executor.session_config import (
+                resolve_session_engine_config,
+                session_secrets_options,
+            )
+
+            _protocol = get_protocol(engine)
+            # Stop the PRE-patch session before building the new one — a
+            # `getOrCreate()`-style reuse without a genuine teardown first
+            # would silently hand back the same live session (the exact
+            # no-op-that-looks-like-a-fix this rebuild exists to avoid).
+            _protocol.session_closer()(_session_holder.session)
+            _session_holder.session = _protocol.session_factory()(
+                SessionSpec(
+                    blueprint_id=target_manifest.blueprint_id,
+                    engine_config=resolve_session_engine_config(cfg, engine, target_manifest),
+                    master_url=master_url,
+                    quiet_startup=not verbose,
+                    timezone=cfg.timezone,
+                    engine_options=session_secrets_options(cfg, target_manifest),
+                )
+            )
 
         while True:
             # `iteration_run_id` is the per-iteration uuid used as `run_id`
@@ -2461,7 +2570,7 @@ def run(
                     obs_store=_obs_store,
                     patch_store=_patch_store,
                     base_dir=manifest.base_dir,
-                    spark_session=session,
+                    spark_session=_session_holder.session,
                     engine=(failure_ctx.engine or engine),
                     config_path=config_path,
                     store_dir=store_dir,
@@ -2549,7 +2658,7 @@ def run(
                             obs_store=_obs_store,
                             patch_store=_patch_store,
                             base_dir=manifest.base_dir,
-                            spark_session=session,
+                            spark_session=_session_holder.session,
                             engine=(link_failure_ctx.engine or engine),
                             config_path=config_path,
                             store_dir=store_dir,
@@ -2609,6 +2718,7 @@ def run(
                         )
                     if _nm is None:
                         return None, None, None
+                    _rebuild_session_for_patch(_nm)
                     _r2, _exc2 = _execute_target(
                         _nm,
                         run_id=str(uuid.uuid4()),
@@ -3268,6 +3378,7 @@ def run(
                         model_cascade_position=_cascade_pos,
                     )
                     break
+                _rebuild_session_for_patch(new_manifest)
                 result2, _exc2 = _execute_target(
                     new_manifest,
                     run_id=str(uuid.uuid4()),
@@ -3448,7 +3559,7 @@ def run(
                 blueprint_path=blueprint,
                 allow_command_hooks=cfg.danger.allow_command_hooks,
                 failure_ctx=failure_ctx,
-                session=session,
+                session=_session_holder.session,
                 engine=engine,
             )
             # Distinguish the three non-success terminal states for downstream
@@ -3509,7 +3620,7 @@ def run(
             blueprint_id=manifest.blueprint_id,
             blueprint_path=blueprint,
             allow_command_hooks=cfg.danger.allow_command_hooks,
-            session=session,
+            session=_session_holder.session,
             engine=engine,
         ):
             _style_success("run complete")
