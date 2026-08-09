@@ -189,10 +189,11 @@ def run_lineage_gate(
       `warn`            at least one missing-column finding (default)
       `fail`            reserved for future hard breakage classes (kept for caller policy)
       `not_applicable`  the patch's operations touch zero modules — e.g.
-                        `set_spark_config`, whose only fields are `key`/
-                        `value`, carries no `module_id`/`module`/`from_id`/
-                        `to_id` for `touched_module_ids()` to extract. This
-                        means the gate has NO signal for this patch, which is
+                        `set_engine_config`, whose only fields are
+                        `engine`/`key`/`value`, carries no `module_id`/
+                        `module`/`from_id`/`to_id` for `touched_module_ids()`
+                        to extract. This means the gate has NO signal for
+                        this patch, which is
                         distinct from having checked it and found nothing —
                         collapsing the two into `pass` would silently claim a
                         column-impact check that never ran. Informational

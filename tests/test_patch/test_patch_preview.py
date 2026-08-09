@@ -239,15 +239,17 @@ class TestGate2NotApplicable:
     from "checked and found nothing" — exactly the silent no-op AGENTS.md
     forbids."""
 
-    def test_set_spark_config_only_patch_is_not_applicable(self):
-        # set_spark_config carries only `key`/`value` — no `module_id`,
-        # `module` dict, or `from_id`/`to_id` — so touched_module_ids()
-        # always returns []. This is the exact op named in the defect
-        # report; any Blueprint (even empty) reproduces it, since the gate
-        # never even needs to look at the Blueprint on this path.
+    def test_set_engine_config_only_patch_is_not_applicable(self):
+        # set_engine_config carries only `engine`/`key`/`value` — no
+        # `module_id`, `module` dict, or `from_id`/`to_id` — so
+        # touched_module_ids() always returns []. This is the exact op
+        # named in the defect report (as its predecessor, set_spark_config);
+        # any Blueprint (even empty) reproduces it, since the gate never
+        # even needs to look at the Blueprint on this path.
         bp = {"modules": [], "edges": []}
         spec = _patch(
-            {"op": "set_spark_config", "key": "spark.sql.shuffle.partitions", "value": "200"}
+            {"op": "set_engine_config", "engine": "spark",
+             "key": "spark.sql.shuffle.partitions", "value": "200"}
         )
 
         result = run_lineage_gate(bp, bp, spec)
@@ -263,7 +265,7 @@ class TestGate2NotApplicable:
         assert "module" in result.detail.lower()
 
     def test_touched_module_patch_still_reports_pass_not_not_applicable(self):
-        # A patch that DOES reference a module (unlike set_spark_config)
+        # A patch that DOES reference a module (unlike set_engine_config)
         # must keep producing the gate's normal checked verdict — the fix
         # must not widen `not_applicable` to cover patches that do have a
         # lineage surface.

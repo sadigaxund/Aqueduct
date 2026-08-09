@@ -32,7 +32,7 @@ from ruamel.yaml import YAML
 from aqueduct.compiler.expander import is_arcade_expanded_id
 from aqueduct.errors import AqueductError
 from aqueduct.parser.parser import ParseError, parse
-from aqueduct.patch.grammar import PATCH_META_KEY, PatchSpec
+from aqueduct.patch.grammar import PATCH_META_KEY, PatchSpec, RetiredPatchOpError
 from aqueduct.patch.operations import PatchOperationError, apply_operation
 from aqueduct.patch.provenance import build_healed_by_record
 from aqueduct.redaction import redact as _redact
@@ -107,6 +107,15 @@ def load_patch_spec(patch_path: Path) -> PatchSpec:
     except ValidationError as exc:
         raise PatchError(
             f"PatchSpec validation failed for {patch_path}:\n{exc}"
+        ) from exc
+    except RetiredPatchOpError as exc:
+        # A RetiredPatchOpError is not a ValueError/TypeError/AssertionError,
+        # so Pydantic does not wrap it into ValidationError (see the class
+        # docstring) — caught separately here so every existing `except
+        # PatchError` caller (aqueduct/cli/patch.py) keeps working unchanged
+        # instead of seeing an uncaught exception type.
+        raise PatchError(
+            f"PatchSpec at {patch_path} cannot be loaded: {exc}"
         ) from exc
 
 

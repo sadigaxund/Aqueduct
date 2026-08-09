@@ -94,7 +94,12 @@ logger = logging.getLogger(__name__)
 #       DuckDB's composed healing system prompt. Spark's composed prompt is
 #       byte-identical to 1.8 — the version constant is global, so Spark is
 #       relabeled too.
-PROMPT_VERSION = "1.9"
+# 1.10 — cross-engine remediation: the op table (`PatchSpec.model_json_schema()`,
+#        embedded verbatim under "## PatchSpec Schema") loses `set_spark_config`
+#        and gains `set_engine_config` — the same op, generalized to every
+#        registered engine. The composed prompt changes for EVERY engine (the
+#        schema is engine-independent), so both are relabeled.
+PROMPT_VERSION = "1.10"
 
 
 @dataclass

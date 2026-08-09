@@ -344,12 +344,14 @@ agent:
   #   #     replace_retry_policy      replace the blueprint-level RetryPolicy
   #   #     add_arcade_ref            insert an Arcade (sub-Blueprint) reference
   #   #     defer_to_human            signal unhealable failure (requires allow_defer: true)
-  #   #     set_spark_config          change an engine.spark.conf value (recommended: block in auto mode)
+  #   #     set_engine_config         change an engine.<engine> config value — conf-bag key (e.g.
+  #   #                               Spark) or typed field (e.g. DuckDB memory_limit/threads)
+  #   #                               (recommended: block in auto mode)
   #   #     replace_macro             replace an existing macros: body (recommended: block in auto mode)
   #   forbidden_ops:
   #     - remove_module
   #     - replace_retry_policy
-  #     - set_spark_config          # recommended: spark config changes affect cluster resources
+  #     - set_engine_config         # recommended: engine config changes affect cluster/session resources
   #     - replace_macro             # recommended: one macro change can affect many modules
 
   #   # heal_on_errors: LLM only triggers when the failure matches one of these labels.

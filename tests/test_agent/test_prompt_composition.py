@@ -193,12 +193,12 @@ def _strip_patch_schema(prompt: str) -> str:
 
     That block is `PatchSpec.model_json_schema()` — the Blueprint PATCH GRAMMAR,
     rendered as JSON, not prose the prompt layer authors. It legitimately names
-    Spark today (`set_spark_config` / `spark_config` is a real patch op). That
-    is a grammar-level engine leak governed by the capability framework (a
-    `spark_config` leaf is `ignored_with_warning` on a non-Spark engine), NOT
-    prompt-composition bleed, and genericizing the patch grammar is out of
-    scope here. Everything OUTSIDE this block is prose we own, and must carry
-    zero engine tokens for a non-Spark engine.
+    Spark today (`set_engine_config`'s `engine` field description gives 'spark'
+    as an example value, e.g.). That is a grammar-level engine leak governed by
+    the capability framework (a `spark_config` leaf is `ignored_with_warning`
+    on a non-Spark engine), NOT prompt-composition bleed, and genericizing the
+    patch grammar is out of scope here. Everything OUTSIDE this block is prose
+    we own, and must carry zero engine tokens for a non-Spark engine.
     """
     start = prompt.index("## PatchSpec Schema")
     end = prompt.index("## Rules")

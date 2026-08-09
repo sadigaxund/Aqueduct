@@ -31,6 +31,7 @@ from ruamel.yaml.scalarstring import DoubleQuotedScalarString as _DQ
 from aqueduct.compiler.expander import is_arcade_expanded_id
 from aqueduct.errors import AqueductError
 from aqueduct.parser.models import ModuleType
+from aqueduct.parser.schema import EngineBlockSchema
 from aqueduct.patch.grammar import (
     AddArcadeRefOp,
     AddProbeOp,
@@ -43,9 +44,9 @@ from aqueduct.patch.grammar import (
     ReplaceModuleConfigOp,
     ReplaceModuleLabelOp,
     ReplaceRetryPolicyOp,
+    SetEngineConfigOp,
     SetModuleConfigKeyOp,
     SetModuleOnFailureOp,
-    SetSparkConfigOp,
 )
 
 _ryaml = _YAML()
@@ -353,28 +354,69 @@ def apply_defer_to_human(bp: dict, op: DeferToHumanOp) -> dict:
     return bp
 
 
-def apply_set_spark_config(bp: dict, op: SetSparkConfigOp) -> dict:
-    """Set a key in the Blueprint's ``engine.spark.conf`` block (Phase 42).
+def apply_set_engine_config(bp: dict, op: SetEngineConfigOp) -> dict:
+    """Set a key in the Blueprint's ``engine.<engine>`` block.
 
-    Auto-creates ``engine.spark.conf`` (2.0 — was the top-level
-    ``spark_config`` block) if absent.  Seven of the 20 most common Spark
-    errors (OOM, container kills, shuffle fetch failures, Kryo overflow,
-    dynamic allocation thrashing, GC issues, driver MaxResultSize) are fixed
-    purely by changing spark config values — this operation makes those
-    healable.
+    Replaces the Phase-42 ``apply_set_spark_config`` (removed — see
+    ``SetEngineConfigOp``'s docstring for why an alias could not preserve
+    it: the field sets differ, ``engine`` is a new required field).
+
+    Addressing rule — SAME structural question the parser asks when
+    reading this block back (``aqueduct.parser.parser.
+    _resolve_engine_block_raw``): does the target engine's own block-schema
+    class (``EngineBlockSchema`` in ``aqueduct/parser/schema.py``) declare a
+    ``conf`` field?
+
+    - Yes (today: only Spark) → ``key`` addresses an entry inside the
+      free-form ``conf`` bag — auto-created if absent.
+    - No (today: DuckDB) → the block declares typed fields directly
+      (``memory_limit``, ``threads``, …); ``key`` must name one of them
+      exactly, or the op is rejected — writing an arbitrary key into a
+      typed block would silently create a field nothing reads (AGENTS.md
+      "no silent no-ops"), since typed engine blocks have `extra="forbid"`
+      the NEXT time the Blueprint is parsed, not at patch-apply time.
+
+    This is never a hardcoded ``if engine == "spark"``: a third engine is
+    addressed correctly (conf bag or typed fields) as soon as it has an
+    ``EngineBlockSchema`` entry, with zero changes here.
     """
+    engine_fields = EngineBlockSchema.model_fields
+    if op.engine not in engine_fields:
+        raise PatchOperationError(
+            f"set_engine_config: unknown engine {op.engine!r}. "
+            f"Available: {sorted(engine_fields)}"
+        )
+
+    engine_block_cls = engine_fields[op.engine].annotation
+    block_fields = getattr(engine_block_cls, "model_fields", {})
+    has_conf_bag = "conf" in block_fields
+
     bp.setdefault("engine", {})
-    bp["engine"].setdefault("spark", {})
-    bp["engine"]["spark"].setdefault("conf", {})
+    bp["engine"].setdefault(op.engine, {})
+    target = bp["engine"][op.engine]
+
     # Force-quote string values — see apply_replace_context_value's comment
     # for the exact mechanism (ruamel/YAML-1.2 dump vs. PyYAML/YAML-1.1
-    # re-parse at step 5 of apply.py). `conf` is `dict[str, Any]`
-    # (schema.py), so a Spark conf value like "on"/"off" (many Spark
-    # boolean-shaped confs accept either spelling) silently became a
-    # Python bool on the next parse, which session.py then renders back
-    # via `str(value)` as "True"/"False" — not a valid Spark conf value at
-    # all, and not what the patch applied.
-    bp["engine"]["spark"]["conf"][op.key] = _DQ(op.value) if isinstance(op.value, str) else op.value
+    # re-parse at step 5 of apply.py). Both `conf` (dict[str, Any]) and a
+    # typed field's own YAML representation are equally exposed: an engine
+    # config value like "on"/"off" (many boolean-shaped confs accept either
+    # spelling) would otherwise silently become a Python bool on the next
+    # parse — not a valid config value at all, and not what the patch
+    # applied.
+    value = _DQ(op.value) if isinstance(op.value, str) else op.value
+
+    if has_conf_bag:
+        target.setdefault("conf", {})
+        target["conf"][op.key] = value
+        return bp
+
+    if op.key not in block_fields:
+        raise PatchOperationError(
+            f"set_engine_config: engine {op.engine!r} has no typed config "
+            f"field {op.key!r} (and declares no free-form conf bag). "
+            f"Available: {sorted(block_fields)}"
+        )
+    target[op.key] = value
     return bp
 
 
@@ -422,7 +464,7 @@ _DISPATCH = {
     "replace_retry_policy":   apply_replace_retry_policy,
     "add_arcade_ref":         apply_add_arcade_ref,
     "defer_to_human":         apply_defer_to_human,
-    "set_spark_config":       apply_set_spark_config,
+    "set_engine_config":      apply_set_engine_config,
     "replace_macro":          apply_replace_macro,
 }
 

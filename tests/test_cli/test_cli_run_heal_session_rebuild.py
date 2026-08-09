@@ -34,7 +34,7 @@ from aqueduct.agent.budget import StopReason
 from aqueduct.cli import cli
 from aqueduct.executor.models import ExecutionResult, ExecutionStatus, ModuleResult
 from aqueduct.executor.protocol import get_protocol as _real_get_protocol
-from aqueduct.patch.grammar import PatchSpec, SetSparkConfigOp
+from aqueduct.patch.grammar import PatchSpec, SetEngineConfigOp
 
 # The bare `aqueduct.executor.orchestrator` import above forces that module
 # to load NOW, at collection time, before any `@patch(
@@ -61,11 +61,11 @@ from aqueduct.patch.grammar import PatchSpec, SetSparkConfigOp
 
 pytestmark = pytest.mark.integration
 
-# `set_spark_config` writes into the Blueprint's `engine.spark.conf` block,
-# which is the ONE thing `resolve_session_engine_config` folds a patch's
-# effect into for Spark (`{**cfg.engine.spark.conf,
-# **manifest.engine_config.get("spark", {})}` — see
-# `aqueduct/executor/session_config.py`). It is the only patch op that
+# `set_engine_config(engine="spark", ...)` writes into the Blueprint's
+# `engine.spark.conf` block, which is the ONE thing
+# `resolve_session_engine_config` folds a patch's effect into for Spark
+# (`{**cfg.engine.spark.conf, **manifest.engine_config.get("spark", {})}` —
+# see `aqueduct/executor/session_config.py`). It is the only patch op that
 # can make a retry's `SessionSpec.engine_config` observably differ from the
 # pre-patch run's, which is exactly what these tests need to prove the
 # rebuild happened for real (not just "a session object changed identity").
@@ -172,7 +172,10 @@ def _spark_config_patch(patch_id: str, value: str) -> AgentPatchResult:
         patch_id=patch_id,
         rationale="bump shuffle partitions",
         operations=[
-            SetSparkConfigOp(op="set_spark_config", key="spark.sql.shuffle.partitions", value=value)
+            SetEngineConfigOp(
+                op="set_engine_config", engine="spark",
+                key="spark.sql.shuffle.partitions", value=value,
+            )
         ],
     )
     return AgentPatchResult(

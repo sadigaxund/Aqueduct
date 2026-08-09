@@ -167,9 +167,11 @@ def _set_module_config_key_classification(key: str | None) -> str:
 #                                                scope for THIS patch's
 #                                                classification.
 # defer_to_human               dialect_neutral     makes zero Blueprint changes.
-# set_spark_config             engine_shaped       explicitly an engine/session
-#                                                config key (e.g.
-#                                                spark.sql.shuffle.partitions) —
+# set_engine_config             engine_shaped       explicitly an engine/session
+#                                                config key (a conf-bag entry
+#                                                like spark.sql.shuffle.
+#                                                partitions, or a typed field
+#                                                like duckdb.memory_limit) —
 #                                                by construction not portable
 #                                                to a different engine.
 # replace_macro                engine_shaped       replaces a raw SQL macro body
@@ -187,7 +189,7 @@ _STATIC_OP_CLASSIFICATION: dict[str, str] = {
     "replace_retry_policy": DIALECT_NEUTRAL,
     "add_arcade_ref": DIALECT_NEUTRAL,
     "defer_to_human": DIALECT_NEUTRAL,
-    "set_spark_config": ENGINE_SHAPED,
+    "set_engine_config": ENGINE_SHAPED,
     "replace_macro": ENGINE_SHAPED,
 }
 

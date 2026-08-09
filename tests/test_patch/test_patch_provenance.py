@@ -46,7 +46,7 @@ def test_every_grammar_op_is_classified_closure():
     ("replace_retry_policy", DIALECT_NEUTRAL),
     ("add_arcade_ref", DIALECT_NEUTRAL),
     ("defer_to_human", DIALECT_NEUTRAL),
-    ("set_spark_config", ENGINE_SHAPED),
+    ("set_engine_config", ENGINE_SHAPED),
     ("replace_macro", ENGINE_SHAPED),
 ])
 def test_static_op_classification(op_name, classification):
@@ -69,7 +69,7 @@ def test_set_module_config_key_field_sensitive(key, expected):
 
 
 def test_classify_ops_is_max_over_ops():
-    ops = [_FakeOp("replace_module_label"), _FakeOp("set_spark_config")]
+    ops = [_FakeOp("replace_module_label"), _FakeOp("set_engine_config")]
     assert classify_ops(ops) == ENGINE_SHAPED
 
     ops2 = [_FakeOp("replace_module_label"), _FakeOp("remove_module")]
@@ -113,7 +113,7 @@ def test_build_healed_by_record_none_without_engine_meta():
 def test_build_healed_by_record_with_engine_meta():
     rec = build_healed_by_record(
         patch_id="p1",
-        operations=[_FakeOp("set_spark_config")],
+        operations=[_FakeOp("set_engine_config")],
         meta={"engine": "duckdb", "engine_version": "1.5.4", "run_id": "r1"},
         applied_at="2026-01-01T00:00:00Z",
     )

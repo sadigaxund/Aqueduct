@@ -1381,8 +1381,8 @@ def _render_op(op: dict) -> str:
         return "\u26a0 cannot auto-fix \u2014 needs human intervention"
     if t == "replace_macro":
         return f"replace macro  {op.get('name', '')}"
-    if t == "set_spark_config":
-        return f"set spark config  {op.get('key', '')} = \"{op.get('value', '')}\""
+    if t == "set_engine_config":
+        return f"set {op.get('engine', 'engine')} config  {op.get('key', '')} = \"{op.get('value', '')}\""
     return f"{t}  {mid}  ({json.dumps({k: v for k, v in op.items() if k not in ('op', 'type', 'module_id', 'target')})})"
 
 

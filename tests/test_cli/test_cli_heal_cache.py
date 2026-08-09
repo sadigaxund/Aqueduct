@@ -149,6 +149,76 @@ def test_replay_hit_auto_mode_zero_llm(tmp_path):
     assert row[0] is None, "Model column should be NULL for replay resolutions"
 
 
+# ── PATH 2b: Replay candidate names a RETIRED op → fall through, no crash ──
+
+def test_replay_candidate_with_retired_op_falls_through_to_llm(tmp_path):
+    """A patch_index-indexed body persisted before the set_spark_config →
+    set_engine_config rename still carries the old op name — the exact
+    "stored patch is now unparseable" scenario the cross-engine remediation
+    must handle. model_validate() must raise the typed RetiredPatchOpError
+    (not a bare pydantic ValidationError), the replay path must catch it,
+    announce the cache entry as unusable, and fall through to the LLM —
+    never crash the run and never silently behave as if the cache simply
+    missed (PATH 3's `run_sandbox_gate` fail test is the closest existing
+    precedent for the fall-through shape; this one fails earlier, at
+    model_validate, before any gate ever runs for the replay candidate)."""
+    runner = CliRunner()
+    bp_path = tmp_path / "bp.yml"
+    _write_bp(bp_path, "approval: auto")
+    cfg_path = tmp_path / "aq.yml"
+    _write_config(cfg_path)
+
+    # A raw dict, NOT built via PatchSpec(...) — constructing a PatchSpec
+    # with this op would itself raise RetiredPatchOpError. This is exactly
+    # the shape a pre-rename patch body has sitting in the blob store.
+    mock_candidate = MagicMock()
+    mock_candidate.patch_id = "replay-retired-1"
+    mock_candidate.payload = {
+        "patch_id": "replay-retired-1",
+        "rationale": "bump shuffle partitions",
+        "operations": [
+            {"op": "set_spark_config", "key": "spark.sql.shuffle.partitions", "value": "200"}
+        ],
+    }
+
+    from aqueduct.patch.grammar import PatchSpec
+    llm_spec = PatchSpec(patch_id="llm-fix-1", rationale="fix",
+                          operations=[{"op": "set_module_config_key",
+                                       "module_id": "m1", "key": "path", "value": "/fixed.csv"}])
+
+    os.environ["ANTHROPIC_API_KEY"] = "test-key"
+
+    from aqueduct.patch.preview import SandboxGateResult
+
+    with patch("aqueduct.executor.get_executor") as mock_get_exec:
+        mock_get_exec.return_value = _make_executor([_run_err(), _run_ok()])
+        with patch("aqueduct.agent.memory.find_pending", return_value=None):
+            with patch("aqueduct.agent.memory.find_replay_candidate", return_value=mock_candidate):
+                with patch("aqueduct.agent.generate_agent_patch") as mock_gap:
+                    from aqueduct.agent import AgentPatchResult
+                    mock_gap.return_value = AgentPatchResult(
+                        patch=llm_spec, attempts=1, stop_reason=StopReason.SOLVED,
+                    )
+                    # Only the LLM patch's own gate call happens now — the
+                    # retired-op candidate never reaches run_sandbox_gate at
+                    # all (it fails at model_validate, before the gate
+                    # pyramid is even entered).
+                    with patch("aqueduct.patch.preview.run_sandbox_gate") as mock_sandbox:
+                        mock_sandbox.return_value = SandboxGateResult(status="pass", detail="ok")
+                        res = runner.invoke(cli, ["run", str(bp_path), "--config", str(cfg_path)])
+
+    # Not a crash: the CLI reached its normal terminal exit code.
+    assert res.exit_code == 0
+    # Not a silent miss: the warning names the reason, distinguishable from
+    # a generic "no longer parses" — proves the typed RetiredPatchOpError
+    # actually propagated out of model_validate rather than being masked by
+    # a bare pydantic ValidationError.
+    assert "retired op" in res.output
+    assert "falling through to Agent" in res.output
+    # And it actually moved on: the LLM was consulted, not left hanging.
+    assert mock_gap.called
+
+
 # ── PATH 3: Replay gate-fail → fall through to LLM ──────────────────────────
 
 def test_replay_gate_fail_falls_through_to_llm(tmp_path):

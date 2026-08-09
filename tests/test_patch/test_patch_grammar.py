@@ -6,7 +6,7 @@ import json
 import pytest
 pytestmark = pytest.mark.unit
 from pydantic import ValidationError
-from aqueduct.patch.grammar import PatchSpec, SetSparkConfigOp
+from aqueduct.patch.grammar import PatchSpec, RetiredPatchOpError, SetEngineConfigOp
 
 
 def test_valid_patch_spec_parsing():
@@ -248,30 +248,36 @@ class TestPatchSpecResilience:
         assert not slug.endswith("-")
 
 
-# ── Phase 42: SetSparkConfigOp ────────────────────────────────────────────────
+# ── cross-engine remediation: SetEngineConfigOp ─────────────────────────────
 
 
-def test_set_spark_config_op_validates():
-    """SetSparkConfigOp validates with op, key, and value."""
-    op = SetSparkConfigOp(
-        op="set_spark_config",
+def test_set_engine_config_op_validates():
+    """SetEngineConfigOp validates with op, engine, key, and value."""
+    op = SetEngineConfigOp(
+        op="set_engine_config",
+        engine="spark",
         key="spark.sql.shuffle.partitions",
         value=200,
     )
+    assert op.engine == "spark"
     assert op.key == "spark.sql.shuffle.partitions"
     assert op.value == 200
 
 
-def test_set_spark_config_alias_normalised():
-    """'set_spark_config_key' alias normalises to 'set_spark_config'."""
-    spec = PatchSpec(
-        patch_id="p", rationale="r",
-        operations=[
-            {"op": "set_spark_config_key",
-             "key": "spark.sql.shuffle.partitions", "value": 200},
-        ],
-    )
-    assert spec.operations[0].op == "set_spark_config"
+def test_set_spark_config_is_retired():
+    """The old engine-named op is REMOVED, not aliased — a stored patch body
+    naming it raises RetiredPatchOpError (a typed AqueductError), never a
+    silent normalisation and never a bare pydantic ValidationError. The
+    field sets differ (no `engine` field on the old shape), so an alias
+    could not have worked even if one were still wired."""
+    with pytest.raises(RetiredPatchOpError, match="set_spark_config"):
+        PatchSpec(
+            patch_id="p", rationale="r",
+            operations=[
+                {"op": "set_spark_config",
+                 "key": "spark.sql.shuffle.partitions", "value": 200},
+            ],
+        )
 
 
 def test_macro_alias_normalised():

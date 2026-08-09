@@ -14,8 +14,8 @@ from aqueduct.patch.grammar import (
     ReplaceModuleConfigOp,
     ReplaceModuleLabelOp,
     ReplaceRetryPolicyOp,
+    SetEngineConfigOp,
     SetModuleOnFailureOp,
-    SetSparkConfigOp,
 )
 from aqueduct.patch.operations import (
     PatchOperationError,
@@ -178,14 +178,15 @@ def test_replace_retry_policy(base_bp):
     assert patched["retry_policy"] == policy
 
 
-# ── Phase 42: set_spark_config ────────────────────────────────────────────────
+# ── cross-engine remediation: set_engine_config ─────────────────────────────
 
 
-def test_apply_set_spark_config_sets_value(base_bp):
-    """apply_set_spark_config sets the key/value in engine.spark.conf (2.0 —
-    was the top-level spark_config block; op name unchanged)."""
-    op = SetSparkConfigOp(
-        op="set_spark_config",
+def test_apply_set_engine_config_conf_bag_sets_value(base_bp):
+    """apply_set_engine_config writes into engine.spark.conf when the target
+    engine's block schema declares a `conf` field (Spark)."""
+    op = SetEngineConfigOp(
+        op="set_engine_config",
+        engine="spark",
         key="spark.sql.shuffle.partitions",
         value=200,
     )
@@ -193,11 +194,12 @@ def test_apply_set_spark_config_sets_value(base_bp):
     assert patched["engine"]["spark"]["conf"]["spark.sql.shuffle.partitions"] == 200
 
 
-def test_apply_set_spark_config_auto_creates_block(base_bp):
-    """apply_set_spark_config auto-creates the engine.spark.conf block when absent."""
+def test_apply_set_engine_config_conf_bag_auto_creates_block(base_bp):
+    """apply_set_engine_config auto-creates engine.spark.conf when absent."""
     bp = {"aqueduct": "1.0", "id": "t", "modules": []}
-    op = SetSparkConfigOp(
-        op="set_spark_config",
+    op = SetEngineConfigOp(
+        op="set_engine_config",
+        engine="spark",
         key="spark.sql.shuffle.partitions",
         value=200,
     )
@@ -206,8 +208,50 @@ def test_apply_set_spark_config_auto_creates_block(base_bp):
     assert patched["engine"]["spark"]["conf"]["spark.sql.shuffle.partitions"] == 200
 
 
+def test_apply_set_engine_config_typed_field_sets_value(base_bp):
+    """apply_set_engine_config writes DIRECTLY under engine.duckdb.<key> when
+    the target engine's block schema declares no `conf` field (DuckDB) —
+    the other addressing shape the op must handle."""
+    op = SetEngineConfigOp(
+        op="set_engine_config",
+        engine="duckdb",
+        key="memory_limit",
+        value="4GB",
+    )
+    patched = apply_operation(base_bp, op)
+    assert patched["engine"]["duckdb"]["memory_limit"] == "4GB"
+    assert "conf" not in patched["engine"]["duckdb"]
+
+
+def test_apply_set_engine_config_typed_field_auto_creates_block(base_bp):
+    """apply_set_engine_config auto-creates engine.duckdb when absent."""
+    bp = {"aqueduct": "1.0", "id": "t", "modules": []}
+    op = SetEngineConfigOp(op="set_engine_config", engine="duckdb", key="threads", value=4)
+    patched = apply_operation(bp, op)
+    assert patched["engine"]["duckdb"]["threads"] == 4
+
+
+def test_apply_set_engine_config_unknown_engine_rejected(base_bp):
+    """An engine with no engine.<name>: block schema is rejected with a
+    typed PatchOperationError naming the available engines — never a
+    silent write under an engine nothing will ever read."""
+    op = SetEngineConfigOp(op="set_engine_config", engine="flink", key="x", value="y")
+    with pytest.raises(PatchOperationError, match="flink"):
+        apply_operation(base_bp, op)
+
+
+def test_apply_set_engine_config_unknown_typed_field_rejected(base_bp):
+    """A key that isn't a declared field on a typed (non-conf-bag) engine
+    block is rejected rather than silently written — DuckDB's block is
+    extra="forbid", so an unrecognised key would only surface as a parse
+    failure much later; the patch op catches it immediately instead."""
+    op = SetEngineConfigOp(op="set_engine_config", engine="duckdb", key="bogus_field", value="x")
+    with pytest.raises(PatchOperationError, match="bogus_field"):
+        apply_operation(base_bp, op)
+
+
 @pytest.mark.parametrize("keyword_value", ["on", "off", "yes", "no", "true", "false"])
-def test_apply_set_spark_config_string_value_survives_yaml_roundtrip(base_bp, keyword_value):
+def test_apply_set_engine_config_string_value_survives_yaml_roundtrip(base_bp, keyword_value):
     """A YAML-1.1-reserved-word-shaped string ("on"/"off"/"yes"/"no", also
     "true"/"false") must round-trip as the SAME string through the real
     dump-then-reparse cycle apply.py's step 5 performs — dump via ruamel
@@ -222,7 +266,10 @@ def test_apply_set_spark_config_string_value_survives_yaml_roundtrip(base_bp, ke
 
     from aqueduct.patch.apply import _yaml_dumps
 
-    op = SetSparkConfigOp(op="set_spark_config", key="spark.eventLog.enabled", value=keyword_value)
+    op = SetEngineConfigOp(
+        op="set_engine_config", engine="spark",
+        key="spark.eventLog.enabled", value=keyword_value,
+    )
     patched = apply_operation(base_bp, op)
     dumped = _yaml_dumps(patched)
     reloaded = pyyaml.safe_load(dumped)
@@ -231,8 +278,28 @@ def test_apply_set_spark_config_string_value_survives_yaml_roundtrip(base_bp, ke
 
 
 @pytest.mark.parametrize("keyword_value", ["on", "off", "yes", "no", "true", "false"])
+def test_apply_set_engine_config_typed_field_string_value_survives_yaml_roundtrip(base_bp, keyword_value):
+    """Same regression as the conf-bag test above, for the typed-field
+    (DuckDB) addressing path — `memory_limit` is a plain str field, equally
+    exposed to the ruamel-dump/PyYAML-reparse boolean-coercion trap."""
+    import yaml as pyyaml
+
+    from aqueduct.patch.apply import _yaml_dumps
+
+    op = SetEngineConfigOp(
+        op="set_engine_config", engine="duckdb",
+        key="memory_limit", value=keyword_value,
+    )
+    patched = apply_operation(base_bp, op)
+    dumped = _yaml_dumps(patched)
+    reloaded = pyyaml.safe_load(dumped)
+    assert reloaded["engine"]["duckdb"]["memory_limit"] == keyword_value
+    assert isinstance(reloaded["engine"]["duckdb"]["memory_limit"], str)
+
+
+@pytest.mark.parametrize("keyword_value", ["on", "off", "yes", "no", "true", "false"])
 def test_apply_replace_context_value_string_survives_yaml_roundtrip(base_bp, keyword_value):
-    """Same regression as set_spark_config above, for replace_context_value
+    """Same regression as set_engine_config above, for replace_context_value
     (`context` is also dict[str, Any])."""
     import yaml as pyyaml
 

@@ -16,9 +16,52 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from aqueduct.errors import AqueductError
+
 # JSON envelope key for CI-kit patch metadata — the key under which the
 # structured `_aq_meta` block lives in webhook / patch-import payloads.
 PATCH_META_KEY = "_aq_meta"
+
+
+class RetiredPatchOpError(AqueductError):
+    """Raised when a patch body names a PatchSpec op that no longer exists.
+
+    The patch grammar is a CLOSED, versioned list (AGENTS.md: "the patch
+    grammar is not a seam") — an op can be renamed/replaced, but patches are
+    PERSISTED artifacts (blob store + ``patch_index``), so a body written
+    under an OLD op name can still be read back long after that name is
+    retired. Without this, a retired op name falls through to Pydantic's
+    ordinary discriminated-union rejection: a bare ``ValidationError`` naming
+    every *other* legal tag, with no hint that the tag used to be legal and
+    was deliberately removed.
+
+    Raised from :func:`PatchSpec._normalize_op_aliases` (a ``mode="before"``
+    validator) — Pydantic only wraps ``ValueError``/``TypeError``/
+    ``AssertionError`` raised inside a validator into its own
+    ``ValidationError``; any other exception type (this one) propagates to
+    the caller unchanged, so callers can distinguish "retired op" from
+    "malformed patch" by TYPE rather than by parsing message text.
+
+    Callers that read a PERSISTED patch body (the heal-cache replay path in
+    ``aqueduct/cli/run.py``, ``aqueduct/patch/apply.py::load_patch_spec``)
+    must catch this and treat the entry as unusable — never crash the run,
+    never silently treat it as a cache miss with no diagnostic.
+    """
+
+
+# Op names once valid in this grammar, now rejected with a specific reason
+# instead of a generic "unknown discriminator" validation error. Mapping
+# value is user-facing replacement guidance. An op is added here in the SAME
+# commit it is deleted from PatchOperation/VALID_PATCH_OPS — never earlier
+# (that would reject a still-valid op) or later (that would silently regress
+# to the generic Pydantic error for one release).
+RETIRED_PATCH_OPS: dict[str, str] = {
+    "set_spark_config": (
+        "replaced by set_engine_config (engine=\"spark\") — the same op, "
+        "generalized to every registered engine. Regenerate this patch; "
+        "there is no automatic translation."
+    ),
+}
 
 
 # ── Individual operation models ───────────────────────────────────────────────
@@ -206,27 +249,60 @@ class ReplaceMacroOp(BaseModel, extra="forbid"):
     value: str = Field(..., description="New SQL body. Keep {{ param }} placeholders the macro's callers supply.")
 
 
-class SetSparkConfigOp(BaseModel, extra="forbid"):
-    """Set a single key in the Blueprint's ``engine.spark.conf`` block (Phase 42).
+class SetEngineConfigOp(BaseModel, extra="forbid"):
+    """Set a single key in one engine's Blueprint-level ``engine.<engine>``
+    block (replaces the engine-named ``set_spark_config`` — REMOVED, no
+    back-compat alias; the field sets differ so an alias could not have
+    worked anyway).
 
-    Seven of the 20 most common Spark errors are fixed purely by changing
-    spark config values: OOM, container kills, shuffle fetch failures,
-    Kryo buffer overflow, dynamic allocation thrashing, GC/heartbeat
-    issues, driver MaxResultSize.  This operation makes those healable.
+    ``engine.<name>:`` blocks take one of two shapes (``aqueduct/parser/
+    schema.py``), and this op addresses BOTH with the SAME structural rule
+    ``aqueduct.parser.parser._resolve_engine_block_raw`` already uses to
+    read the block back — never a hardcoded engine name:
 
-    Auto-creates the ``engine.spark.conf`` block (2.0 — was the top-level
-    ``spark_config`` block) if absent. The op NAME is unchanged; only the
-    Blueprint-dict write path moved with the schema.
+    - **Conf bag** (today: only Spark's ``SparkEngineBlockSchema``, which
+      declares a ``conf: dict[str, Any]`` field) — ``key`` is an opaque
+      dot-bearing vendor config name inside that free-form bag (e.g.
+      ``'spark.sql.shuffle.partitions'``); the dots are part of the key
+      itself, not a nested-path separator.
+    - **Typed fields** (today: DuckDB's ``DuckDBEngineBlockSchema`` — no
+      ``conf`` field, just declared attributes like ``memory_limit``/
+      ``threads``) — ``key`` must name one of those declared fields
+      exactly; an unrecognised name is rejected rather than silently
+      creating a new key the engine never reads (AGENTS.md "no silent
+      no-ops").
 
-    Guardrail: ``set_spark_config`` is **default-forbidden in auto mode**
-    via ``guardrails.forbidden_ops``.  The LLM can always propose it —
-    it just lands in ``patches/pending/`` unless the operator removes
-    it from ``forbidden_ops``.
+    The apply path (``aqueduct.patch.operations.apply_set_engine_config``)
+    decides which shape applies by asking the engine's own block-schema
+    class whether it declares a ``conf`` field — the identical question
+    the parser asks when reading the same block back. A third engine is
+    addressed correctly (as a conf bag or as typed fields) the moment its
+    ``EngineBlockSchema`` entry exists; the apply path needs no change.
+
+    Auto-creates ``engine.<engine>`` (and its ``conf`` sub-block, for a
+    conf-bag engine) if absent.
+
+    Guardrail: ``set_engine_config`` is **default-forbidden in auto mode**
+    via ``guardrails.forbidden_ops`` — inherited from ``set_spark_config``'s
+    posture (it is still ``engine_shaped`` in the heal-provenance
+    classification, for the same reason: an engine/session config value is
+    not portable across engines). The LLM can always propose it — it just
+    lands in ``patches/pending/`` unless the operator removes it from
+    ``forbidden_ops``.
     """
-    op: Literal["set_spark_config"]
+    op: Literal["set_engine_config"]
+    engine: str = Field(
+        ...,
+        description="Target engine name, e.g. 'spark' or 'duckdb' — must be a key of the Blueprint's engine: block",
+    )
     key: str = Field(
         ...,
-        description="Dot-notation spark config key, e.g. 'spark.sql.shuffle.partitions'",
+        description=(
+            "For a conf-bag engine (has a conf field, e.g. Spark): an opaque "
+            "vendor config key, e.g. 'spark.sql.shuffle.partitions'. For a "
+            "typed-field engine (e.g. DuckDB): the exact field name, e.g. "
+            "'memory_limit' or 'threads'."
+        ),
     )
     value: Any = Field(
         ...,
@@ -237,7 +313,7 @@ class SetSparkConfigOp(BaseModel, extra="forbid"):
 # ── Discriminated union ───────────────────────────────────────────────────────
 
 PatchOperation = Annotated[
-    ReplaceModuleConfigOp | SetModuleConfigKeyOp | ReplaceModuleLabelOp | InsertModuleOp | RemoveModuleOp | ReplaceContextValueOp | AddProbeOp | ReplaceEdgeOp | SetModuleOnFailureOp | ReplaceRetryPolicyOp | AddArcadeRefOp | DeferToHumanOp | SetSparkConfigOp | ReplaceMacroOp,
+    ReplaceModuleConfigOp | SetModuleConfigKeyOp | ReplaceModuleLabelOp | InsertModuleOp | RemoveModuleOp | ReplaceContextValueOp | AddProbeOp | ReplaceEdgeOp | SetModuleOnFailureOp | ReplaceRetryPolicyOp | AddArcadeRefOp | DeferToHumanOp | SetEngineConfigOp | ReplaceMacroOp,
     Field(discriminator="op"),
 ]
 
@@ -257,7 +333,7 @@ VALID_PATCH_OPS = (
     "replace_retry_policy",
     "add_arcade_ref",
     "defer_to_human",
-    "set_spark_config",
+    "set_engine_config",
     "replace_macro",
 )
 
@@ -277,8 +353,6 @@ _OP_ALIASES: dict[str, str] = {
     "defer": "defer_to_human",
     "defer_to_user": "defer_to_human",
     "human_review": "defer_to_human",
-    # Phase 42: set_spark_config variants
-    "set_spark_config_key": "set_spark_config",
     # Phase 47: replace_macro variants
     "set_macro": "replace_macro",
     "update_macro": "replace_macro",
@@ -453,6 +527,20 @@ class PatchSpec(BaseModel, extra="allow"):
             raw_op = op.get("op")
             if raw_op in _OP_ALIASES:
                 op["op"] = _OP_ALIASES[raw_op]
+                raw_op = op["op"]
+            # Retired op — reject with a specific reason instead of falling
+            # through to Pydantic's generic "not a valid discriminator"
+            # error. Checked AFTER alias normalization so a retired op's own
+            # historical aliases (none currently) would also be caught; a
+            # RetiredPatchOpError is not a ValueError/TypeError/
+            # AssertionError, so Pydantic does not wrap it into a
+            # ValidationError — it propagates to the caller as-is (see
+            # RetiredPatchOpError's docstring).
+            if raw_op in RETIRED_PATCH_OPS:
+                raise RetiredPatchOpError(
+                    f"PatchSpec operation {raw_op!r} was retired: "
+                    f"{RETIRED_PATCH_OPS[raw_op]}"
+                )
         return data
 
     patch_id: str = Field(..., description="Unique patch identifier")

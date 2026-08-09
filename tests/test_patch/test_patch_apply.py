@@ -53,6 +53,27 @@ def test_load_patch_spec_not_found(tmp_path):
         load_patch_spec(tmp_path / "ghost.json")
 
 
+def test_load_patch_spec_retired_op_raises_patch_error(tmp_path):
+    """A patch FILE (e.g. under patches/pending/, or `aqueduct patch import`)
+    that still names a retired op (set_spark_config, pre-rename) must raise
+    the SAME PatchError type every other malformed-patch caller already
+    expects (`aqueduct/cli/patch.py`'s `except PatchError` clauses) — never
+    an uncaught RetiredPatchOpError escaping past them, and never a bare
+    pydantic ValidationError with no hint the op was deliberately removed."""
+    patch_path = tmp_path / "patch.json"
+    patch_data = {
+        "patch_id": "p1",
+        "rationale": "bump shuffle partitions",
+        "operations": [
+            {"op": "set_spark_config", "key": "spark.sql.shuffle.partitions", "value": 200}
+        ],
+    }
+    patch_path.write_text(json.dumps(patch_data), encoding="utf-8")
+
+    with pytest.raises(PatchError, match="retired"):
+        load_patch_spec(patch_path)
+
+
 def test_apply_patch_to_dict_atomic(tmp_path):
     bp = {
         "modules": [{"id": "m1", "config": {"a": 1}}],

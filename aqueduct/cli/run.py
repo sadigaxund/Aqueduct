@@ -606,7 +606,7 @@ class _SessionHolder:
 
     A heal retry that executes a patched Manifest must close the pre-patch
     session and build a fresh one so an engine-config change the patch made
-    (e.g. a ``set_spark_config`` op) actually reaches the retry — see
+    (e.g. a ``set_engine_config`` op) actually reaches the retry — see
     ``_rebuild_session_for_patch`` in the ``run`` command below (Phase 82
     remediation). Two independent consumers need to observe whichever
     session is CURRENT at the moment they run, never the one that existed
@@ -2003,7 +2003,7 @@ def run(
             ``SparkSession.builder.getOrCreate()`` returns the ACTIVE
             session and only hot-applies a narrow set of runtime-modifiable
             SQL confs; most engine config (and definitely anything a patch
-            changes via ``set_spark_config``) has no effect on an
+            changes via ``set_engine_config``) has no effect on an
             already-running session. So a patch that fixes the failure by
             changing engine config would silently retry against the
             UNCHANGED pre-patch config, fail again, and get misattributed
@@ -2219,11 +2219,31 @@ def run(
                     try:
                         from aqueduct.patch.grammar import PATCH_META_KEY
                         from aqueduct.patch.grammar import PatchSpec as _PatchSpec
+                        from aqueduct.patch.grammar import (
+                            RetiredPatchOpError as _RetiredPatchOpError,
+                        )
 
                         _payload = {
                             k: v for k, v in _candidate.payload.items() if k != PATCH_META_KEY
                         }
-                        _replay_patch = _PatchSpec.model_validate(_payload)
+                        try:
+                            _replay_patch = _PatchSpec.model_validate(_payload)
+                        except _RetiredPatchOpError as _retired_exc:
+                            # The archived body names an op the grammar no
+                            # longer accepts (e.g. a pre-rename
+                            # set_spark_config) — a typed, distinguishable
+                            # failure, not a generic parse error. The cache
+                            # entry is unusable; fall through to the Agent
+                            # exactly like any other unreplayable candidate,
+                            # never silently as if the cache had simply
+                            # missed.
+                            _replay_patch = None
+                            click.echo(
+                                f"  ⚠ heal cache: archived patch {_candidate.patch_id} uses a "
+                                f"retired op and cannot be replayed ({_retired_exc}) — falling "
+                                f"through to Agent",
+                                err=True,
+                            )
                     except Exception as _re_exc:
                         _replay_patch = None
                         click.echo(
