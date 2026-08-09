@@ -7,8 +7,14 @@ engine's own executor (``aqueduct/executor/spark/executor.py``,
 parquet scan on DuckDB). This module owns everything AROUND that write/read:
 where one boundary's spill directory lives, deleting it when the run that
 produced it succeeds, keeping it when the run fails (the resume story — a
-rerun after a heal reads island A's already-materialized spill instead of
-recomputing it), and sweeping directories orphaned by a run that never
+manual ``aqueduct run --resume <run_id>`` after a plain failure, with no
+Blueprint edit in between, reads island A's already-materialized spill
+instead of recomputing it. A heal-triggered rerun does NOT reuse it: a heal
+patches the Manifest, which changes the whole-Manifest hash and therefore
+the spill path — even when the patch touched only a downstream island —
+and ``cli/run.py``'s heal-retry path passes no resume id at all once a
+patch has been applied, so the two never even try to line up), and
+sweeping directories orphaned by a run that never
 reached its own success/failure cleanup (a driver crash, a killed process,
 or — since a heal changes the compiled Manifest and therefore its
 ``manifest_hash`` — a PRIOR hash directory a post-patch rerun will never

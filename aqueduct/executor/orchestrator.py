@@ -207,7 +207,9 @@ def _resume_spill_uris_for_island(
 ) -> dict[str, str]:
     """For handoffs whose WRITE side is this island, the resume run's
     already-spilled directory, if one exists — used to decide whether this
-    island can be skipped entirely (see ``_island_is_resumable``)."""
+    island can be skipped entirely (see the inline ``can_resume`` block in
+    ``run_polyglot`` below, around the ``_resume_spill_uris_for_island``
+    call site)."""
     if not resume_run_id:
         return {}
     out: dict[str, str] = {}
