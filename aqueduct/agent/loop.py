@@ -99,7 +99,16 @@ logger = logging.getLogger(__name__)
 #        and gains `set_engine_config` — the same op, generalized to every
 #        registered engine. The composed prompt changes for EVERY engine (the
 #        schema is engine-independent), so both are relabeled.
-PROMPT_VERSION = "1.10"
+# 1.11 — cross-engine remediation: the composed prompt gains an "Engine/session
+#        config (`set_engine_config`)" section rendering the TARGET engine's
+#        WHOLE `engine_config_allowlist.yml` — every allow entry with its
+#        type/enum/range, every deny entry with its `reason`. Until now the op
+#        was named nowhere in the prompt layer, so the only way the model
+#        learned a key was refused was a Gate 1 rejection. Per-engine content
+#        (each engine sees only its own allowlist); an engine that ships no
+#        allowlist is told the op is unavailable rather than shown an empty
+#        table. Changes the composed prompt for every engine.
+PROMPT_VERSION = "1.11"
 
 
 @dataclass

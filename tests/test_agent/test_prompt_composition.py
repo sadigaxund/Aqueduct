@@ -326,6 +326,153 @@ def test_composed_duckdb_prompt_classifies_oom_as_defer_not_patchable(tmp_path: 
     assert "do NOT propose repeated config-value edits chasing this error" in prompt
 
 
+def _load_shipped_allowlist(engine: str):
+    from aqueduct.executor.engine_config_allowlist import (
+        discover_allowlist_paths,
+        load_allowlist,
+    )
+
+    path = discover_allowlist_paths().get(engine)
+    assert path is not None, f"engine {engine!r} ships no engine_config_allowlist.yml"
+    return load_allowlist(path, engine)
+
+
+@pytest.mark.parametrize("engine", ["spark", "duckdb"])
+def test_whole_engine_config_allowlist_is_disclosed_in_the_prompt(
+    tmp_path: Path, engine: str
+):
+    """The model is told the WHOLE policy, not a curated subset.
+
+    Compared against the SHIPPED yml (data) rather than a hand-listed set of
+    keys (which would be the same tautology `all_leaves_default()` was): add a
+    row to either engine's `engine_config_allowlist.yml` and this test fails
+    until the prompt renders it too.
+    """
+    allowlist = _load_shipped_allowlist(engine)
+    prompt = _build_system_prompt(
+        tmp_path, coaching=False, obs_store=None, engine=engine
+    )
+
+    assert "### Engine/session config (`set_engine_config`)" in prompt
+    for entry in allowlist.entries:
+        assert f"`{entry.pattern}`" in prompt, (
+            f"allow entry {entry.pattern!r} is enforced at Gate 1 but never "
+            f"disclosed to the model healing on {engine!r}"
+        )
+    for deny in allowlist.deny_entries:
+        assert f"`{deny.pattern}`" in prompt, (
+            f"deny entry {deny.pattern!r} is enforced at Gate 1 but never "
+            f"disclosed to the model healing on {engine!r}"
+        )
+        # The `reason` is mandatory on a deny row precisely so a refusal can be
+        # explained; it must reach the model, not just the rejection message.
+        assert deny.reason in prompt
+
+
+@pytest.mark.parametrize(
+    ("engine", "other"), [("spark", "duckdb"), ("duckdb", "spark")]
+)
+def test_engine_config_policy_never_leaks_another_engines_keys(
+    tmp_path: Path, engine: str, other: str
+):
+    """Engine X's composed prompt must never carry engine Y's config keys.
+
+    The patch-schema block is stripped for the same reason the anti-bleed guard
+    strips it (see `_strip_patch_schema`): `SetEngineConfigOp.key`'s own field
+    description names both a Spark and a DuckDB key as examples. That is patch
+    GRAMMAR, not the per-engine policy this test guards.
+    """
+    mine = _load_shipped_allowlist(engine)
+    theirs = _load_shipped_allowlist(other)
+
+    mine_patterns = {e.pattern for e in mine.entries} | {
+        d.pattern for d in mine.deny_entries
+    }
+    theirs_only = (
+        {e.pattern for e in theirs.entries} | {d.pattern for d in theirs.deny_entries}
+    ) - mine_patterns
+
+    prose = _strip_patch_schema(
+        _build_system_prompt(tmp_path, coaching=False, obs_store=None, engine=engine)
+    )
+    for pattern in sorted(theirs_only):
+        assert pattern not in prose, (
+            f"engine {other!r}'s config key {pattern!r} leaked into the composed "
+            f"prompt for engine {engine!r}"
+        )
+
+
+def test_engine_with_no_shipped_allowlist_is_told_the_op_is_unavailable(
+    tmp_path: Path, monkeypatch
+):
+    """A third-party engine shipping no `engine_config_allowlist.yml` can never
+    pass Gate 1 with a `set_engine_config` op. Rendering an empty table (or
+    nothing) would let the model believe it may write engine config and be
+    refused every time — the silent no-op AGENTS.md forbids. It is told the op
+    is unavailable instead."""
+    import aqueduct.executor.protocol as protocol
+
+    monkeypatch.setitem(
+        protocol.PROTOCOL_REGISTRY, "fake-engine", _fake_engine_protocol()
+    )
+    prompt = _build_system_prompt(
+        tmp_path, coaching=False, obs_store=None, engine="fake-engine"
+    )
+
+    assert "### Engine/session config (`set_engine_config`)" in prompt
+    assert (
+        "`set_engine_config` is NOT available for engine `fake-engine`" in prompt
+    )
+    assert "Do NOT emit a `set_engine_config` operation" in prompt
+    # No table header, no allow/deny rows — nothing that reads as "here is what
+    # you may write".
+    assert "| key | value type | allowed values |" not in prompt
+
+
+def test_engine_with_explicitly_empty_allowlist_is_told_the_op_is_unavailable(
+    tmp_path: Path, monkeypatch
+):
+    """`entries: []` is a decision (see the allowlist loader's presence guard),
+    and its consequence is identical: no key is writable, so the op is unusable
+    and the prompt says so rather than printing an empty table."""
+    import aqueduct.agent.prompts as prompts_mod
+
+    empty = tmp_path / "engine_config_allowlist.yml"
+    empty.write_text("engine: duckdb\nentries: []\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "aqueduct.executor.engine_config_allowlist.discover_allowlist_paths",
+        lambda: {"duckdb": empty},
+    )
+
+    section = prompts_mod._render_engine_config_policy("duckdb")
+    assert "`set_engine_config` is NOT available for engine `duckdb`" in section
+    assert "declares no writable key" in section
+
+
+def test_unloadable_shipped_allowlist_degrades_to_unavailable_and_warns(
+    tmp_path: Path, monkeypatch, caplog
+):
+    """A malformed SHIPPED file makes Gate 1 raise too, so the op genuinely
+    cannot succeed — the prompt says so rather than aborting a heal some OTHER
+    op could still fix. It is logged, never swallowed silently."""
+    import logging
+
+    import aqueduct.agent.prompts as prompts_mod
+
+    broken = tmp_path / "engine_config_allowlist.yml"
+    broken.write_text("engine: duckdb\n", encoding="utf-8")  # no `entries:` key
+    monkeypatch.setattr(
+        "aqueduct.executor.engine_config_allowlist.discover_allowlist_paths",
+        lambda: {"duckdb": broken},
+    )
+
+    with caplog.at_level(logging.WARNING, logger="aqueduct.agent.prompts"):
+        section = prompts_mod._render_engine_config_policy("duckdb")
+
+    assert "`set_engine_config` is NOT available for engine `duckdb`" in section
+    assert any("unloadable" in r.message for r in caplog.records)
+
+
 def test_composed_duckdb_prompt_oom_rule_present_without_defer(tmp_path: Path):
     """The `rules` bullet (always rendered) must also warn against chasing an
     OOM with config edits even when `allow_defer` is off."""

@@ -122,6 +122,8 @@ _PATCH_SKELETON = """\
 #   {engine_persona}          — the opening line
 #   {engine_root_cause_note}  — what the engine's structured root-cause block holds
 #   {engine_rules}            — engine-specific bullets inside "Other rules"
+#   {engine_config_policy}    — the target engine's WHOLE set_engine_config
+#                               allowlist (see _render_engine_config_policy)
 #
 # Slot VALUES are `.format()` arguments, not part of this format string, so
 # they carry literal braces (no `{{`/`}}` doubling) — unlike the text here.
@@ -170,7 +172,7 @@ The provenance section tells you the `source_type` of each config value. Pick th
 - SQL query wrong → `set_module_config_key` with key="query".
 {engine_rules}
 - `schema_hint field 'X' not found in source schema. Available columns: [...]` — the message lists every real column in the source. The fix is aligning the schema_hint key to a real column from that list (a rename) or removing the stale entry from schema_hint — never re-typing or re-declaring the missing key under its old name.
-
+{engine_config_policy}
 ## Required output — complete example
 Every response MUST be a single JSON object with ALL of these fields. The `operations` field is MANDATORY — a response without it is always wrong.
 
@@ -638,6 +640,146 @@ def _build_coaching_section(failure_ctx: Any, obs_store: Any) -> str:
     return "\n".join(lines)
 
 
+def _render_engine_config_policy(engine: str) -> str:
+    """Render ``engine``'s COMPLETE ``set_engine_config`` policy for the prompt.
+
+    Gate 1 (``aqueduct/patch/apply.py::_check_engine_config_allowlist``)
+    evaluates every ``set_engine_config`` op against the target engine's core
+    ``engine_config_allowlist.yml``. Before this section existed, nothing in
+    the prompt layer named the op at all, so the ONLY way the model learned a
+    key was refused was by having a patch rejected — a policy gate doubling as
+    a discovery mechanism. This renders the same allowlist Gate 1 loads, so a
+    rejection means the model made a genuine error rather than guessed at an
+    undisclosed list.
+
+    **Whole list, never a curated subset.** Spark's allow section is ~13 rows;
+    a "top N keys" split would buy nothing and guarantee drift the moment a row
+    is added. Every allow entry (with its type and any ``enum``/``range``) and
+    every deny entry (with its mandatory ``reason``) is rendered.
+
+    **No allowlist → the op is announced as UNAVAILABLE, not omitted.** A
+    third-party engine may ship no ``engine_config_allowlist.yml``. For such an
+    engine ``set_engine_config`` can never pass Gate 1 (an unregistered engine
+    is refused outright; a registered one with no file makes ``load_allowlist``
+    raise), so rendering an empty table — or nothing at all — would leave the
+    model believing it may write engine config and being refused every time.
+    That is the silent no-op AGENTS.md forbids. The honest rendering is a
+    statement that the op is unusable on this engine. The same holds for an
+    engine shipping an EXPLICIT empty allowlist (``entries: []``): no key is
+    writable, so the op is unusable, and saying so is what makes that shipped
+    decision visible to the model.
+
+    Engine-agnostic by construction: the loader is core keyed on the engine
+    NAME, imported lazily here for the same reason ``get_protocol`` is — the
+    agent layer must not eagerly resolve the ``aqueduct.engines`` entry-point
+    group, and must never import an engine module by name.
+    """
+    from aqueduct.errors import EngineConfigAllowlistError
+    from aqueduct.executor.engine_config_allowlist import (
+        DECLARATION_FILENAME,
+        EnumConstraint,
+        RangeConstraint,
+        discover_allowlist_paths,
+        load_allowlist,
+    )
+
+    heading = "\n### Engine/session config (`set_engine_config`)\n"
+
+    def _unavailable(why: str) -> str:
+        return (
+            heading
+            + f"`set_engine_config` is NOT available for engine `{engine}` — {why}, "
+            "so any engine-config write is refused before the patch is applied. Do "
+            "NOT emit a `set_engine_config` operation; fix the failure with another "
+            "op.\n"
+        )
+
+    path = discover_allowlist_paths().get(engine)
+    if path is None:
+        return _unavailable(f"it publishes no `{DECLARATION_FILENAME}`")
+
+    try:
+        allowlist = load_allowlist(path, engine)
+    except EngineConfigAllowlistError:
+        # A malformed SHIPPED file is a data/build problem, and Gate 1 raises
+        # on it too — so the op genuinely cannot succeed and "unavailable" is
+        # the truthful thing to tell the model. Refusing to build the prompt
+        # would instead kill a heal that some OTHER op could have fixed. The
+        # operator still learns about it: this is logged, not swallowed.
+        logger.warning(
+            "engine %r ships an unloadable %s at %s — the healing prompt will "
+            "declare set_engine_config unavailable for it",
+            engine, DECLARATION_FILENAME, path, exc_info=True,
+        )
+        return _unavailable(f"its `{DECLARATION_FILENAME}` could not be loaded")
+
+    if not allowlist.entries:
+        return _unavailable(f"its `{DECLARATION_FILENAME}` declares no writable key")
+
+    if allowlist.is_free_form:
+        addressing = (
+            f"Writable keys for engine `{engine}` — glob patterns, where `*` matches "
+            "any run of characters and `?` any single one:"
+        )
+    else:
+        addressing = (
+            f"Writable keys for engine `{engine}` — each names one field of the "
+            f"`engine.{engine}:` block exactly:"
+        )
+
+    allow_rows = []
+    for e in allowlist.entries:
+        if isinstance(e.constraint, EnumConstraint):
+            allowed = ", ".join(f"`{v}`" for v in e.constraint.values)
+        elif isinstance(e.constraint, RangeConstraint):
+            allowed = f"`{e.constraint.minimum}` to `{e.constraint.maximum}` (inclusive)"
+        else:
+            allowed = f"any {e.value_type}"
+        allow_rows.append(f"| `{e.pattern}` | {e.value_type} | {allowed} |")
+
+    lines = [
+        heading.lstrip("\n").rstrip("\n"),
+        f"`set_engine_config` writes ONE key into the Blueprint's `engine.{engine}:` "
+        "block. It is allowlist-gated: the two tables below are this engine's "
+        "COMPLETE policy and are checked before the patch is applied. A key that no "
+        "row of the first table covers, a key covered by the second table, or an "
+        "allowed key carrying the wrong value type — each is refused and the whole "
+        "patch is discarded. Do not guess at a key outside these tables; this is the "
+        "entire list, not an excerpt.",
+        "",
+        addressing,
+        "",
+        "| key | value type | allowed values |",
+        "|---|---|---|",
+        *allow_rows,
+        "",
+        "`int`, `float`, `bool` and `str` mean a JSON value of that type. `size` "
+        'means a byte-size STRING such as `"4g"` or `"512MB"` — never a bare number.',
+    ]
+
+    if allowlist.deny_entries:
+        deny_rows = []
+        for d in allowlist.deny_entries:
+            values = (
+                "all"
+                if d.deny_values is None
+                else ", ".join(f"`{v!r}`" for v in d.deny_values)
+            )
+            deny_rows.append(f"| `{d.pattern}` | {values} | {d.reason} |")
+        lines += [
+            "",
+            "Refused keys and key families (`*`/`?` are glob wildcards here too). "
+            "Writing one is always rejected, for the reason shown — do not try to "
+            "work around it:",
+            "",
+            "| key | refused values | reason |",
+            "|---|---|---|",
+            *deny_rows,
+        ]
+
+    return "\n" + "\n".join(lines) + "\n"
+
+
 def _build_system_prompt(
     patches_dir: Path,
     engine_prompt_context: str | None = None,
@@ -657,7 +799,10 @@ def _build_system_prompt(
             Its ``PromptRules`` pack is pulled through the ``aqueduct.engines``
             registry (Phase 78 Step 2) and rendered into the scaffold's
             ``{engine_*}`` slots. Defaults to ``"spark"``, matching
-            ``aqueduct.executor.get_executor`` / ``compile()``.
+            ``aqueduct.executor.get_executor`` / ``compile()``. The same name
+            also selects the ``set_engine_config`` allowlist rendered into the
+            prompt (``_render_engine_config_policy``) — that loader is core
+            keyed on the engine name, not part of ``ExecutorProtocol``.
 
     Raises:
         UnknownEngineError: ``engine`` has no registered ``ExecutorProtocol``.
@@ -783,6 +928,7 @@ def _build_system_prompt(
         engine_persona=engine_rules_pack.persona,
         engine_root_cause_note=engine_rules_pack.root_cause_note,
         engine_rules=engine_rules_pack.rules,
+        engine_config_policy=_render_engine_config_policy(engine),
     )
 
 
