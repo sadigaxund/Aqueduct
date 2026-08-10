@@ -28,13 +28,16 @@ from aqueduct.errors import AqueductError, EngineConfigAllowlistError
 from aqueduct.executor.engine_config_allowlist import (
     DECLARATION_FILENAME,
     AllowlistEntry,
+    DenyEntry,
+    EngineConfigAllowlist,
     EnumConstraint,
-    RangeConstraint,
+    _glob_canary,
     _size_to_bytes,
     check_presence,
     discover_allowlist_paths,
     discover_registered_engines,
     load_allowlist,
+    validate_against_deny,
 )
 
 pytestmark = pytest.mark.unit
@@ -336,11 +339,24 @@ def test_shipped_spark_allowlist_excludes_redirect_and_credential_keys():
         assert not any(e.matches(key) for e in allowlist.entries), key
 
 
-def test_shipped_spark_allowlist_max_result_size_excludes_unlimited():
+def test_shipped_spark_allowlist_max_result_size_carries_no_invented_range():
+    """Part 1: no magnitude range survives — the entry is shape-only."""
     allowlist = load_allowlist(_SPARK_PATH, "spark")
     (entry,) = [e for e in allowlist.entries if e.pattern == "spark.driver.maxResultSize"]
-    assert isinstance(entry.constraint, RangeConstraint)
-    assert _size_to_bytes(entry.constraint.minimum) > 0
+    assert entry.constraint is None
+    assert entry.value_type == "size"
+
+
+def test_shipped_spark_allowlist_max_result_size_excludes_unlimited_via_deny():
+    """Part 2: the `0` = unlimited exclusion moved from a range floor to a
+    scoped deny_values row — still enforced, now structurally."""
+    allowlist = load_allowlist(_SPARK_PATH, "spark")
+    (entry,) = [
+        d for d in allowlist.deny_entries if d.pattern == "spark.driver.maxResultSize"
+    ]
+    assert entry.deny_values is not None
+    assert 0 in entry.deny_values
+    assert "0" in entry.deny_values
 
 
 def test_shipped_duckdb_allowlist_loads_clean():
@@ -350,19 +366,12 @@ def test_shipped_duckdb_allowlist_loads_clean():
     assert patterns == {"memory_limit", "threads"}
 
 
-def test_shipped_duckdb_allowlist_threads_range_matches_pydantic_gt_zero():
-    from aqueduct.parser.schema import DuckDBEngineBlockSchema
-
+def test_shipped_duckdb_allowlist_carries_no_invented_range():
+    """Part 1: `["128MB","256GB"]`/`[1,256]` were invented magnitudes with no
+    real machine to derive a bound from — both entries are shape-only now."""
     allowlist = load_allowlist(_DUCKDB_PATH, "duckdb")
-    (entry,) = [e for e in allowlist.entries if e.pattern == "threads"]
-    assert isinstance(entry.constraint, RangeConstraint)
-    assert entry.constraint.minimum >= 1
-    # threads carries `gt=0` in the pydantic model; the allowlist's floor
-    # must not permit a value the schema itself would reject.
-    field_info = DuckDBEngineBlockSchema.model_fields["threads"]
-    gt = next((m.gt for m in field_info.metadata if hasattr(m, "gt")), None)
-    if gt is not None:
-        assert entry.constraint.minimum > gt
+    for entry in allowlist.entries:
+        assert entry.constraint is None, f"{entry.pattern!r} still carries a constraint"
 
 
 @pytest.mark.parametrize("engine,path", [("spark", _SPARK_PATH), ("duckdb", _DUCKDB_PATH)])
@@ -373,3 +382,247 @@ def test_every_shipped_file_loads_through_the_real_validator(engine, path):
     at heal time yet."""
     allowlist = load_allowlist(path, engine)
     assert allowlist.engine == engine
+
+
+# ── DenyEntry.matches / .forbids ─────────────────────────────────────────────
+
+
+def test_deny_entry_absolute_ban_forbids_any_value():
+    entry = DenyEntry(pattern="spark.master", reason="x")
+    assert entry.matches("spark.master")
+    assert not entry.matches("spark.mastery")
+    assert entry.forbids()
+    assert entry.forbids("spark://x:7077")
+
+
+def test_deny_entry_scoped_value_ban_forbids_only_listed_values():
+    entry = DenyEntry(pattern="spark.driver.maxResultSize", reason="x", deny_values=("0", 0))
+    assert entry.matches("spark.driver.maxResultSize")
+    assert entry.forbids(0)
+    assert entry.forbids("0")
+    assert not entry.forbids("4g")
+    assert not entry.forbids(None)
+
+
+def test_deny_entry_glob_matches_family():
+    entry = DenyEntry(pattern="spark.kubernetes.*", reason="x")
+    assert entry.matches("spark.kubernetes.namespace")
+    assert not entry.matches("spark.kubernetes")
+
+
+# ── canary derivation ────────────────────────────────────────────────────────
+
+
+def test_glob_canary_returns_exact_pattern_unchanged():
+    assert _glob_canary("spark.master") == "spark.master"
+    assert _glob_canary("database_path") == "database_path"
+
+
+def test_glob_canary_substitutes_wildcards():
+    assert _glob_canary("spark.kubernetes.*") == "spark.kubernetes.x"
+    assert _glob_canary("*.jars.repositories") == "x.jars.repositories"
+    assert _glob_canary("spark.*.extraJavaOptions") == "spark.x.extraJavaOptions"
+    assert _glob_canary("spark.authenticate*") == "spark.authenticatex"
+
+
+# ── deny layer: malformed shape ──────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "text,match",
+    [
+        ("engine: spark\nentries: []\ndeny: not-a-list\n", "'deny:' must be a list"),
+        (
+            "engine: spark\nentries: []\ndeny:\n  - reason: x\n",
+            "needs a 'pattern' and a 'reason'",
+        ),
+        (
+            "engine: spark\nentries: []\ndeny:\n  - pattern: spark.master\n",
+            "needs a 'pattern' and a 'reason'",
+        ),
+        (
+            "engine: spark\nentries: []\ndeny:\n  - pattern: ''\n    reason: x\n",
+            "non-empty string",
+        ),
+        (
+            "engine: spark\nentries: []\ndeny:\n  - pattern: spark.master\n    reason: ''\n",
+            "non-empty string",
+        ),
+        (
+            "engine: spark\nentries: []\ndeny:\n"
+            "  - pattern: spark.driver.maxResultSize\n    reason: x\n    deny_values: []\n",
+            "non-empty list",
+        ),
+    ],
+)
+def test_malformed_deny_entry_raises(tmp_path, text, match):
+    p = _write(tmp_path, text)
+    with pytest.raises(EngineConfigAllowlistError, match=match):
+        load_allowlist(p, "spark")
+
+
+# ── deny layer: TEST 1 — allow/deny overlap caught at load time ─────────────
+
+
+def test_absolute_ban_deny_overlapping_an_exact_allow_entry_raises_at_load(tmp_path):
+    p = _write(
+        tmp_path,
+        "engine: spark\nentries:\n"
+        "  - pattern: spark.master\n    type: str\n"
+        "deny:\n"
+        "  - pattern: spark.master\n    reason: redirects where work runs\n",
+    )
+    with pytest.raises(EngineConfigAllowlistError, match="reachable through allow"):
+        load_allowlist(p, "spark")
+
+
+def test_absolute_ban_deny_overlapping_a_glob_allow_entry_raises_at_load(tmp_path):
+    """The glob-family case: an allow row broad enough to re-admit a whole
+    denied family must be caught via the deny pattern's own canary."""
+    p = _write(
+        tmp_path,
+        "engine: spark\nentries:\n"
+        "  - pattern: 'spark.kubernetes.*'\n    type: str\n"
+        "deny:\n"
+        "  - pattern: 'spark.kubernetes.*'\n    reason: cluster-placement family\n",
+    )
+    with pytest.raises(EngineConfigAllowlistError, match="reachable through allow"):
+        load_allowlist(p, "spark")
+
+
+def test_scoped_value_deny_is_exempt_from_the_overlap_check(tmp_path):
+    """A `deny_values`-scoped row is MEANT to share a pattern with an allow
+    entry (narrowing it, not banning it) — this must load clean."""
+    p = _write(
+        tmp_path,
+        "engine: spark\nentries:\n"
+        "  - pattern: spark.driver.maxResultSize\n    type: size\n"
+        "deny:\n"
+        "  - pattern: spark.driver.maxResultSize\n"
+        "    deny_values: ['0', 0]\n    reason: 0 means unlimited\n",
+    )
+    allowlist = load_allowlist(p, "spark")
+    assert len(allowlist.deny_entries) == 1
+    assert allowlist.deny_entries[0].deny_values == ("0", 0)
+
+
+def test_no_overlap_in_the_two_shipped_files_by_construction():
+    """Loading either shipped file at all (via the fixtures used throughout
+    this module) already proves this, since the overlap check runs inside
+    `load_allowlist` — this test names the property explicitly."""
+    spark = load_allowlist(_SPARK_PATH, "spark")
+    duckdb = load_allowlist(_DUCKDB_PATH, "duckdb")
+    for allowlist in (spark, duckdb):
+        for d in allowlist.deny_entries:
+            if d.deny_values is not None:
+                continue
+            canary = _glob_canary(d.pattern)
+            assert not any(e.matches(canary) for e in allowlist.entries), (
+                allowlist.engine,
+                d.pattern,
+            )
+
+
+# ── deny layer: TEST 2 — family freeze ───────────────────────────────────────
+
+# Hard-coded from the originating task's spec, deliberately NOT read back
+# from the shipped YAML — this is the "prose became code" guarantee.
+# Deleting a deny row (or narrowing a glob) breaks this test, naming the
+# family, instead of silently losing coverage.
+_SPARK_DENY_FAMILIES: dict[str, list[str]] = {
+    "placement": [
+        "spark.master",
+        "spark.submit.*",
+        "spark.kubernetes.*",
+        "spark.yarn.*",
+        "spark.mesos.*",
+    ],
+    "credentials_and_endpoints": [
+        "spark.hadoop.*",
+        "*.jars.repositories",
+    ],
+    "safety_disable": [
+        "spark.ssl.*",
+        "spark.network.crypto.*",
+        "spark.authenticate*",
+        "spark.driver.maxResultSize",  # value-deny (0 = unlimited)
+    ],
+    "code_loading": [
+        "spark.jars",
+        "spark.jars.packages",
+        "spark.files",
+        "spark.submit.pyFiles",
+        "spark.plugins",
+        "spark.sql.extensions",
+        "spark.driver.extraClassPath",
+        "spark.executor.extraClassPath",
+        "spark.driver.extraJavaOptions",
+        "spark.executor.extraJavaOptions",
+        "spark.driver.extraLibraryPath",
+        "spark.executor.extraLibraryPath",
+    ],
+}
+
+
+@pytest.mark.parametrize("family", sorted(_SPARK_DENY_FAMILIES))
+def test_spark_deny_family_is_covered_by_a_shipped_deny_entry(family):
+    allowlist = load_allowlist(_SPARK_PATH, "spark")
+    for member in _SPARK_DENY_FAMILIES[family]:
+        canary = _glob_canary(member)
+        assert any(d.matches(canary) for d in allowlist.deny_entries), (
+            f"family {family!r} member {member!r} (canary {canary!r}) is not "
+            "covered by any shipped Spark deny entry"
+        )
+
+
+_DUCKDB_DENY_FIELDS = ["database_path", "extension_repository", "s3_endpoint"]
+
+
+@pytest.mark.parametrize("field", _DUCKDB_DENY_FIELDS)
+def test_duckdb_deny_guards_the_deployment_connection_fields(field):
+    allowlist = load_allowlist(_DUCKDB_PATH, "duckdb")
+    assert any(d.matches(field) for d in allowlist.deny_entries), field
+
+
+# ── deny layer: TEST 3 — a synthetic extension entry cannot cross it ────────
+
+
+def test_validate_against_deny_refuses_a_synthetic_extension_entry_for_spark_master():
+    """Pinned NOW against the validation function even though the operator-
+    extension config surface does not exist yet — this is the contract that
+    surface must be built under."""
+    allowlist = load_allowlist(_SPARK_PATH, "spark")
+    with pytest.raises(EngineConfigAllowlistError, match="redirects where work runs"):
+        validate_against_deny(allowlist, "spark.master", value="spark://evil:7077")
+
+
+def test_validate_against_deny_refuses_a_synthetic_entry_violating_deny_values():
+    allowlist = load_allowlist(_SPARK_PATH, "spark")
+    with pytest.raises(EngineConfigAllowlistError, match="0 means unlimited"):
+        validate_against_deny(allowlist, "spark.driver.maxResultSize", value=0)
+    with pytest.raises(EngineConfigAllowlistError, match="0 means unlimited"):
+        validate_against_deny(allowlist, "spark.driver.maxResultSize", value="0")
+
+
+def test_validate_against_deny_allows_a_non_denied_candidate():
+    allowlist = load_allowlist(_SPARK_PATH, "spark")
+    # Must not raise: neither the key nor this value is denied.
+    validate_against_deny(allowlist, "spark.executor.memory", value="4g")
+    validate_against_deny(allowlist, "spark.driver.maxResultSize", value="4g")
+
+
+def test_validate_against_deny_cannot_be_bypassed_by_a_hand_built_allowlist():
+    """Immutability check: constructing an EngineConfigAllowlist with an
+    empty/narrowed deny_entries tuple is possible in Python (it's a plain
+    dataclass), but nothing in this module ever hands out such an object —
+    load_allowlist() is the only producer, always reading the shipped core
+    file. This test documents the contract at the object level: a caller
+    who bypasses load_allowlist() and fabricates their own
+    EngineConfigAllowlist gets exactly the (lack of) protection they built,
+    which is a statement about load_allowlist() being the sole legitimate
+    source, not a loophole in validate_against_deny() itself."""
+    fabricated = EngineConfigAllowlist(engine="spark", is_free_form=True, entries=(), deny_entries=())
+    validate_against_deny(fabricated, "spark.master")  # does not raise: no deny data at all
+    real = load_allowlist(_SPARK_PATH, "spark")
+    with pytest.raises(EngineConfigAllowlistError):
+        validate_against_deny(real, "spark.master")

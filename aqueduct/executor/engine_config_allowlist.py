@@ -55,6 +55,75 @@ richer constraint language (no "no more than 4x the current value") until a
 real incident asks for one — see the originating task's explicit steer
 against delta-bounds.
 
+**``range``/``enum`` are a MECHANISM, not a mandate.** A bound core cannot
+derive (the memory/partition-size ceiling a heal should respect depends on
+the cluster it runs on, which this process never observes) is a bound core
+must not state, so the two shipped files carry no invented magnitude
+``range``. They still carry ``spark.serializer``'s ``enum`` — a closed set
+of legal Spark classes is a shape fact, not a guessed number. The loader
+keeps validating ``range``/``enum`` in full for a future operator-narrowing
+feature to use; an empty set of ranges today is a data fact about this
+release, not a capability that was removed.
+
+**Deny layer — core-only, immutable.** Alongside ``entries:``, a file may
+carry a ``deny:`` list: named key/family patterns (glob or exact, same
+``fnmatch`` semantics as an allow entry) that no allow entry — present or a
+future one — may cover, each with a mandatory ``reason`` that renders into
+the eventual patch-rejection message. This is the enforced replacement for
+what used to be only YAML comments describing "excluded families" — a
+comment cannot stop a future row from allowlisting ``spark.master``; a deny
+row can. Two kinds:
+
+  - **Absolute ban** (no ``deny_values``): the pattern is refused
+    regardless of value. ``load_allowlist()`` itself refuses to load a file
+    where any allow entry's pattern is reachable through one of these —
+    derived via ``_glob_canary`` (see below) — so a shipped file that lets
+    an allow row re-admit a denied family fails the same CI load test every
+    other malformed file fails, not a live heal.
+  - **Scoped value-ban** (``deny_values`` set): the key stays allowed —
+    there is normally a matching allow entry for the same pattern — but a
+    fixed set of sentinel values on it are refused (``spark.driver.
+    maxResultSize``'s ``0`` = "unlimited", excluded so raising the cap
+    stays possible while removing the guard does not). A scoped row is
+    exempt from the overlap check above by design: coexisting with an
+    allow entry on the same key is exactly its job, not a bug.
+
+Deny patterns are exempt from the typed-field-engine "pattern must name an
+existing declared field" check allow entries get (see DuckDB's
+``database_path``/``extension_repository``/``s3_*`` rows, none of which
+exist as fields on ``DuckDBEngineBlockSchema`` today) — a deny row's job
+can be guarding a field that does not exist YET, not describing one that
+does.
+
+``_glob_canary(pattern)`` derives one concrete representative key from a
+pattern: the pattern unchanged when it has no ``*``/``?``, or the pattern
+with every ``*``/``?`` replaced by a single fixed placeholder segment when
+it does. This is deliberately not exhaustive — it proves an allow entry
+broad enough to swallow the WHOLE family the deny pattern denotes, not that
+no differently-shaped allow entry could reach some other member of that
+family through a route the placeholder didn't happen to hit. In practice
+every allow-side glob in these two shipped files is narrow (a single fixed
+suffix/prefix), so the one-canary check is exact here; a future allow entry
+with a more elaborate glob would need a human to notice the same way any
+allow/deny design review would.
+
+**Immutability, encoded, not just documented.** The deny layer is
+core-only. ``load_allowlist()`` is the ONLY function that ever populates
+``EngineConfigAllowlist.deny_entries``, always by reading the ONE file this
+engine ships next to its ``capabilities.yml`` — there is no parameter
+anywhere in this module to merge, append to, override, or shrink a loaded
+allowlist's deny entries, and ``EngineConfigAllowlist``/``DenyEntry`` are
+frozen dataclasses with no post-construction mutation path.
+``validate_against_deny()`` — the contract a future operator-extension
+config surface (a prospective ``danger.`` flag or similar) MUST validate a
+candidate entry through before it can be considered, pinned now even though
+no such extension surface exists yet — only ever reads deny rows off the
+``EngineConfigAllowlist`` object it is handed, so an extension cannot
+construct a narrower "private" allowlist of its own and pass that in to
+dodge a core deny; the only way to obtain a real one is
+``load_allowlist()`` against the shipped core file, and this file ships in
+the wheel where no user-supplied ``aqueduct.yml`` path can reach it.
+
 **Presence guard.** Every engine ``discover_allowlist_paths()`` can see via
 its ``aqueduct.engines`` entry point must ship this file — an ABSENT file is
 not the same decision as an EXPLICIT EMPTY one (``entries: []``). An absent
@@ -178,12 +247,47 @@ class AllowlistEntry:
 
 
 @dataclass(frozen=True)
+class DenyEntry:
+    """One CORE, immutable deny rule — never a bound (that's a ``range``'s
+    job), only a name/family plus optional discrete forbidden values, with
+    a mandatory ``reason`` that renders into the eventual patch-rejection
+    message. See the module docstring's "Deny layer" section."""
+
+    pattern: str
+    reason: str
+    deny_values: tuple[Any, ...] | None = None
+
+    def matches(self, key: str) -> bool:
+        """``fnmatch`` semantics — identical rule to ``AllowlistEntry.matches``."""
+        return fnmatch.fnmatchcase(key, self.pattern)
+
+    def forbids(self, value: Any = None) -> bool:
+        """Whether this entry forbids ``value`` for a key it already
+        ``matches()``. No ``deny_values`` means an absolute ban (any value,
+        including no value supplied); ``deny_values`` set means only those
+        specific sentinels are forbidden — the key otherwise stays allowed."""
+        if self.deny_values is None:
+            return True
+        return value in self.deny_values
+
+
+def _glob_canary(pattern: str) -> str:
+    """Derive one concrete, representative key from a (possibly glob)
+    pattern — see the module docstring's "Deny layer" section for what this
+    can and cannot prove."""
+    if "*" not in pattern and "?" not in pattern:
+        return pattern
+    return pattern.replace("*", "x").replace("?", "x")
+
+
+@dataclass(frozen=True)
 class EngineConfigAllowlist:
     """One engine's full ``set_engine_config`` allowlist."""
 
     engine: str
     is_free_form: bool
     entries: tuple[AllowlistEntry, ...] = ()
+    deny_entries: tuple[DenyEntry, ...] = ()
 
 
 def _fail(message: str, *, engine: str, path: Path, keys: list[str] | None = None) -> None:
@@ -451,7 +555,104 @@ def load_allowlist(path: Path | str, engine: str) -> EngineConfigAllowlist:
 
         entries.append(AllowlistEntry(pattern=pattern, value_type=value_type, constraint=constraint))
 
-    return EngineConfigAllowlist(engine=engine, is_free_form=is_free_form, entries=tuple(entries))
+    # ── deny layer — core-only; see module docstring "Deny layer" section ──
+    deny_raw = raw.get("deny", [])
+    if not isinstance(deny_raw, list):
+        _fail(
+            f"engine config allowlist {p}: 'deny:' must be a list of "
+            "{pattern, reason, [deny_values]} mappings.",
+            engine=engine,
+            path=p,
+        )
+
+    deny_entries: list[DenyEntry] = []
+    for row in deny_raw:
+        if not isinstance(row, dict) or "pattern" not in row or "reason" not in row:
+            _fail(
+                f"engine config allowlist {p}: every deny entry needs a "
+                f"'pattern' and a 'reason'; got {row!r}.",
+                engine=engine,
+                path=p,
+            )
+        d_pattern = row["pattern"]
+        if not isinstance(d_pattern, str) or not d_pattern.strip():
+            _fail(
+                f"engine config allowlist {p}: deny entry 'pattern' must be "
+                f"a non-empty string; got {d_pattern!r}.",
+                engine=engine,
+                path=p,
+            )
+        d_reason = row["reason"]
+        if not isinstance(d_reason, str) or not d_reason.strip():
+            _fail(
+                f"engine config allowlist {p}: deny entry {d_pattern!r} "
+                f"'reason' must be a non-empty string; got {d_reason!r}.",
+                engine=engine,
+                path=p,
+                keys=[d_pattern],
+            )
+        dv_raw = row.get("deny_values")
+        deny_values: tuple[Any, ...] | None = None
+        if dv_raw is not None:
+            if not isinstance(dv_raw, list) or not dv_raw:
+                _fail(
+                    f"engine config allowlist {p}: deny entry {d_pattern!r}'s "
+                    f"'deny_values' must be a non-empty list; got {dv_raw!r}.",
+                    engine=engine,
+                    path=p,
+                    keys=[d_pattern],
+                )
+            deny_values = tuple(dv_raw)
+        deny_entries.append(DenyEntry(pattern=d_pattern, reason=d_reason, deny_values=deny_values))
+
+    # Load-time overlap guard (TEST 1 in the originating task): an absolute
+    # ban must never be reachable through an allow entry. A scoped
+    # value-ban (`deny_values` set) is exempt — coexisting with an allow
+    # entry on the same key is its whole purpose, not a defect.
+    for d in deny_entries:
+        if d.deny_values is not None:
+            continue
+        canary = _glob_canary(d.pattern)
+        offending = [e.pattern for e in entries if e.matches(canary)]
+        if offending:
+            _fail(
+                f"engine config allowlist {p}: deny pattern {d.pattern!r} "
+                f"({d.reason}) is reachable through allow "
+                f"entr{'y' if len(offending) == 1 else 'ies'} {offending!r} "
+                f"via canary key {canary!r} — a core deny must never be "
+                "reachable through an allow entry.",
+                engine=engine,
+                path=p,
+                keys=[d.pattern, *offending],
+            )
+
+    return EngineConfigAllowlist(
+        engine=engine,
+        is_free_form=is_free_form,
+        entries=tuple(entries),
+        deny_entries=tuple(deny_entries),
+    )
+
+
+def validate_against_deny(
+    allowlist: EngineConfigAllowlist, pattern: str, value: Any = None
+) -> None:
+    """Raise ``EngineConfigAllowlistError`` if ``pattern`` (optionally with
+    ``value``) is covered by ``allowlist``'s CORE deny entries.
+
+    This is the validation contract a future operator-extension config
+    surface must call before admitting a candidate entry — pinned now, at
+    the same time the deny data ships, even though no such extension
+    surface exists yet (see the module docstring's "Immutability" section
+    for why this function cannot be handed a narrowed deny set to dodge).
+    """
+    for entry in allowlist.deny_entries:
+        if entry.matches(pattern) and entry.forbids(value):
+            raise EngineConfigAllowlistError(
+                f"{pattern!r} is denied for engine {allowlist.engine!r}: {entry.reason}",
+                engine=allowlist.engine,
+                keys=[pattern],
+            )
 
 
 # ── discovery — mirrors capability_tooling.discover_declarations() ──────────
@@ -532,10 +733,12 @@ def check_presence() -> None:
 __all__ = [
     "DECLARATION_FILENAME",
     "AllowlistEntry",
+    "DenyEntry",
     "EngineConfigAllowlist",
     "RangeConstraint",
     "EnumConstraint",
     "load_allowlist",
+    "validate_against_deny",
     "discover_registered_engines",
     "discover_allowlist_paths",
     "check_presence",

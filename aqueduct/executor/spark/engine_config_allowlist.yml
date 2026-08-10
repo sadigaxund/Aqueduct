@@ -19,59 +19,52 @@
 # broadcast join threshold, executor/driver memory and overhead, adaptive
 # execution, max result size, partition sizing, Kryo buffer.
 #
-# EXPLICITLY EXCLUDED — never add a pattern covering these, even inside an
-# otherwise-allowed family:
-#   - Anything that REDIRECTS WHERE WORK RUNS: `spark.master`,
-#     `spark.submit.deployMode`, `spark.kubernetes.*`, `spark.yarn.*`,
-#     `spark.mesos.*`. A patch that moves the job to a different cluster
-#     manager or deploy mode is not a config fix — it changes what ran and
-#     where, which is outside what a heal is allowed to decide.
-#   - Credentials and endpoints: `spark.hadoop.fs.s3a.access.key`,
-#     `spark.hadoop.fs.s3a.secret.key`, `spark.hadoop.fs.s3a.session.token`,
-#     any `*.jars.repositories`/extension-mirror URL, any key whose value is
-#     a secret or a network endpoint the healing agent has no business
-#     rewriting.
-#   - Anything that DISABLES A SAFETY PROPERTY: TLS/encryption toggles
-#     (`spark.ssl.*`, `spark.network.crypto.enabled`,
-#     `spark.authenticate*`), or setting `spark.driver.maxResultSize` to its
-#     "unlimited" value (`0`) — the row below bounds it away from zero for
-#     exactly this reason, since the point of raising the limit is a higher
-#     BOUNDED cap, not removing the guard against a runaway collect().
+# NO MAGNITUDE RANGES. A `range:` bound on a resource knob like
+# spark.executor.memory would have to be a number core invents — this
+# process has no access to the cluster a heal runs on, so `["128m","64g"]`
+# both blocks a legitimate 96g heal on a large cluster and admits an
+# absurd 64g heal on a laptop, wrong in both directions while reading as an
+# authoritative bound. A bound core cannot derive is a bound core must not
+# state. Every entry below therefore carries only a `type:` (a shape fact
+# core CAN assert) — never a `range:`. `spark.driver.maxResultSize`'s old
+# floor (excluding the `0` = unlimited sentinel) is real safety reasoning,
+# not a magnitude guess, so it survives as a `deny_values` row below rather
+# than a range; the old broadcast-threshold `1 GiB` cap was a DEPLOYMENT
+# fact ("the sandbox was never sized for it"), not an engine fact, so it is
+# simply gone — no replacement, deny or otherwise. The `range:`/`enum:`
+# CAPABILITY itself stays fully supported by the loader/schema (see
+# aqueduct/executor/engine_config_allowlist.py) for a future
+# operator-narrowing feature; core just ships none today except
+# `spark.serializer`'s `enum:`, which is a closed set of legal Spark
+# serializer classes, not an invented magnitude.
 #
-# No delta-bounds ("no more than 4x current") — type + range/enum only,
-# per the standing decision to wait for a real incident before inventing a
-# richer constraint language.
+# THE `deny:` SECTION BELOW IS THE ENFORCED VERSION of what used to be only
+# a comment here. It is core-only and immutable — see the loader module's
+# docstring ("Deny layer — core-only, immutable") for how that is encoded,
+# not just stated. No `aqueduct.yml` key, `danger.` flag, or future
+# extension may add to, shrink, or override it.
 
 engine: spark
 entries:
   # ── Shuffle partitioning ──────────────────────────────────────────────
   - pattern: spark.sql.shuffle.partitions
     type: int
-    range: [1, 20000]
 
   # ── Broadcast join threshold ──────────────────────────────────────────
   # Bytes; -1 disables broadcast joins entirely (a legitimate value, not a
-  # safety bypass — it just turns a tuning knob off). Capped at 1 GiB: past
-  # that the fix stops being "broadcast this smaller table" and starts
-  # being "make the driver hold something huge," which the sandbox this
-  # patch replays against was never sized for.
+  # safety bypass — it just turns a tuning knob off).
   - pattern: spark.sql.autoBroadcastJoinThreshold
     type: int
-    range: [-1, 1073741824]
 
   # ── Executor / driver memory and overhead ─────────────────────────────
   - pattern: spark.executor.memory
     type: size
-    range: ["128m", "64g"]
   - pattern: spark.driver.memory
     type: size
-    range: ["128m", "64g"]
   - pattern: spark.executor.memoryOverhead
     type: size
-    range: ["64m", "16g"]
   - pattern: spark.driver.memoryOverhead
     type: size
-    range: ["64m", "16g"]
 
   # ── Adaptive query execution ───────────────────────────────────────────
   - pattern: spark.sql.adaptive.enabled
@@ -83,18 +76,16 @@ entries:
     type: bool
 
   # ── Max result size ────────────────────────────────────────────────────
-  # Deliberately excludes 0 ("unlimited") — see the exclusions note above.
+  # The `0` ("unlimited") sentinel is excluded via the `deny:` section
+  # below, not a range floor — see that section's `maxResultSize` row.
   - pattern: spark.driver.maxResultSize
     type: size
-    range: ["1m", "16g"]
 
   # ── Partition sizing ───────────────────────────────────────────────────
   - pattern: spark.sql.files.maxPartitionBytes
     type: size
-    range: ["1m", "1g"]
   - pattern: spark.sql.adaptive.advisoryPartitionSizeInBytes
     type: size
-    range: ["1m", "1g"]
 
   # ── Kryo serializer buffer ─────────────────────────────────────────────
   # spark.serializer itself is included as an enum (not a range) — the two
@@ -111,7 +102,64 @@ entries:
       - org.apache.spark.serializer.JavaSerializer
   - pattern: spark.kryoserializer.buffer
     type: size
-    range: ["1k", "64m"]
   - pattern: spark.kryoserializer.buffer.max
     type: size
-    range: ["1m", "512m"]
+
+# ── CORE DENY LAYER ──────────────────────────────────────────────────────
+# Structural enforcement of the exclusion families this file's comments
+# used to only describe in prose. Every row needs a `reason:` (renders into
+# the eventual patch-rejection message) and either bans its `pattern`
+# outright, or — via `deny_values` — bans specific sentinel values on a key
+# that otherwise stays allowed above. No `min`/`max` here: a bound is a
+# range (Part 1's job), not a deny concern; discrete sentinels use
+# `deny_values`. `load_allowlist()` refuses to load this file if any
+# absolute-ban row above overlaps an allow entry — see the loader.
+deny:
+  # ── Family 1: placement — redirects where/how work runs ────────────────
+  - pattern: "spark.master"
+    reason: "redirects where work runs; a heal may not move the job"
+  - pattern: "spark.submit.*"
+    reason: "controls how/where the driver is submitted; a heal may not change job placement"
+  - pattern: "spark.kubernetes.*"
+    reason: "cluster-placement family"
+  - pattern: "spark.yarn.*"
+    reason: "cluster-placement family"
+  - pattern: "spark.mesos.*"
+    reason: "cluster-placement family"
+
+  # ── Family 2: credentials / endpoints ───────────────────────────────────
+  - pattern: "spark.hadoop.*"
+    reason: "filesystem credential or endpoint configuration; not a knob a heal may rewrite"
+  - pattern: "*.jars.repositories"
+    reason: "artifact-repository/mirror URL; changing it can redirect where code is fetched from"
+
+  # ── Family 3: safety-disable ────────────────────────────────────────────
+  - pattern: "spark.ssl.*"
+    reason: "TLS/encryption toggle; a heal may not disable a safety property"
+  - pattern: "spark.network.crypto.*"
+    reason: "wire-encryption toggle; a heal may not disable a safety property"
+  - pattern: "spark.authenticate*"
+    reason: "authentication toggle; a heal may not disable a safety property"
+  - pattern: "spark.driver.maxResultSize"
+    deny_values: ["0", 0]
+    reason: "0 means unlimited; raising the cap is allowed, removing the guard is not"
+
+  # ── Family 4: code loading — the no-arbitrary-code-execution moat ──────
+  - pattern: "spark.jars"
+    reason: "loads arbitrary JAR code onto the driver/executors"
+  - pattern: "spark.jars.packages"
+    reason: "resolves and loads arbitrary Maven coordinates onto the driver/executors"
+  - pattern: "spark.files"
+    reason: "ships arbitrary files onto the cluster"
+  - pattern: "spark.submit.pyFiles"
+    reason: "ships arbitrary Python code onto the cluster"
+  - pattern: "spark.plugins"
+    reason: "loads arbitrary driver/executor plugin code"
+  - pattern: "spark.sql.extensions"
+    reason: "loads arbitrary SQL-parser/planner extension code"
+  - pattern: "spark.*.extraClassPath"
+    reason: "extends the JVM classpath with arbitrary code"
+  - pattern: "spark.*.extraJavaOptions"
+    reason: "arbitrary JVM options, including -javaagent code injection"
+  - pattern: "spark.*.extraLibraryPath"
+    reason: "extends the native library search path with arbitrary code"

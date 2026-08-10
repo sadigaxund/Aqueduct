@@ -11,16 +11,40 @@
 # Blueprint-level in the first place. That leaves exactly the two
 # resource/tuning knobs below; nothing else belongs on this list.
 #
+# NO MAGNITUDE RANGES. `["128MB","256GB"]` for memory_limit and `[1,256]`
+# for threads were invented numbers — this process has no access to the
+# machine a heal runs on, so a bound like that is wrong in one direction or
+# the other on any given box. A bound core cannot derive is a bound core
+# must not state; both entries below carry only a `type:`. The
+# `range:`/`enum:` capability itself stays fully supported by the
+# loader/schema for a future operator-narrowing feature — core just ships
+# none today.
+#
 # Types are cross-checked against DuckDBEngineBlockSchema's own pydantic
 # annotations at load time (str | None for memory_limit, int | None for
 # threads) — a mismatch is a build-time EngineConfigAllowlistError, not a
 # silent divergence.
+#
+# THE `deny:` SECTION BELOW guards the three deployment/connection fields
+# named above even though none is Blueprint-level in DuckDBEngineBlockSchema
+# today — the row exists so a FUTURE schema addition that promoted one of
+# them to Blueprint-level cannot silently become healable just because
+# nobody remembered to also add an allow-side exclusion. It is core-only
+# and immutable — see the loader module's docstring ("Deny layer —
+# core-only, immutable").
 
 engine: duckdb
 entries:
   - pattern: memory_limit
     type: size
-    range: ["128MB", "256GB"]
   - pattern: threads
     type: int
-    range: [1, 256]
+
+# ── CORE DENY LAYER ──────────────────────────────────────────────────────
+deny:
+  - pattern: "database_path"
+    reason: "the on-disk database file location for this installation; a heal may not relocate it"
+  - pattern: "extension_repository"
+    reason: "extension-mirror URL; changing it can redirect where extension code is fetched from"
+  - pattern: "s3_*"
+    reason: "S3 credential/endpoint configuration; not a knob a heal may rewrite"
