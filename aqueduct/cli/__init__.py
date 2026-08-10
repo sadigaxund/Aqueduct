@@ -1278,6 +1278,7 @@ from .patch import (  # noqa: E402,F401,F811
     patch_commit,
     patch_discard,
     patch_list,
+    patch_policy,
     patch_preview,
     patch_reject,
     rollback_cmd,

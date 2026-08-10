@@ -234,6 +234,37 @@ class TestEngineConfigAllowlistGate:
         with pytest.raises(PatchError, match="not a registered aqueduct engine"):
             _check_guardrails(spec, bp)
 
+    # ── discovery loop: a rejection must name the command that shows the
+    #    policy it was evaluated against (`aqueduct patch policy`) — guarded
+    #    here because it is a string that can silently drift from the real
+    #    command name without any other test catching it ────────────────────
+    def test_denied_key_message_names_policy_command(self):
+        bp = _bp_with_guardrails()
+        spec = _patch({
+            "op": "set_engine_config", "engine": "spark",
+            "key": "spark.master", "value": "local[*]",
+        })
+        with pytest.raises(PatchError, match=r"aqueduct patch policy --engine spark"):
+            _check_guardrails(spec, bp)
+
+    def test_key_on_no_list_message_names_policy_command(self):
+        bp = _bp_with_guardrails()
+        spec = _patch({
+            "op": "set_engine_config", "engine": "spark",
+            "key": "spark.totally.unlisted.key", "value": "x",
+        })
+        with pytest.raises(PatchError, match=r"aqueduct patch policy --engine spark"):
+            _check_guardrails(spec, bp)
+
+    def test_unregistered_engine_message_names_policy_command(self):
+        bp = _bp_with_guardrails()
+        spec = _patch({
+            "op": "set_engine_config", "engine": "flink",
+            "key": "x", "value": "y",
+        })
+        with pytest.raises(PatchError, match=r"aqueduct patch policy"):
+            _check_guardrails(spec, bp)
+
     # ── error taxonomy: a registered engine with a missing/broken shipped
     #    file is a DATA problem (EngineConfigAllowlistError), never
     #    reinterpreted as a rejected patch ─────────────────────────────────

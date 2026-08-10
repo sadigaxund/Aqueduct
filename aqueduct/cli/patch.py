@@ -20,6 +20,7 @@ from aqueduct.cli import (
     _resolve_and_load_env,
     _uncommitted_applied_patches,
     cli,
+    style,
 )
 from aqueduct.cli.output import emit
 
@@ -390,6 +391,132 @@ def patch_preview(
     if sandbox_res is not None and sandbox_res.status == "fail":
         exit_code = exit_codes.DATA_OR_RUNTIME
     sys.exit(exit_code)
+
+
+POLICY_NARROWING_NOTE = (
+    "Operator extension and narrowing of this policy are not yet "
+    "implemented — this is the whole policy, not a customized view."
+)
+
+
+def _policy_entry_dict(entry) -> dict:
+    """One allow entry, JSON-serializable — shared by text and json rendering."""
+    from aqueduct.executor.engine_config_allowlist import EnumConstraint, RangeConstraint
+
+    out: dict = {"pattern": entry.pattern, "type": entry.value_type}
+    if isinstance(entry.constraint, EnumConstraint):
+        out["enum"] = list(entry.constraint.values)
+    elif isinstance(entry.constraint, RangeConstraint):
+        out["range"] = [entry.constraint.minimum, entry.constraint.maximum]
+    return out
+
+
+def _policy_deny_dict(entry) -> dict:
+    """One deny entry, JSON-serializable."""
+    out: dict = {"pattern": entry.pattern, "reason": entry.reason}
+    if entry.deny_values is not None:
+        out["deny_values"] = list(entry.deny_values)
+    return out
+
+
+def _policy_report(engine: str, allowlist) -> dict:
+    """One engine's effective ``set_engine_config`` policy — the SAME
+    ``EngineConfigAllowlist`` Gate 1 evaluates a candidate write against
+    (``aqueduct.executor.engine_config_allowlist.load_allowlist`` /
+    ``evaluate_set_engine_config``), reshaped for display. No matching
+    logic is reimplemented here."""
+    return {
+        "engine": engine,
+        "shape": "free_form_conf_bag" if allowlist.is_free_form else "typed_fields",
+        "allow": [_policy_entry_dict(e) for e in allowlist.entries],
+        "deny": [_policy_deny_dict(d) for d in allowlist.deny_entries],
+    }
+
+
+@patch.command("policy")
+@click.option(
+    "--engine",
+    "engine_name",
+    default=None,
+    help="Show one engine's policy only (default: every registered engine).",
+)
+@click.option(
+    "--format",
+    "out_format",
+    type=click.Choice(["text", "json"], case_sensitive=False),
+    default="text",
+    show_default=True,
+    help="Output format. `text` (default) renders the allow/deny tables. `json` emits structured data only.",
+)
+def patch_policy(engine_name: str | None, out_format: str) -> None:
+    """Print the effective `set_engine_config` healing policy, per engine.
+
+    Answers "what may the healing agent write on this engine?" — the allowed
+    `engine.<name>` config keys (with value type and any enum/range
+    constraint) and the denied key families (with their `reason`), read
+    straight from each registered engine's core
+    `engine_config_allowlist.yml` — the same file and evaluation logic Gate
+    1 enforces against a `set_engine_config` patch op (see
+    `docs/specs.md` §8.5 "Permission model" /
+    `aqueduct/executor/engine_config_allowlist.py`). Operator extension and
+    narrowing of this policy are not yet implemented, so what this command
+    prints is the complete policy — not a preview of a configurable subset.
+    """
+    from aqueduct.executor.engine_config_allowlist import (
+        DECLARATION_FILENAME,
+        discover_registered_engines,
+        load_allowlist,
+    )
+
+    registered = discover_registered_engines()
+    if not registered:
+        style.warn("no registered engines found")
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    if engine_name is not None and engine_name not in registered:
+        style.error(
+            f"engine {engine_name!r} is not registered. Registered engines: "
+            f"{sorted(registered)}"
+        )
+        sys.exit(exit_codes.USAGE_ERROR)
+
+    targets = [engine_name] if engine_name is not None else sorted(registered)
+    reports = []
+    for eng in targets:
+        allowlist_path = registered[eng] / DECLARATION_FILENAME
+        allowlist = load_allowlist(allowlist_path, eng)
+        reports.append(_policy_report(eng, allowlist))
+
+    if out_format.lower() == "json":
+        emit({"narrowing": POLICY_NARROWING_NOTE, "engines": reports}, fmt="json")
+        return
+
+    for r in reports:
+        shape_label = (
+            "free-form conf bag" if r["shape"] == "free_form_conf_bag" else "typed fields"
+        )
+        click.echo(f"Engine: {r['engine']}  ({shape_label})")
+
+        click.echo("  Allowed keys:")
+        if not r["allow"]:
+            click.echo("    (none)")
+        for e in r["allow"]:
+            constraint = ""
+            if "enum" in e:
+                constraint = f"  enum={e['enum']}"
+            elif "range" in e:
+                constraint = f"  range={e['range']}"
+            click.echo(f"    {e['pattern']:<48} type={e['type']}{constraint}")
+
+        click.echo("  Denied families:")
+        if not r["deny"]:
+            click.echo("    (none)")
+        for d in r["deny"]:
+            scope = f"  (values={d['deny_values']})" if "deny_values" in d else ""
+            click.echo(f"    {d['pattern']:<48} {d['reason']}{scope}")
+        click.echo()
+
+    style.info(POLICY_NARROWING_NOTE)
 
 
 def _patch_store_from(patches_root, config_path, env_file, cli_env):

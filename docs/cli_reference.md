@@ -343,6 +343,7 @@ caps than production.
 | Command | Description |
 |---------|-------------|
 | `aqueduct patch list` | Show pending/applied/rejected patches |
+| `aqueduct patch policy [--engine <name>] [--format text\|json]` | Print the effective `set_engine_config` healing policy — allowed `engine.<name>` config keys (type + any enum/range) and denied key families (with `reason`) — read from each registered engine's core `engine_config_allowlist.yml` (the same table Gate 1 enforces). Default: every registered engine; `--engine` narrows to one (fails with a `USAGE_ERROR` if unregistered). Operator extension/narrowing of this policy is not yet implemented — this command prints the whole policy. |
 | `aqueduct patch preview <file>` | Review changes and run gates |
 | `aqueduct patch apply <file>` | Apply a patch |
 | `aqueduct patch import <file> --blueprint <bp> [--no-commit]` | Apply a received patch and `git commit` it in one step, the `approval: ci` entry point a CI runner calls after the `on_patch_pending` webhook. Equivalent to `apply` + `commit`; `--no-commit` stages only. See `docs/templates/ci-heal-workflow.yml`. |

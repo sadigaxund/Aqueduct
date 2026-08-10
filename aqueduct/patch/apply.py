@@ -311,7 +311,8 @@ def _check_engine_config_allowlist(op: Any) -> None:
         raise PatchError(
             f"set_engine_config: engine {op.engine!r} is not a registered "
             "aqueduct engine — refusing to write engine config for it "
-            f"(fail closed). Registered engines: {sorted(registered)}"
+            f"(fail closed). Registered engines: {sorted(registered)} — see "
+            "`aqueduct patch policy`"
         )
 
     allowlist_path = registered[op.engine] / DECLARATION_FILENAME
@@ -322,7 +323,16 @@ def _check_engine_config_allowlist(op: Any) -> None:
 
     reason = evaluate_set_engine_config(allowlist, op.key, op.value)
     if reason is not None:
-        raise PatchError(f"set_engine_config: {reason}")
+        # Discovery loop (see aqueduct/cli/patch.py::patch_policy): a
+        # rejection that names a rule nobody can look up is half a gate —
+        # `aqueduct patch policy --engine <name>` prints exactly the
+        # allow/deny table this reason was evaluated against. Keep this
+        # pointer in sync with the command name (guarded by
+        # tests/test_cli/test_cli.py::test_gate1_rejection_names_policy_command).
+        raise PatchError(
+            f"set_engine_config: {reason} — see "
+            f"`aqueduct patch policy --engine {op.engine}`"
+        )
 
 
 def _check_guardrails(
