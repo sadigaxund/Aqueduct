@@ -46,7 +46,10 @@ def test_prompt_version_bumped_for_schema_hint_rule():
     # rule bullet (Spark's composed prompt is unchanged; version is global).
     # Phase 79 item 6 bumped 1.8 -> 1.9 for the DuckDB pack's out-of-memory /
     # capacity-exhaustion defer rule (Spark's composed prompt is unchanged).
-    assert PROMPT_VERSION == "1.9"
+    # Phase 82 bumped 1.9 -> 1.10: the op table the LLM sees changed when the
+    # engine-named `set_spark_config` was replaced by `set_engine_config`, which
+    # is exactly what the bump policy covers (the composed prompt's body).
+    assert PROMPT_VERSION == "1.10"
 
 
 def test_schema_hint_rule_never_leaks_defer_op_token(tmp_path: Path):
