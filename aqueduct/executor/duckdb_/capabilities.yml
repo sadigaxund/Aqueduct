@@ -91,13 +91,10 @@ leaves:
   # ── Healing-agent config (engine-independent — the agent layer doesn't
   # touch engine internals; DuckDB honors the same knobs Spark does) ───────
   agent.field.allow_defer: supported
-  agent.field.api_key: supported
   agent.field.approval_mode: supported
-  agent.field.base_url: supported
   agent.field.block_on_explain_regression:
     support: unsupported
     hint: "block_on_explain_regression relies on Spark's explain()-plan snapshot gate (aqueduct.patch.explain_gate); DuckDB has no equivalent plan-snapshot capture implemented."
-  agent.field.cascade: supported
   agent.field.confidence_threshold: supported
   agent.field.deep_loop: supported
   agent.field.guardrails: supported
@@ -107,18 +104,14 @@ leaves:
   agent.field.max_reprompts: supported
   agent.field.max_tool_calls: supported
   agent.field.mode: supported
-  agent.field.model: supported
   agent.field.on_heal_failure: supported
   agent.field.on_pending_patches: supported
   agent.field.patch_validation: supported
   agent.field.progressive: supported
   agent.field.prompt_context: supported
-  agent.field.provider: supported
-  agent.field.provider_options: supported
   agent.field.regression_artifact: supported
   agent.field.sandbox_mode: supported
   agent.field.supports_tools: supported
-  agent.field.timeout: supported
   agent_cascade_tier.field.allow_defer: supported
   agent_cascade_tier.field.api_key: supported
   agent_cascade_tier.field.base_url: supported

@@ -113,27 +113,14 @@ class TestAgentSchemaBounds:
         s = AgentSchema(max_patches=5)
         assert s.max_patches == 5
 
-    def test_timeout_zero(self):
+    def test_timeout_not_a_blueprint_field(self):
+        # 2.59 — `timeout` is a CONNECTION field, removed from the Blueprint
+        # `agent:` block entirely (engine-only now, see test_agent_connection_
+        # config_bounds below). extra="forbid" rejects it by name.
         from aqueduct.parser.schema import AgentSchema
         from pydantic import ValidationError
-        with pytest.raises(ValidationError, match=r"Input should be greater than 0"):
-            AgentSchema(timeout=0)
-
-    def test_timeout_negative(self):
-        from aqueduct.parser.schema import AgentSchema
-        from pydantic import ValidationError
-        with pytest.raises(ValidationError, match=r"Input should be greater than 0"):
-            AgentSchema(timeout=-1.0)
-
-    def test_timeout_none_is_valid(self):
-        from aqueduct.parser.schema import AgentSchema
-        s = AgentSchema(timeout=None)
-        assert s.timeout is None
-
-    def test_timeout_valid(self):
-        from aqueduct.parser.schema import AgentSchema
-        s = AgentSchema(timeout=120.0)
-        assert s.timeout == 120.0
+        with pytest.raises(ValidationError, match=r"timeout"):
+            AgentSchema(timeout=120.0)
 
     def test_max_reprompts_zero(self):
         from aqueduct.parser.schema import AgentSchema
@@ -195,6 +182,34 @@ class TestAgentSchemaBounds:
         from aqueduct.parser.schema import AgentSchema
         s = AgentSchema(max_heal_attempts_per_hour=5)
         assert s.max_heal_attempts_per_hour == 5
+
+
+# ── AgentConnectionConfig bounds (from aqueduct/config.py) ─────────────────────
+# 2.59 — `timeout` (and every other CONNECTION field) moved here, engine-only;
+# these replace the old AgentSchema-level timeout bound tests above.
+
+class TestAgentConnectionConfigBounds:
+    def test_timeout_zero(self):
+        from aqueduct.config import AgentConnectionConfig
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError, match=r"Input should be greater than 0"):
+            AgentConnectionConfig(timeout=0)
+
+    def test_timeout_negative(self):
+        from aqueduct.config import AgentConnectionConfig
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError, match=r"Input should be greater than 0"):
+            AgentConnectionConfig(timeout=-1.0)
+
+    def test_timeout_default(self):
+        from aqueduct.config import AgentConnectionConfig
+        s = AgentConnectionConfig()
+        assert s.timeout == 300.0
+
+    def test_timeout_valid(self):
+        from aqueduct.config import AgentConnectionConfig
+        s = AgentConnectionConfig(timeout=120.0)
+        assert s.timeout == 120.0
 
 
 # ── ProbesConfig bounds (from aqueduct/config.py) ──────────────────────────────

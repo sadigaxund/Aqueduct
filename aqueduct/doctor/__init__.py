@@ -969,27 +969,28 @@ def _check_heal_guardrail_typos(manifest: Any) -> list[CheckResult]:
 
 
 def check_cascade_tiers(
-    blueprint_path: Path,
+    tiers: Any,
     engine_provider: str = "anthropic",
     engine_base_url: str | None = None,
     *,
     preflight: bool = False,
 ) -> list[CheckResult]:
-    """Phase 46 — per-tier credential/endpoint checks for `agent.cascade:`.
+    """Phase 46 — per-tier credential/endpoint checks for `aqueduct.yml`'s
+    `agent.cascade:`.
 
     A cascade only escalates at runtime, so a tier-3 missing API key
     surfaces exactly when the expensive fallback was needed. Doctor warns
     ahead: anthropic tiers need ANTHROPIC_API_KEY; openai_compat tiers need
     a base_url (own or inherited from engine config).
+
+    ``tiers`` is ``cfg.agent.cascade`` (a ``list[CascadeTierSchema] | None``)
+    — CONNECTION config, engine-level only since 2.59 (a Blueprint cannot
+    declare its own cascade; see ``AgentSchema``'s docstring in
+    ``aqueduct/parser/schema.py``), so this check no longer parses a
+    Blueprint at all.
     """
     results: list[CheckResult] = []
-    try:
-        from aqueduct.parser.parser import parse
-        bp = parse(str(blueprint_path))
-    except Exception:
-        return results  # blueprint problems are reported by other checks
-    agent = getattr(bp, "agent", None)
-    tiers = tuple(getattr(agent, "cascade", None) or ())
+    tiers = tuple(tiers or ())
     if not tiers:
         return results
 
@@ -1603,10 +1604,12 @@ def run_doctor(
     # LLM connectivity
     results.append(check_agent(cfg.agent.provider, cfg.agent.base_url, cfg.agent.model, preflight=preflight))
 
-    # Phase 46 — cascade tier credentials/endpoints (blueprint-level config)
-    if blueprint_path is not None:
+    # Phase 46 — cascade tier credentials/endpoints (engine-level config;
+    # cascade has been aqueduct.yml-only since 2.59, so this no longer
+    # depends on a blueprint being given at all).
+    if cfg.agent.cascade:
         results.extend(check_cascade_tiers(
-            blueprint_path,
+            cfg.agent.cascade,
             engine_provider=cfg.agent.provider,
             engine_base_url=cfg.agent.base_url,
             preflight=preflight,

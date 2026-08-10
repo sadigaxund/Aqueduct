@@ -83,18 +83,23 @@ class CascadeTierConfig:
 
 @dataclass(frozen=True)
 class AgentConfig:
+    """Blueprint-level self-healing POLICY, resolved from ``AgentSchema``
+    (``aqueduct/parser/schema.py``).
+
+    CONNECTION fields (``provider``/``base_url``/``api_key``/``model``/
+    ``provider_options``/``timeout``/``cascade``) are deliberately absent —
+    a Blueprint cannot set or override them; see ``AgentSchema``'s
+    docstring. The effective connection settings always come from
+    ``aqueduct.yml``'s ``agent:`` block (``AgentConnectionConfig`` in
+    ``aqueduct/config.py``), resolved by ``aqueduct.cli.resolve_agent_connection``.
+    """
+
     approval_mode: str = "disabled"       # YAML key `approval`: "disabled" | "human" | "auto" | "ci"
     on_pending_patches: str = "warn"      # "ignore" | "warn" | "block"
     # `max_patches` (default 1). Multi-patch loop opt-in: set > 1 AND
     # `danger.allow_multi_patch: true`.
     max_patches: int = 1
-    # Connection fields — None = inherit from aqueduct.yml agent: defaults
-    provider: str | None = None
-    base_url: str | None = None
-    api_key: str | None = None
-    model: str | None = None
-    provider_options: dict | None = None
-    timeout: float | None = None
+    # Reprompt-budget policy — None = inherit from aqueduct.yml agent: defaults
     max_reprompts: int | None = None
     # Guardrail policy — deterministically enforced in apply_patch
     guardrails: GuardrailsConfig = field(default_factory=GuardrailsConfig)
@@ -111,8 +116,6 @@ class AgentConfig:
     # starting a fresh conversation each time. Default False preserves the
     # current behaviour (gates run post-hoc via apply_callback).
     deep_loop: bool = False
-    # Phase 44: multi-model healing cascade
-    cascade: tuple[CascadeTierConfig, ...] | None = None
     # Extra context appended to LLM system prompt for this blueprint only (after engine-level prompt_context)
     prompt_context: str | None = None
     # Spend-cap: max LLM healing attempts per rolling 60-minute window for this blueprint.
@@ -156,10 +159,7 @@ class AgentConfig:
         """
         return {
             "approval_mode": self.approval_mode,
-            "model": self.model,
             "max_patches": self.max_patches,
-            "provider": self.provider,
-            "base_url": self.base_url,
             "prompt_context": self.prompt_context,
             "sandbox_mode": self.sandbox_mode,
             "allow_defer": self.allow_defer,

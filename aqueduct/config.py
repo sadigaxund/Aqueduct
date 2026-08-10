@@ -4,10 +4,18 @@ aqueduct.yml is separate from Blueprint YAML files.  It configures the engine
 itself: deployment target, store backends, probe limits, secrets provider, and
 webhook endpoints.  It is NOT the blueprint definition.
 
-LLM agent connection config (provider, base_url, model, provider_options) lives
-here as engine-level defaults.  Per-blueprint policy (approval,
-on_pending_patches, max_patches) lives in the Blueprint agent: block.
-Blueprint connection values override engine defaults on conflict.
+LLM agent CONNECTION config (provider, base_url, api_key, model,
+provider_options, timeout, cascade) lives here ONLY — a Blueprint's agent:
+block cannot set or override any of these (AgentSchema in
+aqueduct/parser/schema.py has no such fields; extra="forbid" rejects one
+named). Per-blueprint POLICY (approval, on_pending_patches, max_patches,
+guardrails, ...) lives in the Blueprint agent: block; a shared subset of
+policy fields (max_reprompts, mode, max_tool_calls, supports_tools,
+progressive, max_chain, prompt_context, max_heal_attempts_per_hour,
+patch_validation, block_on_explain_regression, regression_artifact) is
+ALSO settable here as the engine-wide default, and the Blueprint's own
+value, when set, wins — see aqueduct.cli.resolve_agent_connection. See
+AgentConnectionConfig's docstring below for the full rationale.
 
 Default behaviour (no file present):
   load_config() returns AqueductConfig with all defaults — equivalent to a
@@ -33,7 +41,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from aqueduct.agent.constants import DEFAULT_LLM_MODEL
 from aqueduct.errors import ConfigError
 from aqueduct.parser.fs_path import FsPath, field_is_fs_path
-from aqueduct.parser.schema import CascadeTierSchema
+from aqueduct.parser.schema import AgentPolicySchema, CascadeTierSchema
 
 DEFAULT_OBS_DB_FILENAME: str = "observability.db"
 
@@ -737,12 +745,35 @@ class AgentMemoryConfig(BaseModel):
     )
 
 
-class AgentConnectionConfig(BaseModel):
-    """Engine-level LLM connection defaults.
+class AgentConnectionConfig(AgentPolicySchema):
+    """Engine-level LLM agent config — the ONLY place CONNECTION fields
+    (``provider``/``base_url``/``api_key``/``model``/``provider_options``/
+    ``timeout``/``cascade``) are legal. A Blueprint's ``agent:`` block
+    (``AgentSchema``, ``aqueduct/parser/schema.py``) cannot set or override
+    any of them — see that class's docstring for why (a Blueprint that could
+    choose its own LLM endpoint could redirect the healing loop's
+    ``FailureContext``, which carries pruned manifest/provenance/error text
+    and, in agentic mode, sampled data rows, to an arbitrary host on any
+    failure).
 
-    Sets provider, endpoint, and model used by all blueprints unless overridden
-    in the Blueprint agent: block.  Policy fields (approval,
-    on_pending_patches, max_patches) belong in the Blueprint, not here.
+    Extends ``AgentPolicySchema`` for the POLICY fields it shares by name
+    with the Blueprint (``max_reprompts``, ``mode``, ``max_tool_calls``,
+    ``supports_tools``, ``progressive``, ``max_chain``, ``prompt_context``,
+    ``max_heal_attempts_per_hour``, ``patch_validation``,
+    ``block_on_explain_regression``, ``regression_artifact``) — each
+    overridden below with this level's concrete engine-wide default (the
+    base class's default is ``None``, meaning "inherit", which has no
+    meaning at the level that IS the thing being inherited from). A
+    Blueprint's own value for one of these, when set, still wins — see
+    ``aqueduct.cli.resolve_agent_connection``.
+
+    Policy fields with NO engine-level equivalent (``approval``,
+    ``on_pending_patches``, ``max_patches``, ``guardrails``,
+    ``confidence_threshold``, ``on_heal_failure``, ``allow_defer``,
+    ``deep_loop``, ``sandbox_mode``) are Blueprint-only by design — they are
+    risk decisions about ONE pipeline, and there is no coherent "engine-wide
+    default approval mode" for a fleet of otherwise-unrelated Blueprints; a
+    field here with nothing to resolve it would be a silent no-op (AGENTS.md).
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -765,11 +796,14 @@ class AgentConnectionConfig(BaseModel):
     cascade: list[CascadeTierSchema] | None = Field(
         default=None,
         description=(
-            "Engine-wide default multi-model healing cascade. Each tier is tried "
-            "in order; cheaper models first, escalate on stuck/exhausted/deferred. "
-            "A blueprint's own agent.cascade (or model: [list] shorthand) fully "
-            "overrides this default. The engine cascade does NOT support the "
-            "model: [list] shorthand — use an explicit list of tiers."
+            "Multi-model healing cascade. Each tier is tried in order; "
+            "cheaper models first, escalate on stuck/exhausted/deferred. "
+            "CONNECTION field — engine-level ONLY (2.59): a Blueprint cannot "
+            "declare its own cascade or override this one (AgentSchema has "
+            "no cascade field). The former `model: [list]` shorthand was "
+            "Blueprint-only and was removed along with the Blueprint's "
+            "`model`/`cascade` fields — always write an explicit list of "
+            "tiers here."
         ),
         json_schema_extra={"engine_scoped": False},
     )

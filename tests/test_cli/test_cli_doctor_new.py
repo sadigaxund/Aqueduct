@@ -662,65 +662,59 @@ def test_doctor_package_split_public_names_resolve():
 
 
 # ── 38. Phase 46 — check_cascade_tiers ──────────────────────────────────────
+# `agent.cascade:` has been aqueduct.yml-only (CONNECTION config) since 2.59 —
+# a Blueprint cannot declare its own cascade (AgentSchema has no `cascade`
+# field). `check_cascade_tiers` now takes the resolved tier list directly
+# (`cfg.agent.cascade`, a `list[CascadeTierSchema] | None`) instead of
+# parsing a Blueprint for one.
 
 class TestCheckCascadeTiers:
-    def _blueprint(self, tmp_path, agent_block: str) -> Path:
-        bp = tmp_path / "blueprint.yml"
-        bp.write_text(
-            "aqueduct: '1.0'\nid: test\nname: Test\n"
-            + agent_block
-            + "modules:\n  - id: m\n    type: Channel\n    label: M\n"
-            + "edges: []\n"
-        )
-        return bp
+    def _tiers(self, *tier_dicts: dict) -> list:
+        from aqueduct.parser.schema import CascadeTierSchema
+        return [CascadeTierSchema.model_validate(t) for t in tier_dicts]
 
-    def test_no_cascade_block_returns_empty(self, tmp_path):
-        bp = self._blueprint(tmp_path, "")
-        results = check_cascade_tiers(bp)
+    def test_no_tiers_returns_empty(self):
+        results = check_cascade_tiers(None)
         assert results == []
+        assert check_cascade_tiers([]) == []
 
-    def test_unparseable_blueprint_returns_empty(self, tmp_path):
-        bp = tmp_path / "bad.yml"
-        bp.write_text("not: valid: yaml: [")
-        results = check_cascade_tiers(bp)
-        assert results == []
-
-    def test_anthropic_tier_missing_key_warns(self, tmp_path):
-        bp = self._blueprint(tmp_path, "agent:\n  cascade:\n    - model: claude\n")
+    def test_anthropic_tier_missing_key_warns(self):
+        tiers = self._tiers({"model": "claude"})
         with patch.dict(os.environ, {}, clear=True):
-            results = check_cascade_tiers(bp)
+            results = check_cascade_tiers(tiers)
         assert any("ANTHROPIC_API_KEY" in r.detail for r in results)
         assert all(r.status == "warn" for r in results if "ANTHROPIC_API_KEY" in r.detail)
 
-    def test_anthropic_tier_with_key_ok(self, tmp_path):
-        bp = self._blueprint(tmp_path, "agent:\n  cascade:\n    - model: claude\n")
+    def test_anthropic_tier_with_key_ok(self):
+        tiers = self._tiers({"model": "claude"})
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"}):
-            results = check_cascade_tiers(bp)
+            results = check_cascade_tiers(tiers)
         assert any(r.status == "ok" for r in results)
 
-    def test_openai_compat_tier_no_base_url_warns(self, tmp_path):
-        bp = self._blueprint(tmp_path,
-            "agent:\n  cascade:\n    - model: gpt4\n      provider: openai_compat\n")
-        results = check_cascade_tiers(bp)
+    def test_openai_compat_tier_no_base_url_warns(self):
+        tiers = self._tiers({"model": "gpt4", "provider": "openai_compat"})
+        results = check_cascade_tiers(tiers)
         assert any("base_url" in r.detail for r in results)
         assert all(r.status == "warn" for r in results if "base_url" in r.detail)
 
-    def test_openai_compat_tier_with_tier_base_url_ok(self, tmp_path):
-        bp = self._blueprint(tmp_path,
-            "agent:\n  cascade:\n    - model: gpt4\n      provider: openai_compat\n"
-            "      base_url: https://tier.test/v1\n")
-        results = check_cascade_tiers(bp)
+    def test_openai_compat_tier_with_tier_base_url_ok(self):
+        tiers = self._tiers({
+            "model": "gpt4", "provider": "openai_compat",
+            "base_url": "https://tier.test/v1",
+        })
+        results = check_cascade_tiers(tiers)
         assert any(r.status == "ok" for r in results)
 
-    def test_openai_compat_tier_with_engine_base_url_ok(self, tmp_path):
-        bp = self._blueprint(tmp_path,
-            "agent:\n  cascade:\n    - model: gpt4\n      provider: openai_compat\n")
-        results = check_cascade_tiers(bp, engine_provider="openai_compat", engine_base_url="https://engine.test/v1")
+    def test_openai_compat_tier_with_engine_base_url_ok(self):
+        tiers = self._tiers({"model": "gpt4", "provider": "openai_compat"})
+        results = check_cascade_tiers(
+            tiers, engine_provider="openai_compat", engine_base_url="https://engine.test/v1"
+        )
         assert any(r.status == "ok" for r in results)
 
-    def test_unknown_provider_warns(self, tmp_path):
-        bp = self._blueprint(tmp_path, "agent:\n  cascade:\n    - model: claude\n")
-        results = check_cascade_tiers(bp, engine_provider="custom")
+    def test_unknown_provider_warns(self):
+        tiers = self._tiers({"model": "claude"})
+        results = check_cascade_tiers(tiers, engine_provider="custom")
         assert any("unknown provider" in r.detail for r in results)
         assert all(r.status == "warn" for r in results if "unknown provider" in r.detail)
 
@@ -939,41 +933,39 @@ class TestJdbcPreflight:
 from aqueduct.doctor import check_cascade_tiers as _check_cascade
 
 
-def _fake_bp_with_tier(provider, model, base_url=None):
-    tier = SimpleNamespace(provider=provider, model=model, base_url=base_url)
-    return SimpleNamespace(agent=SimpleNamespace(cascade=[tier]))
+def _tier_with(provider, model, base_url=None):
+    # `agent.cascade` has been aqueduct.yml-only (CONNECTION config) since
+    # 2.59 — check_cascade_tiers takes the resolved tier list directly
+    # (cfg.agent.cascade) rather than parsing a Blueprint for one.
+    return SimpleNamespace(provider=provider, model=model, base_url=base_url)
 
 
 class TestCascadeTierPing:
-    def test_default_only_checks_base_url_present(self, monkeypatch):
-        import aqueduct.parser.parser as P
-        monkeypatch.setattr(P, "parse", lambda _p: _fake_bp_with_tier("openai_compat", "deepseek", "http://h/v1"))
-        res = _check_cascade(Path("bp.yml"), preflight=False)
+    def test_default_only_checks_base_url_present(self):
+        tiers = [_tier_with("openai_compat", "deepseek", "http://h/v1")]
+        res = _check_cascade(tiers, preflight=False)
         assert res[0].status == "ok" and "base_url=http://h/v1" in res[0].detail
         assert "models" not in res[0].detail  # no ping without preflight
 
     def test_preflight_pings_and_confirms_model(self, monkeypatch):
-        import aqueduct.parser.parser as P
-        monkeypatch.setattr(P, "parse", lambda _p: _fake_bp_with_tier("openai_compat", "deepseek", "http://h/v1"))
+        tiers = [_tier_with("openai_compat", "deepseek", "http://h/v1")]
         monkeypatch.setattr("aqueduct.doctor.checks_io._probe_openai_models",
                             lambda *a, **k: (["deepseek", "other"], None))
-        res = _check_cascade(Path("bp.yml"), preflight=True)
+        res = _check_cascade(tiers, preflight=True)
         assert res[0].status == "ok" and "2 models" in res[0].detail and "[preflight]" in res[0].detail
 
     def test_preflight_model_not_loaded_warns(self, monkeypatch):
-        import aqueduct.parser.parser as P
-        monkeypatch.setattr(P, "parse", lambda _p: _fake_bp_with_tier("openai_compat", "missing", "http://h/v1"))
+        tiers = [_tier_with("openai_compat", "missing", "http://h/v1")]
         monkeypatch.setattr("aqueduct.doctor.checks_io._probe_openai_models",
                             lambda *a, **k: (["only-this"], None))
-        res = _check_cascade(Path("bp.yml"), preflight=True)
+        res = _check_cascade(tiers, preflight=True)
         assert res[0].status == "warn" and "not in 1 loaded models" in res[0].detail
 
     def test_preflight_unreachable_warns(self, monkeypatch):
-        import aqueduct.parser.parser as P
-        monkeypatch.setattr(P, "parse", lambda _p: _fake_bp_with_tier("openai_compat", "x", "http://dead/v1"))
+        tiers = [_tier_with("openai_compat", "x", "http://dead/v1")]
         monkeypatch.setattr("aqueduct.doctor.checks_io._probe_openai_models",
                             lambda *a, **k: ([], "Connection refused"))
-        res = _check_cascade(Path("bp.yml"), preflight=True)
+        res = _check_cascade(tiers, preflight=True)
         assert res[0].status == "warn" and "unreachable" in res[0].detail
 
 

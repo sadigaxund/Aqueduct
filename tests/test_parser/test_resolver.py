@@ -228,8 +228,16 @@ class TestContextResolution:
         today = datetime.date.today().strftime("%Y-%m-%d")
         assert m1.config["options"]["tier1_check"] == today
 
-    def test_agent_config_ctx_resolves(self, tmp_path):
-        """Verify context references resolve in agent configurations."""
+    def test_agent_connection_fields_rejected_even_when_ctx_resolvable(self, tmp_path):
+        """2.59 — `model`/`base_url` are CONNECTION fields, removed from the
+        Blueprint `agent:` block entirely (security fix: a Blueprint cannot
+        choose its own LLM endpoint). Rejected at parse time regardless of
+        whether the value would have resolved via ${ctx.*} — the field
+        itself is illegal, not merely its value. Replaces the pre-2.59
+        test_agent_config_ctx_resolves / test_agent_base_url_env_var /
+        test_agent_model_env_var_missing, which asserted these fields
+        resolved (or raised on a missing var) — that resolution now only
+        happens at the aqueduct.yml level (`AgentConnectionConfig`)."""
         good = tmp_path / "agent_ctx.yml"
         good.write_text(
             "aqueduct: '1.0'\nid: agent_ctx\nname: AgentCtx\n"
@@ -243,40 +251,8 @@ class TestContextResolution:
             "modules:\n  - id: m\n    type: Ingress\n    label: M\n"
             "edges: []\n"
         )
-        bp = parse(good)
-        assert bp.agent is not None
-        assert bp.agent.model == "my-custom-model"
-        assert bp.agent.base_url == "http://my-endpoint:11434"
-
-    def test_agent_base_url_env_var(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("AQ_OLLAMA_URL", "http://localhost:11434")
-        good = tmp_path / "agent_base_url.yml"
-        good.write_text(
-            "aqueduct: '1.0'\nid: test\nname: Test\n"
-            "agent:\n"
-            "  approval: human\n"
-            "  base_url: '${AQ_OLLAMA_URL}/v1'\n"
-            "modules:\n  - id: m\n    type: Ingress\n    label: M\n"
-            "edges: []\n"
-        )
-        bp = parse(good)
-        assert bp.agent.base_url == "http://localhost:11434/v1"
-
-    def test_agent_model_env_var_missing(self, tmp_path, monkeypatch):
-        """Missing env var in agent.model raises ParseError at parse time
-        (consistent with module config and spark_config — ISSUE-028 resolved)."""
-        monkeypatch.delenv("MY_MODEL", raising=False)
-        bad = tmp_path / "agent_model_missing.yml"
-        bad.write_text(
-            "aqueduct: '1.0'\nid: test\nname: Test\n"
-            "agent:\n"
-            "  approval: human\n"
-            "  model: '${MY_MODEL}'\n"
-            "modules:\n  - id: m\n    type: Ingress\n    label: M\n"
-            "edges: []\n"
-        )
-        with pytest.raises(ParseError, match=r"agent config resolution failed"):
-            parse(bad)
+        with pytest.raises(ParseError, match="validation error"):
+            parse(good)
 
     def test_agent_prompt_context_ctx(self, tmp_path):
         good = tmp_path / "agent_prompt_ctx.yml"
@@ -293,24 +269,31 @@ class TestContextResolution:
         bp = parse(good)
         assert bp.agent.prompt_context == "run for analytics"
 
-    def test_agent_provider_options_nested(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("OPENAI_API_VERSION", "2024-02-15")
+    def test_agent_provider_options_rejected(self, tmp_path):
+        """2.59 — `provider_options` is a CONNECTION field, removed from the
+        Blueprint `agent:` block entirely. Replaces the pre-2.59
+        test_agent_provider_options_nested, which asserted it resolved
+        `${ENV}` templates in the Blueprint — that only happens at the
+        aqueduct.yml level (`AgentConnectionConfig`) now."""
         good = tmp_path / "agent_provider_opts.yml"
         good.write_text(
             "aqueduct: '1.0'\nid: test\nname: Test\n"
             "agent:\n"
             "  approval: human\n"
             "  provider_options:\n"
-            "    api_version: '${OPENAI_API_VERSION}'\n"
+            "    api_version: '2024-02-15'\n"
             "modules:\n  - id: m\n    type: Ingress\n    label: M\n"
             "edges: []\n"
         )
-        bp = parse(good)
-        assert bp.agent.provider_options == {"api_version": "2024-02-15"}
+        with pytest.raises(ParseError, match="validation error"):
+            parse(good)
 
     def test_agent_unset_fields_pass_through(self, tmp_path):
-        """None agent fields (model, base_url, provider_options, prompt_context)
-        pass through resolve_value unchanged — no spurious errors or coercions."""
+        """None-able POLICY agent fields pass through resolve_value
+        unchanged — no spurious errors or coercions. (2.59: model/base_url/
+        provider_options no longer exist on the Blueprint agent block at
+        all — see test_agent_connection_fields_rejected_even_when_ctx_resolvable
+        / test_agent_provider_options_rejected above.)"""
         good = tmp_path / "agent_unset.yml"
         good.write_text(
             "aqueduct: '1.0'\nid: test\nname: Test\n"
@@ -320,7 +303,6 @@ class TestContextResolution:
             "edges: []\n"
         )
         bp = parse(good)
-        assert bp.agent.model is None
-        assert bp.agent.base_url is None
-        assert bp.agent.provider_options is None
         assert bp.agent.prompt_context is None
+        assert bp.agent.max_reprompts is None
+        assert bp.agent.mode is None

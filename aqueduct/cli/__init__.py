@@ -140,11 +140,22 @@ def _check_heal_guardrails(failure_ctx: Any, guardrails: Any) -> tuple[bool, str
 
 
 def resolve_agent_connection(engine_agent, blueprint_agent=None):
-    """Merge blueprint agent connection overrides into engine defaults.
+    """Resolve effective agent CONNECTION settings + merge agent POLICY.
 
-    Each connection field uses the blueprint value when set (truthy),
-    falling back to the engine default.  Returns a simple object with
-    resolved values that can be destructured at the call site.
+    CONNECTION fields (provider/base_url/api_key/model/provider_options/
+    timeout/cascade) come from `engine_agent` (aqueduct.yml) ONLY — a
+    Blueprint cannot set or override them (`AgentSchema` in
+    `aqueduct/parser/schema.py` has no such fields; a Blueprint author who
+    could redirect these would redirect the healing loop's FailureContext —
+    pruned manifest, provenance, error text, and, in agentic mode, sampled
+    data rows — to an arbitrary host on any failure). This function used to
+    accept a blueprint override for these; that path was removed as a
+    security fix (2.59) — see AgentSchema's docstring / CHANGELOG.
+
+    POLICY fields (max_reprompts, mode, max_tool_calls, supports_tools,
+    progressive, max_chain) use the blueprint value when set, falling back
+    to the engine default. Returns a simple object with resolved values
+    that can be destructured at the call site.
 
     prompt_context is NOT OR‑merged — the engine and blueprint versions
     are kept separate so the agent loop can concatenate them.
@@ -172,21 +183,18 @@ def resolve_agent_connection(engine_agent, blueprint_agent=None):
     bp = blueprint_agent
     eng = engine_agent
     r = _Resolved()
-    r.provider = (bp.provider or eng.provider) if bp else eng.provider
-    r.base_url = (bp.base_url or eng.base_url) if bp else eng.base_url
-    r.api_key = (bp.api_key or eng.api_key) if bp else eng.api_key
-    r.model = (bp.model or eng.model) if bp else eng.model
-    r.provider_options = (
-        (bp.provider_options or eng.provider_options) if bp else eng.provider_options
-    )
-    r.timeout = (bp.timeout or eng.timeout) if bp else eng.timeout
-    r.max_reprompts = (bp.max_reprompts or eng.max_reprompts) if bp else eng.max_reprompts
-    # Cascade: blueprint wins when present; fall back to engine cascade default
+    # Connection fields — engine-only. A Blueprint cannot influence any of these.
+    r.provider = eng.provider
+    r.base_url = eng.base_url
+    r.api_key = eng.api_key
+    r.model = eng.model
+    r.provider_options = eng.provider_options
+    r.timeout = eng.timeout
     from aqueduct.parser.parser import _build_cascade
 
-    _bp_cascade = bp.cascade if bp else None
-    _eng_cascade = _build_cascade(eng.cascade) if eng.cascade else None
-    r.cascade = _bp_cascade if _bp_cascade else _eng_cascade
+    r.cascade = _build_cascade(eng.cascade) if eng.cascade else None
+    # Policy fields — blueprint overrides when set (None = inherit engine default).
+    r.max_reprompts = (bp.max_reprompts or eng.max_reprompts) if bp else eng.max_reprompts
     r.engine_prompt_context = eng.prompt_context
     r.blueprint_prompt_context = bp.prompt_context if bp else None
     # Phase 75 — same `is not None` inheritance shape as regression_artifact:

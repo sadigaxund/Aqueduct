@@ -418,9 +418,15 @@ Run the new-backend pipeline once first so the target tables exist, and mind sch
 
 ## LLM service configuration
 
-In production, LLM inference runs as a remote HTTP service.
+In production, LLM inference runs as a remote HTTP service. CONNECTION settings
+(`provider`, `base_url`, `model`, `api_key`, `timeout`, `cascade`) are configured
+in `aqueduct.yml` **only** — a Blueprint's `agent:` block cannot set or override
+any of them (2.59: this is a deliberate security boundary, not a missing
+feature — see `docs/specs.md` §8.1). A Blueprint's own `agent:` block sets
+POLICY only, e.g. `approval: human`, in a separate `agent:` block in the
+Blueprint YAML file.
 
-**OpenAI-compatible endpoint (vLLM, Azure OpenAI, together.ai, etc.):**
+**`aqueduct.yml` — OpenAI-compatible endpoint (vLLM, Azure OpenAI, together.ai, etc.):**
 
 ```yaml
 agent:
@@ -428,19 +434,24 @@ agent:
   base_url: "${LLM_BASE_URL}"
   model: "${LLM_MODEL}"
   timeout: 60
-  approval: human
 ```
 
-**Anthropic API:**
+**`aqueduct.yml` — Anthropic API:**
 
 ```yaml
 agent:
   provider: anthropic
   model: claude-opus-4-7-20251001
+```
+
+**Blueprint YAML — policy for this pipeline:**
+
+```yaml
+agent:
   approval: human
 ```
 
-Inject API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) via Kubernetes Secrets or your secrets manager. Never commit keys to Blueprint YAML or `aqueduct.yml`. As of 1.9, `agent.api_key` can be configured per blueprint or per cascade tier, always use `@aq.secret('KEY')` or `${ENV_VAR}`, never a plaintext literal (which triggers an `insecure_api_key` warning and is redacted from logs/LLM payloads). A project-wide cascade default can live in `aqueduct.yml` under `agent.cascade` (useful for fleets of blueprints sharing a heal policy); each Blueprint's own `agent.cascade` overrides it.
+Inject API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) via Kubernetes Secrets or your secrets manager. Never commit keys to `aqueduct.yml`. `agent.api_key` (`aqueduct.yml`, or per cascade tier) always uses `@aq.secret('KEY')` or `${ENV_VAR}`, never a plaintext literal (which triggers an `insecure_api_key` warning and is redacted from logs/LLM payloads). A multi-model cascade lives in `aqueduct.yml` under `agent.cascade` — engine-level only; a Blueprint cannot declare or override a cascade.
 
 ---
 

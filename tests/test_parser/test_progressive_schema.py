@@ -139,3 +139,47 @@ def test_resolve_agent_connection_inherits_progressive(tmp_path):
     r2 = resolve_agent_connection(eng, bp.agent)
     assert r2.progressive is False   # blueprint False wins over engine True
     assert r2.max_chain == 6         # blueprint None inherits engine default
+
+
+def test_resolve_agent_connection_never_reads_connection_fields_from_blueprint(tmp_path):
+    """2.59 security fix — resolve_agent_connection resolves EVERY
+    connection field from the engine config alone. `AgentConfig`
+    (`bp.agent`, the parsed Blueprint policy) has no provider/base_url/
+    api_key/model/provider_options/timeout/cascade attributes at all any
+    more, so there is nothing for a Blueprint to override even in
+    principle — this test pins that as a resolved-value assertion, not
+    just a schema-rejection one (test_agent_policy_split.py covers the
+    rejection)."""
+    from aqueduct.cli import resolve_agent_connection
+
+    eng = AgentConnectionConfig(
+        provider="anthropic",
+        base_url="https://api.anthropic.example",
+        api_key="sk-engine-key",
+        model="claude-sonnet-4-6",
+        provider_options={"temperature": 0.2},
+        timeout=90.0,
+    )
+    bp_file = tmp_path / "bp.yml"
+    bp_file.write_text(
+        "aqueduct: '1.0'\nid: test\nname: Test\n"
+        "agent:\n  approval: auto\n  max_patches: 2\n"
+        "modules:\n  - id: m\n    type: Channel\n    label: M\n"
+        "edges: []\n"
+    )
+    bp = parse(bp_file)
+    assert not hasattr(bp.agent, "provider")
+    assert not hasattr(bp.agent, "base_url")
+    assert not hasattr(bp.agent, "api_key")
+    assert not hasattr(bp.agent, "model")
+    assert not hasattr(bp.agent, "provider_options")
+    assert not hasattr(bp.agent, "timeout")
+    assert not hasattr(bp.agent, "cascade")
+
+    r = resolve_agent_connection(eng, bp.agent)
+    assert r.provider == "anthropic"
+    assert r.base_url == "https://api.anthropic.example"
+    assert r.api_key == "sk-engine-key"
+    assert r.model == "claude-sonnet-4-6"
+    assert r.provider_options == {"temperature": 0.2}
+    assert r.timeout == 90.0

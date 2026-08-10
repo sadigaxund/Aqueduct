@@ -1,12 +1,19 @@
-"""Tier-0 resolution in the Blueprint `agent:` block (1.0.1 fix).
+"""Tier-0 resolution in the Blueprint `agent:` block (1.0.1 fix), and
+CONNECTION-field rejection (2.59 security fix).
 
 Covers ⏳ items in TEST_MANIFEST.md § Parser — Tier-0 resolution in agent block:
 
-  - agent.base_url with ${ENV_VAR} resolves
-  - agent.model with ${ENV_VAR} resolves; missing var raises ParseError
   - agent.prompt_context with ${ctx.*} resolves from blueprint context
-  - agent.provider_options dict with nested ${ENV} resolves
   - None / unset agent fields pass through without errors
+
+2.59 — `base_url`, `model`, `provider_options`, `api_key`, `timeout`,
+`cascade` are CONNECTION fields, removed from the Blueprint `agent:` block
+entirely (a security fix — see `AgentSchema`'s docstring in
+`aqueduct/parser/schema.py`). They are no longer Tier-0-resolved here at
+all; a Blueprint that sets one is REJECTED at parse time, with pydantic
+naming the offending key. Tier-0 (`${ENV}`/`${ctx.*}`) resolution for these
+fields now only happens for `aqueduct.yml`'s `agent:` block
+(`AgentConnectionConfig`), covered in `tests/test_parser/test_config.py`.
 """
 from __future__ import annotations
 
@@ -39,42 +46,40 @@ def _write_bp(tmp_path, agent_block: str, context_block: str = "") -> str:
     return str(bp)
 
 
-class TestAgentBlockEnvVarResolution:
-    def test_base_url_env_var_resolves(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("AQ_OLLAMA_URL", "http://ollama.internal:11434")
-        bp = _write_bp(
-            tmp_path,
-            agent_block='  provider: openai_compat\n  base_url: "${AQ_OLLAMA_URL}/v1"\n  model: m\n',
-        )
-        result = parse(bp)
-        assert result.agent.base_url == "http://ollama.internal:11434/v1"
+class TestAgentBlockConnectionFieldsRejected:
+    """2.59 — every CONNECTION field is a named pydantic rejection at
+    Blueprint parse time, never a silent inherit. Replaces the pre-2.59
+    TestAgentBlockEnvVarResolution class, which asserted these fields
+    resolved `${ENV}` templates in the Blueprint — that resolution now only
+    happens at the aqueduct.yml level (`AgentConnectionConfig`)."""
 
-    def test_model_env_var_resolves(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("MY_MODEL", "qwen2.5-coder:7b")
-        bp = _write_bp(
-            tmp_path,
-            agent_block='  model: "${MY_MODEL}"\n',
-        )
-        result = parse(bp)
-        assert result.agent.model == "qwen2.5-coder:7b"
+    @pytest.mark.parametrize(
+        "agent_block",
+        [
+            '  base_url: "http://ollama.internal:11434/v1"\n',
+            '  model: "qwen2.5-coder:7b"\n',
+            "  provider: openai_compat\n",
+            '  api_key: "sk-literal"\n',
+            "  timeout: 120.0\n",
+            "  provider_options:\n    api_version: '2024-02-01'\n",
+            "  cascade:\n    - model: claude\n",
+        ],
+    )
+    def test_connection_field_rejected(self, tmp_path, agent_block):
+        bp = _write_bp(tmp_path, agent_block=agent_block)
+        with pytest.raises(ParseError, match="1 validation error"):
+            parse(bp)
 
-    def test_missing_env_var_raises_parse_error(self, tmp_path, monkeypatch):
+    def test_missing_env_var_in_policy_field_still_raises_parse_error(self, tmp_path, monkeypatch):
+        # prompt_context (a POLICY field) is still Tier-0 resolved, so a
+        # missing ${ENV} reference there is still a real parse-time failure.
         monkeypatch.delenv("DEFINITELY_NOT_SET_VAR", raising=False)
         bp = _write_bp(
             tmp_path,
-            agent_block='  model: "${DEFINITELY_NOT_SET_VAR}"\n',
+            agent_block='  prompt_context: "${DEFINITELY_NOT_SET_VAR}"\n',
         )
         with pytest.raises(ParseError, match="agent config resolution failed"):
             parse(bp)
-
-    def test_env_var_with_default_resolves_when_unset(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("UNSET_WITH_DEFAULT", raising=False)
-        bp = _write_bp(
-            tmp_path,
-            agent_block='  model: "${UNSET_WITH_DEFAULT:-default-model}"\n',
-        )
-        result = parse(bp)
-        assert result.agent.model == "default-model"
 
 
 class TestAgentBlockCtxResolution:
@@ -86,20 +91,6 @@ class TestAgentBlockCtxResolution:
         )
         result = parse(bp)
         assert result.agent.prompt_context == "Pipeline runs in data-eng"
-
-    def test_provider_options_nested_env_resolves(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("OPENAI_API_VERSION", "2024-02-01")
-        bp = _write_bp(
-            tmp_path,
-            agent_block=(
-                "  provider: openai_compat\n"
-                "  model: m\n"
-                "  provider_options:\n"
-                '    api_version: "${OPENAI_API_VERSION}"\n'
-            ),
-        )
-        result = parse(bp)
-        assert result.agent.provider_options["api_version"] == "2024-02-01"
 
 
 class TestAgentBlockPassThrough:
@@ -119,18 +110,17 @@ class TestAgentBlockPassThrough:
             encoding="utf-8",
         )
         result = parse(str(bp))
-        # Default agent config has provider=anthropic but no model/base_url; passes parse.
+        # Default agent config has no connection fields at all (Blueprint-level).
         assert result.agent is not None
 
-    def test_literal_strings_passthrough_unchanged(self, tmp_path):
+    def test_policy_fields_passthrough_unchanged(self, tmp_path):
         bp = _write_bp(
             tmp_path,
             agent_block=(
-                "  provider: openai_compat\n"
-                "  model: literal-model-name\n"
-                "  base_url: https://api.example.com/v1\n"
+                "  approval: human\n"
+                "  sandbox_mode: preflight\n"
             ),
         )
         result = parse(bp)
-        assert result.agent.model == "literal-model-name"
-        assert result.agent.base_url == "https://api.example.com/v1"
+        assert result.agent.approval_mode == "human"
+        assert result.agent.sandbox_mode == "preflight"

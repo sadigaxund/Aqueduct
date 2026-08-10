@@ -131,37 +131,82 @@ class CascadeTierSchema(BaseModel):
     supports_tools: Literal["auto", True, False] | None = None
 
 
-class AgentSchema(BaseModel):
+class AgentPolicySchema(BaseModel):
+    """Self-healing POLICY fields shared, by NAME, between the Blueprint's
+    ``agent:`` block (``AgentSchema`` below) and the engine-level
+    ``aqueduct.yml`` ``agent:`` block (``AgentConnectionConfig`` in
+    ``aqueduct/config.py``, which extends this class).
+
+    A field belongs here when it is a RISK DECISION about how aggressively /
+    how far to trust a healing attempt (retry budget, patch-validation
+    rigor, tool-use limits, chain length) — never an ENDPOINT FACT (which
+    provider/URL/credential/model to call). Endpoint facts live only on
+    ``AgentConnectionConfig``'s own fields; see that class's docstring and
+    ``AgentSchema``'s docstring for the split rationale.
+
+    Every field defaults to ``None`` here — the Blueprint-appropriate
+    "unset = inherit the engine-level default" shape. A concrete engine-wide
+    default belongs on ``AgentConnectionConfig``, which overrides each field
+    it needs a non-``None`` default for. Declaring a policy field ONCE here
+    guarantees it is at least NAMEABLE on both ``AgentSchema`` and
+    ``AgentConnectionConfig`` (`tests/test_parser/test_agent_policy_split.py`
+    asserts this structurally: this class's field set must be a subset of
+    both), so a future policy field can't be added to only one side by
+    oversight — pydantic subclassing lets each side override the type/
+    default it actually needs while keeping the field NAME in lock-step.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_reprompts: int | None = Field(default=None, ge=1)
+    prompt_context: str | None = None
+    max_heal_attempts_per_hour: int | None = Field(default=None, ge=1)
+    patch_validation: Literal["full_run", "sandbox"] | None = None
+    block_on_explain_regression: bool | None = None
+    regression_artifact: bool | None = None
+    mode: Literal["oneshot", "agentic"] | None = None
+    max_tool_calls: int | None = Field(default=None, ge=1)
+    supports_tools: Literal["auto", True, False] | None = None
+    progressive: bool | None = None
+    max_chain: int | None = Field(default=None, ge=1)
+
+
+class AgentSchema(AgentPolicySchema):
+    """Blueprint-level self-healing POLICY block — risk decisions about THIS
+    pipeline (approval mode, guardrails, budget/reprompt limits, sandbox
+    mode, confidence threshold, ...).
+
+    CONNECTION fields — ``provider``, ``base_url``, ``api_key``, ``model``,
+    ``provider_options``, ``timeout``, ``cascade`` — are deliberately NOT
+    legal here. They describe WHICH LLM ENDPOINT to call, an
+    operator/deployment fact, not a per-pipeline risk decision, and live
+    exclusively on ``AgentConnectionConfig`` (``aqueduct/config.py``,
+    ``aqueduct.yml``'s ``agent:`` block). This is the same split already
+    applied to ``engine:``: ``SparkEngineBlockSchema`` omits ``master_url``
+    and ``DuckDBEngineBlockSchema`` omits ``database_path``/``s3_*`` for the
+    identical reason (see their docstrings) — a Blueprint does not get to
+    decide deployment/connection concerns. Here the stakes are sharper: the
+    healing loop ships ``FailureContext`` (pruned manifest, provenance,
+    error text, and — in agentic mode — sampled data rows) to whatever
+    endpoint is configured, so a Blueprint that could choose its own
+    ``base_url`` could redirect production data to an arbitrary host on any
+    failure. ``extra="forbid"`` (inherited from ``AgentPolicySchema``) makes
+    a connection field written into a Blueprint's ``agent:`` block a named
+    pydantic rejection — never a silent inherit-and-ignore.
+
+    Adds no CONNECTION fields — every legal key is declared on
+    ``AgentPolicySchema`` above or directly below (the fields with no
+    engine-level equivalent: ``approval``, ``on_pending_patches``,
+    ``max_patches``, ``guardrails``, ``confidence_threshold``,
+    ``on_heal_failure``, ``allow_defer``, ``deep_loop``, ``sandbox_mode``).
+    Kept as its own (non-empty) class, rather than an alias for
+    ``AgentPolicySchema``, so the name stays stable for patch paths and
+    tests that already reference ``aqueduct.parser.schema.AgentSchema``.
+    """
+
     # No populate_by_name: the `approval_mode` attr is settable from YAML ONLY via
     # its `approval` alias — the former `approval_mode` YAML key is rejected (2.0).
     model_config = ConfigDict(extra="forbid")
-
-    api_key: str | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def _model_list_sugar(cls, data: Any) -> Any:
-        """Phase 46 — ``agent.model: [cheap, expensive]`` is cascade shorthand.
-
-        A list of model names expands to ``cascade:`` tiers with all-default
-        tier settings (provider/base_url/budget inherit normally). Mutually
-        exclusive with an explicit ``cascade:`` block. A single-item list
-        collapses to a plain ``model:`` string (no cascade overhead).
-        """
-        if isinstance(data, dict) and isinstance(data.get("model"), list):
-            models = data["model"]
-            if not models or not all(isinstance(m, str) and m.strip() for m in models):
-                raise ValueError("agent.model list must contain non-empty model name strings")
-            if data.get("cascade"):
-                raise ValueError(
-                    "agent.model as a list and agent.cascade are mutually exclusive — "
-                    "use the list shorthand OR the explicit cascade block, not both"
-                )
-            data = dict(data)
-            data["model"] = models[0]
-            if len(models) > 1:
-                data["cascade"] = [{"model": m} for m in models]
-        return data
 
     # `approval` is the YAML key; the Python attribute name stays `approval_mode`
     # (internal — keyed in via the alias).
@@ -174,13 +219,6 @@ class AgentSchema(BaseModel):
     # multi-patch reprompt loop; that path also requires
     # `danger.allow_multi_patch: true`.
     max_patches: int = Field(default=1, ge=1)
-    # Connection fields — None means "inherit from aqueduct.yml agent: defaults"
-    provider: Literal["anthropic", "openai_compat"] | None = None
-    base_url: str | None = None
-    model: str | None = None
-    provider_options: dict[str, Any] | None = None
-    timeout: float | None = Field(default=None, gt=0)
-    max_reprompts: int | None = Field(default=None, ge=1)
     # Guardrail policy — deterministically enforced in apply_patch
     guardrails: GuardrailsSchema = Field(default_factory=GuardrailsSchema)
     # Minimum LLM confidence to auto-apply patch (below threshold → escalate to human)
@@ -195,24 +233,6 @@ class AgentSchema(BaseModel):
     # so the model sees rejection feedback and retries in-context. Default False
     # preserves the current behaviour (gates run post-hoc via apply_callback).
     deep_loop: bool = Field(default=False)
-    # Phase 44: multi-model healing cascade — each tier tries a different model,
-    # escalating on stuck_signature / exhausted_attempts / deferred.
-    cascade: list[CascadeTierSchema] | None = None
-    # Extra context appended to LLM system prompt for this blueprint (after engine-level prompt_context)
-    prompt_context: str | None = None
-    # Spend-cap: max successful LLM healing attempts per rolling 60-minute window for this blueprint.
-    # None (default) = unlimited. When exceeded, Surveyor records skip outcome and run ends.
-    max_heal_attempts_per_hour: int | None = Field(default=None, ge=1)
-    # Patch validation pyramid: default `full_run` keeps existing
-    # behaviour: a generated patch is sandbox-checked AND then validated by a
-    # full Spark run before the Blueprint is written to disk. `sandbox` skips
-    # the full-run step — fastest, lowest confidence, lets multi-patch mode
-    # (`auto` + `max_patches > 1`) close patch loops in seconds rather than minutes.
-    patch_validation: Literal["full_run", "sandbox"] | None = None
-    # When True (`auto` multi-patch mode only), the explain gate (post-patch
-    # `explain()` regression check) is treated as blocking. Default None
-    # inherits engine `agent.block_on_explain_regression` (= False).
-    block_on_explain_regression: bool | None = None
     # 1.1.0 — sandbox replay fidelity vs speed trade-off.
     #   sample    : default. Replay every generated patch on the first
     #               1000 rows of each Ingress (no Egress writes). Fast, low
@@ -223,31 +243,6 @@ class AgentSchema(BaseModel):
     #               check → apply → next execute() on real data. Most
     #               dangerous; requires danger.allow_skip_sandbox: true.
     sandbox_mode: Literal["sample", "preflight", "off"] = "sample"
-    # Opt-in post-heal regression artifact: on a SUCCESSFUL heal, optionally
-    # emit an `.aqtest.yml` for the patched module under `aqtests/` next to
-    # the Blueprint. None (default) inherits the engine `agent.regression_artifact`
-    # (= False). See aqueduct.yml.template for the full rationale.
-    regression_artifact: bool | None = None
-    # Phase 75 — oneshot (default) is today's single-turn prompt→PatchSpec
-    # loop unchanged. agentic lets the model call read-only diagnostic tools
-    # (aqueduct/agent/toolbox.py) before answering with a PatchSpec. None
-    # (default) inherits the engine `agent.mode` (= "oneshot").
-    mode: Literal["oneshot", "agentic"] | None = None
-    # Hard cap on tool calls per heal attempt in agentic mode. Exceeding it
-    # forces a final no-tools turn so the model must answer with a PatchSpec.
-    # None inherits the engine `agent.max_tool_calls` (default 8).
-    max_tool_calls: int | None = Field(default=None, ge=1)
-    # Per-blueprint tool-use capability override — see CascadeTierSchema
-    # above for the same field's per-tier meaning. None inherits the engine
-    # `agent.supports_tools` (default "auto").
-    supports_tools: Literal["auto", True, False] | None = None
-    # Progressive (chained) multi-patch healing — opt-in, separate from
-    # `max_patches`. None (default) inherits the engine `agent.progressive`
-    # (= False). See docs/specs.md §8.13.
-    progressive: bool | None = None
-    # Hard cap on links in a progressive chain. None (default) inherits the
-    # engine `agent.max_chain` (= 3).
-    max_chain: int | None = Field(default=None, ge=1)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

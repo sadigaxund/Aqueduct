@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 import pytest
+from pydantic import ValidationError
 from aqueduct.parser.parser import ParseError, parse
 
 pytestmark = pytest.mark.unit
@@ -358,60 +359,31 @@ edges:
 
 # ── Phase 46 — agent.model: list[str] sugar ──────────────────────────────────
 
-class TestAgentModelListSugar:
-    def test_list_two_models_synthesises_cascade(self):
-        from aqueduct.parser.schema import AgentSchema
-        s = AgentSchema.model_validate({"model": ["claude", "gpt4"], "approval": "auto"})
-        assert s.model == "claude"
-        assert s.cascade is not None
-        assert len(s.cascade) == 2
-        assert s.cascade[0].model == "claude"
-        assert s.cascade[1].model == "gpt4"
+class TestAgentModelListSugarRemoved:
+    """2.59 — the `agent.model: [list]` cascade shorthand (and `model`/
+    `cascade` generally) was Blueprint-only and was removed along with every
+    other CONNECTION field when the Blueprint `agent:` block became
+    policy-only (a security fix — see AgentSchema's docstring). `model`
+    still works as engine-level `agent.model: [list]` shorthand... no, it
+    doesn't: the engine cascade never supported the shorthand either (see
+    AgentConnectionConfig.cascade's docstring in aqueduct/config.py) — the
+    feature is gone entirely, not relocated. These tests assert the
+    rejection, replacing the old TestAgentModelListSugar class."""
 
-    def test_single_item_list_collapses_to_plain_string(self):
+    def test_model_list_rejected(self):
         from aqueduct.parser.schema import AgentSchema
-        s = AgentSchema.model_validate({"model": ["claude"], "approval": "auto"})
-        assert s.model == "claude"
-        assert s.cascade is None
+        with pytest.raises(ValidationError):
+            AgentSchema.model_validate({"model": ["claude", "gpt4"], "approval": "auto"})
 
-    def test_empty_list_raises_validation_error(self):
+    def test_plain_string_model_rejected(self):
         from aqueduct.parser.schema import AgentSchema
-        with pytest.raises(ValueError, match=r"non-empty model name strings"):
-            AgentSchema.model_validate({"model": [], "approval": "auto"})
+        with pytest.raises(ValidationError):
+            AgentSchema.model_validate({"model": "claude", "approval": "auto"})
 
-    def test_list_with_non_string_item_raises_error(self):
+    def test_cascade_block_rejected(self):
         from aqueduct.parser.schema import AgentSchema
-        with pytest.raises(ValueError, match=r"non-empty model name strings"):
-            AgentSchema.model_validate({"model": ["claude", 42], "approval": "auto"})
-
-    def test_list_with_empty_string_raises_error(self):
-        from aqueduct.parser.schema import AgentSchema
-        with pytest.raises(ValueError, match=r"non-empty model name strings"):
-            AgentSchema.model_validate({"model": [""], "approval": "auto"})
-
-    def test_list_and_explicit_cascade_mutually_exclusive(self):
-        from aqueduct.parser.schema import AgentSchema
-        with pytest.raises(ValueError, match=r"mutually exclusive"):
+        with pytest.raises(ValidationError):
             AgentSchema.model_validate({
-                "model": ["claude", "gpt4"],
                 "cascade": [{"model": "claude"}],
                 "approval": "auto",
             })
-
-    def test_plain_string_model_no_list_preserved(self):
-        from aqueduct.parser.schema import AgentSchema
-        s = AgentSchema.model_validate({"model": "claude", "approval": "auto"})
-        assert s.model == "claude"
-        assert s.cascade is None
-
-    def test_list_three_models_all_in_cascade(self):
-        from aqueduct.parser.schema import AgentSchema
-        s = AgentSchema.model_validate({
-            "model": ["claude", "gpt4", "gemini"],
-            "approval": "auto",
-        })
-        assert s.model == "claude"
-        assert len(s.cascade) == 3
-        assert s.cascade[0].model == "claude"
-        assert s.cascade[1].model == "gpt4"
-        assert s.cascade[2].model == "gemini"

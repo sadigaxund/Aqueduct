@@ -206,7 +206,16 @@ engine:
 
 # ── LLM self-healing policy ───────────────────────────────────────────────────
 #
-# Per-blueprint. Connection defaults (provider, model) come from aqueduct.yml.
+# Per-blueprint POLICY only — risk decisions about THIS pipeline (approval
+# mode, guardrails, budget/reprompt limits, sandbox mode, ...).
+#
+# CONNECTION settings (provider, base_url, api_key, model, provider_options,
+# timeout, cascade) are NOT legal here — they are an operator/deployment
+# concern that lives exclusively in aqueduct.yml's agent: block. A Blueprint
+# that could choose its own LLM endpoint could redirect the healing loop's
+# FailureContext (pruned manifest, provenance, error text, and — in agentic
+# mode — sampled data rows) to an arbitrary host on any failure, so these
+# fields are a hard schema rejection here, not merely unused.
 
 agent:
   # approval controls what happens when the blueprint fails:
@@ -240,25 +249,11 @@ agent:
   # Default false — gates run post-hoc outside the conversation.
   # deep_loop: true
 
-  # cascade: multi-model healing cascade. Each tier tries a
-  # different model; escalates on stuck_signature / exhausted_attempts /
-  # deferred. Cheaper model first, expensive model as fallback.
-  # agent.budget.max_tokens_total spans the WHOLE cascade.
-  # cascade:
-  #   - model: qwen2.5-coder:7b
-  #     max_reprompts: 2
-  #     max_seconds: 30
-  #   - model: claude-sonnet-4-6
-  #     max_reprompts: 3
-  #     max_seconds: 120
-  #     deep_loop: true
-  #     allow_defer: true
-  #     api_key: "@aq.secret('ANTHROPIC_API_KEY')"  # per-tier key override
-  #     supports_tools: true  # per-tier override; None inherits agent.supports_tools
-  #
-  # Shorthand: a model LIST expands to a default-settings cascade.
-  # Mutually exclusive with an explicit cascade: block.
-  # model: [qwen2.5-coder:7b, claude-sonnet-4-6]
+  # Multi-model healing cascade (a list of tiers, cheaper model first,
+  # escalating to a stronger fallback on stuck_signature / exhausted_attempts
+  # / deferred) is a CONNECTION concern — each tier carries its own model /
+  # provider / base_url / api_key. Configure it in aqueduct.yml's agent:
+  # block (agent.cascade), not here. See aqueduct.yml.template.
 
   # confidence_threshold: LLM patches with confidence below this are escalated to human review
   confidence_threshold: 0.7
@@ -369,24 +364,12 @@ agent:
   #     - SLABreach
   #     - OutOfDiskSpaceError
 
-  # Override connection defaults for this blueprint only (all optional — unset = inherit from aqueduct.yml):
-  # provider: "openai_compat"
-  # base_url: "http://ollama.internal:11434/v1"
-  # model: "claude-sonnet-4-6"
-  # api_key: "@aq.secret('OPENAI_API_KEY')"       # optional; overrides engine-level api_key
-  # timeout: 300.0               # seconds; increase for slow local models
-  # provider_options: {}         # extra payload keys for openai_compat endpoints
-  #                              # (ollama_* keys land in Ollama's options block)
-  # max_reprompts: 5             # single-axis cap — prefer `budget:` below for multi-axis control
-  #                              
-  # Multi-axis budget (available at both engine and blueprint level):
-  # budget:
-  #   max_reprompts: 5
-  #   max_seconds: 120
-  #   max_tokens_total: 50000
-  #   same_error_consecutive: 2
-  #   same_signature_overall: 3
-  #   progress_stalled_window: 3
+  # Connection settings (provider, base_url, model, api_key, timeout,
+  # provider_options, cascade, budget) are NOT legal here — configure them in
+  # aqueduct.yml's agent: block. See the note at the top of this agent: block.
+
+  # max_reprompts: 5             # single-axis cap; unset = inherit aqueduct.yml agent.max_reprompts
+  #                               # (aqueduct.yml also offers a multi-axis `budget:` block for finer control)
 
   # prompt_context: |             # Appended to LLM system prompt after engine-level prompt_context.
   #   Green taxi schema uses lpep_* columns; yellow uses tpep_* columns.

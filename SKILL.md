@@ -411,7 +411,7 @@ macros:
 # use as {{ macros.error_rate }} inside SQL / probe config
 ```
 
-## Self-healing agent (per-Blueprint policy)
+## Self-healing agent (per-Blueprint POLICY — connection lives in aqueduct.yml only)
 ```yaml
 agent:
   approval: auto              # disabled|human|auto|ci  (controls if/how patches apply)
@@ -428,16 +428,11 @@ agent:
   progressive: false           # true = chained multi-patch healing — a candidate that fixes bug #1 but leaves bug #2 failing
                                 # folds into an accumulating patch instead of being discarded; requires sandbox_mode != off
   max_chain: 3                 # hard cap on links in a progressive chain (independent of max_reprompts)
-  # connection (overrides engine aqueduct.yml defaults):
-  provider: openai_compat     # anthropic | openai_compat
-  base_url: "https://openrouter.ai/api/v1"
-  model: "anthropic/claude-sonnet-4-6"
-  api_key: "@aq.secret('OPENAI_API_KEY')"  # optional; per-tier cascade override also supported
 ```
-`approval` values: `disabled` (never heal) · `human` (stage patch for review) · `auto` (apply validated patch; with `max_patches > 1` enables the multi-patch loop) · `ci` (stage + webhook). Engine-level defaults for provider/model/base_url/api_key/mode/max_tool_calls/supports_tools/progressive/max_chain live in `aqueduct.yml`; the Blueprint `agent:` block overrides them. API key precedence (highest first): per-cascade-tier `api_key` → blueprint `agent.api_key` → engine `agent.api_key` → env var (`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`). Prefer `@aq.secret('NAME')` or `${ENV_VAR}` over a plaintext literal in any config file. `supports_tools` also has a per-cascade-tier override (`cascade[].supports_tools`). `progressive: true` (`agent.approval: auto`, non-cascade path) chains multi-patch healing across DIFFERENT-module failures instead of re-diagnosing the same first bug every attempt — see `docs/specs.md` §8.13; `max_patches` semantics are unchanged.
+`approval` values: `disabled` (never heal) · `human` (stage patch for review) · `auto` (apply validated patch; with `max_patches > 1` enables the multi-patch loop) · `ci` (stage + webhook). `mode`/`max_tool_calls`/`supports_tools`/`progressive`/`max_chain`/`prompt_context` (above) override the `aqueduct.yml`-level default when set; unset inherits it. **CONNECTION fields — `provider`, `base_url`, `model`, `api_key`, `provider_options`, `timeout`, `cascade` — are NOT legal in a Blueprint's `agent:` block.** `extra="forbid"` rejects one by name if you write it here; they configure ONLY in `aqueduct.yml` (next section) — a Blueprint cannot choose its own LLM endpoint, since the healing loop ships `FailureContext` (pruned manifest, provenance, error text, and, in agentic mode, sampled data rows) to whatever endpoint is configured, and letting a pipeline author redirect that is a data-exfiltration hole, not a convenience. `progressive: true` (`agent.approval: auto`, non-cascade path) chains multi-patch healing across DIFFERENT-module failures instead of re-diagnosing the same first bug every attempt — see `docs/specs.md` §8.13; `max_patches` semantics are unchanged.
 
 ## Engine config (`aqueduct.yml`) — NOT the Blueprint
-Separate file. Configures deployment target, Spark, stores, secrets, webhooks, and engine-level agent connection. Author it only when asked; Blueprints reference its results. Key blocks: `deployment` (engine/target/env), `engine` (per-engine settings namespaced by name — `engine.spark.master_url`, `engine.spark.conf`, `engine.duckdb`), `stores` (observability/depots/blob/benchmark + backend), `agent` (provider/base_url/model/api_key/cascade defaults), `danger` (allow_multi_patch, allow_full_probe_actions), `handoff` (`root` — cross-engine spill location, any engine-reachable URI, default `.aqueduct/handoff`; `keep_on_failure` — keep a boundary's spill after a failed run so a rerun skips recomputing it, default true), `timezone` (top-level, e.g. `"UTC"` — applied to EVERY engine's session at creation; only worth setting once a Blueprint spans more than one engine — an explicit `engine.spark.conf.spark.sql.session.timeZone` override still wins for Spark, with a warning naming the divergence). Engine `agent.cascade` provides a project-wide default; a Blueprint's `agent.cascade` (or `model: [list]` shorthand) overrides it. See `aqueduct/templates/default/aqueduct.yml.template`.
+Separate file. Configures deployment target, Spark, stores, secrets, webhooks, and the agent's connection settings. Author it only when asked; Blueprints reference its results. Key blocks: `deployment` (engine/target/env), `engine` (per-engine settings namespaced by name — `engine.spark.master_url`, `engine.spark.conf`, `engine.duckdb`), `stores` (observability/depots/blob/benchmark + backend), `agent` (`provider`/`base_url`/`model`/`api_key`/`provider_options`/`timeout`/`cascade` — CONNECTION, engine-only; plus the same policy defaults the Blueprint can override), `danger` (allow_multi_patch, allow_full_probe_actions), `handoff` (`root` — cross-engine spill location, any engine-reachable URI, default `.aqueduct/handoff`; `keep_on_failure` — keep a boundary's spill after a failed run so a rerun skips recomputing it, default true), `timezone` (top-level, e.g. `"UTC"` — applied to EVERY engine's session at creation; only worth setting once a Blueprint spans more than one engine — an explicit `engine.spark.conf.spark.sql.session.timeZone` override still wins for Spark, with a warning naming the divergence). `agent.cascade` is engine-only — a Blueprint cannot declare or override a cascade (no `model: [list]` shorthand either; both were removed as Blueprint features — write an explicit list of tiers here). See `aqueduct/templates/default/aqueduct.yml.template`.
 
 ## Path resolution
 Relative paths in a Blueprint anchor to **the Blueprint file's directory**, never the cwd (portable across run locations). `s3://`, `postgresql://`, absolute paths pass through unchanged. Same rule for `aqueduct.yml` (anchors to the config file dir).
@@ -502,11 +497,13 @@ Aqueduct talks to **Anthropic natively** OR **any OpenAI-compatible endpoint**
 your OpenRouter/DeepSeek/Groq key goes in `OPENAI_API_KEY`). Keyless local servers
 (Ollama / LM Studio) need nothing (it defaults to a dummy value). Set `model:` to
 the provider's model id. These env vars are the fallback; configure `agent.api_key`
-(via `@aq.secret()` or literal) in `aqueduct.yml`, the Blueprint `agent:` block, or
-per cascade tier for finer control.
+(via `@aq.secret()` or literal) in `aqueduct.yml` — CONNECTION fields, `api_key`
+included, are engine-only and NOT legal in a Blueprint's `agent:` block — or per
+cascade tier for finer control.
 
-A single `agent.model:` heals **solo** (one model, the flat `agent.*` connection).
-Adding `agent.cascade:` (a list of tiers, tried in the order you list them) switches to **cascade** mode.
+A single `agent.model:` in `aqueduct.yml` heals **solo** (one model, the flat
+`agent.*` connection). Adding `agent.cascade:` (also `aqueduct.yml`-only — a
+list of tiers, tried in the order you list them) switches to **cascade** mode.
 A tier inherits a flat `agent.*` field only when it leaves that field unset; a field the
 tier sets is its own key (so `--set agent.timeout` raises the solo/flat default and every
 inheriting tier, but not a tier that declares its own `timeout:`).

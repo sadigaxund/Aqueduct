@@ -38,13 +38,13 @@ aqueduct_config: "1.0"
 agent:
   provider: openai_compat
   base_url: "http://localhost:8000"
-danger:
+{cfg_agent_extra}danger:
   allow_skip_sandbox: {allow_skip}
 """
 
 
 def _write_project(tmp_path, progressive, sandbox, allow_skip=True,
-                   approval="human", agent_extra=""):
+                   approval="human", agent_extra="", cfg_agent_extra=""):
     bp = tmp_path / "bp.yml"
     bp.write_text(
         _BP_TEMPLATE.format(
@@ -54,7 +54,10 @@ def _write_project(tmp_path, progressive, sandbox, allow_skip=True,
         encoding="utf-8",
     )
     cfg = tmp_path / "aqueduct.yml"
-    cfg.write_text(_CFG_TEMPLATE.format(allow_skip=str(allow_skip).lower()), encoding="utf-8")
+    cfg.write_text(
+        _CFG_TEMPLATE.format(allow_skip=str(allow_skip).lower(), cfg_agent_extra=cfg_agent_extra),
+        encoding="utf-8",
+    )
     return bp, cfg
 
 
@@ -152,7 +155,12 @@ def test_progressive_with_approval_human_warns(mock_get_executor, mock_generate_
 @patch("aqueduct.executor.get_executor")
 def test_progressive_with_cascade_warns(mock_get_executor, mock_generate_cascade, mock_surveyor_cls, tmp_path):
     """agent.progressive: true + cascade tiers must warn (cascade chaining is
-    deferred) and fall back to the standard cascade loop — visibly."""
+    deferred) and fall back to the standard cascade loop — visibly.
+
+    2.59 — `cascade` is a CONNECTION field, engine-level only (a Blueprint
+    cannot declare its own cascade); the tier list goes in `cfg_agent_extra`
+    (aqueduct.yml), not the Blueprint's `agent_extra`.
+    """
     cascade_block = (
         "  cascade:\n"
         "    - model: small-model\n"
@@ -160,7 +168,7 @@ def test_progressive_with_cascade_warns(mock_get_executor, mock_generate_cascade
     )
     bp, cfg = _write_project(
         tmp_path, progressive=True, sandbox="sample", approval="auto",
-        agent_extra=cascade_block,
+        cfg_agent_extra=cascade_block,
     )
     _failing_executor(mock_get_executor)
     mock_generate_cascade.return_value = _no_patch_result()

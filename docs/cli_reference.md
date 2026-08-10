@@ -168,9 +168,9 @@ Hook outcomes never change the run's exit code. `command:` entries require `dang
 --set  >  blueprint agent:  >  aqueduct.yml  >  built-in defaults
 ```
 
-One flat dotted namespace addresses whichever schema owns the field. For `aqueduct run`, an `agent.*` path that the Blueprint schema declares (e.g. `agent.approval`, `agent.timeout`) lands on the Blueprint (which already wins the merge); engine-only agent fields (`agent.budget.*`, `agent.retry.*`) and everything else (`deployment.*`, `danger.*`, `stores.*`) land on `aqueduct.yml`. A path no schema declares is an error with a nearest-sibling suggestion.
+One flat dotted namespace addresses whichever schema owns the field. For `aqueduct run`, an `agent.*` path that the Blueprint schema declares (e.g. `agent.approval`, `agent.max_patches` — POLICY fields) lands on the Blueprint (which already wins the merge); CONNECTION fields (`agent.provider`, `agent.base_url`, `agent.model`, `agent.api_key`, `agent.provider_options`, `agent.timeout`, `agent.cascade` — 2.59: no longer legal on the Blueprint schema at all) and engine-only agent fields (`agent.budget.*`, `agent.retry.*`) and everything else (`deployment.*`, `danger.*`, `stores.*`) land on `aqueduct.yml`. A path no schema declares is an error with a nearest-sibling suggestion.
 
-> **Precedence is per-key, and a cascade tier's own fields are separate keys.** `--set` wins among the *sources* for the key it targets (`--set agent.timeout` beats the blueprint's and `aqueduct.yml`'s `agent.timeout`). But in a **cascade** (`agent.cascade:`), each tier's `timeout` / `max_reprompts` / `provider` / … are *their own keys* that only inherit the flat `agent.*` value **when the tier leaves them unset**. So `--set agent.timeout=600` raises the solo/flat default and any tier that inherits it, but it does **not** override a tier that declares its own `timeout:` (that is a different key, and the tier's explicit value is intentional). To change one tier, set that tier's field in the blueprint's `agent.cascade:` block. (A per-tier `--set agent.cascade[N].timeout` addressing form is on the roadmap; see `TODOs.md`.)
+> **Precedence is per-key, and a cascade tier's own fields are separate keys.** `--set` wins among the *sources* for the key it targets. `agent.cascade:` is engine-level only (2.59) — each tier's `timeout` / `max_reprompts` / `provider` / … are *their own keys* that only inherit the flat `agent.*` (`aqueduct.yml`) value **when the tier leaves them unset**. So `--set agent.timeout=600` raises the flat `aqueduct.yml` default and any tier that inherits it, but it does **not** override a tier that declares its own `timeout:` (that is a different key, and the tier's explicit value is intentional). To change one tier, edit that tier's field in `aqueduct.yml`'s `agent.cascade:` block. (A per-tier `--set agent.cascade[N].timeout` addressing form is on the roadmap; see `TODOs.md`.)
 
 Value grammar:
 - `PATH=value`: coerced: `true`/`false` → bool, `null`/`none` → None, then int, then float, else the literal string.
@@ -264,7 +264,7 @@ The sandbox gate replays a generated patch BEFORE applying it, to catch broken p
 
 **Double-danger combo**: `sandbox_mode: off` + `max_patches > 1` means every LLM patch hits production data without pre-validation, in a loop. Engine prints a `⚠ DANGER COMBO` line at startup when both are set; use only on tiny scopes you fully trust.
 
-Configure per engine (`agent.sandbox_mode:` in `aqueduct.yml`) or per blueprint (`agent.sandbox_mode:` in the blueprint's `agent:` block, Blueprint value wins). Per-run `--set` override is a planned addition.
+`agent.sandbox_mode` is a Blueprint-only policy field (`agent:` block in the Blueprint YAML) — there is no engine-wide `aqueduct.yml` default for it. Per-run `--set` override is a planned addition.
 
 ---
 

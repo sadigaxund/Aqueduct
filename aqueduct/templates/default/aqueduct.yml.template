@@ -595,11 +595,21 @@ lineage:
 # ── LLM Agent — Connection Defaults ──────────────────────────────────────────
 #
 # Sets the provider, endpoint, and model for all blueprints that enable LLM
-# self-healing. Per-blueprint policy (approval, forbidden_ops,
-# on_pending_patches) belongs in each Blueprint's agent: block — see
-# blueprint.yml.template.
+# self-healing. This is the ONLY place connection settings (provider,
+# base_url, api_key, model, provider_options, timeout, cascade) can be
+# configured — a Blueprint's agent: block cannot set or override any of
+# them (a security boundary, not an oversight: the healing loop ships
+# FailureContext — pruned manifest, provenance, error text, and, in agentic
+# mode, sampled data rows — to whatever endpoint is configured here, so a
+# Blueprint author does not get to redirect that traffic). Per-blueprint
+# POLICY (approval, forbidden_ops, on_pending_patches, guardrails, ...)
+# belongs in each Blueprint's agent: block — see blueprint.yml.template. A
+# handful of policy fields (mode, max_tool_calls, supports_tools,
+# progressive, max_chain, max_reprompts, prompt_context,
+# max_heal_attempts_per_hour, patch_validation, block_on_explain_regression,
+# regression_artifact) are also settable here as the engine-wide default;
+# a Blueprint's own value for one of those, when set, still wins.
 #
-# Blueprint agent: values override these defaults on conflict.
 # If a blueprint omits agent: entirely, LLM self-healing is disabled.
 
 agent:
@@ -795,11 +805,12 @@ agent:
   # timeout: 600.0              # large local models need more time
   # provider_options:
 
-  # ── Engine-wide cascade default ────────────────────────────────────────────
+  # ── Multi-model cascade (CONNECTION — engine-level only) ───────────────────
   # A multi-model healing cascade tried in order; cheaper models first, escalate
-  # on stuck/exhausted/deferred. A blueprint's own agent.cascade (or
-  # model: [list] shorthand) fully overrides this engine default. The engine
-  # cascade does NOT support the model: [list] shorthand — use explicit tiers.
+  # on stuck/exhausted/deferred. A Blueprint cannot declare or override a
+  # cascade (it is a connection concern, not a policy one — see
+  # blueprint.yml.template's agent: block). No model: [list] shorthand here —
+  # always write an explicit list of tiers.
   # cascade:
   #   - model: qwen2.5-coder:7b
   #     max_reprompts: 2
