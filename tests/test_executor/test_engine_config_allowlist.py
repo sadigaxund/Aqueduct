@@ -117,8 +117,22 @@ def test_explicit_empty_file_loads_clean(tmp_path):
 
 def test_check_presence_passes_for_the_real_install():
     """Both shipped engines (spark, duckdb) are registered and both ship a
-    file — this must not raise against the real, installed entry points."""
-    check_presence()
+    file — this must not raise against the real, installed entry points.
+
+    "Passes" only means something if there was something to pass ON: the
+    guard is vacuously satisfied by an EMPTY registry (nothing is missing
+    when nothing is registered), so a check_presence() that never raised
+    would be indistinguishable from one that had nothing to check. Assert
+    the discovered state the guard consults — at least one registered
+    engine, and a real on-disk file for every one of them — restating the
+    guarantee independently of the guard's own implementation. (That both
+    shipped engines are registered is the sibling
+    test_discover_registered_engines_finds_both_real_engines's claim.)
+    """
+    check_presence()  # must not raise
+    paths = discover_allowlist_paths()
+    assert paths, "no engine is registered at all — check_presence() passed vacuously"
+    assert all(p is not None and p.is_file() for p in paths.values()), paths
 
 
 def test_check_presence_names_missing_engine(monkeypatch):
@@ -625,10 +639,30 @@ def test_validate_against_deny_refuses_a_synthetic_entry_violating_deny_values()
 
 
 def test_validate_against_deny_allows_a_non_denied_candidate():
+    """The deny layer refuses exactly what it names and nothing else.
+
+    Two distinct non-denied shapes, and the assertions pin WHICH shape each
+    one is — a "must not raise" that passes because the key silently stopped
+    being deny-matched at all would prove nothing about scoping:
+
+      - ``spark.executor.memory`` — matched by no deny entry whatsoever.
+      - ``spark.driver.maxResultSize`` — IS deny-matched, but only by a
+        SCOPED value-ban, so the key stays writable for every value outside
+        its ``deny_values``. The same key with ``0`` must still be refused;
+        that positive control is what makes "allows" a real claim rather
+        than the answer a no-op ``validate_against_deny`` would also give.
+    """
     allowlist = load_allowlist(_SPARK_PATH, "spark")
-    # Must not raise: neither the key nor this value is denied.
-    validate_against_deny(allowlist, "spark.executor.memory", value="4g")
-    validate_against_deny(allowlist, "spark.driver.maxResultSize", value="4g")
+
+    assert not any(d.matches("spark.executor.memory") for d in allowlist.deny_entries)
+    validate_against_deny(allowlist, "spark.executor.memory", value="4g")  # must not raise
+
+    scoped = [d for d in allowlist.deny_entries if d.matches("spark.driver.maxResultSize")]
+    assert scoped, "expected a shipped deny entry covering spark.driver.maxResultSize"
+    assert all(d.deny_values for d in scoped), scoped  # scoped value-ban, not an absolute one
+    validate_against_deny(allowlist, "spark.driver.maxResultSize", value="4g")  # must not raise
+    with pytest.raises(EngineConfigAllowlistError):
+        validate_against_deny(allowlist, "spark.driver.maxResultSize", value=0)
 
 
 def test_validate_against_deny_cannot_be_bypassed_by_a_hand_built_allowlist():
