@@ -655,6 +655,102 @@ def validate_against_deny(
             )
 
 
+def evaluate_set_engine_config(
+    allowlist: EngineConfigAllowlist, key: str, value: Any
+) -> str | None:
+    """Evaluate one candidate ``set_engine_config`` write against
+    *allowlist*. Pure: returns ``None`` when ``key``/``value`` is permitted,
+    or a human-readable rejection reason naming which layer refused
+    otherwise. Raises nothing — this function is the enforcement LOGIC the
+    module docstring's "Why this exists" section calls out as not yet
+    wired; the exception TYPE a rejection surfaces as is the caller's call
+    (Gate 1, ``aqueduct/patch/apply.py::_check_guardrails``, wraps a
+    non-``None`` return in its own ``PatchError`` — a policy violation is a
+    patch problem, never this module's ``EngineConfigAllowlistError``, which
+    stays reserved for a malformed/missing SHIPPED file, already raised by
+    ``load_allowlist`` long before a caller reaches this function).
+
+    Evaluation order (deliberate, for error quality — the first violation
+    found is the one reported):
+      1. Deny — key match, then (for a scoped ban) a ``deny_values`` match.
+         The returned reason always carries the deny entry's own ``reason``.
+      2. Allow membership — a key matching no allow entry is refused
+         (fail closed: the allowlist is a closed-world grant list, not a
+         denylist — see the module docstring).
+      3. Type.
+      4. Constraint — the matched entry's ``range`` or ``enum``, if it
+         declares one (most shipped entries declare neither today — see
+         the module docstring's "range/enum are a MECHANISM, not a
+         mandate" — but a future entry that DOES declare one must not be
+         silently unenforced, so both are checked here even though today's
+         shipped files never exercise this branch).
+    """
+    for d in allowlist.deny_entries:
+        if d.matches(key) and d.forbids(value):
+            return f"{key!r} is denied for engine {allowlist.engine!r}: {d.reason}"
+
+    entry = next((e for e in allowlist.entries if e.matches(key)), None)
+    if entry is None:
+        return (
+            f"{key!r} is not on engine {allowlist.engine!r}'s set_engine_config "
+            "allowlist"
+        )
+
+    if entry.value_type == "size":
+        if not isinstance(value, str):
+            return (
+                f"{key!r}={value!r} must be a size string (e.g. '4g', '512MB') "
+                f"for engine {allowlist.engine!r}, got {type(value).__name__}"
+            )
+        try:
+            _size_to_bytes(value)
+        except ValueError:
+            return (
+                f"{key!r}={value!r} is not a valid size literal for engine "
+                f"{allowlist.engine!r} (expected e.g. '4g', '512MB')"
+            )
+    else:
+        expected_py_type = _PY_TYPE_OF[entry.value_type]
+        # bool is an int subclass in Python — a stray bool must not silently
+        # satisfy `type: int` (mirrors the same guard in load_allowlist's
+        # own range-bound check).
+        type_ok = isinstance(value, expected_py_type) and not (
+            entry.value_type == "int" and isinstance(value, bool)
+        )
+        if not type_ok:
+            return (
+                f"{key!r}={value!r} has the wrong type for engine "
+                f"{allowlist.engine!r}: expected {entry.value_type}, got "
+                f"{type(value).__name__}"
+            )
+
+    if isinstance(entry.constraint, EnumConstraint):
+        if value not in entry.constraint.values:
+            return (
+                f"{key!r}={value!r} is not one of engine {allowlist.engine!r}'s "
+                f"allowed values for {key!r}: {list(entry.constraint.values)}"
+            )
+    elif isinstance(entry.constraint, RangeConstraint):
+        if entry.value_type == "size":
+            try:
+                v_bytes = _size_to_bytes(value)
+                lo_bytes = _size_to_bytes(str(entry.constraint.minimum))
+                hi_bytes = _size_to_bytes(str(entry.constraint.maximum))
+            except ValueError:
+                v_bytes = lo_bytes = hi_bytes = None
+            in_range = v_bytes is not None and lo_bytes <= v_bytes <= hi_bytes
+        else:
+            in_range = entry.constraint.minimum <= value <= entry.constraint.maximum
+        if not in_range:
+            return (
+                f"{key!r}={value!r} is outside engine {allowlist.engine!r}'s "
+                f"allowed range [{entry.constraint.minimum!r}, "
+                f"{entry.constraint.maximum!r}] for {key!r}"
+            )
+
+    return None
+
+
 # ── discovery — mirrors capability_tooling.discover_declarations() ──────────
 
 
@@ -739,6 +835,7 @@ __all__ = [
     "EnumConstraint",
     "load_allowlist",
     "validate_against_deny",
+    "evaluate_set_engine_config",
     "discover_registered_engines",
     "discover_allowlist_paths",
     "check_presence",

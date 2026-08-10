@@ -245,6 +245,7 @@ def patch_preview(
             sandbox_master_url=cfg.agent.sandbox_master_url,
             warnings_suppress=cfg.warnings.suppress,
             timezone=cfg.timezone,
+            patch_spec=spec,
         )
         # Explain gate — baseline read directly from the observability store.
         try:

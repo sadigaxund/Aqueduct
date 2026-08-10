@@ -63,6 +63,119 @@ def test_gate3_pass_on_valid_blueprint(spark, sample_data, tmp_path):
     assert not (tmp_path / "out").exists()
 
 
+def test_gate3_pass_detail_states_scope_for_config_only_patch(spark, sample_data, tmp_path):
+    """A patch whose ops touch zero modules (e.g. set_engine_config) still
+    gets status=pass on a clean sandbox replay — but the detail must say
+    what actually happened (session built, sample replayed under the
+    patched config) and what it did NOT prove (it cannot reproduce the
+    cluster-scale resource failure the patch usually targets; efficacy is
+    only proven by the full re-run). Before this change, `pass` read
+    identically to a module-touching patch's replay ("sandbox replay
+    succeeded..."), which a user reads as "the fix was validated" — it
+    wasn't."""
+    from aqueduct.patch.grammar import PatchSpec
+
+    orders_path = str(sample_data / "orders.parquet")
+    bp = {
+        "aqueduct": "1.0",
+        "id": "test.gate3",
+        "name": "Test Gate 3 config-only",
+        "modules": [
+            {
+                "id": "in",
+                "type": "Ingress",
+                "label": "Input",
+                "config": {"format": "parquet", "path": orders_path},
+            },
+            {
+                "id": "out",
+                "type": "Egress",
+                "label": "Output",
+                "config": {"format": "parquet", "path": str(tmp_path / "out"), "mode": "overwrite"},
+            },
+        ],
+        "edges": [{"from": "in", "to": "out"}],
+    }
+    config_only_patch = PatchSpec.model_validate({
+        "patch_id": "cfg-1", "rationale": "bump shuffle partitions",
+        "operations": [{
+            "op": "set_engine_config", "engine": "spark",
+            "key": "spark.sql.shuffle.partitions", "value": 200,
+        }],
+    })
+
+    result = run_sandbox_gate(
+        bp,
+        blueprint_path=tmp_path / "bp.yml",
+        patch_id="cfg-1",
+        failed_module=None,
+        engine="spark",
+        cfg=AqueductConfig(),
+        sample_rows=5,
+        spark_session=spark,
+        patch_spec=config_only_patch,
+    )
+
+    assert result.status == "pass"
+    assert "session built and sample replay succeeded" in result.detail
+    assert "cannot reproduce the originating resource failure" in result.detail
+    assert "validated by the full re-run" in result.detail
+    # The old, over-claiming wording must not survive alongside the new one.
+    assert "sandbox replay succeeded against" not in result.detail
+
+
+def test_gate3_pass_detail_unchanged_for_module_patch(spark, sample_data, tmp_path):
+    """A patch_spec that DOES touch a module keeps the ordinary
+    "sandbox replay succeeded" wording — the honest-scope rewrite is
+    scoped to zero-module (config-only) patches only."""
+    from aqueduct.patch.grammar import PatchSpec
+
+    orders_path = str(sample_data / "orders.parquet")
+    bp = {
+        "aqueduct": "1.0",
+        "id": "test.gate3",
+        "name": "Test Gate 3 module patch",
+        "modules": [
+            {
+                "id": "in",
+                "type": "Ingress",
+                "label": "Input",
+                "config": {"format": "parquet", "path": orders_path},
+            },
+            {
+                "id": "out",
+                "type": "Egress",
+                "label": "Output",
+                "config": {"format": "parquet", "path": str(tmp_path / "out"), "mode": "overwrite"},
+            },
+        ],
+        "edges": [{"from": "in", "to": "out"}],
+    }
+    module_patch = PatchSpec.model_validate({
+        "patch_id": "mod-1", "rationale": "fix format",
+        "operations": [{
+            "op": "set_module_config_key", "module_id": "in",
+            "key": "format", "value": "parquet",
+        }],
+    })
+
+    result = run_sandbox_gate(
+        bp,
+        blueprint_path=tmp_path / "bp.yml",
+        patch_id="mod-1",
+        failed_module=None,
+        engine="spark",
+        cfg=AqueductConfig(),
+        sample_rows=5,
+        spark_session=spark,
+        patch_spec=module_patch,
+    )
+
+    assert result.status == "pass"
+    assert "sandbox replay succeeded against" in result.detail
+    assert "cannot reproduce the originating resource failure" not in result.detail
+
+
 def test_gate3_fail_on_compile_error(spark, tmp_path):
     # Blueprint with cycle
     bp = {

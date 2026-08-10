@@ -219,6 +219,69 @@ def test_replay_candidate_with_retired_op_falls_through_to_llm(tmp_path):
     assert mock_gap.called
 
 
+# ── PATH 2c: Replay candidate carries set_engine_config → never replayed ────
+
+def test_replay_candidate_with_set_engine_config_falls_through_to_llm(tmp_path):
+    """A cached patch that includes a `set_engine_config` op parses fine and
+    is otherwise a perfectly valid PatchSpec — but engine/session config is
+    environment-specific (the right shuffle.partitions for one cluster is
+    not the right value for another), so it must never be replayed from
+    the heal cache, even though the failure signature matches exactly. The
+    skip must be announced (not indistinguishable from an ordinary cache
+    miss), and the run must fall through to the LLM instead of silently
+    doing nothing."""
+    runner = CliRunner()
+    bp_path = tmp_path / "bp.yml"
+    _write_bp(bp_path, "approval: auto")
+    cfg_path = tmp_path / "aq.yml"
+    _write_config(cfg_path)
+
+    from aqueduct.patch.grammar import PatchSpec
+    cached_spec = PatchSpec(
+        patch_id="replay-cfg-1", rationale="bump shuffle partitions",
+        operations=[{
+            "op": "set_engine_config", "engine": "spark",
+            "key": "spark.sql.shuffle.partitions", "value": 200,
+        }],
+    )
+    mock_candidate = MagicMock()
+    mock_candidate.patch_id = "replay-cfg-1"
+    mock_candidate.payload = json.loads(cached_spec.model_dump_json())
+
+    llm_spec = PatchSpec(patch_id="llm-fix-1", rationale="fix",
+                          operations=[{"op": "set_module_config_key",
+                                       "module_id": "m1", "key": "path", "value": "/fixed.csv"}])
+
+    os.environ["ANTHROPIC_API_KEY"] = "test-key"
+
+    from aqueduct.patch.preview import SandboxGateResult
+
+    with patch("aqueduct.executor.get_executor") as mock_get_exec:
+        mock_get_exec.return_value = _make_executor([_run_err(), _run_ok()])
+        with patch("aqueduct.agent.memory.find_pending", return_value=None):
+            with patch("aqueduct.agent.memory.find_replay_candidate", return_value=mock_candidate):
+                with patch("aqueduct.agent.generate_agent_patch") as mock_gap:
+                    from aqueduct.agent import AgentPatchResult
+                    mock_gap.return_value = AgentPatchResult(
+                        patch=llm_spec, attempts=1, stop_reason=StopReason.SOLVED,
+                    )
+                    # The disqualified candidate never reaches the gate
+                    # pyramid at all — only the LLM patch's own gate call
+                    # happens.
+                    with patch("aqueduct.patch.preview.run_sandbox_gate") as mock_sandbox:
+                        mock_sandbox.return_value = SandboxGateResult(status="pass", detail="ok")
+                        res = runner.invoke(cli, ["run", str(bp_path), "--config", str(cfg_path)])
+
+    # Not a crash: normal terminal exit.
+    assert res.exit_code == 0
+    # Not a silent miss: the discard is announced, naming the reason.
+    assert "sets engine config" in res.output
+    assert "never replayed from cache" in res.output
+    assert "falling through to Agent" in res.output
+    # And it actually moved on: the LLM was consulted, not left hanging.
+    assert mock_gap.called
+
+
 # ── PATH 3: Replay gate-fail → fall through to LLM ──────────────────────────
 
 def test_replay_gate_fail_falls_through_to_llm(tmp_path):

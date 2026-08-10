@@ -546,6 +546,7 @@ def _run_patch_gates_inline(  # noqa: F811
             sandbox_master_url=sandbox_master_url,
             warnings_suppress=warnings_suppress,
             timezone=timezone,
+            patch_spec=patch,
         )
     try:
         surveyor.record_patch_simulation(

@@ -322,6 +322,7 @@ def run_sandbox_gate(
     sandbox_master_url: str | None = None,
     warnings_suppress: Iterable[str] | None = None,
     timezone: str | None = None,
+    patch_spec: Any = None,
 ) -> SandboxGateResult:
     """Compile and replay the patched Blueprint with a row limit + Egress skipped.
 
@@ -375,6 +376,21 @@ def run_sandbox_gate(
     forwarded to the owned sandbox session's ``SessionSpec`` when this gate
     builds its own session (ignored when ``spark_session`` is given — that
     session's timezone was already resolved by whoever built it).
+
+    ``patch_spec``, if given, is used ONLY to word a ``pass`` result's
+    ``detail`` honestly — never to change scope or status. When the patch's
+    operations touch zero modules (``touched_module_ids(patch_spec)`` is
+    empty — the SAME predicate ``run_lineage_gate`` already uses for its
+    ``not_applicable`` status; today this means a `set_engine_config`-only
+    patch), a sample replay proves the session built and rows flowed under
+    the PATCHED engine config, but a 1000-row local sample can never
+    reproduce the cluster-scale resource failure (OOM, shuffle spill) the
+    patch is usually trying to fix — that is only proven by the full
+    re-run. `pass`'s `detail` says so explicitly instead of reading as a
+    validated fix. Omitted (the default): `detail` keeps its ordinary
+    "sandbox replay succeeded" wording — unchanged for a module-touching
+    patch, and unchanged for any caller that hasn't been updated to pass
+    this new, optional parameter.
 
     Status:
       `pass`  manifest compiled and executed without raising
@@ -575,12 +591,23 @@ def run_sandbox_gate(
                     duration_ms=int((time.monotonic() - t0) * 1000),
                 )
 
-            return SandboxGateResult(
-                status="pass",
-                detail=(
+            is_config_only_patch = patch_spec is not None and not touched_module_ids(patch_spec)
+            if is_config_only_patch:
+                pass_detail = (
+                    "session built and sample replay succeeded under the patched "
+                    f"engine config against {sample_rows or '∞'} row(s) per Ingress; "
+                    "sample replay cannot reproduce the originating resource "
+                    "failure (e.g. cluster-scale OOM/shuffle spill); efficacy is "
+                    "validated by the full re-run, not this gate"
+                )
+            else:
+                pass_detail = (
                     f"sandbox replay succeeded against {sample_rows or '∞'} "
                     f"row(s) per Ingress; {len(egress_targets)} Egress module(s) skipped"
-                ),
+                )
+            return SandboxGateResult(
+                status="pass",
+                detail=pass_detail,
                 sample_rows=sample_rows if sample_rows > 0 else None,
                 egress_targets=egress_targets,
                 duration_ms=int((time.monotonic() - t0) * 1000),

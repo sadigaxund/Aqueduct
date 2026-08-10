@@ -260,6 +260,7 @@ def test_run_patch_gates_inline_preflight_and_sample(mock_run_sandbox, tmp_path)
             sandbox_master_url=None,
             warnings_suppress=None,
             timezone=None,
+            patch_spec=mock_patch,
         )
 
         # Test sample -> forwards 100
@@ -290,6 +291,7 @@ def test_run_patch_gates_inline_preflight_and_sample(mock_run_sandbox, tmp_path)
             sandbox_master_url=None,
             warnings_suppress=None,
             timezone=None,
+            patch_spec=mock_patch,
         )
 
 

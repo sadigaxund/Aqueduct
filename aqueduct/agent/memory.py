@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from aqueduct.patch import index as _ix
 
@@ -43,6 +43,7 @@ __all__ = [
     "find_pending",
     "find_replay_candidate",
     "find_coaching_examples",
+    "contains_set_engine_config",
 ]
 
 _COACHING_MAX = 3
@@ -84,6 +85,33 @@ class CoachingExample:
     ops: list[str] = field(default_factory=list)
     tier: int = 4  # 1 exact sig, 2 coarse sig, 3 same error class, 4 chronological fill
     engine: str = ""  # Phase 78 — auditability, see PendingHit.engine
+
+
+def contains_set_engine_config(operations: Any) -> bool:
+    """Whether *operations* (a validated ``PatchSpec.operations``, or a raw
+    list of op dicts) includes a ``set_engine_config`` op.
+
+    Such a patch is never eligible for zero-token cache REPLAY (cross-engine
+    remediation follow-up, Phase 82): the failure SIGNATURE a replay
+    candidate is keyed on captures the FAILURE, not the ENVIRONMENT it ran
+    in — the right ``spark.sql.shuffle.partitions`` for Monday's 10-node
+    cluster is not the right value for Friday's 3-node one. The patch
+    record itself is left alone — it stays in ``patch_index``/the object
+    store as audit history and can still surface as a coaching example
+    (``find_coaching_examples``) — only automatic zero-token REPLAY is
+    refused.
+
+    This function only answers the predicate; the replay call site
+    (``aqueduct/cli/run.py``) is responsible for announcing the refusal —
+    a candidate discarded for this reason must read as "found but refused
+    for cause", never as an ordinary cache miss, the same way an
+    unparseable or retired-op candidate is already announced there.
+    """
+    for op in operations or []:
+        op_name = getattr(op, "op", None) if not isinstance(op, dict) else op.get("op")
+        if op_name == "set_engine_config":
+            return True
+    return False
 
 
 # ── Lookups ───────────────────────────────────────────────────────────────

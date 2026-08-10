@@ -31,6 +31,12 @@ from ruamel.yaml import YAML
 
 from aqueduct.compiler.expander import is_arcade_expanded_id
 from aqueduct.errors import AqueductError
+from aqueduct.executor.engine_config_allowlist import (
+    DECLARATION_FILENAME,
+    discover_registered_engines,
+    evaluate_set_engine_config,
+    load_allowlist,
+)
 from aqueduct.parser.parser import ParseError, parse
 from aqueduct.patch.grammar import PATCH_META_KEY, PatchSpec, RetiredPatchOpError
 from aqueduct.patch.operations import PatchOperationError, apply_operation
@@ -277,6 +283,48 @@ def _check_config_dict_paths(
             )
 
 
+def _check_engine_config_allowlist(op: Any) -> None:
+    """Gate 1 enforcement for ``set_engine_config``: refuse a write of
+    (engine, key, value) that the target engine's core
+    ``engine_config_allowlist.yml`` does not permit (AGENTS.md's
+    "everything below core may only SUBTRACT permission" — see
+    ``docs/specs.md`` §8 for the full permission model this backs).
+
+    Always runs, independent of ``agent.guardrails.forbidden_ops``/
+    ``allowed_paths`` — the allowlist is the ONLY thing constraining what
+    ``set_engine_config`` may write at all (``engine.<name>.conf``/typed
+    fields carry no capability leaf), so it cannot be gated behind an
+    operator opting in to a DIFFERENT guardrail.
+
+    Raises:
+        PatchError: the write violates policy — a denied key/value, a key
+            on no allowlist, or an allowed key with the wrong shape. A
+            patch problem: the fix is a different patch.
+        EngineConfigAllowlistError: the target engine is registered but
+            ships no ``engine_config_allowlist.yml``, or the shipped file
+            is malformed — propagated UNCHANGED from ``load_allowlist``. A
+            data problem: the fix is shipping/repairing the file, never a
+            rejected-patch retry.
+    """
+    registered = discover_registered_engines()
+    if op.engine not in registered:
+        raise PatchError(
+            f"set_engine_config: engine {op.engine!r} is not a registered "
+            "aqueduct engine — refusing to write engine config for it "
+            f"(fail closed). Registered engines: {sorted(registered)}"
+        )
+
+    allowlist_path = registered[op.engine] / DECLARATION_FILENAME
+    # Missing/malformed file → EngineConfigAllowlistError, propagated
+    # unchanged — a shipped-data problem, never reinterpreted as a
+    # rejected patch (see this function's own docstring).
+    allowlist = load_allowlist(allowlist_path, op.engine)
+
+    reason = evaluate_set_engine_config(allowlist, op.key, op.value)
+    if reason is not None:
+        raise PatchError(f"set_engine_config: {reason}")
+
+
 def _check_guardrails(
     patch_spec: PatchSpec,
     bp_raw: dict,
@@ -292,6 +340,11 @@ def _check_guardrails(
                        add_arcade_ref — must resolve to a value matching at least
                        one fnmatch pattern. ${ctx.*} values are resolved via
                        provenance_map before matching.
+      - set_engine_config: engine/key/value must clear the target engine's
+                       core engine_config_allowlist.yml (deny layer, then
+                       allow membership, then type/enum) — see
+                       _check_engine_config_allowlist. Enforced unconditionally,
+                       not gated behind forbidden_ops/allowed_paths.
 
     Arcade-expanded modules (id contains `__`) are skipped for path checks —
     those IDs do not exist in the Blueprint YAML and the apply step will raise
@@ -309,6 +362,9 @@ def _check_guardrails(
                 f"Operation {op_name!r} is forbidden by agent.guardrails.forbidden_ops. "
                 f"Blocked ops: {forbidden_ops}"
             )
+
+        if op_name == "set_engine_config":
+            _check_engine_config_allowlist(op)
 
         if not allowed_paths:
             continue

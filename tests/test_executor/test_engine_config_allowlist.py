@@ -31,11 +31,13 @@ from aqueduct.executor.engine_config_allowlist import (
     DenyEntry,
     EngineConfigAllowlist,
     EnumConstraint,
+    RangeConstraint,
     _glob_canary,
     _size_to_bytes,
     check_presence,
     discover_allowlist_paths,
     discover_registered_engines,
+    evaluate_set_engine_config,
     load_allowlist,
     validate_against_deny,
 )
@@ -626,3 +628,93 @@ def test_validate_against_deny_cannot_be_bypassed_by_a_hand_built_allowlist():
     real = load_allowlist(_SPARK_PATH, "spark")
     with pytest.raises(EngineConfigAllowlistError):
         validate_against_deny(real, "spark.master")
+
+
+# ── evaluate_set_engine_config — the Gate 1 enforcement logic ───────────────
+#
+# The shipped files (spark/duckdb) carry no range/enum-bearing entries except
+# `spark.serializer`'s enum, so these tests build small synthetic allowlists
+# to pin the constraint branches the real data never exercises today (per the
+# module docstring: "range/enum are a MECHANISM, not a mandate" — but the
+# mechanism itself must work once an operator/entry uses it).
+
+
+def test_evaluate_against_real_spark_file_allowed_passes():
+    allowlist = load_allowlist(_SPARK_PATH, "spark")
+    assert evaluate_set_engine_config(allowlist, "spark.sql.shuffle.partitions", 200) is None
+
+
+def test_evaluate_against_real_spark_file_denied_key():
+    allowlist = load_allowlist(_SPARK_PATH, "spark")
+    reason = evaluate_set_engine_config(allowlist, "spark.master", "local[*]")
+    assert reason is not None
+    assert "redirects where work runs" in reason
+
+
+def test_evaluate_against_real_spark_file_denied_value():
+    allowlist = load_allowlist(_SPARK_PATH, "spark")
+    reason = evaluate_set_engine_config(allowlist, "spark.driver.maxResultSize", 0)
+    assert reason is not None
+    assert "0 means unlimited" in reason
+
+
+def test_evaluate_against_real_spark_file_unlisted_key():
+    allowlist = load_allowlist(_SPARK_PATH, "spark")
+    reason = evaluate_set_engine_config(allowlist, "spark.totally.unlisted.key", "x")
+    assert reason is not None
+    assert "not on engine 'spark'" in reason
+
+
+def test_evaluate_against_real_spark_file_wrong_type():
+    allowlist = load_allowlist(_SPARK_PATH, "spark")
+    reason = evaluate_set_engine_config(allowlist, "spark.sql.shuffle.partitions", "200")
+    assert reason is not None
+    assert "expected int, got str" in reason
+
+
+def test_evaluate_enum_constraint_pass_and_fail():
+    allowlist = load_allowlist(_SPARK_PATH, "spark")
+    assert evaluate_set_engine_config(
+        allowlist, "spark.serializer", "org.apache.spark.serializer.KryoSerializer"
+    ) is None
+    reason = evaluate_set_engine_config(allowlist, "spark.serializer", "com.example.Bogus")
+    assert reason is not None
+    assert "not one of" in reason
+
+
+def _synthetic_allowlist(entry: AllowlistEntry) -> EngineConfigAllowlist:
+    return EngineConfigAllowlist(engine="spark", is_free_form=True, entries=(entry,), deny_entries=())
+
+
+def test_evaluate_int_range_constraint_pass_and_fail():
+    allowlist = _synthetic_allowlist(
+        AllowlistEntry(
+            pattern="spark.sql.shuffle.partitions", value_type="int",
+            constraint=RangeConstraint(minimum=1, maximum=2000),
+        )
+    )
+    assert evaluate_set_engine_config(allowlist, "spark.sql.shuffle.partitions", 200) is None
+    reason = evaluate_set_engine_config(allowlist, "spark.sql.shuffle.partitions", 5000)
+    assert reason is not None
+    assert "outside" in reason
+
+
+def test_evaluate_size_range_constraint_pass_and_fail():
+    allowlist = _synthetic_allowlist(
+        AllowlistEntry(
+            pattern="spark.executor.memory", value_type="size",
+            constraint=RangeConstraint(minimum="128m", maximum="64g"),
+        )
+    )
+    assert evaluate_set_engine_config(allowlist, "spark.executor.memory", "4g") is None
+    reason = evaluate_set_engine_config(allowlist, "spark.executor.memory", "128g")
+    assert reason is not None
+    assert "outside" in reason
+
+
+def test_evaluate_typed_field_duckdb_pass_and_fail():
+    allowlist = load_allowlist(_DUCKDB_PATH, "duckdb")
+    assert evaluate_set_engine_config(allowlist, "threads", 4) is None
+    reason = evaluate_set_engine_config(allowlist, "database_path", "/tmp/evil.db")
+    assert reason is not None
+    assert "may not relocate it" in reason

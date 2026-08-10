@@ -184,7 +184,12 @@ def _failing_result() -> ExecutionResult:
     )
 
 
-def _spark_config_patch(patch_id: str, value: str) -> AgentPatchResult:
+def _spark_config_patch(patch_id: str, value: int) -> AgentPatchResult:
+    # value must be an int — spark.sql.shuffle.partitions is type: int on
+    # the shipped engine_config_allowlist.yml, and Gate 1
+    # (_check_guardrails) now enforces that type (cross-engine remediation
+    # follow-up); a string value here would be rejected before the patch
+    # ever reaches the session-rebuild machinery these tests exist to prove.
     patch_spec = PatchSpec(
         patch_id=patch_id,
         rationale="bump shuffle partitions",
@@ -285,7 +290,7 @@ def test_heal_retry_rebuilds_session_from_patched_manifest(
     fake_protocol = _TrackingProtocol()
     mock_get_protocol.return_value = fake_protocol
     mock_get_executor.return_value = MagicMock(return_value=_failing_result())
-    mock_generate_patch.return_value = _spark_config_patch("p1", "99")
+    mock_generate_patch.return_value = _spark_config_patch("p1", 99)
 
     result = _invoke(tmp_path, max_patches=1)
     _assert_no_unexpected_crash(result)
@@ -302,7 +307,7 @@ def test_heal_retry_rebuilds_session_from_patched_manifest(
 
     initial_spec, retry_spec, baseline_reexec_spec = fake_protocol.built_specs
     assert "spark.sql.shuffle.partitions" not in initial_spec.engine_config
-    assert retry_spec.engine_config.get("spark.sql.shuffle.partitions") == "99", (
+    assert retry_spec.engine_config.get("spark.sql.shuffle.partitions") == 99, (
         "the retry's SessionSpec.engine_config does not carry the patched "
         f"spark config key — got {retry_spec.engine_config}"
     )
@@ -347,8 +352,8 @@ def test_heal_rebuild_happens_on_every_iteration_not_only_the_first(
     mock_get_protocol.return_value = fake_protocol
     mock_get_executor.return_value = MagicMock(return_value=_failing_result())
     mock_generate_patch.side_effect = [
-        _spark_config_patch("p1", "11"),
-        _spark_config_patch("p2", "22"),
+        _spark_config_patch("p1", 11),
+        _spark_config_patch("p2", 22),
     ]
 
     result = _invoke(tmp_path, max_patches=2)
@@ -365,8 +370,8 @@ def test_heal_rebuild_happens_on_every_iteration_not_only_the_first(
     )
 
     initial, retry1, baseline_reexec1, retry2, baseline_reexec2 = fake_protocol.built_specs
-    assert retry1.engine_config.get("spark.sql.shuffle.partitions") == "11"
-    assert retry2.engine_config.get("spark.sql.shuffle.partitions") == "22"
+    assert retry1.engine_config.get("spark.sql.shuffle.partitions") == 11
+    assert retry2.engine_config.get("spark.sql.shuffle.partitions") == 22
     # The invariant this fix adds: NEITHER baseline re-execution may still
     # carry the patch that just failed — both must match the untouched
     # initial config exactly.
@@ -506,7 +511,7 @@ edges:
         ),
         failed_engine="spark",
     )
-    mock_generate_patch.return_value = _spark_config_patch("p1", "99")
+    mock_generate_patch.return_value = _spark_config_patch("p1", 99)
 
     runner = CliRunner()
     with (

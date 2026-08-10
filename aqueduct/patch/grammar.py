@@ -282,13 +282,24 @@ class SetEngineConfigOp(BaseModel, extra="forbid"):
     Auto-creates ``engine.<engine>`` (and its ``conf`` sub-block, for a
     conf-bag engine) if absent.
 
-    Guardrail: ``set_engine_config`` is **default-forbidden in auto mode**
-    via ``guardrails.forbidden_ops`` — inherited from ``set_spark_config``'s
-    posture (it is still ``engine_shaped`` in the heal-provenance
-    classification, for the same reason: an engine/session config value is
-    not portable across engines). The LLM can always propose it — it just
-    lands in ``patches/pending/`` unless the operator removes it from
-    ``forbidden_ops``.
+    Guardrail: ``set_engine_config`` is **allowlist-gated**, in every
+    approval mode including ``auto`` — Gate 1 (``aqueduct/patch/apply.py::
+    _check_guardrails``) refuses any (engine, key, value) the target
+    engine's core ``engine_config_allowlist.yml`` does not permit (deny
+    layer first, then allow membership, then type/enum — see
+    ``aqueduct/executor/engine_config_allowlist.py`` and ``docs/specs.md``
+    §8 for the full permission model). This is NOT the same thing as a
+    default `forbidden_ops` entry — no such default exists, and adding one
+    here would make the op dead on arrival in auto mode; the allowlist is
+    what makes an in-policy write safe to auto-apply at all. An operator
+    who wants human review regardless of policy can still add
+    ``set_engine_config`` to ``guardrails.forbidden_ops`` (the template
+    ships this as a commented-out recommendation) — that guardrail and the
+    allowlist are independent, both-must-pass checks, not alternatives.
+    It is still ``engine_shaped`` in the heal-provenance classification
+    (an engine/session config value is not portable across engines), and a
+    patch containing this op is never replayed from the heal cache for the
+    same reason (see ``aqueduct/agent/memory.py``).
     """
     op: Literal["set_engine_config"]
     engine: str = Field(

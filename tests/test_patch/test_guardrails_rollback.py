@@ -156,6 +156,103 @@ class TestGuardrails:
             _check_guardrails(spec, bp)
 
 
+class TestEngineConfigAllowlistGate:
+    """Gate 1 enforcement of `set_engine_config` against each engine's core
+    `engine_config_allowlist.yml` (cross-engine remediation follow-up).
+
+    Before this gate was wired, none of these patches were rejected —
+    `_check_guardrails` only ever inspected `forbidden_ops`/`allowed_paths`,
+    and `set_engine_config`'s op fields (engine/key/value) trip neither.
+    Every `pytest.raises` below therefore documents a patch that used to
+    apply cleanly and now doesn't — red before this change, green after.
+    """
+
+    # ── 1. denied key (absolute ban) ───────────────────────────────────────
+    def test_denied_key_blocks(self):
+        bp = _bp_with_guardrails()
+        spec = _patch({
+            "op": "set_engine_config", "engine": "spark",
+            "key": "spark.master", "value": "local[*]",
+        })
+        with pytest.raises(PatchError, match="redirects where work runs"):
+            _check_guardrails(spec, bp)
+
+    # ── 2. allowed key, denied value (scoped ban) ───────────────────────────
+    def test_allowed_key_denied_value_blocks(self):
+        bp = _bp_with_guardrails()
+        spec = _patch({
+            "op": "set_engine_config", "engine": "spark",
+            "key": "spark.driver.maxResultSize", "value": 0,
+        })
+        with pytest.raises(PatchError, match="0 means unlimited"):
+            _check_guardrails(spec, bp)
+
+    # ── 3. key on no list (fail closed) ─────────────────────────────────────
+    def test_key_on_no_list_blocks(self):
+        bp = _bp_with_guardrails()
+        spec = _patch({
+            "op": "set_engine_config", "engine": "spark",
+            "key": "spark.totally.unlisted.key", "value": "x",
+        })
+        with pytest.raises(PatchError, match="not on engine 'spark'"):
+            _check_guardrails(spec, bp)
+
+    # ── 4. allowed key, wrong type ───────────────────────────────────────────
+    def test_allowed_key_wrong_type_blocks(self):
+        bp = _bp_with_guardrails()
+        spec = _patch({
+            "op": "set_engine_config", "engine": "spark",
+            "key": "spark.sql.shuffle.partitions", "value": "200",  # str, not int
+        })
+        with pytest.raises(PatchError, match="expected int, got str"):
+            _check_guardrails(spec, bp)
+
+    # ── plus: allowed + well-typed passes ────────────────────────────────────
+    def test_allowed_well_typed_key_passes(self):
+        bp = _bp_with_guardrails()
+        spec = _patch({
+            "op": "set_engine_config", "engine": "spark",
+            "key": "spark.sql.shuffle.partitions", "value": 200,
+        })
+        assert _check_guardrails(spec, bp) is None
+
+    def test_allowed_typed_field_duckdb_passes(self):
+        bp = _bp_with_guardrails()
+        spec = _patch({
+            "op": "set_engine_config", "engine": "duckdb",
+            "key": "threads", "value": 4,
+        })
+        assert _check_guardrails(spec, bp) is None
+
+    # ── plus: unregistered engine fails closed ───────────────────────────────
+    def test_unregistered_engine_fails_closed(self):
+        bp = _bp_with_guardrails()
+        spec = _patch({
+            "op": "set_engine_config", "engine": "flink",
+            "key": "x", "value": "y",
+        })
+        with pytest.raises(PatchError, match="not a registered aqueduct engine"):
+            _check_guardrails(spec, bp)
+
+    # ── error taxonomy: a registered engine with a missing/broken shipped
+    #    file is a DATA problem (EngineConfigAllowlistError), never
+    #    reinterpreted as a rejected patch ─────────────────────────────────
+    def test_engine_with_missing_allowlist_file_raises_data_error(self, tmp_path):
+        import aqueduct.patch.apply as apply_mod
+        from aqueduct.errors import EngineConfigAllowlistError
+
+        bp = _bp_with_guardrails()
+        spec = _patch({
+            "op": "set_engine_config", "engine": "spark",
+            "key": "spark.sql.shuffle.partitions", "value": 200,
+        })
+        with patch.object(
+            apply_mod, "discover_registered_engines", lambda: {"spark": tmp_path}
+        ):
+            with pytest.raises(EngineConfigAllowlistError):
+                _check_guardrails(spec, bp)
+
+
 class TestRollback:
     _MINIMAL_BP = """aqueduct: "1.0"
 id: test.rollback

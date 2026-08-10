@@ -2272,6 +2272,26 @@ def run(
                             f"parses ({_re_exc}) — falling through to Agent",
                             err=True,
                         )
+                    if (
+                        _replay_patch is not None
+                        and _heal_memory.contains_set_engine_config(_replay_patch.operations)
+                    ):
+                        # Engine/session config is environment-specific (right
+                        # for the cluster it was healed on, not necessarily
+                        # for this one) — never zero-token replayed, even
+                        # though the stored patch itself parses fine and
+                        # stays in the index as audit history. Announced the
+                        # same way an unparseable/retired-op candidate is,
+                        # so the discard reads as "found but refused", never
+                        # as an ordinary cache miss.
+                        click.echo(
+                            f"  ⚠ heal cache: archived patch {_candidate.patch_id} sets engine "
+                            f"config (set_engine_config) — engine/session config is "
+                            f"environment-specific and is never replayed from cache; falling "
+                            f"through to Agent",
+                            err=True,
+                        )
+                        _replay_patch = None
                     if _replay_patch is not None:
                         _replay_ok = True
                         if effective_mode == "auto":

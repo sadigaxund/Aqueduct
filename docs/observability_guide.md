@@ -202,6 +202,13 @@ means the gate checked column consumers and found nothing broken,
 `not_applicable` means there was nothing for the gate to check at all.
 Informational — it does not block the patch, same as `skip`. `detail`
 carries the reason, e.g. "no module-lineage surface for this patch's ops").
+For the SAME zero-module patches, the `sandbox` gate still runs and can
+still report `pass` on a clean replay, but its `detail` says so honestly
+rather than reading as a validated fix: the session built and the sample
+replayed successfully under the patched engine config, but a small local
+sample cannot reproduce the cluster-scale resource failure (OOM, shuffle
+spill) the patch usually targets — only the full re-run proves efficacy.
+`status` is unaffected; only the wording changes.
 
 #### `patch_index` (1.2.x+)
 
