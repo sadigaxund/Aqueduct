@@ -146,23 +146,41 @@ def test_discover_allowlist_paths_resolves_without_importing_engine_modules():
     aqueduct.executor.spark.engine / aqueduct.executor.duckdb_.engine, which
     would pull in pyspark / register capabilities as a side effect.
 
-    Guards against the two ENGINE modules specifically (not bare
-    ``pyspark``, which some unrelated fixture elsewhere in the session may
-    have already imported before this test runs — that import happened for
-    reasons unconnected to ``discover_allowlist_paths``, so asserting on
-    engine-module identity is the precise claim, not a proxy for it).
+    Runs in a FRESH INTERPRETER (subprocess), the same pattern
+    ``tests/test_mcp/test_server.py`` uses to prove ``import aqueduct.mcp``
+    leaves the SDK out of ``sys.modules``.
+
+    An in-process version of this check cannot work: it has to assert the
+    engine modules are absent, which is only true if no earlier test in the
+    session imported them — so the guard passed or failed on test ORDER
+    rather than on the behaviour it claims to protect. A subprocess makes
+    the precondition true by construction instead of asserting it.
     """
-    import sys
+    import subprocess
+    import sys as _sys
 
-    for mod in ("aqueduct.executor.spark.engine", "aqueduct.executor.duckdb_.engine"):
-        assert mod not in sys.modules, f"{mod} was already imported by an earlier test"
+    r = subprocess.run(
+        [
+            _sys.executable,
+            "-c",
+            "import sys;"
+            "from aqueduct.executor.engine_config_allowlist import discover_allowlist_paths;"
+            "paths = discover_allowlist_paths();"
+            "assert 'aqueduct.executor.spark.engine' not in sys.modules, "
+            "'discovery imported the Spark engine module';"
+            "assert 'aqueduct.executor.duckdb_.engine' not in sys.modules, "
+            "'discovery imported the DuckDB engine module';"
+            "assert set(paths) >= {'spark', 'duckdb'}, paths;"
+            "print(paths['spark']);print(paths['duckdb'])",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 0, r.stderr
 
-    paths = discover_allowlist_paths()
-
-    assert "aqueduct.executor.spark.engine" not in sys.modules
-    assert "aqueduct.executor.duckdb_.engine" not in sys.modules
-    assert paths["spark"] == _SPARK_PATH.resolve()
-    assert paths["duckdb"] == _DUCKDB_PATH.resolve()
+    spark_line, duckdb_line = r.stdout.strip().splitlines()
+    assert Path(spark_line) == _SPARK_PATH.resolve()
+    assert Path(duckdb_line) == _DUCKDB_PATH.resolve()
 
 
 # ── malformed-file hard validation ───────────────────────────────────────────
