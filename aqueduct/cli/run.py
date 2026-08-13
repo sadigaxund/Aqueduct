@@ -2500,7 +2500,7 @@ def run(
             # run once per patch in multi-patch mode.
             _bp_path_for_cb = Path(blueprint)
 
-            def _apply_cb(patch_spec: Any, _bp=_bp_path_for_cb) -> tuple:
+            def _apply_cb(patch_spec: Any, _bp=_bp_path_for_cb, _cfg=cfg) -> tuple:
                 try:
                     from aqueduct.patch.apply import (
                         PatchError,
@@ -2548,16 +2548,18 @@ def run(
                                 )
                     except Exception as exc:
                         return False, "apply_error", (f"Patch failed to apply cleanly: {exc}"), None
-                    gb = (bp_raw.get("agent") or {}).get("guardrails") or {}
-                    if not (
-                        gb.get("forbidden_ops")
-                        or gb.get("allowed_paths")
-                        or gb.get("heal_on_errors")
-                        or gb.get("never_heal_errors")
-                    ):
-                        return True, None, None, None
+                    # Called UNCONDITIONALLY. It used to short-circuit when the
+                    # Blueprint declared no `agent.guardrails`, which silently
+                    # skipped the two checks that are not guardrail-gated at
+                    # all — `set_engine_config`'s core allowlist and the
+                    # effective-config delta — on every Blueprint that never
+                    # opted into guardrails, i.e. most of them. Those checks
+                    # still fired at the later real-apply site, so nothing
+                    # unsafe applied; what was lost is the reprompt: the model
+                    # never saw the rejection and could not correct it in the
+                    # same heal.
                     try:
-                        _check_guardrails(patch_spec, bp_raw, provenance_map=None)
+                        _check_guardrails(patch_spec, bp_raw, provenance_map=None, cfg=_cfg)
                         return True, None, None, None
                     except PatchError as exc:
                         return False, "guardrail_violation", str(exc), None
@@ -2835,6 +2837,7 @@ def run(
                         mode="auto",
                         obs_store=_obs_store,
                         patch_store=_patch_store,
+                        cfg=cfg,
                     )
                     click.echo(
                         click.style(
@@ -3116,7 +3119,9 @@ def run(
                 from aqueduct.patch.apply import _check_guardrails as _apply_check_guardrails
 
                 _bp_raw = _yaml.safe_load(blueprint_abs.read_text(encoding="utf-8")) or {}
-                _apply_check_guardrails(patch, _bp_raw, provenance_map=manifest.provenance_map)
+                _apply_check_guardrails(
+                    patch, _bp_raw, provenance_map=manifest.provenance_map, cfg=cfg
+                )
                 guardrail_err = None
             except _PatchError as _ge:
                 guardrail_err = str(_ge)
@@ -3390,6 +3395,7 @@ def run(
                         mode="auto",
                         obs_store=_obs_store,
                         patch_store=_patch_store,
+                        cfg=cfg,
                     )
                     click.echo(
                         f"  ✓ multi-patch: sandbox-only validated ({_g3.sample_rows or '∞'} rows) → {blueprint}",
@@ -3487,6 +3493,7 @@ def run(
                         mode="auto",
                         obs_store=_obs_store,
                         patch_store=_patch_store,
+                        cfg=cfg,
                     )
                     click.echo(
                         f"  {click.style('✓', fg='green', bold=True)} Agent patch validated and applied ({patch_count}/{max_patches}) → {blueprint}",

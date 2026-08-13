@@ -38,6 +38,10 @@ from aqueduct.executor.engine_config_allowlist import (
     load_allowlist,
 )
 from aqueduct.parser.parser import ParseError, parse
+from aqueduct.patch.config_delta import (
+    EngineConfigDeltaResult,
+    run_engine_config_delta_gate,
+)
 from aqueduct.patch.grammar import PATCH_META_KEY, PatchSpec, RetiredPatchOpError
 from aqueduct.patch.operations import PatchOperationError, apply_operation
 from aqueduct.patch.provenance import build_healed_by_record
@@ -339,7 +343,9 @@ def _check_guardrails(
     patch_spec: PatchSpec,
     bp_raw: dict,
     provenance_map: Any | None = None,
-) -> None:
+    *,
+    cfg: Any,
+) -> EngineConfigDeltaResult:
     """Deterministically enforce agent.guardrails declared in the Blueprint.
 
     Raises PatchError if any operation violates:
@@ -355,10 +361,29 @@ def _check_guardrails(
                        allow membership, then type/enum) — see
                        _check_engine_config_allowlist. Enforced unconditionally,
                        not gated behind forbidden_ops/allowed_paths.
+      - effective engine config: a patch that WRITES engine config but leaves
+                       every engine's *resolved* session config identical is
+                       refused (`aqueduct/patch/config_delta.py`). A clean
+                       apply that changes nothing is the silent no-op this
+                       gate exists to make impossible.
 
     Arcade-expanded modules (id contains `__`) are skipped for path checks —
     those IDs do not exist in the Blueprint YAML and the apply step will raise
     a clearer "Module not found" error.
+
+    ``cfg`` (an ``AqueductConfig``) is REQUIRED and keyword-only, no default.
+    The effective session config is a MERGE of ``aqueduct.yml``'s
+    ``engine.<name>`` block and the Blueprint's own, so the delta check
+    cannot be answered from the Blueprint alone — and a default of ``None``
+    would silently degrade the check to "Blueprint layer only" on whichever
+    call site forgot to pass one, which is precisely the class of skippable
+    gate this function is shared to prevent. Every caller already resolves a
+    config (or can load the ambient one) before applying a patch.
+
+    Returns the effective-config gate result so a caller that renders gates
+    (``aqueduct patch preview``) or records provenance (``apply_patch_file``)
+    can use the SAME evaluation that enforced the refusal, instead of
+    re-deriving it and risking a second, drifting answer.
     """
     guardrails = (bp_raw.get("agent") or {}).get("guardrails") or {}
     forbidden_ops: list[str] = guardrails.get("forbidden_ops") or []
@@ -407,11 +432,23 @@ def _check_guardrails(
             module_id = (module_dict.get("id") or "") if isinstance(module_dict, dict) else ""
             if is_arcade_expanded_id(module_id):
                 continue
-            cfg = module_dict.get("config") if isinstance(module_dict, dict) else None
+            module_cfg = module_dict.get("config") if isinstance(module_dict, dict) else None
             _check_config_dict_paths(
-                cfg, allowed_paths,
+                module_cfg, allowed_paths,
                 op_name, module_id, provenance_map,
             )
+
+    # ── Effective engine/session config delta ────────────────────────────────
+    # Runs LAST (after forbidden_ops / allowed_paths / the allowlist) so a
+    # patch that is refused on policy grounds is reported by the policy that
+    # refused it, not by an efficacy check. Runs UNCONDITIONALLY: its
+    # applicability is derived from what the patch actually writes, so a
+    # pipeline-only patch costs one dict re-apply and reports
+    # `not_applicable` — never `pass`, which would claim a check that had
+    # nothing to look at.
+    return run_engine_config_delta_gate(
+        cfg=cfg, blueprint_before=bp_raw, patch_spec=patch_spec
+    )
 
 
 def _set_index_status(
@@ -441,6 +478,7 @@ def apply_patch_file(
     obs_store: Any | None = None,
     patch_store: Any | None = None,
     pending_key: str | None = None,
+    cfg: Any | None = None,
 ) -> ApplyResult:
     """Full apply lifecycle: validate → apply → verify → backup → write → archive.
 
@@ -448,6 +486,16 @@ def apply_patch_file(
         blueprint_path: Path to the Blueprint YAML file to patch.
         patch_path:     Path to the PatchSpec JSON file (operations source).
         patches_dir:    Root directory for patch lifecycle dirs (backups/, applied/).
+        cfg:            Resolved ``AqueductConfig``, needed by Gate 1's
+                        effective-engine-config check (the config an engine
+                        runs with is ``aqueduct.yml``'s ``engine.<name>``
+                        block merged under the Blueprint's own). ``None``
+                        means "load the ambient config the same way every
+                        command does" (``load_config(None)`` — the
+                        ``aqueduct.yml`` in the working directory, or plain
+                        defaults when there is none), NOT "skip the check":
+                        there is no code path here in which the delta gate
+                        does not run.
         patch_store:    When given, the patch BODY lifecycle (archive to
                         ``applied/`` and remove the ``pending/`` source) runs in
                         this ``PatchStore`` — local OR object backend — instead of
@@ -498,7 +546,10 @@ def apply_patch_file(
         raise PatchError(f"Cannot load Blueprint YAML from {blueprint_path}: {exc}") from exc
 
     # ── 2.5 Guardrail enforcement (deterministic — blueprint config, not prompt) ─
-    _check_guardrails(patch_spec, bp_raw, provenance_map=provenance_map)
+    if cfg is None:
+        from aqueduct.config import load_config
+        cfg = load_config(None)
+    _config_delta_res = _check_guardrails(patch_spec, bp_raw, provenance_map=provenance_map, cfg=cfg)
 
     # ── 3 & 4. Apply operations on deep copy ──────────────────────────────────
     patched = apply_patch_to_dict(bp_raw, patch_spec)
@@ -514,6 +565,7 @@ def apply_patch_file(
         meta=_patch_meta,
         applied_at=applied_at,
         fallback_run_id=patch_spec.run_id,
+        engine_config_delta=_config_delta_res.delta,
     )
     patched = _append_healed_by(patched, _healed_by_record)
 

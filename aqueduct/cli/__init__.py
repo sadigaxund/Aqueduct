@@ -386,8 +386,18 @@ def _write_patch_to_blueprint(
     mode: str,  # noqa: F811
     obs_store=None,
     patch_store=None,
+    cfg=None,
 ) -> Any:
-    """Write patch permanently to Blueprint, re-parse, re-compile. Returns new Manifest or None."""
+    """Write patch permanently to Blueprint, re-parse, re-compile. Returns new Manifest or None.
+
+    ``cfg`` (``AqueductConfig``) is used only to record the EFFECTIVE
+    engine-config delta in the ``healed_by:`` provenance record — the same
+    delta Gate 1 computed when it let this patch through. Without it the
+    auto-apply path would write a provenance record silently missing the one
+    field that says what a ``set_engine_config`` patch actually changed,
+    while ``aqueduct patch apply`` recorded it. ``None`` falls back to the
+    ambient config (``load_config(None)``), never to omitting the field.
+    """
     try:
         import os as _os
         from datetime import datetime
@@ -418,12 +428,25 @@ def _write_patch_to_blueprint(
             "engine_version": detect_engine_version(getattr(failure_ctx, "engine", "")),
             "run_id": getattr(failure_ctx, "run_id", None),
         }
+        if cfg is None:
+            from aqueduct.config import load_config as _load_config
+
+            cfg = _load_config(None)
+        from aqueduct.patch.config_delta import run_engine_config_delta_gate
+
+        _delta_res = run_engine_config_delta_gate(
+            cfg=cfg,
+            blueprint_before=bp_raw,
+            patch_spec=patch,
+            blueprint_after=patched,
+        )
         _healed_by_record = build_healed_by_record(
             patch_id=patch.patch_id,
             operations=patch.operations,
             meta=_meta,
             applied_at=_applied_at,
             fallback_run_id=patch.run_id,
+            engine_config_delta=_delta_res.delta,
         )
         patched = _append_healed_by(patched, _healed_by_record)
 

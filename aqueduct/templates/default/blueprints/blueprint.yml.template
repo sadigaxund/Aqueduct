@@ -197,7 +197,8 @@ engine:
 # ── Self-heal provenance (machine-written, do not hand-author) ─────────────────
 #
 # `aqueduct patch apply` appends a `healed_by:` record here for every applied
-# self-heal patch (engine, classification, applied_at, validated_on — see
+# self-heal patch (engine, classification, applied_at, validated_on, plus
+# engine_config_delta when the patch changed effective engine config — see
 # docs/specs.md §8.14). It never affects the compiled Manifest and does not
 # need to be edited by hand; if you see it in a Blueprint, leave it alone.
 

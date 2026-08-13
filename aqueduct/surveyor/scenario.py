@@ -421,16 +421,22 @@ def _try_apply_patch(patch: Any, blueprint_path: Path) -> tuple[bool, str, list[
             or guardrails_block.get("heal_on_errors")
             or guardrails_block.get("never_heal_errors")
         )
-        violated: list[str] | None
-        if has_guardrails:
-            try:
-                _check_guardrails(patch, bp_raw, provenance_map=None)
-                violated = []
-            except PatchError as exc:
+        violated: list[str] | None = [] if has_guardrails else None
+        # Called UNCONDITIONALLY, even for a scenario blueprint that declares
+        # no `agent.guardrails`. `_check_guardrails` also enforces
+        # `set_engine_config`'s core allowlist and the effective-config delta,
+        # neither of which is guardrail-gated — running it only when
+        # guardrails exist would let the benchmark score a config patch as
+        # PASS that production refuses, which is the exact over-reporting this
+        # helper was written to end. `violated` still means *guardrail*
+        # violation specifically, so a non-guardrail refusal leaves it as-is.
+        from aqueduct.config import load_config as _load_config
+        try:
+            _check_guardrails(patch, bp_raw, provenance_map=None, cfg=_load_config(None))
+        except PatchError as exc:
+            if has_guardrails:
                 violated = [str(exc)]
-                return False, f"guardrails violated: {exc}", violated, None
-        else:
-            violated = None
+            return False, f"guardrails violated: {exc}", violated, None
 
         patched = apply_patch_to_dict(bp_raw, patch)
 

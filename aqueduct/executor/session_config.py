@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from aqueduct.config import AqueductConfig
 
 __all__ = [
+    "resolve_effective_engine_configs",
     "resolve_session_engine_config",
     "session_config_fingerprint",
     "session_secrets_options",
@@ -77,6 +78,50 @@ def resolve_session_engine_config(
     if engine_cfg is None:
         return {}
     return {**engine_cfg.model_dump(), **blueprint_override}
+
+
+class _BlueprintLayerOnly:
+    """Minimal ``manifest``-shaped carrier for ``resolve_session_engine_config``.
+
+    That function reads exactly one attribute off its ``manifest`` argument
+    (``.engine_config``), so a Blueprint-level override map that has NOT been
+    compiled into a ``Manifest`` yet — the patch gates run on a raw Blueprint
+    dict, before any compile — can be layered through the SAME resolver a
+    real run uses. Deliberately not a public re-implementation of the merge:
+    the whole point is that there is one precedence rule and one function
+    that knows it.
+    """
+
+    __slots__ = ("engine_config",)
+
+    def __init__(self, engine_config: dict[str, dict[str, Any]]) -> None:
+        self.engine_config = engine_config
+
+
+def resolve_effective_engine_configs(
+    cfg: AqueductConfig,
+    blueprint_engine_config: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Effective session config for EVERY engine ``cfg`` knows about.
+
+    ``blueprint_engine_config`` is the Blueprint-level ``engine:`` block in
+    the same shape ``Manifest.engine_config`` carries (engine name -> that
+    engine's override dict). Returns engine name -> the config that engine
+    would actually run with, each resolved through
+    ``resolve_session_engine_config`` so the layering rule is stated once.
+
+    Engine set comes from ``cfg.engine``'s own model fields — every engine
+    the installed config schema declares — never from the keys present in
+    ``blueprint_engine_config``. Reading the engine list off the Blueprint
+    would make the answer depend on which engines the author happened to
+    mention, so a write into a block the Blueprint had not previously
+    declared would be compared against nothing.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for engine in type(cfg.engine).model_fields:
+        shim = _BlueprintLayerOnly({engine: dict(blueprint_engine_config.get(engine) or {})})
+        out[engine] = resolve_session_engine_config(cfg, engine, shim)
+    return out
 
 
 def session_config_fingerprint(cfg: AqueductConfig, engine: str, manifest: Any) -> str:

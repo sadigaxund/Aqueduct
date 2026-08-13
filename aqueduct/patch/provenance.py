@@ -75,6 +75,7 @@ def build_healed_by_record(
     meta: dict[str, Any] | None,
     applied_at: str,
     fallback_run_id: str | None = None,
+    engine_config_delta: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """Build one `healed_by:` record dict, or None if there is no heal
     provenance to record.
@@ -84,12 +85,27 @@ def build_healed_by_record(
     _write_patch_to_blueprint``). A patch with no ``engine`` in its meta (a
     hand-authored patch applied outside the heal loop) is NOT stamped —
     `healed_by` documents heal provenance, not every blueprint edit.
+
+    ``engine_config_delta`` is the EFFECTIVE session-config diff Gate 1
+    computed for this patch (``aqueduct/patch/config_delta.py``): what the
+    target engine will actually see change, after
+    ``resolve_session_engine_config`` merges ``aqueduct.yml``'s
+    ``engine.<name>`` block with the Blueprint's own. It belongs HERE
+    rather than in ``_aq_meta`` because it is an APPLY-time fact, not a
+    generation-time one: the same patch applied against a different
+    ``aqueduct.yml`` has a different effective delta, and the model that
+    wrote the patch never saw either. ``_aq_meta`` documents how the patch
+    was produced; ``healed_by:`` documents what applying it did — and it
+    lands in the Blueprint beside the change itself, so one `git diff`
+    shows both the YAML write and the behaviour it bought. Omitted from the
+    record when empty (a patch that writes no engine config), so a
+    pipeline-only heal's provenance block is byte-identical to before.
     """
     meta = meta or {}
     engine = meta.get("engine")
     if not engine:
         return None
-    return {
+    record = {
         "patch_id": patch_id,
         "engine": engine,
         "engine_version": meta.get("engine_version"),
@@ -98,6 +114,9 @@ def build_healed_by_record(
         "applied_at": applied_at,
         "validated_on": [],
     }
+    if engine_config_delta:
+        record["engine_config_delta"] = engine_config_delta
+    return record
 
 # ── Field-sensitive refinement for set_module_config_key ───────────────────
 # Config keys (dot-notation, matched by exact name or a leading prefix) that

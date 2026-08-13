@@ -193,10 +193,28 @@ def patch_preview(
         click.echo(f"✗ patch schema error: {exc}", err=True)
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
+    # Config is loaded here, not only under `--sandbox`, because Gate 1's
+    # effective-engine-config check needs the `aqueduct.yml` layer to answer
+    # whether a config write changes anything — `patch preview` has to run
+    # the SAME gate `patch apply` runs, or a reviewer is shown a verdict the
+    # apply will not honour.
+    cfg = None
+    try:
+        _resolve_and_load_env(
+            env_file,
+            _Path(config_path) if config_path else _Path(blueprint_path),
+            cli_env=cli_env,
+        )
+        cfg = load_config(_Path(config_path) if config_path else None)
+        _apply_warnings_from_cfg(cfg)
+    except ConfigError as exc:
+        click.echo(f"✗ config error: {exc}", err=True)
+        sys.exit(exit_codes.CONFIG_ERROR)
+
     # Guardrails gate — deterministic. Identical enforcement used by
     # `patch apply`; surfaced here so reviewers see violations up front.
     try:
-        _check_guardrails(spec, bp_raw, provenance_map=None)
+        config_delta_res = _check_guardrails(spec, bp_raw, provenance_map=None, cfg=cfg)
     except PatchError as exc:
         from aqueduct.cli.style import error as _style_error
 
@@ -215,18 +233,6 @@ def patch_preview(
     sandbox_res = None
     explain_res = None
     if sandbox:
-        cfg = None
-        try:
-            _resolve_and_load_env(
-                env_file,
-                _Path(config_path) if config_path else _Path(blueprint_path),
-                cli_env=cli_env,
-            )
-            cfg = load_config(_Path(config_path) if config_path else None)
-            _apply_warnings_from_cfg(cfg)
-        except ConfigError as exc:
-            click.echo(f"✗ config error (needed for sandbox): {exc}", err=True)
-            sys.exit(exit_codes.CONFIG_ERROR)
         from aqueduct.stores import get_stores
 
         bundle = get_stores(cfg)
@@ -283,6 +289,14 @@ def patch_preview(
                 "warnings": [w.__dict__ for w in lineage_res.warnings],
                 "detail": lineage_res.detail or None,
                 "duration_ms": lineage_res.duration_ms,
+            },
+            "engine_config": {
+                "status": config_delta_res.status,
+                "detail": config_delta_res.detail,
+                "delta": config_delta_res.delta,
+                "write_targets": {
+                    k: list(v) for k, v in config_delta_res.write_targets.items()
+                },
             },
         }
         if sandbox_res is not None:
@@ -356,6 +370,16 @@ def patch_preview(
     else:
         click.echo("  no downstream column-consumption regressions detected")
     click.echo(f"  duration:        {lineage_res.duration_ms} ms")
+
+    click.echo()
+    click.echo(_dim("── Engine-config gate (effective session config) ─────────────"))
+    _gate_status_line(config_delta_res.status)
+    click.echo(f"  detail: {config_delta_res.detail}")
+    for _eng, _keys in sorted(config_delta_res.delta.items()):
+        for _key, _ba in sorted(_keys.items()):
+            click.echo(
+                f"    {_eng}.{_key}: {_ba['before']!r} → {_ba['after']!r}"
+            )
 
     if sandbox_res is not None:
         click.echo()
@@ -662,6 +686,7 @@ def patch_apply(
     """
     from pathlib import Path
 
+    from aqueduct.config import ConfigError, load_config
     from aqueduct.patch.apply import PatchError, apply_patch_file
 
     blueprint_path = Path(blueprint)
@@ -677,6 +702,15 @@ def patch_apply(
         cli_env,
         need_local=True,
     )
+    # `--config` is honoured explicitly: Gate 1's effective-engine-config
+    # check compares against `aqueduct.yml`'s `engine.<name>` layer, so
+    # letting `apply_patch_file` fall back to ambient discovery would answer
+    # against a different config than the one the user named.
+    try:
+        _cfg = load_config(Path(config_path) if config_path else None)
+    except ConfigError as exc:
+        click.echo(f"\u2717 config error: {exc}", err=True)
+        sys.exit(exit_codes.CONFIG_ERROR)
     try:
         result = apply_patch_file(
             blueprint_path=blueprint_path,
@@ -685,6 +719,7 @@ def patch_apply(
             obs_store=_patch_index_obs_store(blueprint_path),
             patch_store=ps,
             pending_key=pending_key,
+            cfg=_cfg,
         )
     except PatchError as exc:
         click.echo(f"✗ patch failed: {exc}", err=True)
@@ -746,6 +781,7 @@ def patch_import(
     import tempfile
     from pathlib import Path
 
+    from aqueduct.config import ConfigError, load_config
     from aqueduct.patch.apply import PatchError, apply_patch_file
     from aqueduct.patch.ci import build_commit_message, validate_ci_payload
 
@@ -808,6 +844,11 @@ def patch_import(
         _apply_path = _tmp_unwrapped
 
     try:
+        _cfg = load_config(Path(config_path) if config_path else None)
+    except ConfigError as exc:
+        click.echo(f"\u2717 config error: {exc}", err=True)
+        sys.exit(exit_codes.CONFIG_ERROR)
+    try:
         result = apply_patch_file(
             blueprint_path=blueprint_path,
             patch_path=_apply_path,
@@ -815,6 +856,7 @@ def patch_import(
             obs_store=_patch_index_obs_store(blueprint_path),
             patch_store=_ps,
             pending_key=_pending_key,
+            cfg=_cfg,
         )
     except PatchError as exc:
         click.echo(f"✗ patch failed: {exc}", err=True)

@@ -284,6 +284,9 @@ leaves:
   healed_by.field.engine:
     support: supported
     hint: Compiler-consumed provenance metadata — no engine executes it.
+  healed_by.field.engine_config_delta:
+    support: supported
+    hint: Patch-apply provenance metadata (effective session-config diff) — recorded by core, no engine executes it.
   healed_by.field.engine_version:
     support: supported
     hint: Compiler-consumed provenance metadata — no engine executes it.

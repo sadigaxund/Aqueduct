@@ -9,8 +9,14 @@ pytestmark = pytest.mark.unit
 from click.testing import CliRunner
 
 from aqueduct.cli import cli
+from aqueduct.config import AqueductConfig
 from aqueduct.patch.apply import PatchError, _check_guardrails
 from aqueduct.patch.grammar import PatchSpec
+
+# Gate 1 needs the `aqueduct.yml` layer to answer the effective-engine-config
+# check; these fixtures assert guardrail behaviour, so a defaults-only config
+# is the right ambient (no engine.<name> keys set anywhere).
+_CFG = AqueductConfig()
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 
@@ -38,19 +44,19 @@ class TestGuardrails:
     def test_no_restrictions_always_pass(self):
         bp = _bp_with_guardrails()
         spec = _patch({"op": "remove_module", "module_id": "x"})
-        assert _check_guardrails(spec, bp) is None  # passes → returns None, no raise
+        assert _check_guardrails(spec, bp, cfg=_CFG).status == "not_applicable"  # passes → returns None, no raise
 
     def test_forbidden_op_blocks(self):
         bp = _bp_with_guardrails(forbidden_ops=("remove_module",))
         spec = _patch({"op": "remove_module", "module_id": "x"})
         with pytest.raises(PatchError, match="remove_module"):
-            _check_guardrails(spec, bp)
+            _check_guardrails(spec, bp, cfg=_CFG)
 
     def test_forbidden_replace_macro_blocks(self):
         bp = _bp_with_guardrails(forbidden_ops=("replace_macro",))
         spec = _patch({"op": "replace_macro", "name": "m", "value": "SELECT 1"})
         with pytest.raises(PatchError, match="replace_macro"):
-            _check_guardrails(spec, bp)
+            _check_guardrails(spec, bp, cfg=_CFG)
 
     # ── set_module_config_key path enforcement ────────────────────────────────
     def test_set_key_path_matching_passes(self):
@@ -59,7 +65,7 @@ class TestGuardrails:
             "op": "set_module_config_key", "module_id": "x",
             "key": "path", "value": "s3a://prod/orders/",
         })
-        assert _check_guardrails(spec, bp) is None  # path in allowlist → passes
+        assert _check_guardrails(spec, bp, cfg=_CFG).status == "not_applicable"  # path in allowlist → passes
 
     def test_set_key_path_non_matching_blocks(self):
         bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
@@ -68,7 +74,7 @@ class TestGuardrails:
             "key": "path", "value": "s3a://staging/orders/",
         })
         with pytest.raises(PatchError, match="s3a://staging/orders/"):
-            _check_guardrails(spec, bp)
+            _check_guardrails(spec, bp, cfg=_CFG)
 
     def test_set_key_non_path_key_ignored(self):
         bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
@@ -76,7 +82,7 @@ class TestGuardrails:
             "op": "set_module_config_key", "module_id": "x",
             "key": "format", "value": "/etc/passwd",
         })
-        assert _check_guardrails(spec, bp) is None  # only path/output_path keys are checked
+        assert _check_guardrails(spec, bp, cfg=_CFG).status == "not_applicable"  # only path/output_path keys are checked
 
     def test_set_key_arcade_expanded_id_skipped(self):
         bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
@@ -84,7 +90,7 @@ class TestGuardrails:
             "op": "set_module_config_key", "module_id": "arcade__ingress",
             "key": "path", "value": "s3a://staging/anywhere/",
         })
-        assert _check_guardrails(spec, bp) is None  # arcade-expanded id skipped here
+        assert _check_guardrails(spec, bp, cfg=_CFG).status == "not_applicable"  # arcade-expanded id skipped here
 
     # ── replace_module_config path enforcement (regression for bypass bug) ────
     def test_replace_config_path_matching_passes(self):
@@ -93,7 +99,7 @@ class TestGuardrails:
             "op": "replace_module_config", "module_id": "x",
             "config": {"format": "parquet", "path": "s3a://prod/orders/"},
         })
-        assert _check_guardrails(spec, bp) is None  # config path in allowlist → passes
+        assert _check_guardrails(spec, bp, cfg=_CFG).status == "not_applicable"  # config path in allowlist → passes
 
     def test_replace_config_path_non_matching_blocks(self):
         bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
@@ -102,7 +108,7 @@ class TestGuardrails:
             "config": {"format": "parquet", "path": "/etc/passwd"},
         })
         with pytest.raises(PatchError, match="/etc/passwd"):
-            _check_guardrails(spec, bp)
+            _check_guardrails(spec, bp, cfg=_CFG)
 
     def test_replace_config_output_path_blocks(self):
         bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
@@ -111,7 +117,7 @@ class TestGuardrails:
             "config": {"format": "parquet", "output_path": "/tmp/leak"},
         })
         with pytest.raises(PatchError, match="/tmp/leak"):
-            _check_guardrails(spec, bp)
+            _check_guardrails(spec, bp, cfg=_CFG)
 
     # ── insert_module / add_probe / add_arcade_ref carry full module dicts ────
     def test_insert_module_path_blocks(self):
@@ -125,7 +131,7 @@ class TestGuardrails:
             "edges_to_add": [], "edges_to_remove": [],
         })
         with pytest.raises(PatchError, match="s3a://attacker/data/"):
-            _check_guardrails(spec, bp)
+            _check_guardrails(spec, bp, cfg=_CFG)
 
     def test_add_probe_path_blocks(self):
         bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
@@ -139,7 +145,7 @@ class TestGuardrails:
             "edges_to_add": [],
         })
         with pytest.raises(PatchError, match="/etc/secret"):
-            _check_guardrails(spec, bp)
+            _check_guardrails(spec, bp, cfg=_CFG)
 
     def test_add_arcade_ref_path_blocks(self):
         bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
@@ -153,7 +159,7 @@ class TestGuardrails:
             "edges_to_add": [], "edges_to_remove": [],
         })
         with pytest.raises(PatchError, match="/var/leak"):
-            _check_guardrails(spec, bp)
+            _check_guardrails(spec, bp, cfg=_CFG)
 
 
 class TestEngineConfigAllowlistGate:
@@ -175,7 +181,7 @@ class TestEngineConfigAllowlistGate:
             "key": "spark.master", "value": "local[*]",
         })
         with pytest.raises(PatchError, match="redirects where work runs"):
-            _check_guardrails(spec, bp)
+            _check_guardrails(spec, bp, cfg=_CFG)
 
     # ── 2. allowed key, denied value (scoped ban) ───────────────────────────
     def test_allowed_key_denied_value_blocks(self):
@@ -185,7 +191,7 @@ class TestEngineConfigAllowlistGate:
             "key": "spark.driver.maxResultSize", "value": 0,
         })
         with pytest.raises(PatchError, match="0 means unlimited"):
-            _check_guardrails(spec, bp)
+            _check_guardrails(spec, bp, cfg=_CFG)
 
     # ── 3. key on no list (fail closed) ─────────────────────────────────────
     def test_key_on_no_list_blocks(self):
@@ -195,7 +201,7 @@ class TestEngineConfigAllowlistGate:
             "key": "spark.totally.unlisted.key", "value": "x",
         })
         with pytest.raises(PatchError, match="not on engine 'spark'"):
-            _check_guardrails(spec, bp)
+            _check_guardrails(spec, bp, cfg=_CFG)
 
     # ── 4. allowed key, wrong type ───────────────────────────────────────────
     def test_allowed_key_wrong_type_blocks(self):
@@ -205,7 +211,7 @@ class TestEngineConfigAllowlistGate:
             "key": "spark.sql.shuffle.partitions", "value": "200",  # str, not int
         })
         with pytest.raises(PatchError, match="expected int, got str"):
-            _check_guardrails(spec, bp)
+            _check_guardrails(spec, bp, cfg=_CFG)
 
     # ── plus: allowed + well-typed passes ────────────────────────────────────
     def test_allowed_well_typed_key_passes(self):
@@ -214,7 +220,9 @@ class TestEngineConfigAllowlistGate:
             "op": "set_engine_config", "engine": "spark",
             "key": "spark.sql.shuffle.partitions", "value": 200,
         })
-        assert _check_guardrails(spec, bp) is None
+        # `pass`, not `not_applicable`: this patch DOES write engine config
+        # and the write changes the resolved value (nothing set it before).
+        assert _check_guardrails(spec, bp, cfg=_CFG).status == "pass"
 
     def test_allowed_typed_field_duckdb_passes(self):
         bp = _bp_with_guardrails()
@@ -222,7 +230,7 @@ class TestEngineConfigAllowlistGate:
             "op": "set_engine_config", "engine": "duckdb",
             "key": "threads", "value": 4,
         })
-        assert _check_guardrails(spec, bp) is None
+        assert _check_guardrails(spec, bp, cfg=_CFG).status == "pass"
 
     # ── plus: unregistered engine fails closed ───────────────────────────────
     def test_unregistered_engine_fails_closed(self):
@@ -232,7 +240,7 @@ class TestEngineConfigAllowlistGate:
             "key": "x", "value": "y",
         })
         with pytest.raises(PatchError, match="not a registered aqueduct engine"):
-            _check_guardrails(spec, bp)
+            _check_guardrails(spec, bp, cfg=_CFG)
 
     # ── discovery loop: a rejection must name the command that shows the
     #    policy it was evaluated against (`aqueduct patch policy`) — guarded
@@ -245,7 +253,7 @@ class TestEngineConfigAllowlistGate:
             "key": "spark.master", "value": "local[*]",
         })
         with pytest.raises(PatchError, match=r"aqueduct patch policy --engine spark"):
-            _check_guardrails(spec, bp)
+            _check_guardrails(spec, bp, cfg=_CFG)
 
     def test_key_on_no_list_message_names_policy_command(self):
         bp = _bp_with_guardrails()
@@ -254,7 +262,7 @@ class TestEngineConfigAllowlistGate:
             "key": "spark.totally.unlisted.key", "value": "x",
         })
         with pytest.raises(PatchError, match=r"aqueduct patch policy --engine spark"):
-            _check_guardrails(spec, bp)
+            _check_guardrails(spec, bp, cfg=_CFG)
 
     def test_unregistered_engine_message_names_policy_command(self):
         bp = _bp_with_guardrails()
@@ -263,7 +271,7 @@ class TestEngineConfigAllowlistGate:
             "key": "x", "value": "y",
         })
         with pytest.raises(PatchError, match=r"aqueduct patch policy"):
-            _check_guardrails(spec, bp)
+            _check_guardrails(spec, bp, cfg=_CFG)
 
     # ── error taxonomy: a registered engine with a missing/broken shipped
     #    file is a DATA problem (EngineConfigAllowlistError), never
@@ -281,7 +289,7 @@ class TestEngineConfigAllowlistGate:
             apply_mod, "discover_registered_engines", lambda: {"spark": tmp_path}
         ):
             with pytest.raises(EngineConfigAllowlistError):
-                _check_guardrails(spec, bp)
+                _check_guardrails(spec, bp, cfg=_CFG)
 
 
 class TestRollback:

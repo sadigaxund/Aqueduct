@@ -314,6 +314,10 @@ class HealedByRecord:
     engine_version: str | None = None
     run_id: str | None = None
     validated_on: tuple[str, ...] = ()
+    # Effective session-config diff Gate 1 recorded for this patch, per
+    # engine: {engine: {key: {"before": ..., "after": ...}}}. Empty for a
+    # patch that writes no engine config.
+    engine_config_delta: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

@@ -349,6 +349,7 @@ def test_apply_patch_to_dict_ingress_missing_format_detected(tmp_path):
 @pytest.mark.unit
 def test_apply_patch_to_dict_skips_guardrail_after_schema_drift(tmp_path):
     """ReplaceModuleConfigOp on a Channel without 'op' is a schema issue, not a guardrails issue."""
+    from aqueduct.config import AqueductConfig
     from aqueduct.patch.apply import PatchError, _check_guardrails, apply_patch_to_dict
     from aqueduct.patch.grammar import PatchSpec, ReplaceModuleConfigOp
 
@@ -381,4 +382,4 @@ def test_apply_patch_to_dict_skips_guardrail_after_schema_drift(tmp_path):
     with pytest.raises(PatchError):
         # Test guardrails on the ORIGINAL (unpatched) bp — should catch the
         # forbidden op. This confirms guardrails work when schema is valid.
-        _check_guardrails(patch_spec, bp_raw, provenance_map=None)
+        _check_guardrails(patch_spec, bp_raw, provenance_map=None, cfg=AqueductConfig())

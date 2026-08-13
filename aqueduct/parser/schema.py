@@ -1086,6 +1086,14 @@ class HealedByRecordSchema(BaseModel):
     # Appended to (never replaces) by the self-clearing stamp on a successful
     # run — see aqueduct/patch/apply.py::stamp_validated_engine.
     validated_on: list[str] = Field(default_factory=list)
+    # EFFECTIVE session-config diff this patch produced, per engine:
+    # {engine: {key: {before, after}}}. Written by Gate 1's
+    # effective-engine-config check (aqueduct/patch/config_delta.py) at apply
+    # time, because the resolved config depends on the aqueduct.yml the patch
+    # was applied against — not on anything the patch itself carries. Absent
+    # for a patch that writes no engine config (the overwhelmingly common
+    # pipeline-only heal), never an empty mapping.
+    engine_config_delta: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class BlueprintSchema(BaseModel):

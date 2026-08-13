@@ -325,14 +325,25 @@ def heal(
     # rejections feed back as reprompts (same as `aqueduct run` self-heal). No
     # live blueprint path here — heal-from-store reconstructs the minimal dict
     # `_check_guardrails` needs from the manifest_json carried in the obs DB.
-    def _apply_cb(patch_spec: Any, _gb=_guardrails_for_prompt) -> tuple:
-        if not _gb:
-            return True, None, None, None
+    def _apply_cb(patch_spec: Any, _gb=_guardrails_for_prompt, _cfg=cfg) -> tuple:
+        # No `if not _gb: return` short-circuit: `_check_guardrails` also
+        # enforces `set_engine_config`'s core allowlist and the
+        # effective-config delta, neither of which is gated behind a
+        # Blueprint declaring `agent.guardrails` — skipping the call when a
+        # Blueprint declares none removed those two from the reprompt loop
+        # entirely.
         try:
             from aqueduct.patch.apply import PatchError, _check_guardrails
-            bp_raw = {"agent": {"guardrails": _gb}}
+            # `aqueduct heal` runs from the observability store with no live
+            # Blueprint file, so the engine layer here is `aqueduct.yml`'s
+            # only. That makes the delta check STRICTLY WEAKER on this path
+            # (it cannot see a value the Blueprint already carries) but never
+            # wrong: a write that matches the resolved `aqueduct.yml` value is
+            # still refused. `heal` only STAGES; the full-strength check runs
+            # against the real Blueprint at `aqueduct patch apply` time.
+            bp_raw = {"agent": {"guardrails": _gb or {}}}
             try:
-                _check_guardrails(patch_spec, bp_raw, provenance_map=None)
+                _check_guardrails(patch_spec, bp_raw, provenance_map=None, cfg=_cfg)
                 return True, None, None, None
             except PatchError as exc:
                 return False, "guardrail_violation", str(exc), None
