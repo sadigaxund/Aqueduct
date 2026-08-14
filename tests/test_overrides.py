@@ -261,6 +261,39 @@ class TestRouteOverrides:
             route_overrides(["agent.approval_mode=auto"], allow_blueprint=False)
 
     def test_shared_path_wins_blueprint(self):
-        cfg, bp = route_overrides(["agent.timeout=5"], allow_blueprint=True)
-        assert bp == {"agent": {"timeout": 5}}
+        """A path BOTH schemas declare routes to the Blueprint.
+
+        `agent.max_reprompts` is a POLICY field: it is declared once on
+        `AgentPolicySchema`, which both `AgentSchema` (Blueprint) and
+        `AgentConnectionConfig` (aqueduct.yml) extend — so it is genuinely
+        nameable on both sides. The premise is asserted here rather than
+        assumed, because the previous fixture for this test (`agent.timeout`)
+        stopped being shared when the connection fields moved off the
+        Blueprint's `agent:` block, which turned this into a test of nothing.
+        """
+        from aqueduct.parser.schema import BlueprintSchema
+
+        path = ("agent", "max_reprompts")
+        assert model_accepts_path(BlueprintSchema, path)
+        assert model_accepts_path(AqueductConfig, path)
+
+        cfg, bp = route_overrides(["agent.max_reprompts=5"], allow_blueprint=True)
+        assert bp == {"agent": {"max_reprompts": 5}}
         assert cfg == {}
+
+    def test_connection_field_routes_to_config(self):
+        """A connection field is config-ONLY, so it routes to the config.
+
+        `agent.timeout` names WHICH endpoint to call and for how long — an
+        operator/deployment fact. It lives exclusively on
+        `AgentConnectionConfig`; the Blueprint's `agent:` block rejects it.
+        """
+        from aqueduct.parser.schema import BlueprintSchema
+
+        path = ("agent", "timeout")
+        assert not model_accepts_path(BlueprintSchema, path)
+        assert model_accepts_path(AqueductConfig, path)
+
+        cfg, bp = route_overrides(["agent.timeout=5"], allow_blueprint=True)
+        assert cfg == {"agent": {"timeout": 5}}
+        assert bp == {}
