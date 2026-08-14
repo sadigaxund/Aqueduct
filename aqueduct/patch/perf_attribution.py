@@ -65,6 +65,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from aqueduct.executor.models import SUCCEEDED_STATUSES
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -78,8 +80,11 @@ __all__ = [
 
 # Terminal run statuses that count as GREEN. `patched` is a run that
 # succeeded after a patch was applied mid-run (see ExecutionStatus), so it
-# is a legitimate baseline and a legitimate observation point.
-_GREEN_STATUSES: tuple[str, ...] = ("success", "patched")
+# is a legitimate baseline and a legitimate observation point. Aliases the
+# shared tuple beside the enum (`executor/models.py`) rather than restating
+# it — the handoff-spill retention rule reads the same set to decide when a
+# kept-failure spill has been superseded, and the two must not drift.
+_GREEN_STATUSES: tuple[str, ...] = SUCCEEDED_STATUSES
 
 # Volume proxy is unavailable on any engine that writes no `module_metrics`
 # rows. Stated in full rather than left as a None the reader has to

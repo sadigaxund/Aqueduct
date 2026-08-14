@@ -312,3 +312,213 @@ def test_spill_exists_empty_uri_never_touches_cwd(tmp_path, monkeypatch):
     (tmp_path / "something.parquet").mkdir()
     (tmp_path / "something.parquet" / "part-0.parquet").write_bytes(b"x")
     assert _spill_exists("") is False
+
+
+# ── The resumed-FROM spill is released by a successful resume ────────────────
+#
+# `run_polyglot()` used to delete only `<root>/<hash>/<run_id>` — the CURRENT
+# run's directory — so the spill it had just CONSUMED (`<hash>/<resume_run_id>`)
+# survived. That prior run's `run_records` row stays `status='error'` forever,
+# so `sweep_orphan_spills` kept exempting it under `keep_on_failure` as well:
+# a provably-consumed spill was the one directory nothing in the system could
+# ever reclaim. These tests drive the real `run_polyglot()` with a stub engine
+# protocol (no Spark/DuckDB) so the lifecycle is asserted directly.
+
+
+def _two_island_manifest():
+    a = _m("a", "spark")
+    b = _m("b", "duckdb")
+    h = _handoff_module("h", "a", "b")
+    return _manifest(
+        [a, h, b],
+        [Edge(from_id="a", to_id="h"), Edge(from_id="h", to_id="b")],
+        [
+            Island(engine="spark", module_ids=frozenset({"a"})),
+            Island(engine="duckdb", module_ids=frozenset({"b"})),
+        ],
+    )
+
+
+def _install_stub_engine(monkeypatch, *, island_status):
+    """Patch out engine resolution + execution so `run_polyglot()` runs its
+    real orchestration/spill-lifecycle code with no engine installed.
+
+    `island_status` maps an executed module id -> the ExecutionStatus that
+    module's result carries. Any handoff module handed to a call gets its
+    spill directory materialized, exactly as a real engine's write side
+    would."""
+    import aqueduct.executor.orchestrator as orch
+    import aqueduct.executor.protocol as proto
+    from aqueduct.executor.models import ExecutionResult, ExecutionStatus, ModuleResult
+
+    class _StubProtocol:
+        def session_factory(self):
+            return lambda spec: object()
+
+        def session_closer(self):
+            return lambda session: None
+
+    monkeypatch.setattr(orch, "get_protocol", lambda engine: _StubProtocol())
+
+    def _fake_call_execute(engine, manifest, session, **kw):
+        from pathlib import Path as _P
+
+        for uri in (kw.get("handoff_spill_uris") or {}).values():
+            _P(uri).mkdir(parents=True, exist_ok=True)
+            (_P(uri) / "part-0.parquet").write_bytes(b"spilled")
+        results = []
+        status = ExecutionStatus.SUCCESS
+        for m in manifest.modules:
+            st = island_status.get(m.id, ExecutionStatus.SUCCESS)
+            results.append(ModuleResult(module_id=m.id, status=st))
+            if st == ExecutionStatus.ERROR:
+                status = ExecutionStatus.ERROR
+        return ExecutionResult(
+            blueprint_id=manifest.blueprint_id,
+            run_id=kw.get("run_id", ""),
+            status=status,
+            module_results=tuple(results),
+        )
+
+    monkeypatch.setattr(proto, "call_execute", _fake_call_execute)
+
+
+def _seed_resume_spill(root, manifest, run_id, edge_id="h", *, populated=True):
+    from aqueduct.executor.models import manifest_hash as _mh
+
+    d = root / _mh(manifest) / run_id / edge_id
+    d.mkdir(parents=True)
+    if populated:
+        (d / "part-0.parquet").write_bytes(b"prior run output")
+    return d
+
+
+@pytest.fixture
+def failed_prior_run_store(tmp_path):
+    """A real local DuckDB observability store carrying ONE terminal
+    ``error`` row for ``prev_run`` of blueprint ``bp``, and no later
+    success. That is exactly the state in which the orphan sweep must keep
+    ``prev_run``'s spill, so anything these tests observe being deleted was
+    deleted by the resume-release path under test, not by the sweep."""
+    import contextlib
+
+    from aqueduct.surveyor.ddl import _DDL
+
+    path = tmp_path / "obs.db"
+
+    class _Store:
+        def connect(self):
+            import duckdb
+
+            from aqueduct.stores.base import RelationalCursor
+
+            @contextlib.contextmanager
+            def _cm():
+                conn = duckdb.connect(str(path))
+                try:
+                    yield RelationalCursor(conn.cursor(), paramstyle="qmark")
+                finally:
+                    conn.close()
+
+            return _cm()
+
+    from datetime import UTC, datetime, timedelta
+
+    store = _Store()
+    now = datetime.now(tz=UTC)
+    with store.connect() as cur:
+        cur.execute(_DDL)
+        cur.execute(
+            "INSERT INTO run_records (run_id, blueprint_id, status, started_at, finished_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [
+                "prev_run",
+                "bp",
+                "error",
+                (now - timedelta(minutes=5)).isoformat(),
+                (now - timedelta(minutes=4)).isoformat(),
+            ],
+        )
+    return store
+
+
+def test_successful_resume_deletes_the_spill_it_consumed(
+    tmp_path, monkeypatch, failed_prior_run_store
+):
+    from aqueduct.executor.models import ExecutionStatus
+    from aqueduct.executor.orchestrator import run_polyglot
+
+    manifest = _two_island_manifest()
+    root = tmp_path / "handoff"
+    prior = _seed_resume_spill(root, manifest, "prev_run")
+    _install_stub_engine(monkeypatch, island_status={})
+
+    result = run_polyglot(
+        manifest,
+        run_id="cur_run",
+        handoff_root=str(root),
+        resume_run_id="prev_run",
+        observability_store=failed_prior_run_store,
+    )
+
+    assert result.status == ExecutionStatus.SUCCESS
+    # Island A was SKIPPED — the resume actually happened. Without this the
+    # deletion assertion below could pass for the wrong reason (the spill
+    # having been swept away before the resume check ever looked at it).
+    statuses = {r.module_id: r.status for r in result.module_results}
+    assert statuses["a"] == ExecutionStatus.SKIPPED
+    assert not prior.exists(), "the consumed resumed-FROM spill must be released"
+    assert not prior.parent.exists(), "the resumed-FROM run directory goes with it"
+
+
+def test_failed_resume_keeps_the_spill_it_read(tmp_path, monkeypatch, failed_prior_run_store):
+    """Positive control for the test above: the SAME setup with a failing
+    downstream island must LEAVE the resumed-FROM spill in place — it is
+    still resumable, which is the entire reason a failure's spill is kept."""
+    from aqueduct.executor.models import ExecutionStatus
+    from aqueduct.executor.orchestrator import run_polyglot
+
+    manifest = _two_island_manifest()
+    root = tmp_path / "handoff"
+    prior = _seed_resume_spill(root, manifest, "prev_run")
+    _install_stub_engine(monkeypatch, island_status={"b": ExecutionStatus.ERROR})
+
+    result = run_polyglot(
+        manifest,
+        run_id="cur_run",
+        handoff_root=str(root),
+        resume_run_id="prev_run",
+        observability_store=failed_prior_run_store,
+    )
+
+    assert result.status == ExecutionStatus.ERROR
+    assert prior.exists(), "a failed resume must keep the spill it read"
+
+
+def test_success_without_an_actual_resume_keeps_the_candidate_directory(
+    tmp_path, monkeypatch, failed_prior_run_store
+):
+    """Positive control on the TRIGGER: ``resume_run_id`` is passed, but the
+    candidate directory holds no parquet, so no island is skipped and nothing
+    is consumed. A successful run must then leave it alone — the release is
+    keyed on a resume having actually happened, not on the flag being set."""
+    from aqueduct.executor.models import ExecutionStatus
+    from aqueduct.executor.orchestrator import run_polyglot
+
+    manifest = _two_island_manifest()
+    root = tmp_path / "handoff"
+    prior = _seed_resume_spill(root, manifest, "prev_run", populated=False)
+    _install_stub_engine(monkeypatch, island_status={})
+
+    result = run_polyglot(
+        manifest,
+        run_id="cur_run",
+        handoff_root=str(root),
+        resume_run_id="prev_run",
+        observability_store=failed_prior_run_store,
+    )
+
+    assert result.status == ExecutionStatus.SUCCESS
+    statuses = {r.module_id: r.status for r in result.module_results}
+    assert statuses["a"] == ExecutionStatus.SUCCESS  # re-executed, nothing resumed
+    assert prior.exists()

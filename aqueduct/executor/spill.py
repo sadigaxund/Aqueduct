@@ -23,6 +23,16 @@ recompile its way back into). ``sweep_orphan_spills`` scans the entire
 run_id's fate from ``run_records`` alone (never from "is this hash mine") —
 see its docstring.
 
+**Keeping a spill is an acquisition, so it needs a release.** Nothing used
+to delete a kept-failure spill, ever: the sweep exempted it on
+``status == 'error'`` and a heal then moved ``manifest_hash``, putting it
+out of reach of every future run while the exemption stayed in force. The
+release event is ACTION-based and deterministic — a later run of the SAME
+blueprint that SUCCEEDED (``_superseded_by_later_success``), meaning the
+failure is resolved and no rerun will ever resume from that spill. No
+clock, no retention window, no threshold: ``finished_at`` orders two rows
+and is never read as a duration.
+
 Directory layout: ``<root>/<manifest_hash>/<run_id>/<edge_id>/`` — see
 ``aqueduct.compiler.handoff`` for where ``edge_id`` comes from and
 ``docs/specs.md`` §10.4.3 for the config surface (``handoff.root``,
@@ -57,6 +67,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from aqueduct.executor.models import SUCCEEDED_STATUSES
 from aqueduct.executor.path_keys import CLOUD_SCHEMES
 
 logger = logging.getLogger(__name__)
@@ -291,6 +302,72 @@ def _run_status(obs_store: Any, run_id: str) -> tuple[str | None, bool]:
     return status, finished_at is not None
 
 
+def _superseded_by_later_success(obs_store: Any, run_id: str) -> bool:
+    """True when a LATER run of the SAME blueprint has succeeded since
+    *run_id* failed — the release event for a kept-failure spill.
+
+    ``keep_on_failure`` is an acquisition with no release: nothing else in
+    the system ever deletes a spill kept for a failure, and the sweep's
+    ``status == "error"`` exemption keeps exempting it forever, so disk
+    grows without bound. This predicate supplies the missing release. It is
+    deliberately ACTION-based, not time-based: the sweep only runs at the
+    start of a run, so a wall-clock retention window would be an
+    action-trigger wearing a fuzzy predicate, and no measurement exists that
+    would justify a number of days anyway.
+
+    The comparison lives in SQL so the ``finished_at`` ordering is done by
+    whichever backend owns the TIMESTAMPTZ column, not by Python against
+    values whose tz-awareness varies by driver. ``finished_at`` is used for
+    ORDERING TWO ROWS ONLY — there is no duration, threshold, or clock
+    anywhere in this rule.
+
+    Why "a later SUCCESS" and not "N later terminal runs": a multi-patch
+    heal mints a terminal ``run_records`` row per iteration, so a count
+    would reclaim the spill minutes after keeping it, while the heal that
+    needs it is still running. A failed heal iteration is an ``error`` row
+    and correctly does not count.
+
+    ``SUCCEEDED_STATUSES`` (not just ``"success"``) is load-bearing:
+    ``Surveyor.record()`` stamps ``patched`` on the iteration that succeeded
+    after a patch was applied, which is the most common way a failure gets
+    resolved. Accepting only ``"success"`` would leave every healed failure's
+    spill permanently unreleased — the exact leak this rule closes.
+
+    ``run_records`` carries no ``manifest_hash`` column, so "this spill is
+    unreachable because a heal moved the hash" is not computable from the
+    store. This rule does not need it: a later success means no future
+    rerun will resume from this failure, whatever hash it sits under.
+
+    Best effort — a store that cannot be queried returns False, i.e. keep
+    the spill. Never delete on a failed lookup.
+    """
+    if obs_store is None:
+        return False
+    placeholders = ", ".join("?" for _ in SUCCEEDED_STATUSES)
+    try:
+        with obs_store.connect() as cur:
+            cur.execute(
+                f"""
+                SELECT 1
+                FROM run_records failed
+                JOIN run_records later
+                  ON later.blueprint_id = failed.blueprint_id
+                WHERE failed.run_id = ?
+                  AND failed.finished_at IS NOT NULL
+                  AND later.finished_at IS NOT NULL
+                  AND later.status IN ({placeholders})
+                  AND later.finished_at > failed.finished_at
+                LIMIT 1
+                """,
+                [run_id, *SUCCEEDED_STATUSES],
+            )
+            row = cur.fetchone()
+    except Exception as exc:
+        logger.debug("_superseded_by_later_success: query failed for %r: %s", run_id, exc)
+        return False
+    return row is not None
+
+
 def sweep_orphan_spills(
     root: str,
     *,
@@ -320,13 +397,29 @@ def sweep_orphan_spills(
     A run_id's ``<root>/<hash>/<run_id>/`` directory is deleted unless
     ``run_records`` says it is still non-terminal (possibly still running —
     never delete out from under a live process) or it is a terminal FAILURE
-    and ``keep_on_failure`` is true (the resume story). Everything else — a
-    successful run whose own cleanup never ran, a failed run when
-    ``keep_on_failure`` is false, or a run_id with no ``run_records`` row at
-    all (unknown — nothing positively says it is still needed) — is
-    reclaimed. A ``<hash>/`` directory left empty once every run underneath
-    it has been swept is reclaimed too, so a superseded hash directory
-    doesn't linger as an empty shell forever.
+    that ``keep_on_failure`` protects AND no later run of the same blueprint
+    has succeeded yet (the resume story, see
+    ``_superseded_by_later_success``). Everything else — a successful run
+    whose own cleanup never ran, a failed run when ``keep_on_failure`` is
+    false, a failed run a later success has already resolved, or a run_id
+    with no ``run_records`` row at all (unknown — nothing positively says it
+    is still needed) — is reclaimed. A ``<hash>/`` directory left empty once
+    every run underneath it has been swept is reclaimed too, so a superseded
+    hash directory doesn't linger as an empty shell forever.
+
+    Two consequences of the release rule, both stated rather than papered
+    over:
+
+    * A blueprint that fails and is never run again keeps its spill
+      forever. Nothing here can reclaim it, because nothing here ever
+      runs again for that blueprint. Closing that gap needs an explicit
+      operator-invoked command, not a clock.
+    * A failure being actively debugged loses its spill if an unrelated
+      scheduled run of the same blueprint succeeds in the meantime. Whether
+      that should be prevented (by exempting the most recent failure per
+      blueprint, by an opt-out, or not at all) is an OPEN QUESTION with no
+      decision taken — this function implements plain release-on-success
+      and does not pretend to answer it.
 
     Returns the list of deleted directory paths (best-effort; a remote root
     with no fsspec returns ``[]`` and the caller is expected to have already
@@ -353,7 +446,14 @@ def sweep_orphan_spills(
             if status is not None and not is_terminal:
                 continue  # still running — never touch
             if status == "error" and keep_on_failure:
-                continue  # kept failure — the resume story
+                # A kept failure is kept only until it is RESOLVED. A later
+                # succeeded run of the same blueprint is that resolution:
+                # no future rerun will resume from this failure, so the
+                # spill's whole documented purpose has expired. Without
+                # this release the `keep_on_failure` exemption is
+                # permanent and disk grows without bound.
+                if not _superseded_by_later_success(obs_store, run_id):
+                    continue  # kept failure, not yet superseded — the resume story
             path = f"{hash_dir}/{run_id}"
             if delete_spill_tree(path):
                 deleted.append(path)

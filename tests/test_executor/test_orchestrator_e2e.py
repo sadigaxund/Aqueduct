@@ -438,12 +438,14 @@ def test_spill_kept_on_failure_and_reused_on_resume(spark: SparkSession, tmp_pat
     written = duckdb.sql(f"SELECT COUNT(*) FROM read_parquet('{out_path}')").fetchone()[0]
     assert written == 4
 
-    # The originally-failed run's spill is a distinct, independently-owned
-    # directory: run 2's own cleanup only ever targets run 2's OWN run_id
-    # directory (which was never populated, since island A was skipped), so
-    # run 1's kept spill is a known, bounded leftover — not reclaimed by a
-    # successful resume. Documented behavior, not asserted as a bug here.
-    assert run1_dir.exists()
+    # The resumed-FROM spill has now served its entire documented purpose
+    # ("a rerun reads this instead of recomputing it") and is released. It
+    # used to survive forever: the run's own cleanup only ever targeted its
+    # OWN run_id directory, and run-1's `run_records` row stays `error`, so
+    # `sweep_orphan_spills` kept exempting it under `keep_on_failure` too.
+    assert not run1_dir.exists(), "a successful resume must release the spill it consumed"
+    # This run's own directory goes as well — the ordinary delete-on-success.
+    assert not (Path(handoff_root) / manifest_h / run_id_2).exists()
 
 
 # ── Orphan sweep wired through a real run ────────────────────────────────────

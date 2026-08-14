@@ -90,3 +90,39 @@ def test_java_to_strftime_month_day_name_and_millis_patterns():
         clear "not supported, requires a time-of-day value" CompileError
         rather than leaving them as silent literal passthrough.
     """
+
+
+@pytest.mark.todo(
+    "handoff spill release-on-success reclaims the spill of a failure "
+    "someone is actively debugging when an unrelated scheduled run of the "
+    "same blueprint succeeds in between — OPEN QUESTION, no decision taken"
+)
+def test_handoff_spill_retention_during_an_open_investigation():
+    """
+    intended: tests/test_executor/test_spill.py
+
+    context: `sweep_orphan_spills` reclaims a kept-failure spill once a
+        LATER run of the same blueprint has succeeded — the release event
+        that `handoff.keep_on_failure` previously lacked entirely (nothing
+        ever deleted a kept spill, and a heal then moved `manifest_hash`
+        so no future run could even reach it). The rule is deterministic
+        and action-based on purpose: no clock, no retention window, no
+        threshold anywhere.
+
+        One case is deliberately left open rather than silently resolved:
+        a pipeline fails on Monday, an operator is still investigating on
+        Tuesday, and a scheduled run succeeds Monday night — the spill is
+        gone mid-investigation. Three candidate answers were named and
+        NONE has been chosen: (a) exempt the most RECENT failed spill per
+        blueprint from the release, (b) add an explicit opt-out, (c)
+        accept it as the cost of a bounded-disk guarantee. Each has a
+        different cost, and (b) in particular would be a new config field
+        with an `engine_scoped` tag and a capability leaf on every engine.
+        Whichever is chosen, write the test here first.
+
+        A second, separate gap is known and NOT this stub's subject: a
+        blueprint that fails and is never run again keeps its spill
+        forever, because nothing ever runs again for it. That one is meant
+        to be answered by an explicit operator-invoked reclaim command,
+        not by a clock and not by this rule.
+    """

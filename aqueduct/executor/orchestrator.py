@@ -316,7 +316,11 @@ def run_polyglot(
                          checkpointed under the failed prior run. Per-module
                          ``checkpoint: true`` resume for an arbitrary island
                          is not wired by this function; only cross-engine
-                         handoff-spill resume is.
+                         handoff-spill resume is. When a resume actually
+                         happened AND this run then SUCCEEDS, the resumed-FROM
+                         run's spill directory is DELETED — it was kept for
+                         exactly the rerun that has now consumed it. A failed
+                         resume keeps it (still resumable).
         checkpoint_root, block_full_actions: forwarded to every island's
                          ``execute()`` unfiltered — part of ``ExecutorProtocol
                          .execute``'s COMMON kwargs (`aqueduct/executor/
@@ -412,6 +416,11 @@ def run_polyglot(
 
     acc = _PolyglotResult()
     run_spill_uris: dict[str, str] = {}  # every handoff's THIS-run spill_uri, for cleanup
+    # True once at least one island was actually SKIPPED by reading
+    # `resume_run_id`'s spill — i.e. that spill was provably consumed. A
+    # `resume_run_id` that resolved to nothing on disk never sets this, so
+    # the release below can't delete a directory this run did not use.
+    resumed_from = False
 
     for island_idx in order:
         island = manifest.islands[island_idx]
@@ -452,6 +461,7 @@ def run_polyglot(
                 resume_run_id,
                 [h.module.id for h in resumable_exits],
             )
+            resumed_from = True
             for m in sub_manifest.modules:
                 acc.module_results.append(_skipped_result(m.id))
             # Downstream islands must read the RESUME run's spill, not this
@@ -583,6 +593,25 @@ def run_polyglot(
     if run_spill_uris:
         if merged.status == ExecutionStatus.SUCCESS or not keep_on_failure:
             delete_spill_tree(run_dir)
+
+    # A successful resume RELEASES the spill it just consumed. That spill was
+    # kept for exactly one documented purpose — "a rerun reads this instead
+    # of recomputing it" — and this run is that rerun, so the purpose has
+    # been served. Deleting only `run_id`'s own directory (above) leaked the
+    # resumed-FROM one permanently: the prior run's `run_records` row stays
+    # `status='error'` forever, so `sweep_orphan_spills` keeps exempting it
+    # under `keep_on_failure` too, and a provably-consumed spill was the one
+    # thing nothing could ever reclaim.
+    #
+    # A FAILED resume keeps it — the spill is still resumable, which is the
+    # whole point of keeping a failure's spill in the first place.
+    if (
+        resumed_from
+        and merged.status == ExecutionStatus.SUCCESS
+        and resume_run_id
+        and resume_run_id != run_id
+    ):
+        delete_spill_tree(f"{handoff_root.rstrip('/')}/{manifest_h}/{resume_run_id}")
 
     if record_result and surveyor is not None:
         surveyor.record(merged, engine=acc.failed_engine)

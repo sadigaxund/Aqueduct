@@ -136,6 +136,21 @@ class ExecutionStatus(StrEnum):
     PATCHED = "patched"  # run-level effective status (succeeded after an applied patch); never set on a ModuleResult
 
 
+# The terminal `run_records.status` values that mean "this run of the
+# Blueprint completed its work". `patched` belongs here and is NOT an
+# optional nicety: `Surveyor.record()` stamps `patched` (never `success`)
+# on the iteration that succeeded after a heal applied a patch, so any
+# reader that accepts only `success` silently misses the single most common
+# way an Aqueduct pipeline recovers. Read by the handoff-spill retention
+# rule (`executor/spill.py`) and by perf attribution
+# (`patch/perf_attribution.py`); those two must not drift apart, which is
+# why the tuple lives here beside the enum rather than being restated.
+SUCCEEDED_STATUSES: tuple[str, ...] = (
+    ExecutionStatus.SUCCESS.value,
+    ExecutionStatus.PATCHED.value,
+)
+
+
 def concise_error(text: str | None, *, limit: int = 300) -> str:
     """First line of an error string, capped — for **display** only.
 
