@@ -1,0 +1,48 @@
+aqueduct: "1.0"
+id: duckdb_memory_limit_demo
+name: "DuckDB out of memory — typed engine-field tuning demo"
+description: >
+  A DuckDB aggregation exhausts the configured memory limit. DuckDB's
+  Blueprint block carries TYPED fields rather than a free-form conf bag, so
+  the fix is a write to engine.duckdb.memory_limit, addressed by field name.
+
+engine:
+  duckdb:
+    memory_limit: "1GB"
+
+modules:
+  - id: events_raw
+    type: Ingress
+    label: "Raw events (parquet)"
+    config:
+      format: parquet
+      path: data/input/events
+
+  - id: events_per_user
+    type: Channel
+    label: "Count events per user"
+    config:
+      op: sql
+      query: |
+        SELECT
+          user_id,
+          COUNT(*) AS event_count
+        FROM events_raw
+        GROUP BY user_id
+
+  - id: out_counts
+    type: Egress
+    label: "Write per-user counts"
+    config:
+      format: parquet
+      path: data/output/events_per_user
+      mode: overwrite
+
+edges:
+  - from: events_raw
+    to: events_per_user
+  - from: events_per_user
+    to: out_counts
+
+agent:
+  approval: auto

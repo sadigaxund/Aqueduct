@@ -21,6 +21,7 @@ from aqueduct.cli import (
 )
 from aqueduct.cli.output import emit
 from aqueduct.cli.style import error as _error
+from aqueduct.surveyor.scenario import SCENARIO_DOMAINS
 
 # ── aqueduct benchmark ────────────────────────────────────────────────────────
 
@@ -69,6 +70,17 @@ from aqueduct.cli.style import error as _error
     "file destinations on other commands; this is the data format.)",
 )
 @click.option(
+    "--domain",
+    "domains",
+    multiple=True,
+    type=click.Choice(SCENARIO_DOMAINS),
+    help="Only run scenarios declaring this `domains:` member (repeatable: "
+    "--domain pipeline --domain engine_config). A scenario matches when ANY "
+    "of its declared domains is selected. Omitted, every scenario runs. A "
+    "scenario that declares no domains at all is excluded by any --domain "
+    "filter and reported by id.",
+)
+@click.option(
     "--workers",
     default=1,
     show_default=True,
@@ -93,6 +105,7 @@ def benchmark(
     config_path: str | None,
     patches_dir: str,
     fmt: str,
+    domains: tuple[str, ...],
     workers: int,
     set_items: tuple[str, ...],
     env_file: str | None,
@@ -104,6 +117,7 @@ def benchmark(
     Example:
       aqueduct benchmark aqscenarios/ --model claude-opus-4-7 --model llama3
       aqueduct benchmark one.aqscenario.yml          # single scenario
+      aqueduct benchmark aqscenarios/ --domain engine_config
 
     Takes a .aqscenario.yml file or a directory (recursively globbed),
     runs each against every specified model, prints a comparison table.
@@ -119,7 +133,11 @@ def benchmark(
     scenarios_dir = target
     from aqueduct.cli.style import error as _error
     from aqueduct.config import ConfigError, load_config
-    from aqueduct.surveyor.scenario import format_benchmark_table, run_benchmark
+    from aqueduct.surveyor.scenario import (
+        format_benchmark_table,
+        run_benchmark,
+        select_scenarios,
+    )
 
     try:
         _resolve_and_load_env(
@@ -169,19 +187,35 @@ def benchmark(
         sys.exit(exit_codes.CONFIG_ERROR)
 
     click.echo(
-        f"↻ benchmark  scenarios={scenarios_dir}  "
-        f"models={model_list}  provider={resolved_provider}",
+        f"↻ benchmark  scenarios={scenarios_dir}"
+        + (f"  domains={list(domains)}" if domains else "")
+        + f"  models={model_list}  provider={resolved_provider}",
         err=True,
     )
 
-    # Count scenarios up-front for the banner. Cheap glob — load_scenario
-    # runs again inside run_benchmark, but we only need the count here.
-    _scn_count = (
-        1
-        if Path(scenarios_dir).is_file()
-        else len(list(Path(scenarios_dir).glob("**/*.aqscenario.yml")))
-    )
+    # Resolve the selection up-front for the banner. `run_benchmark` selects
+    # again (and logs the load errors) — the double read is the status quo
+    # and cheap, but the count must come from the SAME selector that decides
+    # what runs, or a --domain filter would be advertised as a pair count it
+    # never delivers.
+    _selection = select_scenarios(Path(scenarios_dir), domains)
+    _scn_count = len(_selection.scenarios)
     _pair_count = _scn_count * len(model_list)
+    # The scenarios a --domain filter excluded for declaring no `domains:` at
+    # all are reported by `run_benchmark` itself (one warning, at the layer
+    # that actually drops them) so a library caller hears about it too. Not
+    # repeated here.
+    if domains and not _scn_count:
+        # Only when a filter was actually typed. An empty directory with no
+        # --domain keeps its long-standing exit-0 behaviour; a --domain that
+        # matches nothing is the user's own selection returning an empty
+        # suite, and running zero pairs while reporting success is the
+        # silent no-op the flag would otherwise introduce.
+        _error(
+            f"--domain {list(domains)} selected no scenarios under {scenarios_dir} "
+            f"(known domains: {list(SCENARIO_DOMAINS)})"
+        )
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     # Benchmark MUST use the same BudgetConfig as production. Reading from
     # the same engine config block enforces parity — divergence would
@@ -222,6 +256,7 @@ def benchmark(
             mode=resolved_mode,
             max_tool_calls=resolved_max_tool_calls,
             supports_tools=resolved_supports_tools,
+            domains=domains,
         )
     except KeyboardInterrupt:
         # Per-pair results persist to benchmark.duckdb inside run_scenario
@@ -253,6 +288,13 @@ def benchmark(
                     "category_match": r.category_match,
                     "diag_score": r.diag_score,
                     "violated_guardrails": r.violated_guardrails,
+                    # Why the apply refused (see scenario.REFUSAL_REASONS) and
+                    # Gate 1's engine-config verdict. Both are None when the
+                    # patch applied / no apply was attempted — a failed
+                    # domain-2 pair is unreadable without them, since
+                    # `patch_applies: false` alone covers four causes.
+                    "refusal": r.refusal,
+                    "engine_config_gate": r.engine_config_gate,
                     "failures": r.failures,
                     "soft_failures": r.soft_failures,
                     "patch": (r.patch.model_dump(mode="json") if r.patch is not None else None),

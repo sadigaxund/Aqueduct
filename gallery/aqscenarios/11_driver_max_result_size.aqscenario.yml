@@ -1,0 +1,51 @@
+aqueduct_scenario: "1.0"
+
+id: driver_max_result_size
+description: >
+  An aggregation returns more serialized data to the driver than
+  spark.driver.maxResultSize allows. The Blueprint pins that cap at 1g, so the
+  whole fix is one allowlisted engine-config write: nothing about the modules,
+  the SQL or the edges is wrong. Grades the engine-config heal path end to
+  end — the write clears Gate 1's allowlist AND moves the effective session
+  config.
+blueprint: blueprints/11_driver_max_result_size.yml
+
+domains: [engine_config]
+
+inject_failure:
+  module: daily_totals
+  engine: spark
+  error_message: |
+    org.apache.spark.SparkException: Job aborted due to stage failure:
+    Total size of serialized results of 42 tasks (1024.0 MiB) is bigger than
+    spark.driver.maxResultSize (1024.0 MiB)
+      at org.apache.spark.scheduler.DAGScheduler.failJobAndIndependentStages(DAGScheduler.scala:3083)
+      at org.apache.spark.scheduler.DAGScheduler$$anonfun$abortStage$1.apply(DAGScheduler.scala:3071)
+  structured:
+    error_class: SPARK_DRIVER_RESULT_TOO_LARGE
+    object_name: null
+    suggested_columns: []
+    root_exception:
+      type: org.apache.spark.SparkException
+      message: "Total size of serialized results of 42 tasks (1024.0 MiB) is bigger than spark.driver.maxResultSize (1024.0 MiB)"
+
+# `engine_config_changed`, not a pinned byte count: the right cap depends on
+# the driver this would run on, which nothing here can see. What IS gradeable
+# without inventing a number is that the key moved — and Gate 1 already
+# refuses a write that leaves the effective config identical, so "it moved"
+# cannot be satisfied by re-writing 1g.
+expected_patch:
+  effect:
+    engine_config_changed:
+      spark: [spark.driver.maxResultSize]
+
+assertions:
+  - patch_is_valid: true
+  - patch_applies: true
+  # Gate 1's effective-config delta gate must report `pass`, not
+  # `not_applicable`. `not_applicable` here would mean the patch wrote no
+  # engine config at all — i.e. the model fixed something else — which
+  # `engine_config_changed` alone would also catch, but this states the gate's
+  # own verdict rather than inferring it.
+  - gate_status: {engine_config: pass}
+  - root_cause_contains: ["maxResultSize", "driver", "result"]

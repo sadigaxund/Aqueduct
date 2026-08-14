@@ -1,0 +1,54 @@
+aqueduct_scenario: "1.0"
+
+id: duckdb_memory_limit
+description: >
+  A DuckDB aggregation exhausts the configured memory limit. The whole fix is
+  one write to engine.duckdb.memory_limit.
+
+  The engine-agnostic half of the config-heal path is what this grades.
+  DuckDB's Blueprint block carries TYPED fields (memory_limit, threads), not
+  Spark's free-form `conf` bag, so the write is addressed by field name and
+  the allowlist matches exact names rather than globs. Everything downstream —
+  the allowlist evaluation, the effective-config delta, the effect grader's
+  {engine: {key: value}} addressing — has to reach the same answer through a
+  different shape than every Spark scenario in this suite exercises.
+blueprint: blueprints/14_duckdb_memory_limit.yml
+
+domains: [engine_config]
+
+inject_failure:
+  module: events_per_user
+  # NOT cosmetic. This selects DuckDB's PromptRules pack and DuckDB's
+  # engine_config_allowlist.yml for the prompt, and DuckDB's capability table
+  # for the post-patch re-compile. Left on the "spark" default, the model
+  # would be shown Spark's spark.* allowlist and could never produce the
+  # DuckDB write this scenario grades.
+  engine: duckdb
+  error_message: |
+    duckdb.duckdb.OutOfMemoryException: Out of Memory Error: failed to
+    allocate data of size 256.0 MiB (1.0 GiB/1.0 GiB used)
+    Database is out of memory. The memory limit is currently set to 1.0 GiB.
+      at duckdb.duckdb.DuckDBPyConnection.execute
+  structured:
+    error_class: DUCKDB_OUT_OF_MEMORY
+    object_name: null
+    suggested_columns: []
+    root_exception:
+      type: duckdb.duckdb.OutOfMemoryException
+      message: "failed to allocate data of size 256.0 MiB (1.0 GiB/1.0 GiB used)"
+
+# Addressed as {engine: {key: ...}} exactly like a Spark scenario would be —
+# the grader normalises DuckDB's typed block and Spark's conf bag into one
+# shape, so a scenario never has to know which of the two its engine uses.
+# `engine_config_changed` rather than a pinned size: the right limit is a
+# property of the machine, which nothing here can see.
+expected_patch:
+  effect:
+    engine_config_changed:
+      duckdb: [memory_limit]
+
+assertions:
+  - patch_is_valid: true
+  - patch_applies: true
+  - gate_status: {engine_config: pass}
+  - root_cause_contains: ["memory", "out of memory", "memory_limit"]

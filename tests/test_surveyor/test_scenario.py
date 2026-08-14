@@ -10,6 +10,7 @@ import pytest
 pytestmark = pytest.mark.unit
 
 from aqueduct.agent.budget import StopReason
+from aqueduct.errors import ScenarioError
 from aqueduct.surveyor.scenario import (
     AqScenario,
     ScenarioResult,
@@ -90,25 +91,25 @@ class TestLoadScenario:
     def test_missing_version_raises(self, tmp_path):
         sc = tmp_path / "bad.aqscenario.yml"
         sc.write_text("id: x\ninject_failure: {module: m1}\n")
-        with pytest.raises(ValueError, match="missing or unsupported aqueduct_scenario version"):
+        with pytest.raises(ScenarioError, match="missing or unsupported aqueduct_scenario version"):
             load_scenario(sc)
 
     def test_unsupported_version_raises(self, tmp_path):
         sc = tmp_path / "bad.aqscenario.yml"
         sc.write_text("aqueduct_scenario: '99.0'\nid: x\ninject_failure: {module: m1}\n")
-        with pytest.raises(ValueError, match="missing or unsupported aqueduct_scenario version"):
+        with pytest.raises(ScenarioError, match="missing or unsupported aqueduct_scenario version"):
             load_scenario(sc)
 
     def test_missing_id_raises(self, tmp_path):
         sc = tmp_path / "bad.aqscenario.yml"
         sc.write_text("aqueduct_scenario: '1.0'\ninject_failure: {module: m1}\n")
-        with pytest.raises(ValueError, match="missing 'id'"):
+        with pytest.raises(ScenarioError, match="missing 'id'"):
             load_scenario(sc)
 
     def test_missing_inject_failure_raises(self, tmp_path):
         sc = tmp_path / "bad.aqscenario.yml"
         sc.write_text("aqueduct_scenario: '1.0'\nid: x\n")
-        with pytest.raises(ValueError, match="missing 'inject_failure'"):
+        with pytest.raises(ScenarioError, match="missing 'inject_failure'"):
             load_scenario(sc)
 
     def test_version_int_1_accepted(self, tmp_path):
@@ -358,9 +359,14 @@ assertions:
         mock_result.reprompt_errors = []
 
         # We mock _try_apply_patch in scenario.py to succeed so patch_applies passes
+        from aqueduct.surveyor.scenario import ApplyOutcome
+
         with (
             patch("aqueduct.agent.generate_agent_patch", return_value=mock_result),
-            patch("aqueduct.surveyor.scenario._try_apply_patch", return_value=(True, "", None, {})),
+            patch(
+                "aqueduct.surveyor.scenario._try_apply_patch",
+                return_value=ApplyOutcome(True, "", None, {}),
+            ),
         ):
             result = run_scenario(
                 scenario,
@@ -412,11 +418,13 @@ expected_patch:
         mock_result.attempts = 1
         mock_result.reprompt_errors = []
 
+        from aqueduct.surveyor.scenario import ApplyOutcome
+
         with (
             patch("aqueduct.agent.generate_agent_patch", return_value=mock_result),
             patch(
                 "aqueduct.surveyor.scenario._try_apply_patch",
-                return_value=(
+                return_value=ApplyOutcome(
                     True,
                     "",
                     None,
@@ -463,11 +471,13 @@ assertions:
         mock_result.reprompt_errors = []
 
         # Return a non-None violated_guardrails from _try_apply_patch
+        from aqueduct.surveyor.scenario import ApplyOutcome
+
         with (
             patch("aqueduct.agent.generate_agent_patch", return_value=mock_result),
             patch(
                 "aqueduct.surveyor.scenario._try_apply_patch",
-                return_value=(False, "violated", ["replace_module_config"], None),
+                return_value=ApplyOutcome(False, "violated", ["replace_module_config"], None),
             ),
         ):
             result = run_scenario(scenario, model="claude-3", patches_dir=tmp_path / "patches")
@@ -768,7 +778,12 @@ class TestTryApplyPatch:
         bp_path = self._create_bp(tmp_path)
         patch = self._make_patch("set_module_config_key", key="path", value="/new")
 
-        success, err, violated, patched_dict = _try_apply_patch(patch, bp_path)
+        outcome = _try_apply_patch(patch, bp_path)
+        success, violated, patched_dict = (
+            outcome.applied,
+            outcome.violated_guardrails,
+            outcome.patched_dict,
+        )
         assert success is True
         assert violated is None
         assert patched_dict is not None
@@ -780,7 +795,12 @@ class TestTryApplyPatch:
         bp_path = self._create_bp(tmp_path, "forbidden_ops: [replace_module_config]")
         patch = self._make_patch("set_module_config_key", key="path", value="/new")
 
-        success, err, violated, patched_dict = _try_apply_patch(patch, bp_path)
+        outcome = _try_apply_patch(patch, bp_path)
+        success, violated, patched_dict = (
+            outcome.applied,
+            outcome.violated_guardrails,
+            outcome.patched_dict,
+        )
         assert success is True
         assert violated == []
         assert patched_dict is not None
@@ -791,7 +811,13 @@ class TestTryApplyPatch:
         bp_path = self._create_bp(tmp_path, "forbidden_ops: [replace_module_config]")
         patch = self._make_patch("replace_module_config", config={"path": "/new"})
 
-        success, err, violated, patched_dict = _try_apply_patch(patch, bp_path)
+        outcome = _try_apply_patch(patch, bp_path)
+        success, err, violated, patched_dict = (
+            outcome.applied,
+            outcome.error,
+            outcome.violated_guardrails,
+            outcome.patched_dict,
+        )
         assert success is False
         assert "guardrails violated" in err
         assert "replace_module_config" in err
@@ -806,7 +832,13 @@ class TestTryApplyPatch:
         bp_path = self._create_bp(tmp_path, "allowed_paths: [blueprints/orders.yml]")
         patch = self._make_patch("set_module_config_key", key="path", value="data/other.csv")
 
-        success, err, violated, patched_dict = _try_apply_patch(patch, bp_path)
+        outcome = _try_apply_patch(patch, bp_path)
+        success, err, violated, patched_dict = (
+            outcome.applied,
+            outcome.error,
+            outcome.violated_guardrails,
+            outcome.patched_dict,
+        )
         assert success is False
         assert "guardrails violated" in err
         assert "blueprints/orders.yml" in err
@@ -833,7 +865,13 @@ class TestTryApplyPatch:
             ],
         )
 
-        success, err, violated, patched_dict = _try_apply_patch(patch, bp_path)
+        outcome = _try_apply_patch(patch, bp_path)
+        success, err, violated, patched_dict = (
+            outcome.applied,
+            outcome.error,
+            outcome.violated_guardrails,
+            outcome.patched_dict,
+        )
         assert success is False
         assert (
             "ParseError" in err
@@ -1039,14 +1077,61 @@ class TestCheckExpectedEffect:
         )
         assert failures == []
 
-    def test_patched_dict_none_skips_grader(self):
+    def test_patched_dict_none_fails_the_effect_block(self):
+        """An effect that could not be graded must FAIL, not pass.
+
+        This asserted ``failures == []`` until 2026-08-15, i.e. it pinned the
+        bug: a scenario stating an ``effect`` whose patch Gate 1 refused was
+        scored PASS, because the grader returned "no failures" for "never
+        graded". Every shipped gallery scenario with an effect also asserts
+        ``patch_applies: true``, which failed first — so the hole was latent,
+        and exactly the kind that stops being latent the day someone writes a
+        scenario without that assertion.
+        """
         from aqueduct.surveyor.scenario import _check_expected_effect
 
         failures = _check_expected_effect(
             {"effect": {"module": "clean_events", "config_contains": {"query": "event_time"}}},
             None,
+            apply_error="engine-config policy refused the write: denied key",
         )
-        assert failures == []
+        assert len(failures) == 1
+        assert "never applied" in failures[0]
+        # The cause is NAMED, not just "grading skipped" — the whole point is
+        # that a reader learns why without cross-referencing another failure.
+        assert "denied key" in failures[0]
+
+    def test_ungradeable_effect_reports_one_line_not_a_cascade(self):
+        """Positive control on the shape of the failure above.
+
+        The reason the None branch skipped grading in the first place was to
+        avoid burying a refusal under per-key noise. That concern is still
+        valid, so the failure must stay a SINGLE line even for an effect with
+        many sub-expectations — otherwise this fix trades a silent pass for
+        the noise it was avoiding.
+        """
+        from aqueduct.surveyor.scenario import _check_expected_effect
+
+        failures = _check_expected_effect(
+            {
+                "effect": {
+                    "module": "clean_events",
+                    "config_contains": {"query": "event_time", "format": "parquet"},
+                    "engine_config_changed": {"spark": ["spark.sql.shuffle.partitions"]},
+                }
+            },
+            None,
+        )
+        assert len(failures) == 1
+
+    def test_effect_absent_still_passes_when_the_patch_never_applied(self):
+        """Negative control: no ``effect:`` stated, nothing to grade, no
+        failure invented. Scenarios 12 and 13 are exactly this shape — they
+        assert ``patch_refused:`` and state no effect — so a blanket "the
+        patch did not apply" failure here would fail both of them."""
+        from aqueduct.surveyor.scenario import _check_expected_effect
+
+        assert _check_expected_effect({}, None, apply_error="refused") == []
 
     def test_legacy_ops_syntax_returns_hard_failure(self):
         failures = self._call({"ops": [{"op": "set_module_config_key"}]})
@@ -1302,3 +1387,990 @@ class TestPhase35StructuredPropagation:
         assert ctx.sql_state is None
         assert ctx.suggested_columns == ()
         assert ctx.object_name is None
+
+
+# ── Unknown-key rejection, at every level ─────────────────────────────────────
+#
+# The whole reason `load_scenario` is strict: a reader that drops keys it does
+# not implement grades the scenario against an expectation nobody wrote. Each
+# test below plants ONE typo and asserts the loader names it — a positive
+# control per level, because a rejection that only fires at the top level is
+# indistinguishable from no rejection for the four nested levels.
+
+
+class TestUnknownKeyRejection:
+    _BODY = (
+        'aqueduct_scenario: "1.0"\n'
+        "id: unknown_key\n"
+        "blueprint: blueprint.yml\n"
+        "inject_failure:\n"
+        "  module: src\n"
+        '  error_message: "boom"\n'
+    )
+
+    def _load(self, tmp_path, body):
+        return load_scenario(_write_scenario(tmp_path, body))
+
+    def test_unknown_top_level_key_named(self, tmp_path):
+        with pytest.raises(ScenarioError, match=r"asertions"):
+            self._load(tmp_path, self._BODY + "asertions:\n  - patch_is_valid: true\n")
+
+    def test_unknown_inject_failure_key_named(self, tmp_path):
+        body = self._BODY.replace('  error_message: "boom"\n', '  error_mesage: "boom"\n')
+        with pytest.raises(ScenarioError, match=r"error_mesage.*inject_failure"):
+            self._load(tmp_path, body)
+
+    def test_unknown_expected_patch_key_named(self, tmp_path):
+        with pytest.raises(ScenarioError, match=r"efect"):
+            self._load(tmp_path, self._BODY + "expected_patch:\n  efect:\n    module: src\n")
+
+    def test_unknown_effect_key_named(self, tmp_path):
+        body = self._BODY + (
+            "expected_patch:\n  effect:\n    module: src\n    config_contain:\n      path: x\n"
+        )
+        with pytest.raises(ScenarioError, match=r"config_contain"):
+            self._load(tmp_path, body)
+
+    def test_unknown_assertion_key_named(self, tmp_path):
+        with pytest.raises(ScenarioError, match=r"patch_aplies"):
+            self._load(tmp_path, self._BODY + "assertions:\n  - patch_aplies: true\n")
+
+    def test_known_keys_at_every_level_still_load(self, tmp_path):
+        """Negative control for the five tests above: the same file with every
+        key spelled correctly must load. Without this, a loader that rejected
+        EVERYTHING would pass all five."""
+        body = self._BODY + (
+            "domains: [pipeline]\n"
+            "expected_patch:\n"
+            "  effect:\n"
+            "    module: src\n"
+            "    config_contains:\n"
+            "      path: /tmp\n"
+            "assertions:\n"
+            "  - patch_is_valid: true\n"
+            "  - patch_applies: true\n"
+        )
+        scenario = self._load(tmp_path, body)
+        assert scenario.id == "unknown_key"
+        assert scenario.domains == ("pipeline",)
+
+    def test_effect_stating_no_expectation_is_refused(self, tmp_path):
+        """An effect block carrying only `config_contains` (or nothing) grades
+        nothing and would pass for free. It is the exact shape that let a
+        domain-2 scenario pass while its patch touched no module."""
+        body = self._BODY + "expected_patch:\n  effect:\n    config_contains:\n      path: x\n"
+        with pytest.raises(ScenarioError, match="module.*required"):
+            self._load(tmp_path, body)
+
+    def test_unknown_refusal_reason_named(self, tmp_path):
+        with pytest.raises(ScenarioError, match="not a .*refusal reason"):
+            self._load(tmp_path, self._BODY + "assertions:\n  - patch_refused: vibes\n")
+
+    def test_gate_a_scenario_never_runs_is_refused(self, tmp_path):
+        """Gates 2/3/4 need an engine session a scenario never starts, so
+        asserting on them would assert on a check that never ran."""
+        with pytest.raises(ScenarioError, match="sandbox"):
+            self._load(tmp_path, self._BODY + "assertions:\n  - gate_status: {sandbox: pass}\n")
+
+    def test_unknown_gate_status_value_named(self, tmp_path):
+        with pytest.raises(ScenarioError, match="not a\ngate status|not a gate status"):
+            self._load(
+                tmp_path, self._BODY + "assertions:\n  - gate_status: {engine_config: green}\n"
+            )
+
+    def test_unknown_domain_named(self, tmp_path):
+        with pytest.raises(ScenarioError, match="unknown domains"):
+            self._load(tmp_path, self._BODY + "domains: [sparkling]\n")
+
+
+# ── domains: + --domain filtering ─────────────────────────────────────────────
+
+
+class TestDomainSelection:
+    def _write(self, dir_: Path, name: str, domains: str) -> Path:
+        (dir_ / "blueprint.yml").write_text(_MINIMAL_BP_YAML)
+        p = dir_ / f"{name}.aqscenario.yml"
+        p.write_text(
+            'aqueduct_scenario: "1.0"\n'
+            f"id: {name}\n"
+            "blueprint: blueprint.yml\n"
+            f"{domains}"
+            "inject_failure:\n  module: src\n  error_message: boom\n"
+        )
+        return p
+
+    def _suite(self, tmp_path: Path) -> Path:
+        self._write(tmp_path, "pipe_only", "domains: [pipeline]\n")
+        self._write(tmp_path, "cfg_only", "domains: [engine_config]\n")
+        self._write(tmp_path, "both", "domains: [pipeline, engine_config]\n")
+        self._write(tmp_path, "silent", "")
+        return tmp_path
+
+    def test_no_filter_selects_everything_including_undeclared(self, tmp_path):
+        from aqueduct.surveyor.scenario import select_scenarios
+
+        sel = select_scenarios(self._suite(tmp_path))
+        assert {s.id for s in sel.scenarios} == {"pipe_only", "cfg_only", "both", "silent"}
+        assert sel.undeclared == ()
+        assert sel.filtered_out == ()
+
+    def test_single_domain_selects_declarers_only(self, tmp_path):
+        from aqueduct.surveyor.scenario import select_scenarios
+
+        sel = select_scenarios(self._suite(tmp_path), ["engine_config"])
+        assert {s.id for s in sel.scenarios} == {"cfg_only", "both"}
+        assert sel.filtered_out == ("pipe_only",)
+        assert sel.undeclared == ("silent",)
+
+    def test_two_domains_union_not_intersection(self, tmp_path):
+        from aqueduct.surveyor.scenario import select_scenarios
+
+        sel = select_scenarios(self._suite(tmp_path), ["pipeline", "engine_config"])
+        assert {s.id for s in sel.scenarios} == {"pipe_only", "cfg_only", "both"}
+        assert sel.filtered_out == ()
+
+    def test_undeclared_scenario_is_never_silently_matched(self, tmp_path):
+        """A scenario declaring no domains must be EXCLUDED by any filter and
+        REPORTED by id. Both halves matter: including it would make --domain a
+        lie, and dropping it silently would make a suite shrink with no
+        explanation."""
+        from aqueduct.surveyor.scenario import select_scenarios
+
+        sel = select_scenarios(self._suite(tmp_path), ["pipeline"])
+        assert "silent" not in {s.id for s in sel.scenarios}
+        assert sel.undeclared == ("silent",)
+
+    def test_load_error_is_reported_not_dropped(self, tmp_path):
+        from aqueduct.surveyor.scenario import select_scenarios
+
+        self._write(tmp_path, "good", "domains: [pipeline]\n")
+        (tmp_path / "broken.aqscenario.yml").write_text(
+            'aqueduct_scenario: "1.0"\nid: broken\nasertions: []\ninject_failure: {module: src}\n'
+        )
+        sel = select_scenarios(tmp_path)
+        assert {s.id for s in sel.scenarios} == {"good"}
+        assert len(sel.load_errors) == 1
+        assert "asertions" in sel.load_errors[0]
+
+    def test_run_benchmark_domain_filter_reaches_run_scenario(self, tmp_path):
+        """The flag has to reach the thing that runs, not just the selector."""
+        from aqueduct.surveyor.scenario import run_benchmark
+
+        self._suite(tmp_path)
+        with patch("aqueduct.surveyor.scenario.run_scenario") as mock_run:
+            mock_run.side_effect = lambda scenario, **kw: ScenarioResult(
+                scenario_id=scenario.id,
+                model=kw["model"],
+                passed=True,
+                patch_valid=True,
+                patch_applies=True,
+                failures=[],
+                patch=None,
+                duration_seconds=0.0,
+            )
+            results = run_benchmark(tmp_path, ["m"], tmp_path / "patches", domains=["pipeline"])
+        assert set(results) == {"pipe_only", "both"}
+
+
+# ── Engine-config effect shape ────────────────────────────────────────────────
+
+
+_BEFORE_SPARK_10 = {"engine": {"spark": {"conf": {"spark.sql.shuffle.partitions": "10"}}}}
+
+
+def _after_spark(value):
+    return {"modules": [], "engine": {"spark": {"conf": {"spark.sql.shuffle.partitions": value}}}}
+
+
+class TestEngineConfigEffect:
+    def _grade(self, effect, after, before=None):
+        from aqueduct.surveyor.scenario import _check_expected_effect
+
+        return _check_expected_effect({"effect": effect}, after, before or {})
+
+    def test_engine_config_exact_value_matches(self):
+        assert (
+            self._grade(
+                {"engine_config": {"spark": {"spark.sql.shuffle.partitions": 200}}},
+                _after_spark("200"),
+            )
+            == []
+        )
+
+    def test_engine_config_compares_across_str_and_int_spelling(self):
+        """Every engine-config value reaches the session as a string, so 200
+        and "200" are the same setting and neither spelling may fail."""
+        assert (
+            self._grade(
+                {"engine_config": {"spark": {"spark.sql.shuffle.partitions": "200"}}},
+                _after_spark(200),
+            )
+            == []
+        )
+
+    def test_engine_config_superstring_actual_does_not_satisfy(self):
+        """The bug `config_contains` already had to fix for numbers, in the
+        other grader: a substring rule would let an ACTUAL of 1200 satisfy an
+        EXPECTED of 200. Engine-config values compare by equality."""
+        failures = self._grade(
+            {"engine_config": {"spark": {"spark.sql.shuffle.partitions": 200}}},
+            _after_spark("1200"),
+        )
+        assert len(failures) == 1
+        assert "1200" in failures[0]
+
+    def test_engine_config_missing_key_reported(self):
+        failures = self._grade(
+            {"engine_config": {"spark": {"spark.executor.memory": "8g"}}}, _after_spark("200")
+        )
+        assert len(failures) == 1
+        assert "spark.executor.memory" in failures[0]
+
+    def test_engine_config_changed_detects_a_real_change(self):
+        assert (
+            self._grade(
+                {"engine_config_changed": {"spark": ["spark.sql.shuffle.partitions"]}},
+                _after_spark("400"),
+                _BEFORE_SPARK_10,
+            )
+            == []
+        )
+
+    def test_engine_config_changed_fails_when_value_is_unmoved(self):
+        failures = self._grade(
+            {"engine_config_changed": {"spark": ["spark.sql.shuffle.partitions"]}},
+            _after_spark("10"),
+            _BEFORE_SPARK_10,
+        )
+        assert len(failures) == 1
+        assert "did not change" in failures[0]
+
+    def test_engine_config_changed_ignores_a_pure_respelling(self):
+        """ "10" -> 10 changes the YAML and nothing the engine sees. Reading it
+        as a change is exactly the no-op Gate 1 exists to refuse."""
+        failures = self._grade(
+            {"engine_config_changed": {"spark": ["spark.sql.shuffle.partitions"]}},
+            _after_spark(10),
+            _BEFORE_SPARK_10,
+        )
+        assert len(failures) == 1
+        assert "did not change" in failures[0]
+
+    def test_engine_config_changed_needs_the_before_dict(self):
+        """Positive control for the wiring, not the rule: graded against an
+        EMPTY before, an unmoved key reads as a change (absent -> "10") and
+        the assertion passes for free. run_scenario must pass the real
+        pre-patch Blueprint, and `test_run_scenario_passes_blueprint_before`
+        pins that it does."""
+        assert (
+            self._grade(
+                {"engine_config_changed": {"spark": ["spark.sql.shuffle.partitions"]}},
+                _after_spark("10"),
+                {},
+            )
+            == []
+        )
+
+    def test_duckdb_typed_block_addressed_the_same_way(self):
+        """DuckDB carries typed fields, not a conf bag. A scenario addresses
+        both as {engine: {key: value}} and never has to know which."""
+        after = {"modules": [], "engine": {"duckdb": {"memory_limit": "8GB"}}}
+        before = {"engine": {"duckdb": {"memory_limit": "1GB"}}}
+        assert self._grade({"engine_config": {"duckdb": {"memory_limit": "8GB"}}}, after) == []
+        assert (
+            self._grade({"engine_config_changed": {"duckdb": ["memory_limit"]}}, after, before)
+            == []
+        )
+
+    def test_any_of_passes_when_one_alternative_holds(self):
+        after = {
+            "modules": [{"id": "r", "type": "Channel", "config": {"op": "repartition"}}],
+            "engine": {"spark": {"conf": {"spark.sql.shuffle.partitions": "10"}}},
+        }
+        assert (
+            self._grade(
+                {
+                    "any_of": [
+                        {"engine_config_changed": {"spark": ["spark.sql.shuffle.partitions"]}},
+                        {
+                            "modules_contain": {
+                                "type": "Channel",
+                                "config_contains": {"op": "repartition"},
+                            }
+                        },
+                    ]
+                },
+                after,
+                _BEFORE_SPARK_10,
+            )
+            == []
+        )
+
+    def test_any_of_fails_when_no_alternative_holds(self):
+        after = {
+            "modules": [
+                {"id": "j", "type": "Channel", "config": {"op": "sql", "query": "SELECT 1"}}
+            ],
+            "engine": {"spark": {"conf": {"spark.sql.shuffle.partitions": "10"}}},
+        }
+        failures = self._grade(
+            {
+                "any_of": [
+                    {"engine_config_changed": {"spark": ["spark.sql.shuffle.partitions"]}},
+                    {
+                        "modules_contain": {
+                            "type": "Channel",
+                            "config_contains": {"op": "repartition"},
+                        }
+                    },
+                ]
+            },
+            after,
+            _BEFORE_SPARK_10,
+        )
+        assert len(failures) == 1
+        assert "no alternative held" in failures[0]
+        # Both alternatives' own reasons survive into the message — a bare
+        # "no alternative held" is undebuggable.
+        assert "did not change" in failures[0]
+        assert "repartition" in failures[0]
+
+
+# ── patch_refused: + gate_status: ─────────────────────────────────────────────
+#
+# Every test here runs the REAL apply path (`_try_apply_patch` -> the real
+# `_check_guardrails`, the real engine-config allowlist, the real
+# effective-config delta gate). Nothing is mocked, because a mocked gate would
+# make these tests assertions about the mock. No LLM is involved: the PatchSpec
+# is hand-built, which is how a benchmark grades a patch anyway.
+
+_CONFIG_BP_YAML = """\
+aqueduct: "1.0"
+id: test.scenario.cfg
+name: Test
+
+engine:
+  spark:
+    conf:
+      spark.sql.shuffle.partitions: "10"
+
+modules:
+  - id: src
+    type: Ingress
+    label: Source
+    config:
+      format: parquet
+      path: /tmp/in
+
+  - id: sink
+    type: Egress
+    label: Sink
+    config:
+      format: parquet
+      path: /tmp/out
+      mode: overwrite
+      coalesce: 1
+
+edges:
+  - from: src
+    to: sink
+"""
+
+
+def _set_engine_config(engine: str, key: str, value):
+    from aqueduct.patch.grammar import PatchSpec
+
+    return PatchSpec(
+        patch_id="cfg",
+        rationale="test",
+        operations=[{"op": "set_engine_config", "engine": engine, "key": key, "value": value}],
+    )
+
+
+class TestApplyOutcomeClassification:
+    """`_try_apply_patch` must tell four refusals apart BY TYPE.
+
+    `applied=False` alone covers all four and they have four different fixes.
+    Collapsing them is what let a domain-2 scenario report a result it never
+    checked.
+    """
+
+    def _bp(self, tmp_path: Path, extra: str = "") -> Path:
+        p = tmp_path / "blueprint.yml"
+        p.write_text(_CONFIG_BP_YAML + extra)
+        return p
+
+    def test_allowed_key_with_real_delta_applies(self, tmp_path):
+        from aqueduct.surveyor.scenario import _try_apply_patch
+
+        out = _try_apply_patch(
+            _set_engine_config("spark", "spark.sql.shuffle.partitions", 400), self._bp(tmp_path)
+        )
+        assert out.applied is True
+        assert out.refusal is None
+        assert out.engine_config_gate == "pass"
+
+    def test_denied_key_is_policy_and_gate_never_ran(self, tmp_path):
+        from aqueduct.surveyor.scenario import REFUSAL_POLICY, _try_apply_patch
+
+        out = _try_apply_patch(
+            _set_engine_config("spark", "spark.master", "local[8]"), self._bp(tmp_path)
+        )
+        assert out.applied is False
+        assert out.refusal == REFUSAL_POLICY
+        # The allowlist check runs BEFORE the delta gate, so there is no
+        # verdict to report. `fail` here would claim a measurement nobody took.
+        assert out.engine_config_gate is None
+
+    def test_unlisted_key_is_also_policy(self, tmp_path):
+        from aqueduct.surveyor.scenario import REFUSAL_POLICY, _try_apply_patch
+
+        out = _try_apply_patch(
+            _set_engine_config("spark", "spark.sql.made.up.key", "1"), self._bp(tmp_path)
+        )
+        assert out.refusal == REFUSAL_POLICY
+
+    def test_inert_write_is_inert_and_gate_fails(self, tmp_path):
+        from aqueduct.surveyor.scenario import REFUSAL_INERT, _try_apply_patch
+
+        # 10 -> "10": allowlist-clean, schema-valid, and changes nothing the
+        # engine would see.
+        out = _try_apply_patch(
+            _set_engine_config("spark", "spark.sql.shuffle.partitions", 10), self._bp(tmp_path)
+        )
+        assert out.applied is False
+        assert out.refusal == REFUSAL_INERT
+        assert out.engine_config_gate == "fail"
+
+    def test_guardrail_violation_is_guardrail_not_policy(self, tmp_path):
+        from aqueduct.patch.grammar import PatchSpec
+        from aqueduct.surveyor.scenario import REFUSAL_GUARDRAIL, _try_apply_patch
+
+        bp = self._bp(
+            tmp_path, "\nagent:\n  guardrails:\n    forbidden_ops: [replace_module_config]\n"
+        )
+        patch_obj = PatchSpec(
+            patch_id="g",
+            rationale="t",
+            operations=[
+                {"op": "replace_module_config", "module_id": "src", "config": {"path": "/new"}}
+            ],
+        )
+        out = _try_apply_patch(patch_obj, bp)
+        assert out.refusal == REFUSAL_GUARDRAIL
+        assert out.violated_guardrails and "replace_module_config" in out.violated_guardrails[0]
+
+    def test_unparseable_result_is_invalid(self, tmp_path):
+        from aqueduct.patch.grammar import PatchSpec
+        from aqueduct.surveyor.scenario import REFUSAL_INVALID, _try_apply_patch
+
+        patch_obj = PatchSpec(
+            patch_id="b",
+            rationale="t",
+            operations=[
+                {"op": "set_module_config_key", "module_id": "src", "key": "format", "value": ["x"]}
+            ],
+        )
+        out = _try_apply_patch(patch_obj, self._bp(tmp_path))
+        assert out.applied is False
+        assert out.refusal == REFUSAL_INVALID
+        # The delta gate DID run and DID permit this patch — it fell over on
+        # the re-parse afterwards — so its verdict is real and reported.
+        assert out.engine_config_gate == "not_applicable"
+
+    def test_every_refusal_reason_is_reachable(self, tmp_path):
+        """The vocabulary and the classifier must not drift: a reason nobody
+        can produce is a reason a scenario can assert and never satisfy."""
+        from aqueduct.patch.grammar import PatchSpec
+        from aqueduct.surveyor.scenario import REFUSAL_REASONS, _try_apply_patch
+
+        bp = self._bp(
+            tmp_path, "\nagent:\n  guardrails:\n    forbidden_ops: [replace_module_config]\n"
+        )
+        produced = {
+            _try_apply_patch(p, bp).refusal
+            for p in (
+                _set_engine_config("spark", "spark.master", "local[8]"),
+                _set_engine_config("spark", "spark.sql.shuffle.partitions", 10),
+                PatchSpec(
+                    patch_id="g",
+                    rationale="t",
+                    operations=[
+                        {
+                            "op": "replace_module_config",
+                            "module_id": "src",
+                            "config": {"path": "/n"},
+                        }
+                    ],
+                ),
+                PatchSpec(
+                    patch_id="b",
+                    rationale="t",
+                    operations=[
+                        {
+                            "op": "set_module_config_key",
+                            "module_id": "src",
+                            "key": "format",
+                            "value": ["x"],
+                        }
+                    ],
+                ),
+            )
+        }
+        assert produced == set(REFUSAL_REASONS)
+
+    def test_engine_selects_the_capability_table_for_the_recompile(self, tmp_path):
+        """`engine=` is not cosmetic: it decides which engine's capability
+        verdicts the post-patch re-compile is checked against."""
+        from unittest.mock import patch as mock_patch
+
+        from aqueduct.surveyor.scenario import _try_apply_patch
+
+        bp = self._bp(tmp_path)
+        with mock_patch("aqueduct.compiler.compiler.compile") as mock_compile:
+            _try_apply_patch(
+                _set_engine_config("spark", "spark.sql.shuffle.partitions", 400),
+                bp,
+                engine="duckdb",
+            )
+        assert mock_compile.call_args.kwargs["engine"] == "duckdb"
+
+
+class TestPatchRefusedAssertion:
+    def _bp(self, tmp_path: Path) -> Path:
+        p = tmp_path / "blueprint.yml"
+        p.write_text(_CONFIG_BP_YAML)
+        return p
+
+    def _check(self, tmp_path, assertions, patch_obj):
+        bp = self._bp(tmp_path)
+        return _check_assertions(assertions, patch_obj, bp)[0]
+
+    def test_expected_policy_refusal_satisfied(self, tmp_path):
+        assert (
+            self._check(
+                tmp_path,
+                [{"patch_refused": "policy"}],
+                _set_engine_config("spark", "spark.master", "local[8]"),
+            )
+            == []
+        )
+
+    def test_expected_policy_refusal_but_patch_applied_fails(self, tmp_path):
+        failures = self._check(
+            tmp_path,
+            [{"patch_refused": "policy"}],
+            _set_engine_config("spark", "spark.sql.shuffle.partitions", 400),
+        )
+        assert len(failures) == 1
+        assert "applied cleanly" in failures[0]
+
+    def test_wrong_refusal_reason_fails(self, tmp_path):
+        """The distinction is the point: an inert write is not a policy
+        refusal, and a grader that accepted either would be back to
+        `patch_applies: false`."""
+        failures = self._check(
+            tmp_path,
+            [{"patch_refused": "policy"}],
+            _set_engine_config("spark", "spark.sql.shuffle.partitions", 10),
+        )
+        assert len(failures) == 1
+        assert "expected refusal 'policy'" in failures[0]
+        assert "'inert'" in failures[0]
+
+    def test_expected_inert_refusal_satisfied(self, tmp_path):
+        assert (
+            self._check(
+                tmp_path,
+                [{"patch_refused": "inert"}],
+                _set_engine_config("spark", "spark.sql.shuffle.partitions", 10),
+            )
+            == []
+        )
+
+    def test_patch_none_cannot_be_refused(self, tmp_path):
+        failures = self._check(tmp_path, [{"patch_refused": "policy"}], None)
+        assert len(failures) == 1
+        assert "patch is None" in failures[0]
+
+    def test_refused_and_applies_false_agree_without_one_masking_the_other(self, tmp_path):
+        """Both assertions in one scenario: a patch that applies must fail
+        BOTH, so neither can be silently satisfied by the other."""
+        failures = self._check(
+            tmp_path,
+            [{"patch_applies": False}, {"patch_refused": "inert"}],
+            _set_engine_config("spark", "spark.sql.shuffle.partitions", 400),
+        )
+        assert len(failures) == 2
+
+
+class TestGateStatusAssertion:
+    def _bp(self, tmp_path: Path) -> Path:
+        p = tmp_path / "blueprint.yml"
+        p.write_text(_CONFIG_BP_YAML)
+        return p
+
+    def _check(self, tmp_path, status, patch_obj):
+        return _check_assertions(
+            [{"gate_status": {"engine_config": status}}], patch_obj, self._bp(tmp_path)
+        )[0]
+
+    def test_pass_matches_a_real_delta(self, tmp_path):
+        assert (
+            self._check(
+                tmp_path, "pass", _set_engine_config("spark", "spark.sql.shuffle.partitions", 400)
+            )
+            == []
+        )
+
+    def test_pass_does_not_match_not_applicable(self, tmp_path):
+        """A pipeline-only patch writes no engine config, so the gate reports
+        `not_applicable`. Treating that as `pass` is the exact lie
+        `not_applicable` was added to stop."""
+        from aqueduct.patch.grammar import PatchSpec
+
+        failures = self._check(
+            tmp_path,
+            "pass",
+            PatchSpec(
+                patch_id="p",
+                rationale="t",
+                operations=[{"op": "replace_module_label", "module_id": "src", "label": "New"}],
+            ),
+        )
+        assert len(failures) == 1
+        assert "not_applicable" in failures[0]
+
+    def test_fail_matches_an_inert_write(self, tmp_path):
+        assert (
+            self._check(
+                tmp_path, "fail", _set_engine_config("spark", "spark.sql.shuffle.partitions", 10)
+            )
+            == []
+        )
+
+    def test_gate_that_never_ran_has_no_status_to_assert(self, tmp_path):
+        """A policy refusal happens before the delta gate. Asserting any
+        status must fail rather than resolve to one."""
+        for status in ("pass", "fail", "not_applicable"):
+            failures = self._check(
+                tmp_path, status, _set_engine_config("spark", "spark.master", "local[8]")
+            )
+            assert len(failures) == 1, status
+            assert "never ran" in failures[0]
+
+    def test_reader_table_covers_exactly_the_declared_gate_set(self):
+        """`SCENARIO_GATES` is what the loader validates against and
+        `_GATE_STATUS_READERS` is what the grader reads. A name in one and not
+        the other is either an unassertable gate or a KeyError at grade time."""
+        from aqueduct.surveyor.scenario import _GATE_STATUS_READERS, SCENARIO_GATES
+
+        assert set(_GATE_STATUS_READERS) == set(SCENARIO_GATES)
+
+
+class TestRunScenarioAppliesOnce:
+    """`run_scenario`'s wiring of the single apply into every consumer."""
+
+    _SC = """aqueduct_scenario: "1.0"
+id: wiring
+blueprint: blueprint.yml
+domains: [engine_config]
+inject_failure:
+  module: src
+  engine: spark
+  error_message: boom
+expected_patch:
+  effect:
+    engine_config_changed:
+      spark: [spark.sql.shuffle.partitions]
+assertions:
+  - patch_is_valid: true
+  - patch_applies: true
+"""
+
+    def _scenario(self, tmp_path: Path):
+        (tmp_path / "blueprint.yml").write_text(_CONFIG_BP_YAML)
+        sc = tmp_path / "wiring.aqscenario.yml"
+        sc.write_text(self._SC)
+        return load_scenario(sc)
+
+    def _run(self, tmp_path, patch_obj):
+        mock_result = MagicMock()
+        mock_result.patch = patch_obj
+        mock_result.attempts = 1
+        mock_result.reprompt_errors = []
+        mock_result.stop_reason = StopReason.SOLVED
+        mock_result.escalated = False
+        mock_result.tokens_in_total = 0
+        mock_result.tokens_out_total = 0
+        with patch("aqueduct.agent.generate_agent_patch", return_value=mock_result):
+            return run_scenario(
+                self._scenario(tmp_path), model="m", patches_dir=tmp_path / "patches"
+            )
+
+    def test_real_config_fix_passes_and_records_the_gate(self, tmp_path):
+        result = self._run(
+            tmp_path, _set_engine_config("spark", "spark.sql.shuffle.partitions", 400)
+        )
+        assert result.passed is True
+        assert result.refusal is None
+        assert result.engine_config_gate == "pass"
+
+    def test_run_scenario_passes_blueprint_before(self, tmp_path):
+        """Positive control for the pre-patch dict reaching the effect grader.
+
+        The patch changes a DIFFERENT allowlisted key, so it applies cleanly
+        and `spark.sql.shuffle.partitions` is still "10" afterwards — the
+        scenario must FAIL. The control is load-bearing: the same
+        post-patch dict graded against an EMPTY before reads the unmoved key
+        as absent -> "10", i.e. a change, and passes. That is what
+        `run_scenario` did before the pre-patch dict was wired through, and
+        the second half of this test pins that the two answers differ.
+        """
+        from aqueduct.surveyor.scenario import _check_expected_effect, _try_apply_patch
+
+        result = self._run(tmp_path, _set_engine_config("spark", "spark.executor.memory", "8g"))
+        assert result.passed is False
+        assert any("shuffle.partitions" in f and "did not change" in f for f in result.failures)
+
+        out = _try_apply_patch(
+            _set_engine_config("spark", "spark.executor.memory", "8g"),
+            tmp_path / "blueprint.yml",
+        )
+        expected = {
+            "effect": {"engine_config_changed": {"spark": ["spark.sql.shuffle.partitions"]}}
+        }
+        assert _check_expected_effect(expected, out.patched_dict, {}) == []
+        assert _check_expected_effect(expected, out.patched_dict, out.blueprint_before) != []
+
+    def test_effect_is_graded_even_with_no_patch_applies_assertion(self, tmp_path):
+        """The apply used to happen only as a side effect of `patch_applies`,
+        so a scenario stating an effect but no `patch_applies` graded its
+        effect against None and passed for free."""
+        (tmp_path / "blueprint.yml").write_text(_CONFIG_BP_YAML)
+        sc = tmp_path / "wiring.aqscenario.yml"
+        sc.write_text(self._SC.replace("  - patch_applies: true\n", ""))
+        scenario = load_scenario(sc)
+
+        mock_result = MagicMock()
+        mock_result.patch = _set_engine_config("spark", "spark.executor.memory", "8g")
+        mock_result.attempts = 1
+        mock_result.reprompt_errors = []
+        mock_result.stop_reason = StopReason.SOLVED
+        mock_result.escalated = False
+        mock_result.tokens_in_total = 0
+        mock_result.tokens_out_total = 0
+        with patch("aqueduct.agent.generate_agent_patch", return_value=mock_result):
+            result = run_scenario(scenario, model="m", patches_dir=tmp_path / "patches")
+
+        assert result.passed is False
+        assert any("shuffle.partitions" in f for f in result.failures)
+
+    def test_policy_refusal_surfaces_on_the_result(self, tmp_path):
+        result = self._run(tmp_path, _set_engine_config("spark", "spark.master", "local[8]"))
+        assert result.passed is False
+        assert result.refusal == "policy"
+        assert result.engine_config_gate is None
+
+
+# ── Gallery scenario 07 — the rewrite's positive control ─────────────────────
+
+
+class TestGalleryScenario07GradesTheFix:
+    """07 used to expect `effect: {module: join_and_aggregate}` — it asserted
+    only that a module the patch never touched still existed, so it passed for
+    every patch including ones that fixed nothing. These tests pin that the
+    rewritten expectation fails on a non-fix and passes on each of the two
+    legitimate fixes.
+    """
+
+    def _scenario(self):
+        return load_scenario(_GALLERY_DIR / "07_spark_oom_shuffle.aqscenario.yml")
+
+    def _grade(self, ops):
+        from aqueduct.patch.grammar import PatchSpec
+        from aqueduct.surveyor.scenario import (
+            _check_expected_effect,
+            _try_apply_patch,
+            scenario_engine,
+        )
+
+        sc = self._scenario()
+        bp = (sc.source_path.parent / sc.blueprint).resolve()
+        out = _try_apply_patch(
+            PatchSpec(patch_id="t", rationale="t", operations=ops),
+            bp,
+            engine=scenario_engine(sc),
+        )
+        assert out.applied is True, out.error
+        return _check_expected_effect(sc.expected_patch, out.patched_dict, out.blueprint_before)
+
+    def test_declares_both_domains(self):
+        assert set(self._scenario().domains) == {"pipeline", "engine_config"}
+
+    def test_a_patch_that_fixes_nothing_now_fails(self):
+        failures = self._grade(
+            [
+                {
+                    "op": "replace_module_label",
+                    "module_id": "join_and_aggregate",
+                    "label": "Join and aggregate (tuned)",
+                }
+            ]
+        )
+        assert len(failures) == 1
+        assert "no alternative held" in failures[0]
+
+    def test_the_engine_config_fix_passes(self):
+        assert (
+            self._grade(
+                [
+                    {
+                        "op": "set_engine_config",
+                        "engine": "spark",
+                        "key": "spark.sql.shuffle.partitions",
+                        "value": 200,
+                    }
+                ]
+            )
+            == []
+        )
+
+    def test_the_repartition_fix_passes(self):
+        assert (
+            self._grade(
+                [
+                    {
+                        "op": "insert_module",
+                        "module": {
+                            "id": "repartition_tx",
+                            "type": "Channel",
+                            "label": "Repartition",
+                            "config": {"op": "repartition", "num_partitions": 200},
+                        },
+                        "edges_to_add": [
+                            {"from": "transactions_raw", "to": "repartition_tx"},
+                            {"from": "repartition_tx", "to": "join_and_aggregate"},
+                        ],
+                        "edges_to_remove": [
+                            {"from": "transactions_raw", "to": "join_and_aggregate"}
+                        ],
+                    }
+                ]
+            )
+            == []
+        )
+
+
+class TestGalleryConfigScenarios:
+    """The four new config scenarios, each graded through the REAL gates
+    against the patch it is written for and against every wrong one. A
+    scenario that cannot fail is not a test."""
+
+    def _verdict(self, filename: str, ops):
+        from aqueduct.patch.grammar import PatchSpec
+        from aqueduct.surveyor.scenario import (
+            _check_expected_effect,
+            _try_apply_patch,
+            scenario_engine,
+        )
+
+        sc = load_scenario(_GALLERY_DIR / filename)
+        bp = (sc.source_path.parent / sc.blueprint).resolve()
+        patch_obj = PatchSpec(patch_id="t", rationale="t", operations=ops)
+        out = _try_apply_patch(patch_obj, bp, engine=scenario_engine(sc))
+        hard, _soft, *_ = _check_assertions(sc.assertions, patch_obj, bp, 1, apply_outcome=out)
+        effect = _check_expected_effect(sc.expected_patch, out.patched_dict, out.blueprint_before)
+        return hard + effect
+
+    _SEC = staticmethod(
+        lambda engine, key, value: [
+            {"op": "set_engine_config", "engine": engine, "key": key, "value": value}
+        ]
+    )
+
+    def test_11_passes_on_the_allowlisted_write_with_a_real_delta(self):
+        assert (
+            self._verdict(
+                "11_driver_max_result_size.aqscenario.yml",
+                self._SEC("spark", "spark.driver.maxResultSize", "4g"),
+            )
+            == []
+        )
+
+    def test_11_fails_when_the_key_does_not_move(self):
+        failures = self._verdict(
+            "11_driver_max_result_size.aqscenario.yml",
+            [{"op": "replace_module_label", "module_id": "daily_totals", "label": "x"}],
+        )
+        assert failures
+        assert any("did not change" in f for f in failures)
+
+    def test_12_passes_only_when_the_denied_write_is_refused(self):
+        assert (
+            self._verdict(
+                "12_engine_config_denied_key.aqscenario.yml",
+                self._SEC("spark", "spark.executor.extraJavaOptions", "-XX:+UseG1GC"),
+            )
+            == []
+        )
+
+    def test_12_fails_when_a_denied_key_would_get_through(self):
+        """The failing direction that matters: an allowlisted write applies,
+        so the scenario reports that Gate 1 refused nothing."""
+        failures = self._verdict(
+            "12_engine_config_denied_key.aqscenario.yml",
+            self._SEC("spark", "spark.executor.memory", "8g"),
+        )
+        assert any("applied cleanly" in f for f in failures)
+
+    def test_13_passes_on_the_inert_write(self):
+        assert (
+            self._verdict(
+                "13_engine_config_inert_write.aqscenario.yml",
+                self._SEC("spark", "spark.sql.shuffle.partitions", 200),
+            )
+            == []
+        )
+
+    def test_13_fails_on_a_real_change_and_on_a_policy_refusal(self):
+        real = self._verdict(
+            "13_engine_config_inert_write.aqscenario.yml",
+            self._SEC("spark", "spark.sql.shuffle.partitions", 400),
+        )
+        assert any("applied cleanly" in f for f in real)
+        policy = self._verdict(
+            "13_engine_config_inert_write.aqscenario.yml",
+            self._SEC("spark", "spark.jars", "x.jar"),
+        )
+        assert any("expected refusal 'inert'" in f for f in policy)
+
+    def test_14_passes_on_the_duckdb_typed_field_write(self):
+        assert (
+            self._verdict(
+                "14_duckdb_memory_limit.aqscenario.yml",
+                self._SEC("duckdb", "memory_limit", "8GB"),
+            )
+            == []
+        )
+
+    def test_14_fails_when_the_write_targets_the_wrong_engine(self):
+        """The engine-agnostic path's own failure mode: a perfectly valid
+        Spark write scores nothing for a DuckDB scenario."""
+        failures = self._verdict(
+            "14_duckdb_memory_limit.aqscenario.yml",
+            self._SEC("spark", "spark.executor.memory", "8g"),
+        )
+        assert any("memory_limit" in f and "did not change" in f for f in failures)
+
+    def test_14_targets_duckdb(self):
+        from aqueduct.surveyor.scenario import scenario_engine
+
+        sc = load_scenario(_GALLERY_DIR / "14_duckdb_memory_limit.aqscenario.yml")
+        assert scenario_engine(sc) == "duckdb"
+
+    def test_every_gallery_scenario_still_loads(self):
+        files = sorted(_GALLERY_DIR.glob("*.aqscenario.yml"))
+        assert len(files) >= 14
+        for f in files:
+            assert load_scenario(f).id

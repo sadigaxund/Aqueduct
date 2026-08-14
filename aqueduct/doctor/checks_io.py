@@ -786,10 +786,17 @@ def check_aqscenario(aqscenario_path: Path) -> list[CheckResult]:
         return [CheckResult("aqscenario", "fail", f"file not found: {aqscenario_path}", _ms(t))]
 
     try:
-        from aqueduct.surveyor.scenario import load_scenario
+        from aqueduct.errors import ScenarioError
+        from aqueduct.surveyor.scenario import load_scenario, scenario_engine
 
         sc = load_scenario(aqscenario_path)
-    except ValueError as exc:
+    except ScenarioError as exc:
+        # The file's SHAPE is wrong and the message already names the key and
+        # the legal set — reported verbatim, without the "load failed" wrapper
+        # the generic clause adds. Branching by TYPE, never on message text
+        # (AGENTS.md); this used to catch `ValueError`, which `ScenarioError`
+        # is not, so every malformed scenario fell through to the generic
+        # clause and its precise message was buried under "load failed".
         return [CheckResult("aqscenario", "fail", f"{aqscenario_path}: {exc}", _ms(t))]
     except Exception as exc:
         return [CheckResult("aqscenario", "fail", f"{aqscenario_path}: load failed: {exc}", _ms(t))]
@@ -857,18 +864,27 @@ def check_aqscenario(aqscenario_path: Path) -> list[CheckResult]:
         )
         return results
 
-    expected = sc.expected_patch or {}
-    note = ""
-    if isinstance(expected, dict):
-        ops_count = len(expected.get("ops") or [])
-        forbidden = len(expected.get("forbidden_ops") or [])
-        note = f"  expected_ops={ops_count}  forbidden_ops={forbidden}"
+    # What this scenario actually GRADES. The old note counted
+    # `expected_patch.ops`/`forbidden_ops`, a syntax the loader now refuses
+    # outright as unknown keys — so it could only ever print `expected_ops=0
+    # forbidden_ops=0` and told a reader that a scenario with a full effect
+    # block checked nothing. `load_scenario` has already hard-validated the
+    # effect shape (`validate_expected_patch`), including the rule that a
+    # block stating no expectation is an error, so anything reaching here is
+    # well formed and only needs summarising.
+    effect = (sc.expected_patch or {}).get("effect") or {}
+    graded = sorted(k for k in effect if k != "config_contains") if isinstance(effect, dict) else []
+    note = f"  effect={graded}" if graded else "  effect=(none — assertions only)"
+    if sc.domains:
+        note += f"  domains={list(sc.domains)}"
+    engine = scenario_engine(sc)
 
     results.append(
         CheckResult(
             "aqscenario",
             "ok",
-            f"{aqscenario_path}: id={sc.id!r}  failed_module={inj_module!r}{note}",
+            f"{aqscenario_path}: id={sc.id!r}  engine={engine!r}  "
+            f"failed_module={inj_module!r}{note}",
             _ms(t),
         )
     )

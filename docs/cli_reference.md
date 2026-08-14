@@ -52,7 +52,7 @@ Aqueduct automatically loads `.env` from the directory of the config or blueprin
 | `aqueduct doctor --preflight` | Full Spark session + storage validation. Also: verifies cloud Ingress/Egress objects (`s3a://`/`gs://`/`abfss://`) exist via Spark's Hadoop FileSystem; warns on a **Spark major.minor** vs client-pyspark mismatch; for `agent.provider: anthropic` proves the API key works (`GET /v1/models`, no tokens); **imports** each Python `udf_registry` entry (catches typos/missing deps); does a store **write+read** round-trip (write perms, not just connect); for `jdbc:` sources attempts a real connect+auth (postgres via psycopg2); and proves Spark can round-trip `handoff.root` via a real SparkSession (see the handoff rows below). Default `doctor` only checks endpoint reachability. A standalone **Java** runtime check (detected JVM version + a pyspark-4-needs-Java-17 nudge) runs even without `--preflight`. |
 | *(handoff checks, always on)* | `handoff-space`: free disk space at `handoff.root` (skips on a remote URI — not a local-disk question; warns, never fails, below a 5 GiB heuristic). `handoff-access:<engine>`: a write+read+cleanup round-trip at `handoff.root` for every registered engine (`aqueduct.executor.capabilities.CAPABILITY_REGISTRY`, never a hardcoded engine list). DuckDB's probe runs unconditionally (a `:memory:` connection is cheap) and attempts a real round trip on a remote root too — `httpfs` autoloads on first touch, using the configured `engine.duckdb.s3_*`/`extension_repository` if present (see [specs.md §10.9](specs.md#109-engines-and-the-capability-framework)) — reporting a genuine `ok`/`fail` rather than an unconditional skip. Spark's probe needs a real SparkSession to prove the configured `engine.spark.conf` credentials actually work, so it only runs under `--preflight`; the default is a `skip` naming that. |
 | `aqueduct doctor --aqtest <file>` | Schema pre-flight on a `.aqtest.yml` (verifies blueprint ref + module IDs) |
-| `aqueduct doctor --aqscenario <file>` | Schema pre-flight on a `.aqscenario.yml` (verifies blueprint ref + `inject_failure.module`) |
+| `aqueduct doctor --aqscenario <file>` | Schema pre-flight on a `.aqscenario.yml`: hard-validates the whole file (unknown keys at any level, the `expected_patch.effect` shape, the assertion vocabulary, `domains:`), then verifies the blueprint ref and that `inject_failure.module` names a module in it. Reports the simulated engine, the effect keys the scenario actually grades, and its declared domains. No LLM call. |
 | `aqueduct doctor -v, --verbose` | Also show skipped checks (not-applicable / not-configured), not just the collapsed summary |
 | `aqueduct doctor --format json` | Machine-readable result of every check (`{schema_version, summary, checks[]}`); implies `--verbose` (nothing collapsed). Text mode groups checks into sections (Config, Stores, Spark, …). |
 | `aqueduct completion {bash\|zsh\|fish}` | Emit a shell-completion script for installation |
@@ -319,8 +319,24 @@ Exit codes: `0` (no drift, or a baseline was established), `3` `HEAL_PENDING`
 |------|---------|-------------|
 | `--model <name>` | `agent.model` | Repeatable. Each value runs the suite against that model. (Stays, multi-model runs aren't expressible as `--set`.) |
 | `-s` / `--set PATH=VALUE` | n/a | Override an `aqueduct.yml` value for this run (repeatable, in-memory). E.g. `--set agent.provider=openai_compat --set agent.base_url=http://h:11434/v1 --set agent.timeout=600`. |
+| `--domain pipeline\|engine_config` | all | Repeatable. Run only scenarios whose `domains:` list includes one of these. A scenario matches when any of its declared domains is selected. An unknown value is a usage error naming the legal set. |
 | `--workers <N>` | 1 | Parallel scenario×model pairs. Per-pair progress prints one line per completed pair (serial mode keeps the grouped multi-line view). |
 | `--format table\|json` | `table` | |
+
+`--domain` filters on what the scenario's expected FIX touches, not on what
+failed: `pipeline` is a Blueprint edit (modules, config, edges),
+`engine_config` is a `set_engine_config` write. A scenario may declare both,
+because some failures are legitimately fixable either way. A scenario that
+declares no `domains:` at all is excluded by any `--domain` filter and
+reported by id, so a suite never shrinks without saying why. A `--domain` that
+selects nothing exits `2` `DATA_OR_RUNTIME` rather than reporting success
+after running zero pairs.
+
+`--format json` carries two per-pair fields specific to config heals:
+`refusal` (`policy` / `inert` / `guardrail` / `invalid`, or `null` when the
+patch applied) and `engine_config_gate` (Gate 1's status, or `null` when that
+gate never ran). Without them a failed pair reads only as `patch_applies:
+false`, which covers four causes with four different fixes.
 
 The benchmark store backend is configured under `stores.benchmark` in `aqueduct.yml` (`backend: duckdb\|postgres`, `path`, `persist`, `gate_on_regression`), Postgres rows live in the `benchmark` schema. Override any of these per-run with `--set stores.benchmark.*`.
 

@@ -1314,10 +1314,14 @@ redaction guarantee but never share a process boundary or a protocol.
 ## **8.11 Remediation domains**
 
 Aqueduct's self-healing operates in explicit **remediation domains**, a
-domain is the boundary of what a patch is allowed to touch. Today there is
-one: the **pipeline-definition domain**, where a `PatchSpec` op (§8.5) edits
-the Blueprint YAML that defines a pipeline. Every domain, present or future,
-follows the same principle:
+domain is the boundary of what a patch is allowed to touch. Two are built:
+
+| Domain | The patch edits | Its permission model |
+| :- | :- | :- |
+| `pipeline` | The Blueprint's modules, their config, and the edges between them, via a `PatchSpec` op (§8.5) | The Blueprint's own `agent.guardrails` (`forbidden_ops`, `allowed_paths`) |
+| `engine_config` | An engine's session config, via `set_engine_config` writing the Blueprint's `engine.<name>` block | The target engine's core allowlist plus the effective-config delta check (§8, "Efficacy check") |
+
+Every domain, present or future, follows the same principle:
 
 - **Declarative, typed operations**: a fixed, closed grammar of ops (never
   freeform code generation; §1.4's "patch grammar over codegen" principle).
@@ -1330,9 +1334,22 @@ follows the same principle:
 Diagnostics are domain-aware and read-only: the tool registry (§8.10) gives
 the agent (and any future MCP client) visibility into a domain's state,
 patch history, run outcomes, probe signals: without ever granting it a
-write handle. Framing self-healing this way keeps the pipeline-definition
-domain's contract explicit and gives any domain added later the same shape
-to slot into, rather than a one-off extension of the patch grammar.
+write handle. Framing self-healing this way keeps each domain's contract
+explicit and gives any domain added later the same shape to slot into,
+rather than a one-off extension of the patch grammar.
+
+**A domain is a property of the FIX, not of the failure.** The same failure
+is often reachable from more than one domain: an executor OOM on a large
+shuffle is fixed either by raising the shuffle-partition count
+(`engine_config`) or by inserting a repartition step (`pipeline`). Anything
+that classifies work by domain therefore has to allow more than one, and
+must not group failures by domain. A benchmark scenario
+(`.aqscenario.yml`) declares the domains its expected fix may touch in a
+`domains:` list, and `aqueduct benchmark --domain <name>` selects on it; a
+scenario declaring both is the normal case for a failure with two valid
+fixes, not an ambiguity to be resolved. See
+[`gallery/aqscenarios/README.md`](../gallery/aqscenarios/README.md) for the
+scenario file format.
 
 ## **8.12 Agentic heal (opt-in, `agent.mode`)**
 

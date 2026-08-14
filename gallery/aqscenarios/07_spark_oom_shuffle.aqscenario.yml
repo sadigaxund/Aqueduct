@@ -4,9 +4,15 @@ id: spark_oom_shuffle
 description: >
   Large join triggers executor OOM because shuffle partitions are set too low
   (10 partitions for a large dataset). The agent must increase
-  spark.sql.shuffle.partitions and optionally insert a repartition step to
-  distribute the join load across more tasks.
+  spark.sql.shuffle.partitions or insert a repartition step to distribute the
+  join load across more tasks.
 blueprint: blueprints/07_spark_oom_shuffle.yml
+
+# Both, on purpose. The domain is a property of the FIX, not of the failure,
+# and this failure has two legitimate fixes: raise the shuffle-partition count
+# (engine_config) or add a repartition Channel ahead of the join (pipeline).
+# Declaring one would assert the answer this scenario exists to test.
+domains: [engine_config, pipeline]
 
 inject_failure:
   module: join_and_aggregate
@@ -31,9 +37,27 @@ inject_failure:
       type: org.apache.spark.SparkException
       message: "Container killed by YARN for exceeding memory limits. 10.4 GB of 10 GB physical memory used."
 
+# The expectation grades the FIX, not the survival of the module. This block
+# used to read `effect: {module: join_and_aggregate}`, which asserted only
+# that a module the patch never touched still existed — so the scenario passed
+# for every patch, including one that changed nothing relevant.
+#
+# `engine_config_changed` rather than a pinned partition count: the right
+# number is a property of the cluster this would run on, which nothing here
+# can see, so pinning one would fail a correct heal on a differently-sized
+# deployment. The gate that a change is REAL is already enforced elsewhere —
+# Gate 1 refuses a write whose effective config is identical before and after
+# (`aqueduct/patch/config_delta.py`), so "the key moved" cannot be satisfied
+# by re-writing the value the Blueprint already carries.
 expected_patch:
   effect:
-    module: join_and_aggregate
+    any_of:
+      - engine_config_changed:
+          spark: [spark.sql.shuffle.partitions]
+      - modules_contain:
+          type: Channel
+          config_contains:
+            op: repartition
 
 assertions:
   - patch_is_valid: true

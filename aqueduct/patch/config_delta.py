@@ -44,9 +44,14 @@ so removing it cannot change how any other op behaves.
 **Non-empty write targets + empty effective delta = refuse.** Not warn:
 the whole value of a config op is the config change, so an op that provably
 changes no config has nothing left to be right about, and the fix is a
-different patch — which is what makes it a ``PatchError`` (the same
-reasoning that makes an allowlist violation a ``PatchError`` while a
-malformed shipped allowlist is an ``EngineConfigAllowlistError``).
+different patch — which is what makes it an ``EngineConfigInertError``, a
+``PatchError`` subclass (the same reasoning that makes an allowlist
+violation an ``EngineConfigPolicyError``, also a ``PatchError``, while a
+malformed shipped allowlist is an ``EngineConfigAllowlistError``). The two
+``PatchError`` refinements exist because their fixes are opposite — a
+policy refusal needs a different key, an inert write needs a different
+value — and a consumer must not have to read the message text to tell them
+apart.
 """
 
 from __future__ import annotations
@@ -100,9 +105,9 @@ class EngineConfigDeltaResult:
                           stop. Free for pipeline-only patches.
 
     There is no ``fail`` member. The only failing state — writes engine
-    config, changes nothing — is raised as ``PatchError`` by
-    ``run_engine_config_delta_gate`` rather than returned, because every
-    apply path must refuse it, not render it.
+    config, changes nothing — is raised as ``EngineConfigInertError`` (a
+    ``PatchError``) by ``run_engine_config_delta_gate`` rather than returned,
+    because every apply path must refuse it, not render it.
     """
 
     status: str
@@ -328,14 +333,18 @@ def run_engine_config_delta_gate(
     caller remembering to supply it.
 
     Raises:
-        PatchError: the patch writes engine config but the effective
-            config is identical before and after — the write cannot change
-            what any engine does, so applying it would burn a heal attempt
-            while reporting success. A patch problem: the fix is a
+        EngineConfigInertError: the patch writes engine config but the
+            effective config is identical before and after — the write
+            cannot change what any engine does, so applying it would burn a
+            heal attempt while reporting success. A ``PatchError`` subclass,
+            so every existing ``except PatchError`` apply path refuses it
+            exactly as before; the narrower type only exists so a caller
+            that must tell an inert write from a POLICY refusal can do it by
+            type rather than by message text. A patch problem: the fix is a
             different patch (a different key, a different value, or an op
             that is not a config write at all).
     """
-    from aqueduct.patch.apply import PatchError, _ruamel_copy
+    from aqueduct.patch.apply import EngineConfigInertError, _ruamel_copy
 
     write_targets = engine_config_write_targets(blueprint_before, patch_spec)
     if not write_targets:
@@ -374,13 +383,13 @@ def run_engine_config_delta_gate(
             # attempt on a change this invocation cannot exhibit, and the
             # in-loop retry would run under the same pin and fail the same
             # way.
-            raise PatchError(_cli_pinned_message(cfg, written, cli_pinned))
+            raise EngineConfigInertError(_cli_pinned_message(cfg, written, cli_pinned))
         already = []
         for engine, keys in sorted(write_targets.items()):
             for key in keys:
                 current = (before_effective.get(engine) or {}).get(key, ABSENT)
                 already.append(f"engine {engine!r} key {key!r} already resolves to {current!r}")
-        raise PatchError(
+        raise EngineConfigInertError(
             "set_engine_config write has no effect: the patch writes "
             f"{written}, but the effective session config is identical before "
             "and after it is applied — the engine's behaviour would not change "

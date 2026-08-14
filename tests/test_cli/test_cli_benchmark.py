@@ -797,3 +797,97 @@ def test_benchmark_diff_rejects_postgres_backend(tmp_path, monkeypatch):
     result = CliRunner().invoke(cli, ["benchmark-diff", "--config", "aqueduct.yml"])
     assert result.exit_code != 0
     assert "duckdb benchmark stores only" in result.output
+
+
+# ── --domain filter ───────────────────────────────────────────────────────────
+
+
+def _domain_suite(tmp_path):
+    """A scenario dir with one scenario per domain, one in both, one silent."""
+    d = tmp_path / "scenarios"
+    d.mkdir()
+    (d / "blueprint.yml").write_text(
+        'aqueduct: "1.0"\nid: bp\nname: BP\nmodules:\n'
+        "  - id: src\n    type: Ingress\n    label: S\n"
+        "    config: {format: parquet, path: /tmp/in}\n"
+    )
+    for name, domains in (
+        ("pipe_only", "domains: [pipeline]\n"),
+        ("cfg_only", "domains: [engine_config]\n"),
+        ("silent", ""),
+    ):
+        (d / f"{name}.aqscenario.yml").write_text(
+            'aqueduct_scenario: "1.0"\n'
+            f"id: {name}\nblueprint: blueprint.yml\n{domains}"
+            "inject_failure:\n  module: src\n  error_message: boom\n"
+        )
+    cfg = tmp_path / "aqueduct.yml"
+    cfg.write_text("agent:\n  provider: openai_compat\n  model: m\n")
+    return d, cfg
+
+
+def test_benchmark_unknown_domain_is_a_usage_error(tmp_path):
+    """An unknown --domain must fail loudly naming the legal set, never run a
+    filter that silently matches nothing."""
+    d, cfg = _domain_suite(tmp_path)
+    result = CliRunner().invoke(
+        cli, ["benchmark", str(d), "--config", str(cfg), "--domain", "sparkling"]
+    )
+    assert result.exit_code != 0
+    assert "'sparkling' is not one of" in result.output
+    assert "pipeline" in result.output and "engine_config" in result.output
+
+
+@patch("aqueduct.surveyor.scenario.run_benchmark")
+def test_benchmark_domain_reaches_run_benchmark(mock_run_benchmark, tmp_path):
+    d, cfg = _domain_suite(tmp_path)
+    mock_run_benchmark.return_value = {}
+    result = CliRunner().invoke(
+        cli, ["benchmark", str(d), "--config", str(cfg), "--domain", "engine_config"]
+    )
+    assert result.exit_code == 0, result.output
+    assert tuple(mock_run_benchmark.call_args[1]["domains"]) == ("engine_config",)
+
+
+@patch("aqueduct.surveyor.scenario.run_benchmark")
+def test_benchmark_banner_counts_the_filtered_suite(mock_run_benchmark, tmp_path):
+    """The pair count must come from the same selector that decides what runs
+    — advertising 3 scenarios while running 1 is the number being wrong in the
+    one place a user reads it."""
+    d, cfg = _domain_suite(tmp_path)
+    mock_run_benchmark.return_value = {}
+    result = CliRunner().invoke(
+        cli, ["benchmark", str(d), "--config", str(cfg), "--domain", "engine_config"]
+    )
+    assert "[benchmark] 1 scenarios × 1 models" in result.output
+    unfiltered = CliRunner().invoke(cli, ["benchmark", str(d), "--config", str(cfg)])
+    assert "[benchmark] 3 scenarios × 1 models" in unfiltered.output
+
+
+@patch("aqueduct.surveyor.scenario.run_benchmark")
+def test_benchmark_domain_matching_nothing_exits_nonzero(mock_run_benchmark, tmp_path):
+    """A filter the user typed that selects no scenario must not report
+    success after running zero pairs."""
+    from aqueduct.exit_codes import DATA_OR_RUNTIME
+
+    d, cfg = _domain_suite(tmp_path)
+    (d / "cfg_only.aqscenario.yml").unlink()
+    mock_run_benchmark.return_value = {}
+    result = CliRunner().invoke(
+        cli, ["benchmark", str(d), "--config", str(cfg), "--domain", "engine_config"]
+    )
+    assert result.exit_code == DATA_OR_RUNTIME
+    assert "selected no scenarios" in result.output
+    mock_run_benchmark.assert_not_called()
+
+
+@patch("aqueduct.surveyor.scenario.run_benchmark")
+def test_benchmark_without_domain_still_runs_an_empty_dir(mock_run_benchmark, tmp_path):
+    """Negative control for the exit above: no --domain, no new failure mode."""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    cfg = tmp_path / "aqueduct.yml"
+    cfg.write_text("agent:\n  provider: openai_compat\n  model: m\n")
+    mock_run_benchmark.return_value = {}
+    result = CliRunner().invoke(cli, ["benchmark", str(empty), "--config", str(cfg)])
+    assert result.exit_code == 0, result.output

@@ -1,0 +1,50 @@
+aqueduct_scenario: "1.0"
+
+id: engine_config_inert_write
+description: >
+  The Blueprint already pins spark.sql.shuffle.partitions at 200 and the
+  engine's error text recommends 200. A model that echoes the recommendation
+  writes the value that already resolves: allowlist-clean, schema-valid,
+  applies without complaint, and changes nothing any engine would see.
+
+  This scenario PASSES when that write is REFUSED as inert. The distinction
+  from scenario 12 is the whole point: a policy refusal needs a different KEY,
+  an inert write needs a different VALUE, and a benchmark that reported both
+  as "did not apply" would be unable to tell a blocked security violation from
+  a wasted heal attempt.
+blueprint: blueprints/13_engine_config_inert_write.yml
+
+domains: [engine_config]
+
+inject_failure:
+  module: join_returns
+  engine: spark
+  error_message: |
+    org.apache.spark.SparkException: Job aborted due to stage failure:
+    Task 17 in stage 5.0 failed 4 times, most recent failure:
+    Lost task 17.3 in stage 5.0 (TID 244) (10.0.0.9 executor 4):
+    ExecutorLostFailure (executor 4 exited caused by one of the running tasks)
+    Reason: Container killed on request. Exit code is 143
+      at org.apache.spark.scheduler.DAGScheduler.failJobAndIndependentStages(DAGScheduler.scala:3083)
+    Shuffle write for this stage was skewed across too few reducers.
+    Consider setting spark.sql.shuffle.partitions to 200.
+  structured:
+    error_class: SPARK_EXECUTOR_LOST
+    object_name: null
+    suggested_columns: []
+    root_exception:
+      type: org.apache.spark.SparkException
+      message: "Container killed on request. Exit code is 143"
+
+# No `expected_patch:`. An inert write is refused, so no post-patch Blueprint
+# exists to grade an effect against.
+
+assertions:
+  - patch_is_valid: true
+  - patch_applies: false
+  - patch_refused: inert
+  # Unlike the denied-key scenario, the delta gate DID run here — the write
+  # cleared the allowlist and was then measured against the effective session
+  # config. It has a real verdict, and `fail` is it.
+  - gate_status: {engine_config: fail}
+  - root_cause_contains: ["shuffle", "partitions", "skew"]

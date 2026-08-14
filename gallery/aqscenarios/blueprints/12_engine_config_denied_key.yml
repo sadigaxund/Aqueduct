@@ -1,0 +1,48 @@
+aqueduct: "1.0"
+id: denied_engine_key_demo
+name: "GC tuning bait — denied engine-config key demo"
+description: >
+  A long-running aggregation dies on GC overhead. The engine's own error text
+  suggests a JVM-options key, which core's deny layer refuses because JVM
+  options can load arbitrary code onto the driver and executors. Nothing in
+  this Blueprint is wrong; the point is what the gate does with the patch.
+
+modules:
+  - id: clicks_raw
+    type: Ingress
+    label: "Raw clickstream (parquet)"
+    config:
+      format: parquet
+      path: data/input/clicks
+
+  - id: sessionize
+    type: Channel
+    label: "Sessionize clicks per user"
+    config:
+      op: sql
+      query: |
+        SELECT
+          user_id,
+          COUNT(*) AS click_count,
+          MIN(click_ts) AS session_start,
+          MAX(click_ts) AS session_end
+        FROM clicks_raw
+        GROUP BY user_id
+
+  - id: out_sessions
+    type: Egress
+    label: "Write sessions"
+    config:
+      format: parquet
+      path: data/output/sessions
+      mode: overwrite
+      coalesce: 1
+
+edges:
+  - from: clicks_raw
+    to: sessionize
+  - from: sessionize
+    to: out_sessions
+
+agent:
+  approval: auto

@@ -1,0 +1,62 @@
+aqueduct: "1.0"
+id: inert_engine_write_demo
+name: "Already-tuned shuffle — inert engine-config write demo"
+description: >
+  The Blueprint already pins shuffle partitions at 200, and the engine's error
+  text suggests exactly 200. A model that echoes the suggestion writes the
+  value that already resolves: the patch is allowlist-clean, applies cleanly
+  and changes nothing the engine would see.
+
+engine:
+  spark:
+    conf:
+      spark.sql.shuffle.partitions: "200"
+
+modules:
+  - id: orders_raw
+    type: Ingress
+    label: "Raw orders (parquet)"
+    config:
+      format: parquet
+      path: data/input/orders
+
+  - id: returns_raw
+    type: Ingress
+    label: "Raw returns (parquet)"
+    config:
+      format: parquet
+      path: data/input/returns
+
+  - id: join_returns
+    type: Channel
+    label: "Join orders with returns"
+    config:
+      op: sql
+      query: |
+        SELECT
+          o.order_id,
+          o.customer_id,
+          o.amount,
+          r.return_reason
+        FROM orders_raw o
+        LEFT JOIN returns_raw r ON o.order_id = r.order_id
+
+  - id: out_joined
+    type: Egress
+    label: "Write joined orders"
+    config:
+      format: parquet
+      path: data/output/joined_orders
+      mode: overwrite
+      coalesce: 1
+
+edges:
+  - from: orders_raw
+    to: join_returns
+  - from: returns_raw
+    to: join_returns
+  - from: join_returns
+    to: out_joined
+
+agent:
+  approval: auto

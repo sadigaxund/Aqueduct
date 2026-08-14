@@ -2,33 +2,113 @@
 
 A scenario YAML (.aqscenario.yml) defines a simulated failure + expected LLM
 response assertions so the healing agent can be regression-tested and compared
-across models without running a real Spark pipeline.
+across models without running a real engine pipeline.
 
-File format:
+File format::
+
   aqueduct_scenario: "1.0"
   id: schema_drift_column_rename
   description: "Column renamed from event_ts to event_time upstream"
   blueprint: ../pipelines/orders.yml    # resolved relative to scenario file
+  domains: [pipeline]                   # optional; filter with --domain
   inject_failure:
     module: cast_and_clean              # failed_module
+    engine: spark                       # optional; default "spark"
     error_message: "AnalysisException: Column 'event_ts' does not exist"
     stack_trace: |                      # optional
       ...
+    structured:                         # optional high-fidelity error fields
+      error_class: UNRESOLVED_COLUMN.WITH_SUGGESTION
   expected_patch:
-    ops:                                # ALL must match at least one generated op
-      - op: set_module_config_key
-        module_id: cast_and_clean
-        key: query
-        value_contains: "event_time"   # substring match on value field
-    forbidden_ops:                      # NONE may appear in generated ops
-      - replace_module_config
+    effect: { ... }                     # see "Expected effect" below
   assertions:
     - patch_is_valid: true             # PatchSpec parses without schema error
-    - patch_applies: true              # patch can be applied to blueprint
+    - patch_applies: true              # patch survives Gate 1 + re-parse/compile
+    - patch_refused: policy            # the patch was REFUSED, for this reason
+    - gate_status: {engine_config: pass}
     - max_attempts: 1                  # must succeed on first LLM call (no reprompts)
     - min_confidence: 0.8              # LLM self-reported confidence above threshold
     - expected_category: format_mismatch  # LLM must classify the failure correctly
     - root_cause_contains: "format"    # root_cause field must contain this keyword
+    - allow_defer: true                # accept (or require) defer_to_human
+
+**Unknown keys are rejected**, at every level (top level, ``inject_failure``,
+``expected_patch``, ``effect``, and each assertion mapping). The reader used to
+read known keys with ``raw.get(...)`` and ignore the rest, so a typo'd
+``asertions:`` silently graded the scenario against nothing at all — the
+"no silent no-ops" rule violated by the format itself. Rejection is not a
+format change: no ``aqueduct_scenario: "1.0"`` file was ever documented as
+being allowed to carry an unrecognised key, so a file this now refuses was
+already mis-grading. See ``ScenarioError``.
+
+**Version.** The reader still accepts ``"1.0"`` only, and that is deliberate.
+Every key added since is OPTIONAL and additive: an existing 1.0 file remains
+valid and grades identically. The unknown-key tightening applies to *every*
+file regardless of the version it declares — keeping it permissive for "1.0"
+would preserve exactly the silent no-op it exists to end — so a ``"1.1"``
+reader would be a byte-identical code path under a second name. The version
+field earns a bump the day a change is genuinely NOT additive (a key removed
+or renamed, as ``ops:``/``forbidden_ops:`` was), which is when a reader has to
+branch on it.
+
+Expected effect
+---------------
+
+``expected_patch.effect`` grades the POST-PATCH Blueprint. Five keys, at least
+one of which must be present — an effect block that states no expectation is a
+hard failure, because a scenario that asserts nothing passes for free and that
+is the silent no-op this format exists to catch::
+
+  expected_patch:
+    effect:
+      # 1. a named module's config (pipeline edits, "domain 1")
+      module: clean_events
+      config_contains:
+        query: "event_time"       # SQL-typed key -> sqlglot-normalised substring
+        header: true              # bool / number  -> strict typed equality
+        path: "data/orders"       # other strings  -> raw substring
+
+      # 2. SOME module matches (the fix inserted a module whose id the
+      #    scenario cannot know in advance)
+      modules_contain:
+        type: Channel
+        config_contains: {op: repartition}
+
+      # 3. engine/session config (`set_engine_config`, "domain 2") — the
+      #    post-patch value of an engine-config key
+      engine_config:
+        spark: {spark.sql.shuffle.partitions: 200}
+        duckdb: {memory_limit: "4GB"}
+
+      # 4. an engine-config key whose value CHANGED, without pinning to what
+      engine_config_changed:
+        spark: [spark.sql.shuffle.partitions]
+
+      # 5. at least one of several acceptable fixes
+      any_of:
+        - engine_config_changed: {spark: [spark.sql.shuffle.partitions]}
+        - modules_contain: {type: Channel, config_contains: {op: repartition}}
+
+``module`` is NOT required — a ``set_engine_config`` patch touches no module,
+so requiring one gave a domain-2 outcome no legal shape at all. ``module`` and
+``modules_contain``/``engine_config``/``engine_config_changed``/``any_of`` are
+independent; a block may carry any combination and every one present is
+checked.
+
+Engine-config keys are addressed the way ``aqueduct.patch.config_delta.
+blueprint_engine_layers`` addresses them — ``{engine: {key: value}}`` — which
+normalises Spark's free-form ``engine.spark.conf`` bag and DuckDB's typed
+``engine.duckdb.<field>`` block into one shape, so a scenario never has to
+know which of the two its target engine uses.
+
+Engine-config VALUES compare by equality on the canonical (string) form, not
+by substring the way ``config_contains`` does. Every engine-config value ends
+up as a string on the session, so ``200`` and ``"200"`` are the same setting —
+but a substring rule would let an actual of ``1200`` satisfy an expected
+``200``, which is the exact superstring bug ``config_contains`` already had to
+fix for numbers. A module config value is usually a long SQL string or a path
+where substring is the only usable check; an engine-config value is a scalar
+whose whole point is its exact value.
 """
 
 from __future__ import annotations
@@ -36,6 +116,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC
 from pathlib import Path
@@ -43,7 +124,132 @@ from typing import Any
 
 import yaml
 
+from aqueduct.errors import ScenarioError
+from aqueduct.patch.gate_status import GATE_STATUSES, GateStatus
+
 logger = logging.getLogger(__name__)
+
+
+# ── Format vocabulary ─────────────────────────────────────────────────────────
+#
+# Every closed set the loader validates against lives here, once. A key the
+# reader does not implement is refused by name rather than dropped.
+
+#: Version strings the reader accepts. See the module docstring for why this
+#: has not moved.
+SUPPORTED_SCENARIO_VERSIONS: tuple[Any, ...] = ("1.0", 1, "1")
+
+#: Healing domains a scenario may declare, and the ONLY legal ``domains:``
+#: members. Named rather than numbered: a name says which surface the FIX
+#: touches, while a number implies an ordering and a count that do not exist
+#: (two of the five planned domains are built). A scenario may declare BOTH —
+#: domain is a property of the fix, not of the failure, and some failures are
+#: legitimately fixable either way.
+SCENARIO_DOMAINS: tuple[str, ...] = (
+    "pipeline",  # Blueprint pipeline edits — modules, config, edges
+    "engine_config",  # engine/session config via `set_engine_config`
+)
+
+_TOP_LEVEL_KEYS = frozenset(
+    {
+        "aqueduct_scenario",
+        "id",
+        "description",
+        "blueprint",
+        "domains",
+        "inject_failure",
+        "expected_patch",
+        "assertions",
+    }
+)
+
+_INJECT_FAILURE_KEYS = frozenset({"module", "engine", "error_message", "stack_trace", "structured"})
+
+_EXPECTED_PATCH_KEYS = frozenset({"effect"})
+
+_EFFECT_KEYS = frozenset(
+    {
+        "module",
+        "config_contains",
+        "modules_contain",
+        "engine_config",
+        "engine_config_changed",
+        "any_of",
+    }
+)
+
+#: The effect keys that STATE an expectation. An effect block carrying none of
+#: them expects nothing, which is a hard failure.
+_EFFECT_EXPECTATION_KEYS = frozenset(
+    {"module", "modules_contain", "engine_config", "engine_config_changed", "any_of"}
+)
+
+_ASSERTION_KEYS = frozenset(
+    {
+        "patch_is_valid",
+        "patch_applies",
+        "patch_refused",
+        "gate_status",
+        "allow_defer",
+        "max_attempts",
+        "min_confidence",
+        "expected_category",
+        "root_cause_contains",
+    }
+)
+
+
+# ── Refusal vocabulary ────────────────────────────────────────────────────────
+#
+# Why this is a NEW assertion (`patch_refused:`) rather than a reason bolted
+# onto `patch_applies:`
+# ---------------------------------------------------------------------------
+# `patch_applies: false` means "the patch did not apply", full stop, and it
+# conflates four different outcomes: a malformed patch, a Blueprint-guardrail
+# violation, a Gate 1 engine-config POLICY refusal, and an INERT config write.
+# For a domain-2 suite that distinction is the entire point.
+#
+# It is a separate key because giving the existing one a reason would change
+# the TYPE of an existing key's value (`patch_applies: false` -> a mapping),
+# breaking every scenario in the wild for no gain, while still leaving a plain
+# `patch_applies: false` asserting nothing about WHY. And silently widening
+# `patch_applies`'s meaning — treating `false` as "any of the four" — is the
+# thing that made scenario 07 pass while verifying nothing.
+#
+# `patch_refused: <reason>` states the fact positively, is purely additive, and
+# is checked INDEPENDENTLY of `patch_applies`. A scenario may state both; they
+# cannot contradict each other silently, because a refused patch never applies
+# and a contradiction fails both assertions loudly.
+
+#: Gate 1 refused the write on policy grounds (denied key, unlisted key, wrong
+#: type/shape, unregistered engine) — ``patch.apply.EngineConfigPolicyError``.
+REFUSAL_POLICY = "policy"
+#: Gate 1 refused the write as inert: it changes no effective config —
+#: ``patch.apply.EngineConfigInertError``.
+REFUSAL_INERT = "inert"
+#: The Blueprint's own ``agent.guardrails`` refused the op (``forbidden_ops`` /
+#: ``allowed_paths``) — a plain ``PatchError`` from the guardrail branch.
+REFUSAL_GUARDRAIL = "guardrail"
+#: The patched Blueprint failed to re-parse or re-compile — the patch is
+#: malformed against the schema, not against a policy.
+REFUSAL_INVALID = "invalid"
+
+#: Every reason ``patch_refused:`` may name. Classified by exception TYPE
+#: (``EngineConfigPolicyError`` / ``EngineConfigInertError`` / ``PatchError`` /
+#: ``ParseError``+``CompileError``), never by matching an error message.
+REFUSAL_REASONS: tuple[str, ...] = (
+    REFUSAL_POLICY,
+    REFUSAL_INERT,
+    REFUSAL_GUARDRAIL,
+    REFUSAL_INVALID,
+)
+
+#: Gates a scenario run actually evaluates, and therefore the only names
+#: ``gate_status:`` may key on. A scenario starts no engine session, so Gates
+#: 2/3/4 (lineage, sandbox replay, explain-plan) never run and asserting on
+#: them would be asserting on a check that was never performed. Gate 1's
+#: engine-config delta gate DOES run, on every apply, via ``_check_guardrails``.
+SCENARIO_GATES: tuple[str, ...] = ("engine_config",)
 
 
 # ── Scenario model ────────────────────────────────────────────────────────────
@@ -57,34 +263,169 @@ class AqScenario:
     description: str
     blueprint: str  # path relative to scenario file
     inject_failure: dict[str, Any]
-    expected_patch: dict[str, Any]  # {ops: [...], forbidden_ops: [...]}
+    expected_patch: dict[str, Any]  # {effect: {...}}
     assertions: list[dict[str, Any]]
     source_path: Path  # absolute path of the .aqscenario.yml file
+    #: Healing domains this scenario's expected fix touches (`SCENARIO_DOMAINS`).
+    #: Empty when the file declares none, which makes the scenario invisible to
+    #: `--domain` filtering — the fail-closed direction, and reported as a count
+    #: rather than dropped in silence.
+    domains: tuple[str, ...] = ()
+
+
+def _reject_unknown_keys(
+    mapping: dict[str, Any],
+    known: frozenset[str],
+    *,
+    path: Path,
+    where: str,
+) -> None:
+    """Raise ``ScenarioError`` naming every key *known* does not contain.
+
+    The whole reason the loader is strict — see the module docstring. The
+    message names the offending key AND the legal set, so the fix is a single
+    read of the error, with no separate migration guard duplicating what this
+    already reports (AGENTS.md: a breaking change ships as documentation).
+    """
+    unknown = sorted(k for k in mapping if k not in known)
+    if unknown:
+        raise ScenarioError(
+            f"Scenario {path}: unknown key(s) {unknown} in {where}. "
+            f"Known keys: {sorted(known)}. A key this reader does not implement "
+            "is refused rather than ignored — an ignored key silently grades "
+            "the scenario against an expectation nobody wrote."
+        )
 
 
 def load_scenario(path: Path) -> AqScenario:
-    """Parse a .aqscenario.yml file into an AqScenario."""
+    """Parse + hard-validate a .aqscenario.yml file into an AqScenario.
+
+    Raises:
+        ScenarioError: the file is not a mapping, declares an unsupported
+            ``aqueduct_scenario:`` version, omits ``id``/``inject_failure``,
+            carries an unknown key at any level, names an assertion nobody
+            implements, or declares a ``domains:`` member outside
+            ``SCENARIO_DOMAINS``.
+    """
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
-        raise ValueError(f"Scenario {path} is not a valid YAML mapping")
+        raise ScenarioError(f"Scenario {path} is not a valid YAML mapping")
     version = raw.get("aqueduct_scenario")
-    if version not in ("1.0", 1, "1"):
-        raise ValueError(
+    if version not in SUPPORTED_SCENARIO_VERSIONS:
+        raise ScenarioError(
             f"Scenario {path} missing or unsupported aqueduct_scenario version: {version!r}"
         )
+    _reject_unknown_keys(raw, _TOP_LEVEL_KEYS, path=path, where="the scenario file")
     if "id" not in raw:
-        raise ValueError(f"Scenario {path} missing 'id'")
+        raise ScenarioError(f"Scenario {path} missing 'id'")
     if "inject_failure" not in raw:
-        raise ValueError(f"Scenario {path} missing 'inject_failure'")
+        raise ScenarioError(f"Scenario {path} missing 'inject_failure'")
+
+    inject_failure = raw.get("inject_failure") or {}
+    if not isinstance(inject_failure, dict):
+        raise ScenarioError(
+            f"Scenario {path}: 'inject_failure' must be a mapping, "
+            f"got {type(inject_failure).__name__}"
+        )
+    _reject_unknown_keys(inject_failure, _INJECT_FAILURE_KEYS, path=path, where="inject_failure")
+
+    expected_patch = raw.get("expected_patch") or {}
+    if not isinstance(expected_patch, dict):
+        raise ScenarioError(
+            f"Scenario {path}: 'expected_patch' must be a mapping, "
+            f"got {type(expected_patch).__name__}"
+        )
+    _reject_unknown_keys(expected_patch, _EXPECTED_PATCH_KEYS, path=path, where="expected_patch")
+    # Same structural validator the grader runs, so the two cannot disagree
+    # about what a legal effect block is — `aqueduct doctor --aqscenario`
+    # catches the shape error before an LLM call is ever made.
+    shape_errors = validate_expected_patch(expected_patch)
+    if shape_errors:
+        raise ScenarioError(f"Scenario {path}: " + "; ".join(shape_errors))
+
+    assertions = raw.get("assertions", [{"patch_is_valid": True}])
+    if not isinstance(assertions, list):
+        raise ScenarioError(
+            f"Scenario {path}: 'assertions' must be a list of single-key mappings, "
+            f"got {type(assertions).__name__}"
+        )
+    for entry in assertions:
+        if not isinstance(entry, dict):
+            raise ScenarioError(
+                f"Scenario {path}: every 'assertions' entry must be a mapping, got {entry!r}"
+            )
+        _reject_unknown_keys(entry, _ASSERTION_KEYS, path=path, where="an assertions entry")
+        if "patch_refused" in entry and entry["patch_refused"] not in REFUSAL_REASONS:
+            raise ScenarioError(
+                f"Scenario {path}: patch_refused={entry['patch_refused']!r} is not a "
+                f"known refusal reason. Legal reasons: {list(REFUSAL_REASONS)}."
+            )
+        if "gate_status" in entry:
+            gs = entry["gate_status"]
+            if not isinstance(gs, dict) or not gs:
+                raise ScenarioError(
+                    f"Scenario {path}: gate_status must be a non-empty mapping of "
+                    f"{{gate: status}}; got {gs!r}"
+                )
+            for gate, status in gs.items():
+                if gate not in SCENARIO_GATES:
+                    raise ScenarioError(
+                        f"Scenario {path}: gate_status names gate {gate!r}, which a "
+                        f"scenario run never evaluates. Gates a scenario runs: "
+                        f"{list(SCENARIO_GATES)} (a scenario starts no engine "
+                        "session, so the lineage/sandbox/explain gates never run)."
+                    )
+                if status not in GATE_STATUSES:
+                    raise ScenarioError(
+                        f"Scenario {path}: gate_status[{gate!r}]={status!r} is not a "
+                        f"gate status. Legal statuses: {list(GATE_STATUSES)}."
+                    )
+
+    domains_raw = raw.get("domains", []) or []
+    if isinstance(domains_raw, str):
+        domains_raw = [domains_raw]
+    if not isinstance(domains_raw, list):
+        raise ScenarioError(
+            f"Scenario {path}: 'domains' must be a list of "
+            f"{list(SCENARIO_DOMAINS)}; got {domains_raw!r}"
+        )
+    unknown_domains = sorted(d for d in domains_raw if d not in SCENARIO_DOMAINS)
+    if unknown_domains:
+        raise ScenarioError(
+            f"Scenario {path}: unknown domains(s) {unknown_domains}. "
+            f"Known domains: {list(SCENARIO_DOMAINS)}."
+        )
+
     return AqScenario(
         id=raw["id"],
         description=raw.get("description", ""),
         blueprint=raw.get("blueprint", ""),
-        inject_failure=raw.get("inject_failure", {}),
-        expected_patch=raw.get("expected_patch", {}),
-        assertions=raw.get("assertions", [{"patch_is_valid": True}]),
+        inject_failure=inject_failure,
+        expected_patch=expected_patch,
+        assertions=assertions,
         source_path=path.resolve(),
+        domains=tuple(domains_raw),
     )
+
+
+#: Engine a scenario simulates when `inject_failure.engine` is absent. Spark,
+#: matching `compiler.compile`'s and `executor.get_executor`'s own defaults —
+#: an existing scenario file that never mentioned an engine described a Spark
+#: failure, and must keep doing so.
+DEFAULT_SCENARIO_ENGINE = "spark"
+
+
+def scenario_engine(scenario: AqScenario) -> str:
+    """The engine whose run *scenario* simulates.
+
+    One accessor rather than three `inject_failure.get("engine", …)` reads,
+    because the value has to reach three places that must not disagree: the
+    compile behind the `FailureContext`, the compile behind the apply check,
+    and the `FailureContext.engine` field that selects the engine's prompt
+    rules and config allowlist.
+    """
+    engine = scenario.inject_failure.get("engine") if scenario.inject_failure else None
+    return str(engine) if engine else DEFAULT_SCENARIO_ENGINE
 
 
 # ── Result model ──────────────────────────────────────────────────────────────
@@ -130,6 +471,13 @@ class ScenarioResult:
     escalated: bool = False  # stuck-signature escalation was applied
     tokens_in_total: int = 0
     tokens_out_total: int = 0
+    #: Why the apply refused this patch (`REFUSAL_REASONS`), or None when it
+    #: applied / no apply was attempted. Distinct from `patch_applies` on
+    #: purpose — see the "Refusal vocabulary" comment above.
+    refusal: str | None = None
+    #: Gate 1's effective-engine-config gate status for this patch
+    #: (`GateStatus`), or None when no apply was attempted.
+    engine_config_gate: str | None = None
 
     @property
     def diag_correct(self) -> bool | None:
@@ -172,11 +520,13 @@ def _build_failure_ctx(
     from aqueduct.compiler.compiler import compile as compiler_compile
     from aqueduct.parser.parser import parse
 
+    inj = scenario.inject_failure
+    engine = scenario_engine(scenario)
+
     bp = parse(str(blueprint_path))
-    manifest = compiler_compile(bp, blueprint_path=blueprint_path)
+    manifest = compiler_compile(bp, blueprint_path=blueprint_path, engine=engine)
     manifest_json = json.dumps(manifest.to_dict())
 
-    inj = scenario.inject_failure
     now = datetime.now(tz=UTC).isoformat()
 
     # Optional `structured:` block lets a scenario carry the same
@@ -206,10 +556,14 @@ def _build_failure_ctx(
         sql_state=structured.get("sql_state"),
         suggested_columns=tuple(str(c) for c in sug),
         object_name=structured.get("object_name"),
-        # Scenario benchmarks simulate a Spark run (no `.aqscenario.yml` field
-        # carries an engine yet); explicit rather than an inherited default so
-        # this reads as a deliberate choice, not the bug this field prevents.
-        engine="spark",
+        # `inject_failure.engine` (default "spark", see `scenario_engine`) —
+        # the engine whose run this scenario simulates. It is NOT cosmetic:
+        # it selects the engine's `PromptRules` pack and the
+        # `engine_config_allowlist.yml` rendered into the healing prompt, so a
+        # DuckDB scenario left on the "spark" default would show the model
+        # Spark's `spark.*` allowlist and could never produce the DuckDB
+        # config write it is testing for.
+        engine=engine,
     )
     return ctx, bp, manifest
 
@@ -251,89 +605,143 @@ def _normalize_sql(text: str) -> str:
         return " ".join(text.lower().split())
 
 
-def _check_expected_effect(
-    expected: dict[str, Any],
-    patched_dict: dict | None,
-) -> list[str]:
-    """Verify the post-patch blueprint matches the expected effect.
+def validate_expected_patch(expected: dict[str, Any]) -> list[str]:
+    """Structural validation of an ``expected_patch`` block. Pure.
 
-    ``expected`` is the scenario's ``expected_patch`` block in the new
-    ``effect:`` shape::
+    Returns a list of shape errors (empty = the block is well formed). Called
+    from BOTH ``load_scenario`` (which raises ``ScenarioError``, so
+    ``aqueduct doctor --aqscenario`` catches a bad shape before any LLM call)
+    and ``_check_expected_effect`` (which reports them as gating failures, so
+    a programmatically-built expectation is held to the same contract). One
+    validator, two call sites: two copies of "what is a legal effect block"
+    would drift.
 
-        expected_patch:
-          effect:
-            module: clean_events
-            config_contains:
-              query: "event_time"       # SQL-typed → sqlglot-normalized substring
-              header: true               # bool / number → equality
-              path: "data/orders"        # other strings → raw substring
-
-    Returns a list of failure messages (empty = OK). ``patched_dict`` is the
-    post-patch blueprint dict produced by ``_try_apply_patch`` — None when the
-    patch failed to apply, in which case effect grading is skipped (the
-    patch_applies gate already caught it).
-
-    Old ``ops:`` / ``forbidden_ops:`` syntax was deleted in Phase 33 Part B
-    Scope C — scenarios MUST use ``effect:`` after the migration.
+    The rule that matters: **an effect block must state at least one
+    expectation.** A block carrying only, say, a ``config_contains`` typo
+    grades nothing and therefore passes for free — the silent no-op this
+    format exists to catch, and the exact reason a domain-2 scenario could
+    pass while its patch touched no module at all.
     """
-    failures: list[str] = []
+    errors: list[str] = []
     if not expected:
-        return failures
+        return errors
+    if not isinstance(expected, dict):
+        return [f"expected_patch: must be a mapping, got {type(expected).__name__}"]
+
+    # `ops:`/`forbidden_ops:` were deleted in Phase 33 Part B Scope C. They are
+    # unknown keys like any other now, but they get their own message because
+    # the fix is a migration, not a spelling correction.
+    legacy = sorted(k for k in ("ops", "forbidden_ops") if k in expected)
+    if legacy:
+        errors.append(
+            f"expected_patch: scenario uses the deleted `ops:`/`forbidden_ops:` "
+            f"syntax (found {legacy}). Migrate to `expected_patch.effect:`."
+        )
+    unknown = sorted(k for k in expected if k not in _EXPECTED_PATCH_KEYS and k not in legacy)
+    if unknown:
+        errors.append(
+            f"expected_patch: unknown key(s) {unknown}. "
+            f"Known keys: {sorted(_EXPECTED_PATCH_KEYS)}."
+        )
+    if errors:
+        return errors
 
     effect = expected.get("effect")
-    if not effect:
-        # Legacy `ops:` block in a scenario that wasn't migrated yet. Surface
-        # the migration ask as a single hard failure so the user can't miss it.
-        if "ops" in expected or "forbidden_ops" in expected:
-            failures.append(
-                "expected_patch: scenario uses the deleted `ops:`/`forbidden_ops:` "
-                "syntax. Migrate to `expected_patch.effect:` — see Phase 33 Part B "
-                "Scope C in CHANGELOG."
-            )
-        return failures
+    if effect is None:
+        return errors
+    return _validate_effect(effect, "expected_patch.effect")
 
+
+def _validate_effect(effect: Any, where: str) -> list[str]:
+    """Shape-check one effect block (recursing through ``any_of``)."""
     if not isinstance(effect, dict):
-        failures.append(f"expected_patch.effect: must be a mapping, got {type(effect).__name__}")
-        return failures
+        return [f"{where}: must be a mapping, got {type(effect).__name__}"]
 
-    module_id = effect.get("module")
-    if not module_id:
-        failures.append("expected_patch.effect.module: required (target module_id)")
-        return failures
+    unknown = sorted(k for k in effect if k not in _EFFECT_KEYS)
+    if unknown:
+        return [f"{where}: unknown key(s) {unknown}. Known keys: {sorted(_EFFECT_KEYS)}."]
 
-    if patched_dict is None:
-        # Apply failed earlier in the pipeline; effect grader skips so the user
-        # sees the apply failure as the root cause, not a noisy follow-up.
-        return failures
+    if "config_contains" in effect and not effect.get("module"):
+        return [
+            f"{where}: 'module' is required when 'config_contains' is given "
+            "(config_contains grades one named module's config)"
+        ]
 
-    modules = patched_dict.get("modules", []) or []
-    target = next(
-        (m for m in modules if isinstance(m, dict) and m.get("id") == module_id),
-        None,
-    )
-    if target is None:
-        failures.append(
-            f"expected_patch.effect.module: {module_id!r} not found in patched "
-            f"blueprint (modules present: {[m.get('id') for m in modules if isinstance(m, dict)]})"
-        )
-        return failures
+    if not (_EFFECT_EXPECTATION_KEYS & set(effect)):
+        return [
+            f"{where}: states no expectation. At least one of "
+            f"{sorted(_EFFECT_EXPECTATION_KEYS)} is required — an expectation "
+            "block that expects nothing passes for free and verifies nothing."
+        ]
 
-    target_config = target.get("config") or {}
-    config_contains = effect.get("config_contains") or {}
-    if not isinstance(config_contains, dict):
-        failures.append(
-            f"expected_patch.effect.config_contains: must be a mapping, "
-            f"got {type(config_contains).__name__}"
-        )
-        return failures
+    errors: list[str] = []
+    for key in ("config_contains", "engine_config", "modules_contain"):
+        value = effect.get(key)
+        if value is not None and not isinstance(value, dict):
+            errors.append(f"{where}.{key}: must be a mapping, got {type(value).__name__}")
 
-    for key, expected_val in config_contains.items():
-        actual_val = target_config.get(key)
+    changed = effect.get("engine_config_changed")
+    if changed is not None:
+        if not isinstance(changed, dict):
+            errors.append(
+                f"{where}.engine_config_changed: must be a mapping of "
+                f"{{engine: [key, ...]}}, got {type(changed).__name__}"
+            )
+        else:
+            for engine, keys in changed.items():
+                if not isinstance(keys, list) or not keys:
+                    errors.append(
+                        f"{where}.engine_config_changed[{engine!r}]: must be a "
+                        f"non-empty list of config keys, got {keys!r}"
+                    )
+
+    any_of = effect.get("any_of")
+    if any_of is not None:
+        if not isinstance(any_of, list) or not any_of:
+            errors.append(
+                f"{where}.any_of: must be a non-empty list of effect blocks, got {any_of!r}"
+            )
+        else:
+            for i, alt in enumerate(any_of):
+                errors.extend(_validate_effect(alt, f"{where}.any_of[{i}]"))
+
+    return errors
+
+
+def _compare_config_values(
+    where: str,
+    expected_config: dict[str, Any],
+    actual_config: dict[str, Any],
+    *,
+    sql_aware: bool,
+) -> list[str]:
+    """Compare an expected ``{key: value}`` map against an actual config map.
+
+    ``sql_aware`` selects the STRING rule: SQL-normalised substring for
+    ``_SQL_TYPED_KEYS`` and raw substring otherwise (module config), versus
+    canonical equality (engine config — see the module docstring for why
+    substring is wrong there). Booleans and numbers are strict, type-checked
+    equality either way.
+    """
+    failures: list[str] = []
+    for key, expected_val in expected_config.items():
+        actual_val = actual_config.get(key)
         if actual_val is None:
             failures.append(
-                f"expected_patch.effect.config_contains[{key!r}]: key not present "
-                f"in patched config (keys: {sorted(target_config.keys())})"
+                f"{where}[{key!r}]: key not present in patched config "
+                f"(keys: {sorted(actual_config.keys())})"
             )
+            continue
+
+        if not sql_aware:
+            # Engine config: every value reaches the session as a string, so
+            # `200` and `"200"` are the same setting — `canonical_config_value`
+            # is the SAME normalisation Gate 1 and `patch revert` use, so the
+            # three cannot disagree about whether a value changed.
+            from aqueduct.patch.config_delta import canonical_config_value
+
+            if canonical_config_value(actual_val) != canonical_config_value(expected_val):
+                failures.append(f"{where}[{key!r}]: expected {expected_val!r}, got {actual_val!r}")
             continue
 
         # Booleans / numbers → strict equality, type-checked. `isinstance(True, int)`
@@ -350,7 +758,7 @@ def _check_expected_effect(
         if isinstance(expected_val, bool):
             if not isinstance(actual_val, bool) or actual_val != expected_val:
                 failures.append(
-                    f"expected_patch.effect.config_contains[{key!r}]: "
+                    f"{where}[{key!r}]: "
                     f"expected bool {expected_val!r}, got {actual_val!r} "
                     f"({type(actual_val).__name__})"
                 )
@@ -362,7 +770,7 @@ def _check_expected_effect(
                 or actual_val != expected_val
             ):
                 failures.append(
-                    f"expected_patch.effect.config_contains[{key!r}]: "
+                    f"{where}[{key!r}]: "
                     f"expected {expected_val!r}, got {actual_val!r} "
                     f"({type(actual_val).__name__})"
                 )
@@ -376,28 +784,240 @@ def _check_expected_effect(
             normalized_expected = _normalize_sql(expected_str)
             if normalized_expected not in normalized_actual:
                 failures.append(
-                    f"expected_patch.effect.config_contains[{key!r}]: "
+                    f"{where}[{key!r}]: "
                     f"AST-normalized expected substring {expected_str!r} not in "
                     f"normalized actual {actual_str!r}"
                 )
         else:
             if expected_str not in actual_str:
                 failures.append(
-                    f"expected_patch.effect.config_contains[{key!r}]: "
-                    f"substring {expected_str!r} not in {actual_str!r}"
+                    f"{where}[{key!r}]: " f"substring {expected_str!r} not in {actual_str!r}"
                 )
 
     return failures
 
 
+def _module_matches(module: dict, constraints: dict[str, Any]) -> bool:
+    """Whether one post-patch module dict satisfies a ``modules_contain`` block."""
+    wanted_type = constraints.get("type")
+    if wanted_type is not None and str(module.get("type")) != str(wanted_type):
+        return False
+    config_contains = constraints.get("config_contains") or {}
+    if not isinstance(config_contains, dict):
+        return False
+    return not _compare_config_values(
+        "modules_contain.config_contains",
+        config_contains,
+        module.get("config") or {},
+        sql_aware=True,
+    )
+
+
+def _grade_effect(
+    effect: dict[str, Any],
+    patched_dict: dict,
+    blueprint_before: dict,
+    where: str,
+) -> list[str]:
+    """Grade ONE effect block against the post-patch Blueprint.
+
+    ``blueprint_before`` is the pre-patch Blueprint dict, needed only by
+    ``engine_config_changed`` (which is a before/after question). Both engine
+    blocks are read through ``config_delta.blueprint_engine_layers`` — the same
+    normaliser Gate 1 uses — so a scenario addresses Spark's free-form
+    ``conf`` bag and DuckDB's typed fields with one shape.
+    """
+    from aqueduct.patch.config_delta import blueprint_engine_layers
+
+    failures: list[str] = []
+    modules = patched_dict.get("modules", []) or []
+
+    module_id = effect.get("module")
+    if module_id:
+        target = next(
+            (m for m in modules if isinstance(m, dict) and m.get("id") == module_id),
+            None,
+        )
+        if target is None:
+            failures.append(
+                f"{where}.module: {module_id!r} not found in patched blueprint "
+                f"(modules present: "
+                f"{[m.get('id') for m in modules if isinstance(m, dict)]})"
+            )
+        else:
+            config_contains = effect.get("config_contains") or {}
+            failures.extend(
+                _compare_config_values(
+                    f"{where}.config_contains",
+                    config_contains,
+                    target.get("config") or {},
+                    sql_aware=True,
+                )
+            )
+
+    modules_contain = effect.get("modules_contain")
+    if modules_contain:
+        if not any(_module_matches(m, modules_contain) for m in modules if isinstance(m, dict)):
+            failures.append(
+                f"{where}.modules_contain: no module in the patched blueprint "
+                f"matches {modules_contain!r} (modules present: "
+                f"{[(m.get('id'), m.get('type')) for m in modules if isinstance(m, dict)]})"
+            )
+
+    engine_config = effect.get("engine_config")
+    if engine_config:
+        after_layers = blueprint_engine_layers(patched_dict)
+        for engine, wanted in engine_config.items():
+            if not isinstance(wanted, dict):
+                failures.append(
+                    f"{where}.engine_config[{engine!r}]: must be a mapping of "
+                    f"{{key: value}}, got {type(wanted).__name__}"
+                )
+                continue
+            failures.extend(
+                _compare_config_values(
+                    f"{where}.engine_config[{engine!r}]",
+                    wanted,
+                    after_layers.get(engine) or {},
+                    sql_aware=False,
+                )
+            )
+
+    changed = effect.get("engine_config_changed")
+    if changed:
+        from aqueduct.patch.config_delta import ABSENT, canonical_config_value
+
+        before_layers = blueprint_engine_layers(blueprint_before)
+        after_layers = blueprint_engine_layers(patched_dict)
+        for engine, keys in changed.items():
+            before = before_layers.get(engine) or {}
+            after = after_layers.get(engine) or {}
+            for key in keys:
+                b = before.get(key, ABSENT)
+                a = after.get(key, ABSENT)
+                if canonical_config_value(b) == canonical_config_value(a):
+                    failures.append(
+                        f"{where}.engine_config_changed[{engine!r}]: {key!r} did not "
+                        f"change (before={None if b is ABSENT else b!r}, "
+                        f"after={None if a is ABSENT else a!r})"
+                    )
+
+    any_of = effect.get("any_of")
+    if any_of:
+        per_alt = [
+            _grade_effect(alt, patched_dict, blueprint_before, f"{where}.any_of[{i}]")
+            for i, alt in enumerate(any_of)
+        ]
+        if all(alt_failures for alt_failures in per_alt):
+            joined = "; ".join(
+                f"[{i}] " + " / ".join(alt_failures) for i, alt_failures in enumerate(per_alt)
+            )
+            failures.append(f"{where}.any_of: no alternative held. Each one's failure: {joined}")
+
+    return failures
+
+
+def _check_expected_effect(
+    expected: dict[str, Any],
+    patched_dict: dict | None,
+    blueprint_before: dict | None = None,
+    apply_error: str | None = None,
+) -> list[str]:
+    """Verify the post-patch blueprint matches the expected effect.
+
+    ``expected`` is the scenario's ``expected_patch`` block; see this module's
+    docstring for the full ``effect:`` grammar. Returns a list of failure
+    messages (empty = OK).
+
+    ``patched_dict`` is the post-patch blueprint dict produced by
+    ``_try_apply_patch`` — None when the patch failed to apply. The per-key
+    grading is skipped then (a cascade of "the module has no such key" noise
+    on top of a refusal buries the real cause), but the block still fails,
+    with ONE line naming the refusal: an effect stated and never graded must
+    never read as an effect satisfied. It used to return ``[]`` there, so a
+    scenario that stated an effect and did not also assert ``patch_applies:
+    true`` scored PASS for a patch Gate 1 had refused outright — the same
+    silently-ungraded-expectation family this grammar exists to close, one
+    level up. Every shipped scenario with an effect also asserts
+    ``patch_applies``, so this is a latent hole, not a live miscount.
+    Shape errors in the expectation itself are reported regardless: a
+    malformed expectation is the scenario author's bug no matter what the
+    model produced.
+
+    ``blueprint_before`` is the pre-patch Blueprint dict, required only by
+    ``engine_config_changed``. ``apply_error`` is ``ApplyOutcome.error``,
+    used only to name the cause in that single failure line.
+    """
+    shape_errors = validate_expected_patch(expected)
+    if shape_errors:
+        return shape_errors
+
+    effect = expected.get("effect")
+    if not effect:
+        return []
+    if patched_dict is None:
+        return [
+            "expected_patch.effect: stated, but the patch never applied, so no "
+            "effect could be graded — "
+            f"{apply_error or 'the apply did not succeed (no message)'}"
+        ]
+
+    return _grade_effect(effect, patched_dict, blueprint_before or {}, "expected_patch.effect")
+
+
+@dataclass(frozen=True)
+class ApplyOutcome:
+    """Everything one apply attempt tells the grader.
+
+    A record rather than a tuple because the four facts it carries are not
+    interchangeable and three of them are ``None``-able: ``applied=False``
+    with ``refusal=None`` (the apply was never attempted) is a different
+    state from ``applied=False`` with ``refusal="policy"`` (Gate 1 said no),
+    and a positional tuple makes those two one careless index apart. The
+    grader has to tell them apart to answer ``patch_refused:`` at all.
+    """
+
+    #: The patch applied AND the patched Blueprint re-parsed + re-compiled.
+    applied: bool
+    #: Human-readable reason when it did not. Empty on success.
+    error: str
+    #: ``None`` = the Blueprint declares no ``agent.guardrails`` (guardrail
+    #: compliance is N/A); ``[]`` = declared and clean; non-empty = violated.
+    violated_guardrails: list[str] | None
+    #: Post-patch Blueprint dict; ``None`` whenever the apply did not succeed.
+    patched_dict: dict | None
+    #: Which refusal reason (`REFUSAL_REASONS`) rejected it, classified by
+    #: exception TYPE — never by matching a message. ``None`` on success.
+    refusal: str | None = None
+    #: Gate 1's effective-engine-config gate status (`GateStatus`) for this
+    #: patch, or ``None`` when that gate never ran — which is the honest
+    #: answer for a POLICY refusal, since the allowlist check that rejected
+    #: the write runs BEFORE the delta gate and the delta was never measured.
+    engine_config_gate: str | None = None
+    #: The PRE-patch Blueprint dict. Carried here because
+    #: ``engine_config_changed`` is a before/after question and the loader
+    #: already read the file — re-reading it in the caller is a second
+    #: source of truth for the same bytes.
+    blueprint_before: dict | None = None
+
+
 def _try_apply_patch(
-    patch: Any, blueprint_path: Path
-) -> tuple[bool, str, list[str] | None, dict | None]:
+    patch: Any,
+    blueprint_path: Path,
+    *,
+    engine: str = DEFAULT_SCENARIO_ENGINE,
+) -> ApplyOutcome:
     """Try applying patch to blueprint.
 
-    Returns (success, error_message, violated_guardrails, patched_dict).
+    ``engine`` is the engine whose run the scenario simulates
+    (``scenario_engine``). It selects the capability table the post-patch
+    re-compile is checked against: a DuckDB scenario left on the Spark
+    default would have its patched Blueprint graded against SPARK's
+    capability verdicts, so a patch that is legal on DuckDB and unsupported
+    on Spark (or the reverse) would be scored against the wrong engine
+    entirely.
 
-    ``violated_guardrails`` is:
+    ``ApplyOutcome.violated_guardrails`` is:
       - ``None`` when the blueprint defines NO ``agent.guardrails`` (so
         guardrail compliance is N/A for this scenario)
       - ``[]`` when guardrails are defined and the patch satisfies all of them
@@ -412,12 +1032,26 @@ def _try_apply_patch(
     ``patched_dict`` is the post-patch blueprint dict (after a successful
     apply + parse + compile). Returned so the caller can re-use it for the
     new effect-based grader without re-running the apply pipeline.
+
+    **Refusals are classified by exception TYPE.** ``_check_guardrails`` can
+    say no for four different reasons whose fixes have nothing in common — a
+    denied/unlisted engine-config key (``EngineConfigPolicyError``), a config
+    write that provably changes no effective config
+    (``EngineConfigInertError``), a Blueprint ``agent.guardrails`` violation
+    (a plain ``PatchError``), and a patched Blueprint that no longer parses
+    or compiles (``ParseError``/``CompileError``). Collapsing them into one
+    ``applied=False`` is what let a domain-2 scenario claim a result it never
+    checked. Matching the message text instead of the type is forbidden
+    (AGENTS.md), which is why the two narrow ``PatchError`` refinements exist
+    in the first place.
     """
     try:
         from aqueduct.compiler.compiler import CompileError
         from aqueduct.compiler.compiler import compile as compiler_compile
         from aqueduct.parser.parser import ParseError, parse_dict
         from aqueduct.patch.apply import (
+            EngineConfigInertError,
+            EngineConfigPolicyError,
             PatchError,
             _check_guardrails,
             _yaml_load,
@@ -446,11 +1080,50 @@ def _try_apply_patch(
         from aqueduct.config import load_config as _load_config
 
         try:
-            _check_guardrails(patch, bp_raw, provenance_map=None, cfg=_load_config(None))
+            gate = _check_guardrails(patch, bp_raw, provenance_map=None, cfg=_load_config(None))
+        except EngineConfigPolicyError as exc:
+            # Ordered before the bare `PatchError` clause: both refinements
+            # ARE PatchErrors, so a single broad clause would swallow them
+            # and re-conflate the states they exist to separate.
+            return ApplyOutcome(
+                applied=False,
+                error=f"engine-config policy refused the write: {exc}",
+                violated_guardrails=violated,
+                patched_dict=None,
+                refusal=REFUSAL_POLICY,
+                # The delta gate runs AFTER the allowlist check, so on a
+                # policy refusal it never ran and has no status to report.
+                # Reporting `fail` here would claim a measurement nobody took.
+                engine_config_gate=None,
+                blueprint_before=bp_raw,
+            )
+        except EngineConfigInertError as exc:
+            return ApplyOutcome(
+                applied=False,
+                error=f"engine-config write is inert: {exc}",
+                violated_guardrails=violated,
+                patched_dict=None,
+                refusal=REFUSAL_INERT,
+                # `EngineConfigDeltaResult` deliberately has no `fail` member
+                # — the failing state is RAISED so every apply path must
+                # refuse it rather than render it. A scenario is the one
+                # consumer that has to render it, so the raise is mapped back
+                # onto the shared gate vocabulary here, at the boundary.
+                engine_config_gate=GateStatus.FAIL,
+                blueprint_before=bp_raw,
+            )
         except PatchError as exc:
             if has_guardrails:
                 violated = [str(exc)]
-            return False, f"guardrails violated: {exc}", violated, None
+            return ApplyOutcome(
+                applied=False,
+                error=f"guardrails violated: {exc}",
+                violated_guardrails=violated,
+                patched_dict=None,
+                refusal=REFUSAL_GUARDRAIL,
+                engine_config_gate=None,
+                blueprint_before=bp_raw,
+            )
 
         patched = apply_patch_to_dict(bp_raw, patch)
 
@@ -462,12 +1135,51 @@ def _try_apply_patch(
         base_dir = blueprint_path.parent if blueprint_path.exists() else Path.cwd()
         try:
             bp = parse_dict(patched, base_dir=base_dir)
-            compiler_compile(bp, blueprint_path=blueprint_path)
-            return True, "", violated, patched
+            compiler_compile(bp, blueprint_path=blueprint_path, engine=engine)
+            return ApplyOutcome(
+                applied=True,
+                error="",
+                violated_guardrails=violated,
+                patched_dict=patched,
+                refusal=None,
+                engine_config_gate=gate.status,
+                blueprint_before=bp_raw,
+            )
         except (ParseError, CompileError) as exc:
-            return False, str(exc), violated, None
+            return ApplyOutcome(
+                applied=False,
+                error=str(exc),
+                violated_guardrails=violated,
+                patched_dict=None,
+                refusal=REFUSAL_INVALID,
+                # Gate 1 DID run and DID have an answer here — the patch was
+                # permitted and only fell over on the re-parse — so its status
+                # is real and reported, unlike the policy-refusal branch.
+                engine_config_gate=gate.status,
+                blueprint_before=bp_raw,
+            )
     except Exception as exc:
-        return False, str(exc), None, None
+        return ApplyOutcome(
+            applied=False,
+            error=str(exc),
+            violated_guardrails=None,
+            patched_dict=None,
+        )
+
+
+#: Assertions that can only be answered by actually applying the patch. Used
+#: to decide whether ``_check_assertions`` needs an ``ApplyOutcome`` at all —
+#: a scenario asserting none of them costs no apply.
+_APPLY_DEPENDENT_ASSERTIONS = frozenset({"patch_applies", "patch_refused", "gate_status"})
+
+#: ``gate_status:`` gate name -> where that gate's status lives on an
+#: ``ApplyOutcome``. A dict rather than an if/elif so adding a gate is one
+#: line here plus one in ``SCENARIO_GATES``, and so the two cannot drift into
+#: naming different gate sets (a name in one and not the other is caught by
+#: ``tests/test_surveyor/test_scenario.py``).
+_GATE_STATUS_READERS = {
+    "engine_config": lambda outcome: outcome.engine_config_gate,
+}
 
 
 def _check_assertions(
@@ -475,6 +1187,7 @@ def _check_assertions(
     patch: Any,  # PatchSpec | None
     blueprint_path: Path | None,
     attempts: int = 0,
+    apply_outcome: ApplyOutcome | None = None,
 ) -> tuple[
     list[str], list[str], bool, bool, bool | None, bool | None, list[str] | None, dict | None
 ]:
@@ -490,11 +1203,19 @@ def _check_assertions(
     effect-based grader needs to inspect the result.
 
     Gating (correctness — flips PASS/FAIL): `patch_is_valid`,
-    `patch_applies`. Scoring (quality — recorded, NEVER flips PASS/FAIL):
-    `root_cause_contains`, `expected_category`, `max_attempts`,
-    `min_confidence`. A correct fix with imperfect diagnosis still PASSes;
-    the soft misses are reported and rolled into the diagnosis score.
-    root_cause_match / category_match are None when not configured.
+    `patch_applies`, `patch_refused`, `gate_status`. Scoring (quality —
+    recorded, NEVER flips PASS/FAIL): `root_cause_contains`,
+    `expected_category`, `max_attempts`, `min_confidence`. A correct fix with
+    imperfect diagnosis still PASSes; the soft misses are reported and rolled
+    into the diagnosis score. root_cause_match / category_match are None when
+    not configured.
+
+    ``apply_outcome`` is the ALREADY-COMPUTED result of applying ``patch``
+    (``run_scenario`` resolves it once so the effect grader and the refusal
+    assertions read the same attempt). When omitted, one is computed here on
+    demand — but only if some assertion actually needs it
+    (``_APPLY_DEPENDENT_ASSERTIONS``), so a diagnosis-only scenario still
+    costs no apply.
     """
     failures: list[str] = []  # gating (correctness)
     soft_failures: list[str] = []  # scoring (quality, non-gating)
@@ -504,6 +1225,25 @@ def _check_assertions(
     patched_dict: dict | None = None  # post-patch dict reused by the effect grader
     root_cause_match: bool | None = None
     category_match: bool | None = None
+
+    # ── Resolve the apply ONCE ────────────────────────────────────────────
+    # Three assertions ask about the same event from different angles, and
+    # each used to be free to run its own apply (only `patch_applies` ever
+    # did). Two applies of one patch are two chances to disagree about
+    # whether it applied.
+    outcome = apply_outcome
+    if (
+        outcome is None
+        and patch is not None
+        and blueprint_path is not None
+        and blueprint_path.exists()
+        and any(key in _APPLY_DEPENDENT_ASSERTIONS for a in assertions for key in a)
+    ):
+        outcome = _try_apply_patch(patch, blueprint_path)
+    if outcome is not None:
+        patch_applies = outcome.applied
+        violated_guardrails = outcome.violated_guardrails
+        patched_dict = outcome.patched_dict
 
     # Phase 41: detect defer_to_human in the patch
     did_defer = patch is not None and any(
@@ -548,20 +1288,63 @@ def _check_assertions(
             if patch is None:
                 if expected_val:
                     failures.append("patch_applies: cannot check — patch is None")
-            else:
-                if blueprint_path and blueprint_path.exists():
-                    ok, err, violated, patched = _try_apply_patch(patch, blueprint_path)
-                    patch_applies = ok
-                    violated_guardrails = violated
-                    patched_dict = patched
-                    if expected_val and not ok:
-                        failures.append(f"patch_applies: patch failed to apply: {err}")
-                    elif not expected_val and ok:
-                        failures.append(
-                            "patch_applies: expected patch to fail but it applied successfully"
-                        )
+            elif outcome is None:
+                logger.warning("patch_applies assertion: blueprint path not found; skipped")
+            elif expected_val and not outcome.applied:
+                failures.append(f"patch_applies: patch failed to apply: {outcome.error}")
+            elif not expected_val and outcome.applied:
+                failures.append("patch_applies: expected patch to fail but it applied successfully")
+
+        if "patch_refused" in assertion:
+            # A REASON, not a boolean. `patch_applies: false` says only "it
+            # did not apply" and covers four outcomes with four different
+            # fixes; this says which one, and is checked independently of
+            # `patch_applies` so a scenario stating both cannot have one of
+            # them silently satisfied by the other.
+            expected_reason = str(assertion["patch_refused"])
+            if patch is None:
+                failures.append(
+                    f"patch_refused: cannot check — patch is None "
+                    f"(nothing was submitted for {expected_reason!r} to refuse)"
+                )
+            elif outcome is None:
+                logger.warning("patch_refused assertion: blueprint path not found; skipped")
+            elif outcome.refusal is None:
+                failures.append(
+                    f"patch_refused: expected the patch to be refused "
+                    f"({expected_reason!r}) but it applied cleanly"
+                )
+            elif outcome.refusal != expected_reason:
+                failures.append(
+                    f"patch_refused: expected refusal {expected_reason!r}, got "
+                    f"{outcome.refusal!r} ({outcome.error})"
+                )
+
+        if "gate_status" in assertion:
+            for gate, expected_status in assertion["gate_status"].items():
+                # `load_scenario` already refused an unknown gate/status, so
+                # the reader lookup below cannot miss.
+                reader = _GATE_STATUS_READERS[gate]
+                if patch is None:
+                    failures.append(f"gate_status[{gate}]: cannot check — patch is None")
+                elif outcome is None:
+                    logger.warning("gate_status assertion: blueprint path not found; skipped")
+                    continue
                 else:
-                    logger.warning("patch_applies assertion: blueprint path not found; skipped")
+                    actual_status = reader(outcome)
+                    if actual_status is None:
+                        failures.append(
+                            f"gate_status[{gate}]: expected {expected_status!r} but the "
+                            f"gate never ran on this patch, so it has no status "
+                            f"({outcome.error or 'the patch was applied'}). A gate that "
+                            "did not run has no verdict to assert — reporting one would "
+                            "be claiming a measurement nobody took."
+                        )
+                    elif actual_status != expected_status:
+                        failures.append(
+                            f"gate_status[{gate}]: expected {expected_status!r}, "
+                            f"got {actual_status!r}"
+                        )
 
         if "max_attempts" in assertion:
             max_att = int(assertion["max_attempts"])
@@ -688,12 +1471,18 @@ def run_scenario(
     apply_cb: Any = None
     if blueprint_path is not None:
 
-        def apply_cb(patch_spec: Any, _bp_path: Path = blueprint_path) -> tuple:
-            ok, err, violated, _patched = _try_apply_patch(patch_spec, _bp_path)
-            if ok:
+        def apply_cb(
+            patch_spec: Any,
+            _bp_path: Path = blueprint_path,
+            _engine: str = scenario_engine(scenario),
+        ) -> tuple:
+            outcome = _try_apply_patch(patch_spec, _bp_path, engine=_engine)
+            if outcome.applied:
                 return True, None, None, None
-            err_class = "guardrail_violation" if violated else "compile_error"
-            return False, err_class, err or "(no message)", None
+            err_class = (
+                "guardrail_violation" if outcome.refusal == REFUSAL_GUARDRAIL else "compile_error"
+            )
+            return False, err_class, outcome.error or "(no message)", None
 
     _toolbox: Any = None
     if mode == "agentic":
@@ -732,6 +1521,16 @@ def run_scenario(
 
     duration = time.monotonic() - t0
 
+    # Apply ONCE, here, for every consumer below. Previously the apply only
+    # happened as a side effect of a `patch_applies:` assertion, so a
+    # scenario that stated an `expected_patch.effect` but no `patch_applies`
+    # graded its effect against `patched_dict=None` — i.e. graded nothing,
+    # silently, and passed. Resolving it up front makes the effect grader,
+    # the refusal assertions and the gate assertions all read one attempt.
+    apply_outcome: ApplyOutcome | None = None
+    if patch is not None and blueprint_path is not None:
+        apply_outcome = _try_apply_patch(patch, blueprint_path, engine=scenario_engine(scenario))
+
     # Check assertions — gating (correctness) vs soft (quality)
     # blueprint_path already resolved above; reused for _check_assertions.
     (
@@ -744,15 +1543,27 @@ def run_scenario(
         violated_guardrails,
         patched_dict,
     ) = _check_assertions(
-        scenario.assertions, patch, blueprint_path, attempts=agent_result.attempts
+        scenario.assertions,
+        patch,
+        blueprint_path,
+        attempts=agent_result.attempts,
+        apply_outcome=apply_outcome,
     )
 
     # expected_patch is a correctness/effect check → gating. Effect-based
     # grader inspects the POST-PATCH blueprint (patched_dict) rather than
     # comparing op-name equality on the raw patch — see _check_expected_effect.
+    # The PRE-patch dict goes with it: `engine_config_changed` is a
+    # before/after question and grading it against an empty "before" would
+    # call every present key a change.
     expected_failures: list[str] = []
     if patch is not None and scenario.expected_patch:
-        expected_failures = _check_expected_effect(scenario.expected_patch, patched_dict)
+        expected_failures = _check_expected_effect(
+            scenario.expected_patch,
+            patched_dict,
+            apply_outcome.blueprint_before if apply_outcome is not None else None,
+            apply_error=(apply_outcome.error if apply_outcome is not None else None),
+        )
 
     gating_failures = hard_failures + expected_failures
     passed = len(gating_failures) == 0  # diagnosis quality NEVER flips this
@@ -786,6 +1597,93 @@ def run_scenario(
         escalated=agent_result.escalated,
         tokens_in_total=agent_result.tokens_in_total,
         tokens_out_total=agent_result.tokens_out_total,
+        refusal=apply_outcome.refusal if apply_outcome is not None else None,
+        engine_config_gate=(
+            apply_outcome.engine_config_gate if apply_outcome is not None else None
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class ScenarioSelection:
+    """What ``select_scenarios`` found, and everything it left behind.
+
+    Three "not selected" reasons, kept apart rather than summed into one
+    count, because they need three different responses from the user: fix
+    the file, widen ``--domain``, or declare ``domains:`` on the scenario.
+    A single "12 of 15 scenarios" line hides which.
+    """
+
+    #: Scenarios that will actually run.
+    scenarios: tuple[AqScenario, ...]
+    #: ``"<path>: <error>"`` per file that failed to load. NOT silently
+    #: dropped — a malformed scenario that vanishes from a suite makes the
+    #: suite look smaller rather than broken.
+    load_errors: tuple[str, ...] = ()
+    #: IDs of scenarios that declare ``domains:`` none of which was selected.
+    #: The ordinary, expected exclusion.
+    filtered_out: tuple[str, ...] = ()
+    #: IDs of scenarios that declare NO ``domains:`` at all. Excluded by any
+    #: ``--domain`` filter, because a scenario that states no domain cannot
+    #: truthfully be claimed to be in one — but reported by ID rather than
+    #: dropped in silence, since the fix is a one-line edit to the file and
+    #: the failure mode otherwise is a suite that quietly shrinks.
+    undeclared: tuple[str, ...] = ()
+
+
+def select_scenarios(
+    scenarios_dir: Path,
+    domains: Sequence[str] = (),
+) -> ScenarioSelection:
+    """Load every scenario under *scenarios_dir*, optionally domain-filtered.
+
+    *scenarios_dir* may be a single ``.aqscenario.yml`` file or a directory
+    searched recursively — the same two shapes ``aqueduct benchmark`` accepts.
+
+    *domains* empty means no filtering at all: every loadable scenario is
+    selected regardless of what it declares, which is what keeps the flag
+    purely additive for suites that predate ``domains:``. A non-empty
+    *domains* selects a scenario when ANY of its declared domains was asked
+    for — a scenario may legitimately declare more than one, because domain
+    is a property of the FIX and some failures are fixable more than one way.
+
+    Callers are responsible for validating *domains* against
+    ``SCENARIO_DOMAINS``; the CLI does it through ``click.Choice`` so an
+    unknown value is a usage error naming the legal set, rather than a filter
+    that silently matches nothing.
+    """
+    if scenarios_dir.is_file():
+        scenario_files = [scenarios_dir]
+    else:
+        scenario_files = sorted(scenarios_dir.glob("**/*.aqscenario.yml"))
+
+    loaded: list[AqScenario] = []
+    load_errors: list[str] = []
+    for spath in scenario_files:
+        try:
+            loaded.append(load_scenario(spath))
+        except Exception as exc:
+            load_errors.append(f"{spath}: {exc}")
+
+    if not domains:
+        return ScenarioSelection(scenarios=tuple(loaded), load_errors=tuple(load_errors))
+
+    wanted = set(domains)
+    selected: list[AqScenario] = []
+    filtered_out: list[str] = []
+    undeclared: list[str] = []
+    for scenario in loaded:
+        if not scenario.domains:
+            undeclared.append(scenario.id)
+        elif wanted & set(scenario.domains):
+            selected.append(scenario)
+        else:
+            filtered_out.append(scenario.id)
+    return ScenarioSelection(
+        scenarios=tuple(selected),
+        load_errors=tuple(load_errors),
+        filtered_out=tuple(filtered_out),
+        undeclared=tuple(undeclared),
     )
 
 
@@ -804,6 +1702,7 @@ def run_benchmark(
     mode: str = "oneshot",
     max_tool_calls: int = 8,
     supports_tools: bool | str = "auto",
+    domains: Sequence[str] = (),
 ) -> dict[str, dict[str, ScenarioResult]]:
     """Run all scenarios in scenarios_dir against each model.
 
@@ -815,28 +1714,28 @@ def run_benchmark(
         mode: Phase 75 — ``"oneshot"`` (default) or ``"agentic"``. Plumbed
             straight through to every ``run_scenario`` call so a live A/B
             (oneshot vs agentic, same scenarios/models) is possible.
+        domains: Restrict the suite to scenarios declaring at least one of
+            these ``domains:`` members (``SCENARIO_DOMAINS``). Empty = no
+            filtering. See ``select_scenarios``.
 
     Returns:
         {scenario_id: {model: ScenarioResult}}
     """
     import concurrent.futures
 
-    if scenarios_dir.is_file():
-        scenario_files = [scenarios_dir]
-    else:
-        scenario_files = sorted(scenarios_dir.glob("**/*.aqscenario.yml"))
-    if not scenario_files:
-        logger.warning("No .aqscenario.yml files found in %s", scenarios_dir)
-        return {}
-
-    loaded: list[Any] = []  # AqScenario list
-    for spath in scenario_files:
-        try:
-            loaded.append(load_scenario(spath))
-        except Exception as exc:
-            logger.error("Failed to load scenario %s: %s", spath, exc)
-
+    selection = select_scenarios(scenarios_dir, domains)
+    for message in selection.load_errors:
+        logger.error("Failed to load scenario %s", message)
+    if selection.undeclared:
+        logger.warning(
+            "--domain excluded %d scenario(s) that declare no domains: %s",
+            len(selection.undeclared),
+            ", ".join(selection.undeclared),
+        )
+    loaded = list(selection.scenarios)
     if not loaded:
+        if not selection.load_errors and not selection.filtered_out and not selection.undeclared:
+            logger.warning("No .aqscenario.yml files found in %s", scenarios_dir)
         return {}
 
     # Pre-populate result dict to maintain scenario insertion order

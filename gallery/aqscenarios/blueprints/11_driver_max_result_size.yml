@@ -1,0 +1,51 @@
+aqueduct: "1.0"
+id: driver_max_result_demo
+name: "Driver result cap too small — engine-config tuning demo"
+description: >
+  A wide aggregation collects a large result back to the driver and trips the
+  driver's serialized-result cap. The Blueprint pins that cap, so the fix is a
+  single engine-config write and nothing about the pipeline needs to change.
+
+engine:
+  spark:
+    conf:
+      spark.driver.maxResultSize: "1g"
+
+modules:
+  - id: sales_raw
+    type: Ingress
+    label: "Raw sales (parquet)"
+    config:
+      format: parquet
+      path: data/input/sales
+
+  - id: daily_totals
+    type: Channel
+    label: "Totals per store per day"
+    config:
+      op: sql
+      query: |
+        SELECT
+          store_id,
+          sale_date,
+          SUM(amount) AS total_amount
+        FROM sales_raw
+        GROUP BY store_id, sale_date
+
+  - id: out_totals
+    type: Egress
+    label: "Write daily totals"
+    config:
+      format: parquet
+      path: data/output/daily_totals
+      mode: overwrite
+      coalesce: 1
+
+edges:
+  - from: sales_raw
+    to: daily_totals
+  - from: daily_totals
+    to: out_totals
+
+agent:
+  approval: auto

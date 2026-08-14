@@ -84,6 +84,42 @@ class PatchError(AqueductError):
     """Raised when a patch cannot be applied."""
 
 
+class EngineConfigPolicyError(PatchError):
+    """Gate 1 refused a ``set_engine_config`` write on POLICY grounds.
+
+    A denied key/value, a key on no allowlist, an allowed key with the wrong
+    type/shape, or an engine that is not registered at all. The write was
+    evaluated and the answer is "not permitted".
+
+    A ``PatchError`` SUBCLASS, deliberately, and this is the one place in the
+    codebase where subclassing an error is right rather than the flat
+    sibling-types rule the capability errors follow. Those three
+    (``EnginePluginError``/``CapabilityDeclarationError``/
+    ``CapabilityScopeError``) are independent states with different fixes, so
+    a handler for one must never swallow another. These two are REFINEMENTS
+    of a single state — "this patch was refused" — which every existing
+    ``except PatchError`` caller already handles correctly and must keep
+    handling identically. Subclassing changes no existing behaviour anywhere;
+    it only lets a caller that genuinely needs the distinction (the
+    ``.aqscenario.yml`` grader, which has to tell a policy refusal from an
+    inert write from a malformed patch) get it by TYPE instead of by matching
+    the message text, which AGENTS.md forbids.
+    """
+
+
+class EngineConfigInertError(PatchError):
+    """Gate 1 refused a ``set_engine_config`` write as INERT.
+
+    The patch writes engine config, applies cleanly, and leaves every
+    engine's *effective* session config identical — see
+    ``aqueduct/patch/config_delta.py``. The write was permitted; it just
+    cannot change what any engine does. Distinct from
+    ``EngineConfigPolicyError`` because the fixes are opposite: a policy
+    refusal needs a different KEY, an inert write needs a different VALUE (or
+    a different layer entirely, when a ``--set`` pin is what nullifies it).
+    """
+
+
 # ── Result model ──────────────────────────────────────────────────────────────
 
 
@@ -428,7 +464,7 @@ def _check_engine_config_allowlist(op: Any) -> None:
     """
     registered = discover_registered_engines()
     if op.engine not in registered:
-        raise PatchError(
+        raise EngineConfigPolicyError(
             f"set_engine_config: engine {op.engine!r} is not a registered "
             "aqueduct engine — refusing to write engine config for it "
             f"(fail closed). Registered engines: {sorted(registered)} — see "
@@ -449,7 +485,7 @@ def _check_engine_config_allowlist(op: Any) -> None:
         # allow/deny table this reason was evaluated against. Keep this
         # pointer in sync with the command name (guarded by
         # tests/test_cli/test_cli.py::test_gate1_rejection_names_policy_command).
-        raise PatchError(
+        raise EngineConfigPolicyError(
             f"set_engine_config: {reason} — see " f"`aqueduct patch policy --engine {op.engine}`"
         )
 

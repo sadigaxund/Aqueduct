@@ -198,6 +198,25 @@ class ConfigError(AqueductError):
     """Raised when aqueduct.yml cannot be loaded or fails validation."""
 
 
+class ScenarioError(AqueductError):
+    """Raised when a ``.aqscenario.yml`` benchmark file is malformed.
+
+    A scenario file is user-authored (a benchmark suite is something a user
+    writes and ships), so a bad one is a user-reachable failure and must not
+    surface as a bare ``ValueError`` — see AGENTS.md's "User-reachable errors
+    raise an ``AqueductError`` subclass". ``aqueduct/doctor/checks_io.py``
+    ``check_aqscenario`` branches on this TYPE to tell "this file's shape is
+    wrong" (fix the YAML) from "loading it blew up some other way".
+
+    Covers the whole load-time contract: a missing/unsupported
+    ``aqueduct_scenario:`` version, a missing required key, an UNKNOWN key at
+    any level of the file, an assertion nobody implements, and a ``domains:``
+    member outside the closed vocabulary. The unknown-key cases are the load-
+    bearing ones: a permissive reader that drops a typo'd key silently grades
+    a scenario against an expectation its author never wrote.
+    """
+
+
 class ExecuteError(AqueductError):
     """Raised for unrecoverable execution-setup failures — the Executor
     layer's root error, mirroring ``ParseError`` (Parser) and

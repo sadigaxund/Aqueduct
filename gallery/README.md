@@ -115,9 +115,18 @@ deterministically across models. No Spark needed. See
 - [`06_guardrail_forbidden_op`](aqscenarios/06_guardrail_forbidden_op.aqscenario.yml) — LLM proposes a `remove_module` operation blocked by `forbidden_ops` guardrail.
 - [`07_spark_oom_shuffle`](aqscenarios/07_spark_oom_shuffle.aqscenario.yml) — Large shuffle hits executor OOM; patch adjusts `shuffle.partitions` and adds a repartition.
 - [`08_delta_schema_merge`](aqscenarios/08_delta_schema_merge.aqscenario.yml) — Delta read fails with schema mismatch; patch adds `mergeSchema: true`.
+- [`09_broadcast_join_timeout`](aqscenarios/09_broadcast_join_timeout.aqscenario.yml) — a `/*+ BROADCAST */` hint on a table past the threshold times out the broadcast.
+- [`10_small_files`](aqscenarios/10_small_files.aqscenario.yml) — Egress writes 200 tiny files; patch compacts the output.
+- [`11_driver_max_result_size`](aqscenarios/11_driver_max_result_size.aqscenario.yml) — result set exceeds `spark.driver.maxResultSize`; the whole fix is one engine-config write.
+- [`12_engine_config_denied_key`](aqscenarios/12_engine_config_denied_key.aqscenario.yml) — the engine's own advice names a denied JVM-options key; the write must be refused on policy.
+- [`13_engine_config_inert_write`](aqscenarios/13_engine_config_inert_write.aqscenario.yml) — the suggested value is the one already configured; the write must be refused as inert.
+- [`14_duckdb_memory_limit`](aqscenarios/14_duckdb_memory_limit.aqscenario.yml) — DuckDB runs out of memory; the fix is a typed `engine.duckdb.memory_limit` field, not a Spark `conf` key.
+
+Scenarios declare which surface their expected fix touches (`domains: [pipeline]`
+/ `[engine_config]`), and `aqueduct benchmark --domain <name>` runs only those.
 
 **Next:** Scenarios for JDBC connection errors, partition discovery failure, and UDF serialization are ideal candidates to add — see
-[`aqscenarios/CONTRIBUTING.md`](aqscenarios/CONTRIBUTING.md).
+[`aqscenarios/BENCHMARK_CANDIDATES.md`](aqscenarios/BENCHMARK_CANDIDATES.md).
 
 > **OpenLineage integration:** Aqueduct emits lineage events to any
 > OpenLineage-compatible backend (Marquez, Atlan, etc.) via
