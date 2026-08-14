@@ -346,8 +346,8 @@ def _agent_usable_with_cascade(
 
 
 def _apply_patch_in_memory(
-    patch, blueprint_path: Path, depot, profile, cli_overrides: dict
-) -> Any:  # noqa: F811
+    patch_spec, blueprint_path: Path, depot, profile, cli_overrides: dict
+) -> Any:
     """Apply patch operations to Blueprint without touching disk. Returns new Manifest or None."""
     try:
         from aqueduct.compiler.compiler import CompileError
@@ -356,7 +356,7 @@ def _apply_patch_in_memory(
         from aqueduct.patch.apply import _yaml_load, apply_patch_to_dict
 
         bp_raw = _yaml_load(blueprint_path)
-        patched = apply_patch_to_dict(bp_raw, patch)
+        patched = apply_patch_to_dict(bp_raw, patch_spec)
 
         # Parse the patched dict directly with
         # ``base_dir`` set to the original Blueprint's parent. Replaces the
@@ -379,11 +379,11 @@ def _apply_patch_in_memory(
 
 
 def _write_patch_to_blueprint(
-    patch,
+    patch_spec,
     blueprint_path: Path,
     patches_dir: Path,
     failure_ctx,
-    mode: str,  # noqa: F811
+    mode: str,
     obs_store=None,
     patch_store=None,
     cfg=None,
@@ -415,7 +415,7 @@ def _write_patch_to_blueprint(
         from aqueduct.patch.provenance import build_healed_by_record, detect_engine_version
 
         bp_raw = _yaml_load(blueprint_path)
-        patched = apply_patch_to_dict(bp_raw, patch)
+        patched = apply_patch_to_dict(bp_raw, patch_spec)
 
         # Heal-patch provenance (Phase 79) — this is the auto-mode (agent.
         # approval_mode: auto) direct-write path, so there is no on-disk
@@ -437,7 +437,7 @@ def _write_patch_to_blueprint(
         _delta_res = run_engine_config_delta_gate(
             cfg=cfg,
             blueprint_before=bp_raw,
-            patch_spec=patch,
+            patch_spec=patch_spec,
             blueprint_after=patched,
         )
         # Warn-only perf baseline — the last green run before this apply.
@@ -451,11 +451,11 @@ def _write_patch_to_blueprint(
             obs_store, str(bp_raw.get("id") or ""), before=_applied_at
         )
         _healed_by_record = build_healed_by_record(
-            patch_id=patch.patch_id,
-            operations=patch.operations,
+            patch_id=patch_spec.patch_id,
+            operations=patch_spec.operations,
             meta=_meta,
             applied_at=_applied_at,
-            fallback_run_id=patch.run_id,
+            fallback_run_id=patch_spec.run_id,
             engine_config_delta=_delta_res.delta,
             perf_baseline=_perf_baseline.to_dict() if _perf_baseline else None,
         )
@@ -468,7 +468,9 @@ def _write_patch_to_blueprint(
         from datetime import datetime
 
         ts = datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
-        shutil.copy2(blueprint_path, backup_dir / f"{patch.patch_id}_{ts}_{blueprint_path.name}")
+        shutil.copy2(
+            blueprint_path, backup_dir / f"{patch_spec.patch_id}_{ts}_{blueprint_path.name}"
+        )
 
         # Write atomically
         tmp_out = blueprint_path.with_suffix(".llm_patch.tmp.yml")
@@ -476,7 +478,12 @@ def _write_patch_to_blueprint(
         _os.replace(tmp_out, blueprint_path)
 
         archive_patch(
-            patch, patches_dir, failure_ctx, mode=mode, patch_store=patch_store, obs_store=obs_store
+            patch_spec,
+            patches_dir,
+            failure_ctx,
+            mode=mode,
+            patch_store=patch_store,
+            obs_store=obs_store,
         )
 
         # Re-parse + re-compile from updated file
@@ -732,11 +739,11 @@ def _run_patch_gates_inline(  # noqa: F811
 
 def _stage_failed_patch(
     on_heal_failure: str,
-    patch,
+    patch_spec,
     patches_dir,
     failure_ctx,
     cfg,
-    click_mod,  # noqa: F811
+    click_mod,
     obs_store=None,
     patch_store=None,
 ) -> None:
@@ -745,7 +752,7 @@ def _stage_failed_patch(
         from aqueduct.agent import stage_patch_for_human
 
         stage_patch_for_human(
-            patch,
+            patch_spec,
             patches_dir,
             failure_ctx,
             on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
@@ -754,7 +761,7 @@ def _stage_failed_patch(
         )
         _label = patch_store.location_label if patch_store is not None else patches_dir
         click_mod.echo(
-            f"  ✎ Failed patch staged for review → {_label}/pending/  (id={patch.patch_id})",
+            f"  ✎ Failed patch staged for review → {_label}/pending/  (id={patch_spec.patch_id})",
             err=True,
         )
     # discard: do nothing
