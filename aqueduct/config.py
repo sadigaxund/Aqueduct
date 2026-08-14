@@ -36,7 +36,15 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from aqueduct.agent.constants import DEFAULT_LLM_MODEL
 from aqueduct.errors import ConfigError
@@ -1236,7 +1244,8 @@ class SparkEngineConfig(BaseModel):
         default_factory=dict,
         description=(
             "Per-run Spark session configuration, merged with the "
-            "Blueprint's own engine.spark.conf (Blueprint wins). Replaces "
+            "Blueprint's own engine.spark.conf (Blueprint wins), and with "
+            "this invocation's -s/--set on top of both. Replaces "
             "the pre-2.0 top-level spark_config dict."
         ),
         json_schema_extra={"engine_scoped": True},
@@ -1465,7 +1474,12 @@ class HandoffConfig(BaseModel):
     actual write/read; this block only configures WHERE):
     `<root>/<manifest_hash>/<run_id>/<edge_id>/`. Deleted on a successful
     run; kept when `keep_on_failure` is true (the default) so a rerun
-    reads the existing spill instead of recomputing it.
+    reads the existing spill instead of recomputing it. Keeping is bounded
+    by two deterministic RELEASE events, not by a clock: a successful
+    `--resume` deletes the spill it consumed, and the orphan sweep
+    reclaims a kept failure once a later run of the same blueprint has
+    succeeded (see `aqueduct/executor/spill.py` and `docs/specs.md`
+    §10.4.3). There is no retention window and no age threshold.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -1487,8 +1501,10 @@ class HandoffConfig(BaseModel):
             "Keep a boundary's spilled parquet after a failed run so a "
             "rerun (e.g. after a self-heal) can read the upstream "
             "island's already-materialized output instead of recomputing "
-            "it. When false, spill directories are removed regardless of "
-            "outcome."
+            "it. A kept spill is released once it has been consumed by a "
+            "successful resume, or once a later run of the same blueprint "
+            "has succeeded (no time-based expiry exists). When false, "
+            "spill directories are removed regardless of outcome."
         ),
         json_schema_extra={"engine_scoped": False},
     )
@@ -1551,6 +1567,55 @@ class AqueductConfig(BaseModel):
         ),
         json_schema_extra={"engine_scoped": True},
     )
+
+    # ── Per-invocation `-s/--set` engine-config layer ────────────────────
+    #
+    # NOT a config field, deliberately. It is a `PrivateAttr`, so it never
+    # appears in `model_dump()`, never becomes an `aqueduct.yml` key a user
+    # could write, and never becomes a `config.*` capability leaf every
+    # engine has to declare a verdict for. It carries what the user typed on
+    # THIS invocation's command line and nothing else, and is never
+    # persisted anywhere.
+    #
+    # It lives on `AqueductConfig` because every single site that resolves a
+    # session's engine config already threads `cfg` — the CLI run path
+    # (single-engine and polyglot), the drift command, the sandbox gate, the
+    # effective-config delta gate, `patch revert`, and the doctor check. An
+    # extra parameter on the resolver would have to be remembered at each of
+    # them, and a site that forgot it would silently drop the user's flag,
+    # which is the exact silent-no-op class AGENTS.md forbids. Carrying it
+    # on the object they all already hold makes forgetting impossible.
+    #
+    # Shape: ``{engine_name: {key: value}}`` — the same shape
+    # ``Manifest.engine_config`` uses, so it layers through
+    # ``aqueduct.executor.session_config.resolve_session_engine_config``
+    # with no reshaping. Written only by
+    # ``aqueduct.overrides.apply_to_model``; read through the
+    # ``cli_engine_overrides`` property below.
+    _cli_engine_overrides: dict[str, dict[str, Any]] = PrivateAttr(default_factory=dict)
+
+    @property
+    def cli_engine_overrides(self) -> dict[str, dict[str, Any]]:
+        """Per-invocation ``-s/--set`` engine-config layer, ``{engine: {key: value}}``.
+
+        The TOP layer of the session-config merge — above `aqueduct.yml` and
+        above the Blueprint's own ``engine.<name>:`` block. A CLI flag is the
+        most explicit statement a user can make about one run, and it is
+        never written back to any file, so it cannot silently undo a healed
+        Blueprint value beyond the invocation that typed it. The merge order
+        itself is stated once, in
+        ``aqueduct.executor.session_config.resolve_session_engine_config``;
+        this is only the carrier.
+        """
+        return self._cli_engine_overrides
+
+    def with_cli_engine_overrides(self, layers: dict[str, dict[str, Any]]) -> AqueductConfig:
+        """Copy of this config carrying *layers* as its ``--set`` engine layer."""
+        out = self.model_copy()
+        out._cli_engine_overrides = {
+            engine: dict(keys) for engine, keys in (layers or {}).items() if keys
+        }
+        return out
 
     @field_validator("checkpoint_root")
     @classmethod

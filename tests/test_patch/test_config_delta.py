@@ -387,3 +387,93 @@ def test_apply_patch_file_refuses_an_inert_config_write(tmp_path):
             cfg=_cfg(),
         )
     assert bp_path.read_text(encoding="utf-8") == original
+
+
+# ── (e) a `--set` above the Blueprint — the higher-precedence nullifier ──────
+#
+# `--set` is now the TOP layer of the session-config merge, above the
+# Blueprint. That makes this gate's empty-delta branch reachable from a
+# source the Blueprint cannot outrank for the first time: a heal writes a
+# key the user's own flag pins, so the write provably cannot reach the
+# session. The refusal has to say THAT, not "write a different value" — no
+# Blueprint value can win against the flag, so the resolution is the user's.
+
+
+def _cfg_with_set(*items: str, spark_conf=None):
+    from aqueduct.overrides import apply_to_model, route_overrides
+
+    nested, _ = route_overrides(items, allow_blueprint=False)
+    return apply_to_model(_cfg(spark_conf), nested)
+
+
+def test_a_heal_write_shadowed_by_set_is_refused_and_names_the_flag():
+    cfg = _cfg_with_set("engine.spark.conf.spark.sql.shuffle.partitions=800")
+    spec = _spec(_set_spark("spark.sql.shuffle.partitions", "400"))
+    with pytest.raises(PatchError) as exc:
+        run_engine_config_delta_gate(cfg=cfg, blueprint_before=_bp(), patch_spec=spec)
+    msg = str(exc.value)
+    assert "has no effect" in msg
+    # The user's own flag is named, with its exact path and pinned value.
+    assert "--set" in msg
+    assert "engine.spark.conf.spark.sql.shuffle.partitions is pinned to 800" in msg
+    # And it must NOT tell the user to write a different value — that advice
+    # is false here, since no Blueprint value can outrank the flag.
+    assert "write a different value" not in msg
+
+
+def test_the_same_write_PASSES_when_no_set_pins_the_key():
+    """Positive control for the test above: identical patch, identical
+    Blueprint, identical aqueduct.yml — only the flag removed. If this also
+    raised, the test above would be proving nothing about `--set`."""
+    cfg = _cfg()
+    spec = _spec(_set_spark("spark.sql.shuffle.partitions", "400"))
+    res = run_engine_config_delta_gate(cfg=cfg, blueprint_before=_bp(), patch_spec=spec)
+    assert res.status == "pass"
+    assert res.cli_pinned == {}
+
+
+def test_a_set_on_a_DIFFERENT_key_does_not_shadow_the_write():
+    """Positive control on which key is pinned: a flag pinning some other
+    key must leave this write measurable and the gate green."""
+    cfg = _cfg_with_set("engine.spark.conf.spark.sql.adaptive.enabled=false")
+    spec = _spec(_set_spark("spark.sql.shuffle.partitions", "400"))
+    res = run_engine_config_delta_gate(cfg=cfg, blueprint_before=_bp(), patch_spec=spec)
+    assert res.status == "pass"
+    assert res.cli_pinned == {}
+    assert res.delta["spark"]["spark.sql.shuffle.partitions"]["after"] == "400"
+
+
+def test_a_partially_shadowed_patch_passes_but_reports_the_pinned_key():
+    """One written key moves, another is pinned. The gate passes on the
+    strength of the first, and the second is a partial no-op that must be
+    reported rather than folded into a clean `pass`."""
+    cfg = _cfg_with_set("engine.spark.conf.spark.sql.shuffle.partitions=800")
+    spec = _spec(
+        _set_spark("spark.sql.shuffle.partitions", "400"),
+        _set_spark("spark.sql.adaptive.enabled", "false"),
+    )
+    res = run_engine_config_delta_gate(cfg=cfg, blueprint_before=_bp(), patch_spec=spec)
+    assert res.status == "pass"
+    assert res.cli_pinned == {"spark": ("spark.sql.shuffle.partitions",)}
+    assert "pinned by --set" in res.detail
+    assert "--set engine.spark.conf.spark.sql.shuffle.partitions" in res.detail
+    # The key that actually moves is still in the delta; the pinned one is not.
+    assert set(res.delta["spark"]) == {"spark.sql.adaptive.enabled"}
+
+
+def test_a_typed_engine_block_pin_is_named_with_its_own_flag_path():
+    """The flag path is derived structurally, not by an `if engine ==
+    'spark'`: DuckDB's block has no `conf` bag, so the path has no `.conf.`
+    segment."""
+    from aqueduct.overrides import apply_to_model, route_overrides
+
+    nested, _ = route_overrides(["engine.duckdb.memory_limit=4GB"], allow_blueprint=False)
+    cfg = apply_to_model(_cfg(), nested)
+    spec = _spec(
+        {"op": "set_engine_config", "engine": "duckdb", "key": "memory_limit", "value": "2GB"}
+    )
+    with pytest.raises(PatchError) as exc:
+        run_engine_config_delta_gate(cfg=cfg, blueprint_before=_bp(), patch_spec=spec)
+    msg = str(exc.value)
+    assert "engine.duckdb.memory_limit is pinned to '4GB'" in msg
+    assert "engine.duckdb.conf" not in msg

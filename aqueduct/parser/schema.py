@@ -874,8 +874,9 @@ class SparkEngineBlockSchema(BaseModel):
         default_factory=dict,
         description=(
             "Per-run Spark session configuration, merged with the engine-"
-            "level engine.spark.conf from aqueduct.yml (Blueprint wins). "
-            "Replaces the pre-2.0 top-level spark_config block."
+            "level engine.spark.conf from aqueduct.yml (Blueprint wins), and "
+            "with this invocation's -s/--set on top of both. Replaces the "
+            "pre-2.0 top-level spark_config block."
         ),
     )
 
@@ -913,8 +914,9 @@ class DuckDBEngineBlockSchema(BaseModel):
         description=(
             "DuckDB `SET memory_limit='<value>'` (e.g. '4GB'), merged with "
             "the engine-level engine.duckdb.memory_limit from aqueduct.yml "
-            "(Blueprint wins). Unset leaves the aqueduct.yml value (or "
-            "DuckDB's own default) untouched."
+            "(Blueprint wins; this invocation's -s/--set wins over both). "
+            "Unset leaves the aqueduct.yml value (or DuckDB's own default) "
+            "untouched."
         ),
     )
     threads: int | None = Field(
@@ -922,9 +924,9 @@ class DuckDBEngineBlockSchema(BaseModel):
         gt=0,
         description=(
             "DuckDB `SET threads=<value>`, merged with the engine-level "
-            "engine.duckdb.threads from aqueduct.yml (Blueprint wins). "
-            "Unset leaves the aqueduct.yml value (or DuckDB's own default) "
-            "untouched."
+            "engine.duckdb.threads from aqueduct.yml (Blueprint wins; this "
+            "invocation's -s/--set wins over both). Unset leaves the "
+            "aqueduct.yml value (or DuckDB's own default) untouched."
         ),
     )
 

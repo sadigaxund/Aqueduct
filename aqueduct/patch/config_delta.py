@@ -109,6 +109,13 @@ class EngineConfigDeltaResult:
     detail: str
     delta: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
     write_targets: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    #: ``{engine: (key, ...)}`` — write targets this invocation's ``-s/--set``
+    #: pins above the Blueprint, so the patch's write cannot reach the
+    #: session. Empty unless the user typed such a flag, which is why it is
+    #: reported rather than assumed: a gate whose measurement was changed by
+    #: a user's own flag must say so instead of presenting the result as if
+    #: the Blueprint were the top layer.
+    cli_pinned: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 def blueprint_engine_layers(bp: Any) -> dict[str, dict[str, Any]]:
@@ -251,6 +258,61 @@ def _diff_effective(
     return delta
 
 
+def _cli_pinned_write_targets(
+    cfg: Any, write_targets: dict[str, tuple[str, ...]]
+) -> dict[str, tuple[str, ...]]:
+    """The subset of *write_targets* this invocation's ``-s/--set`` pins.
+
+    ``--set`` is the top layer of the session-config merge (above the
+    Blueprint), so a key it names cannot be moved by any Blueprint write —
+    which is exactly what makes this gate's empty-delta branch reachable
+    from a higher-precedence source for the first time.
+    """
+    pins = getattr(cfg, "cli_engine_overrides", None) or {}
+    out: dict[str, tuple[str, ...]] = {}
+    for engine, keys in write_targets.items():
+        pinned = tuple(k for k in keys if k in (pins.get(engine) or {}))
+        if pinned:
+            out[engine] = pinned
+    return out
+
+
+def _cli_pinned_flags(cfg: Any, cli_pinned: dict[str, tuple[str, ...]]) -> list[str]:
+    """``--set`` flag paths for every pinned key, quoted back at the user."""
+    from aqueduct.executor.session_config import engine_config_set_path
+
+    return [
+        f"--set {engine_config_set_path(cfg, engine, key)}"
+        for engine, keys in sorted(cli_pinned.items())
+        for key in keys
+    ]
+
+
+def _cli_pinned_message(cfg: Any, written: str, cli_pinned: dict[str, tuple[str, ...]]) -> str:
+    from aqueduct.executor.session_config import engine_config_set_path
+
+    pins = getattr(cfg, "cli_engine_overrides", None) or {}
+    shadowing = "; ".join(
+        f"{engine_config_set_path(cfg, engine, key)} is pinned to "
+        f"{(pins.get(engine) or {}).get(key)!r}"
+        for engine, keys in sorted(cli_pinned.items())
+        for key in keys
+    )
+    return (
+        "set_engine_config write has no effect: the patch writes "
+        f"{written}, but every one of those keys is pinned by a -s/--set "
+        "override on this invocation, and --set is the TOP layer of the "
+        "session-config merge (above aqueduct.yml and above the Blueprint's "
+        f"own engine.<name> block). {shadowing}. Nothing the patch writes "
+        "into the Blueprint can change what this run's engine sees, so "
+        "applying it would spend a heal attempt on a change this invocation "
+        "cannot exhibit — and the in-loop retry would run under the same pin "
+        "and fail the same way. Re-run without that --set to let the heal "
+        f"take effect ({', '.join(_cli_pinned_flags(cfg, cli_pinned))}), or "
+        "keep the pin and accept that this key is fixed for the run."
+    )
+
+
 def run_engine_config_delta_gate(
     *,
     cfg: Any,
@@ -296,11 +358,23 @@ def run_engine_config_delta_gate(
         cfg, blueprint_engine_layers(blueprint_after)
     )
     delta = _diff_effective(before_effective, after_effective)
+    cli_pinned = _cli_pinned_write_targets(cfg, write_targets)
 
     if not delta:
         written = "; ".join(
             f"{engine}: {', '.join(keys)}" for engine, keys in sorted(write_targets.items())
         )
+        if cli_pinned:
+            # The case this gate was built for and could not previously
+            # reach: something with HIGHER precedence than the Blueprint
+            # nullifies the write. Telling the user "write a different
+            # value" here would be false — no Blueprint value can win
+            # against their own flag, so the resolution is theirs, not the
+            # model's. Still a refusal: applying it would spend a heal
+            # attempt on a change this invocation cannot exhibit, and the
+            # in-loop retry would run under the same pin and fail the same
+            # way.
+            raise PatchError(_cli_pinned_message(cfg, written, cli_pinned))
         already = []
         for engine, keys in sorted(write_targets.items()):
             for key in keys:
@@ -319,9 +393,21 @@ def run_engine_config_delta_gate(
         )
 
     changed = sum(len(keys) for keys in delta.values())
+    detail = f"{changed} effective engine-config key(s) change"
+    if cli_pinned:
+        # A patch that changes SOME keys but writes others this invocation
+        # pins: the gate passes on the ones that move, and the pinned ones
+        # are a partial no-op that would otherwise be reported as a clean
+        # pass.
+        pinned_flags = ", ".join(_cli_pinned_flags(cfg, cli_pinned))
+        detail += (
+            f"; {sum(len(k) for k in cli_pinned.values())} written key(s) are pinned "
+            f"by --set for this invocation and cannot take effect here ({pinned_flags})"
+        )
     return EngineConfigDeltaResult(
         status="pass",
-        detail=f"{changed} effective engine-config key(s) change",
+        detail=detail,
         delta=delta,
         write_targets=write_targets,
+        cli_pinned=cli_pinned,
     )

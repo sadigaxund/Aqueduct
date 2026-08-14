@@ -7,9 +7,12 @@
 # All sections are optional — omitting this file entirely uses local Spark with
 # DuckDB stores in .aqueduct/.
 #
-# CLI flags override values here. Blueprint engine.spark.conf overrides
-# engine.spark.conf below (Blueprint wins on conflict). LLM policy (approval,
-# forbidden_ops) belongs in each Blueprint's agent: block — not here.
+# Engine/session config resolves in three layers, lowest first: this file,
+# then the Blueprint's own engine.<name>: block, then this invocation's
+# -s/--set flags. So `-s engine.spark.conf.spark.sql.shuffle.partitions=800`
+# wins over both, for that one run only — nothing is written back here. LLM
+# policy (approval, forbidden_ops) belongs in each Blueprint's agent: block
+# — not here.
 #
 # Usage:
 #   aqueduct run blueprint.yml                       # auto-discovers aqueduct.yml in CWD
@@ -71,7 +74,8 @@ engine:
     master_url: "local[*]"
 
     # conf: any spark.* key accepted. Merged with the Blueprint's own
-    # engine.spark.conf at runtime; Blueprint values win on conflict.
+    # engine.spark.conf at runtime; Blueprint values win on conflict, and a
+    # -s/--set flag on the invocation wins over both.
     conf: {}
 
       # ── Object storage — MinIO / S3-compatible ────────────────────────────
@@ -267,7 +271,10 @@ stores:
 # `checkpoint_root` above, a remote scheme is NOT rejected here. Layout:
 # <root>/<manifest_hash>/<run_id>/<edge_id>/ — deleted on a successful run,
 # kept on failure (when keep_on_failure is true) so a rerun after a self-heal
-# reads the existing spill instead of recomputing the upstream island.
+# reads the existing spill instead of recomputing the upstream island. A kept
+# spill is released once a successful --resume has consumed it, or once a
+# later run of the same blueprint has succeeded. There is no time-based
+# expiry: retention is bounded by those actions, not by an age in days.
 #
 # handoff:
 #   root: ".aqueduct/handoff"    # default

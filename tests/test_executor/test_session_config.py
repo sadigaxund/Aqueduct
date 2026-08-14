@@ -195,3 +195,131 @@ class TestSessionSecretsOptions:
         assert opts["secrets"]["region"] == cfg.secrets.region
         assert opts["secrets"]["resolver"] == cfg.secrets.resolver
         assert opts["secrets"]["base_dir"] == "/blueprints/x"
+
+
+# ── `-s/--set` is the TOP layer, above the Blueprint ─────────────────────────
+#
+# Before this, `--set` overlaid the `aqueduct.yml` layer only, so a value a
+# heal had written into the Blueprint's `engine.<name>:` block months earlier
+# beat the flag the user typed thirty seconds ago. A CLI flag is the most
+# explicit statement a user can make about one run and was silently the
+# weakest input in the merge. It is now a genuine third layer, expressed once
+# in `resolve_session_engine_config` — never by mutating a lower one.
+
+
+def _cfg_with_set(*items: str) -> AqueductConfig:
+    """The real routing + overlay path a CLI invocation takes."""
+    from aqueduct.overrides import apply_to_model, route_overrides
+
+    nested, _ = route_overrides(items, allow_blueprint=False)
+    return apply_to_model(AqueductConfig(), nested)
+
+
+def test_set_beats_a_healed_blueprint_value_for_spark():
+    manifest = _manifest({"spark": {"spark.sql.shuffle.partitions": "200"}})
+    cfg_plain = AqueductConfig()
+    cfg_set = _cfg_with_set("engine.spark.conf.spark.sql.shuffle.partitions=800")
+
+    # Control: without the flag the Blueprint value still wins over
+    # aqueduct.yml, exactly as before — this change does not weaken layer 2.
+    assert resolve_session_engine_config(cfg_plain, "spark", manifest) == {
+        "spark.sql.shuffle.partitions": "200"
+    }
+    assert resolve_session_engine_config(cfg_set, "spark", manifest) == {
+        "spark.sql.shuffle.partitions": 800
+    }
+
+
+def test_set_beats_a_blueprint_value_for_a_typed_engine_block():
+    """The rule is per-engine and structural, not a Spark special case: a
+    typed engine block (DuckDB) layers identically."""
+    manifest = _manifest({"duckdb": {"memory_limit": "1GB"}})
+    cfg_set = _cfg_with_set("engine.duckdb.memory_limit=4GB")
+
+    assert resolve_session_engine_config(AqueductConfig(), "duckdb", manifest)["memory_limit"] == (
+        "1GB"
+    )
+    assert resolve_session_engine_config(cfg_set, "duckdb", manifest)["memory_limit"] == "4GB"
+
+
+def test_set_does_not_leak_into_an_engine_it_did_not_name():
+    """Positive control on scope: pinning a Spark key must not touch DuckDB's
+    resolved config, and must not disturb OTHER Spark keys the Blueprint set."""
+    manifest = _manifest(
+        {
+            "spark": {"spark.sql.shuffle.partitions": "200", "spark.sql.adaptive.enabled": "false"},
+            "duckdb": {"memory_limit": "1GB"},
+        }
+    )
+    cfg_set = _cfg_with_set("engine.spark.conf.spark.sql.shuffle.partitions=800")
+
+    spark_cfg = resolve_session_engine_config(cfg_set, "spark", manifest)
+    assert spark_cfg["spark.sql.shuffle.partitions"] == 800
+    assert spark_cfg["spark.sql.adaptive.enabled"] == "false"  # untouched
+    assert resolve_session_engine_config(cfg_set, "duckdb", manifest)["memory_limit"] == "1GB"
+
+
+def test_a_dotted_engine_conf_key_stays_ONE_key():
+    """`engine.spark.conf` is `dict[str, Any]` and Spark's own key names are
+    dotted, so splitting the whole `--set` path on every dot built a DEEP
+    nested dict (`conf["spark"]["sql"][...]`) that pydantic accepted without
+    complaint — the session was configured with a key literally named
+    `spark` whose value was a dict. Silent wrong answer, fixed at the router."""
+    from aqueduct.overrides import route_overrides
+
+    nested, _ = route_overrides(
+        ["engine.spark.conf.spark.sql.shuffle.partitions=800"], allow_blueprint=False
+    )
+    assert nested == {"engine": {"spark": {"conf": {"spark.sql.shuffle.partitions": 800}}}}
+
+
+def test_a_model_valued_dict_path_still_nests_normally():
+    """Positive control for the collapse above: `stores.depots` is
+    `dict[str, DepotMountConfig]`, so the segments after it really are a key
+    followed by that model's fields. Collapsing there would break paths that
+    work today."""
+    from aqueduct.overrides import route_overrides
+
+    nested, _ = route_overrides(["stores.depots.mydepot.backend=redis"], allow_blueprint=False)
+    assert nested == {"stores": {"depots": {"mydepot": {"backend": "redis"}}}}
+
+
+def test_fingerprint_separates_a_session_built_with_set_from_one_without():
+    """The invariant closed in the session-rebuild work: a session built with
+    `--set` must never be reused for a Manifest resolved without it. Nothing
+    was added to `session_config_fingerprint` for this — the CLI layer lives
+    INSIDE `resolve_session_engine_config`, whose output is what gets hashed,
+    so the separation holds by construction."""
+    manifest = _manifest({"spark": {"spark.sql.shuffle.partitions": "200"}})
+    plain = session_config_fingerprint(AqueductConfig(), "spark", manifest)
+    pinned = session_config_fingerprint(
+        _cfg_with_set("engine.spark.conf.spark.sql.shuffle.partitions=800"), "spark", manifest
+    )
+    assert plain != pinned
+
+
+def test_fingerprint_is_stable_when_a_heal_writes_a_key_that_set_pins():
+    """Consequence of layer 3 that the fingerprint gets right for free: a
+    heal writing a Blueprint value the user's `--set` shadows does NOT change
+    the resolved session config, so no session rebuild is triggered. The
+    control below proves the fingerprint still moves for an UNPINNED key —
+    without it this assertion would also hold for a fingerprint that ignored
+    the Manifest entirely."""
+    cfg_set = _cfg_with_set("engine.spark.conf.spark.sql.shuffle.partitions=800")
+    before = _manifest({"spark": {"spark.sql.shuffle.partitions": "200"}})
+    healed = _manifest({"spark": {"spark.sql.shuffle.partitions": "400"}})
+    assert session_config_fingerprint(cfg_set, "spark", before) == session_config_fingerprint(
+        cfg_set, "spark", healed
+    )
+
+    healed_elsewhere = _manifest(
+        {"spark": {"spark.sql.shuffle.partitions": "200", "spark.sql.adaptive.enabled": "false"}}
+    )
+    assert session_config_fingerprint(cfg_set, "spark", before) != session_config_fingerprint(
+        cfg_set, "spark", healed_elsewhere
+    )
+
+
+def test_no_set_leaves_the_cli_layer_empty():
+    assert AqueductConfig().cli_engine_overrides == {}
+    assert _cfg_with_set("timezone=UTC").cli_engine_overrides == {}

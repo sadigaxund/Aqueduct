@@ -172,9 +172,12 @@ One flat dotted namespace addresses whichever schema owns the field. For `aquedu
 
 > **Precedence is per-key, and a cascade tier's own fields are separate keys.** `--set` wins among the *sources* for the key it targets. `agent.cascade:` is engine-level only (2.59) — each tier's `timeout` / `max_reprompts` / `provider` / … are *their own keys* that only inherit the flat `agent.*` (`aqueduct.yml`) value **when the tier leaves them unset**. So `--set agent.timeout=600` raises the flat `aqueduct.yml` default and any tier that inherits it, but it does **not** override a tier that declares its own `timeout:` (that is a different key, and the tier's explicit value is intentional). To change one tier, edit that tier's field in `aqueduct.yml`'s `agent.cascade:` block. (A per-tier `--set agent.cascade[N].timeout` addressing form is on the roadmap; see `TODOs.md`.)
 
+> **Engine/session config is a three-layer merge, and `--set` is the top layer.** `engine.<name>.*` is not resolved by the plain overlay above: `aqueduct.executor.session_config.resolve_session_engine_config` layers the Blueprint's own `engine.<name>:` block over the `aqueduct.yml` one, and then `--set` over both. That third layer exists because the overlay alone left `--set` UNDER the Blueprint, so a value a self-heal had written into `engine.spark.conf` months earlier beat the flag typed at the prompt. It is safe for the flag to win because it is per-invocation and never written back: it overrides a heal for one run, it does not undo one. Two visible consequences: a heal that tries to write a key the invocation pins is refused (Gate 1 names the exact `--set` path rather than telling the author to write a different value), and `aqueduct patch preview` takes no `--set`, so its engine-config verdict is measured with no pins and can differ from what `aqueduct run -s ...` reports.
+
 Value grammar:
 - `PATH=value`: coerced: `true`/`false` → bool, `null`/`none` → None, then int, then float, else the literal string.
 - `PATH:=value`: `value` parsed as JSON, for structured values (objects/arrays/typed scalars).
+- A path that continues past a free-form dict field (`engine.spark.conf`, whose keys are themselves dotted) rejoins the remaining segments into one key: `--set engine.spark.conf.spark.sql.shuffle.partitions=800` sets the single key `spark.sql.shuffle.partitions`. A dict of structured entries (`stores.depots.<name>.backend`) keeps nesting normally.
 
 ```bash
 aqueduct run bp.yml \
@@ -182,6 +185,7 @@ aqueduct run bp.yml \
   --set agent.budget.max_seconds=5 \
   --set agent.budget.max_tokens_total=80000 \
   --set engine.spark.master_url=spark://10.0.0.39:7077 \
+  --set engine.spark.conf.spark.sql.shuffle.partitions=800 \
   --set agent.provider_options:='{"temperature":0.1}'
 ```
 

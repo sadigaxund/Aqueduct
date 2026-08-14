@@ -10,6 +10,13 @@ Semantics:
   - **Top precedence.** ``--set`` is applied as the final overlay, on top of the
     already-merged result, so a path wins regardless of which file originally
     set it: ``--set > blueprint agent: > aqueduct.yml > built-in defaults``.
+    Engine/session config (``engine.<name>.*``) is resolved by a separate
+    merge that layers the Blueprint's own ``engine.<name>:`` block over the
+    ``aqueduct.yml`` one, so the overlay alone would leave ``--set`` BELOW a
+    healed Blueprint value there. ``apply_to_model`` therefore also pins the
+    engine-config subset as an explicit third layer above the Blueprint —
+    same ``--set`` wins everywhere rule, one extra layer to express it. See
+    ``aqueduct.executor.session_config.resolve_session_engine_config``.
   - **One flat namespace.** A dotted path addresses whichever schema owns the
     field. ``agent.*`` is split between the blueprint (`approval_mode`,
     `max_patches`, guardrails, …) and the engine config (`budget`, `retry`,
@@ -25,6 +32,7 @@ Value grammar:
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import types
 import typing
@@ -175,6 +183,63 @@ def model_accepts_path(model_cls: type[BaseModel], path: tuple[str, ...]) -> boo
     return True
 
 
+def _dict_value_is_model(annotation: Any) -> bool:
+    """True when *annotation* is a ``dict[...]`` whose VALUE type is a
+    pydantic model (``stores.depots: dict[str, DepotMountConfig]``) rather
+    than a scalar/``Any`` bag (``engine.spark.conf: dict[str, Any]``)."""
+    if typing.get_origin(annotation) is not dict:
+        return False
+    args = typing.get_args(annotation)
+    return bool(args) and _unwrap(args[-1]) not in (None, _FREEFORM)
+
+
+def freeform_key_boundary(model_cls: type[BaseModel], path: tuple[str, ...]) -> int | None:
+    """Index in *path* at which the remaining segments address ONE key
+    inside a free-form scalar-valued dict field, or None when *path* never
+    enters one.
+
+    ``engine.spark.conf`` is ``dict[str, Any]``, and Spark's own key names
+    are themselves dotted (``spark.sql.shuffle.partitions``). Splitting the
+    whole ``--set`` path on every dot therefore built a DEEP nested dict
+    (``conf["spark"]["sql"]["shuffle"]["partitions"]``) instead of the one
+    flat key the user meant, and because the field is ``dict[str, Any]``
+    pydantic accepted it without complaint — the session was then configured
+    with a key literally named ``spark`` whose value was a dict. A silent
+    wrong answer, so it is fixed here rather than documented.
+
+    A dict whose values are MODELS (``stores.depots: dict[str,
+    DepotMountConfig]``) is deliberately NOT a boundary: there the segments
+    after the dict really are a key followed by that model's own fields, and
+    collapsing them would break paths that work today.
+    """
+    cur: Any = model_cls
+    for idx, seg in enumerate(path):
+        if not (isinstance(cur, type) and issubclass(cur, BaseModel)):
+            return None
+        fld = cur.model_fields.get(seg)
+        if fld is None:
+            return None
+        annotation = fld.annotation
+        if _dict_value_is_model(annotation):
+            return None
+        nxt = _unwrap(annotation)
+        if nxt is _FREEFORM:
+            return idx + 1
+        if nxt is None:
+            return None
+        cur = nxt
+    return None
+
+
+def collapse_freeform_tail(model_cls: type[BaseModel], path: tuple[str, ...]) -> tuple[str, ...]:
+    """*path* with everything past a free-form-dict boundary rejoined into a
+    single dotted key. A path with no such boundary is returned unchanged."""
+    boundary = freeform_key_boundary(model_cls, path)
+    if boundary is None or len(path) - boundary < 2:
+        return path
+    return path[:boundary] + (".".join(path[boundary:]),)
+
+
 def suggest_for_path(
     model_classes: typing.Sequence[type[BaseModel]], path: tuple[str, ...]
 ) -> str | None:
@@ -247,15 +312,47 @@ def deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
 
 
 def apply_to_model(model_instance: BaseModel, nested: dict[str, Any]) -> BaseModel:
-    """Return a new validated model with ``nested`` overlaid (top precedence)."""
+    """Return a new validated model with ``nested`` overlaid (top precedence).
+
+    For an ``AqueductConfig`` the overlay alone does NOT deliver "top
+    precedence", and used not to: engine config is resolved as a merge of
+    the ``aqueduct.yml`` layer and the Blueprint's own ``engine.<name>:``
+    block, with the Blueprint winning, so a ``--set`` written into the
+    ``aqueduct.yml`` layer lost to any value a heal had written into the
+    Blueprint. The returned config therefore also carries the engine-config
+    subset of *nested* as an explicit third layer ABOVE the Blueprint (see
+    ``AqueductConfig.cli_engine_overrides`` and
+    ``aqueduct.executor.session_config.resolve_session_engine_config``).
+
+    Pinning happens here rather than at each CLI call site on purpose: this
+    is the one function every config ``--set`` already flows through
+    (``run``, ``heal``, both ``benchmark`` paths), so no call site can
+    forget it and silently drop the user's flag.
+    """
     if not nested:
         return model_instance
     data = model_instance.model_dump(mode="python")
     merged = deep_merge(data, nested)
     try:
-        return type(model_instance).model_validate(merged)
+        out = type(model_instance).model_validate(merged)
     except ValidationError as exc:
         raise OverrideError(f"--set produced an invalid config: {exc}") from exc
+    return _pin_cli_engine_layers(out, nested)
+
+
+def _pin_cli_engine_layers(model_instance: BaseModel, nested: dict[str, Any]) -> BaseModel:
+    """Record *nested*'s engine-config keys on an ``AqueductConfig`` as the
+    top session-config layer. Any other model is returned untouched — the
+    Blueprint has no session-config merge to sit on top of."""
+    from aqueduct.config import AqueductConfig
+
+    if not isinstance(model_instance, AqueductConfig):
+        return model_instance
+    from aqueduct.executor.session_config import cli_engine_config_layers
+
+    return model_instance.with_cli_engine_overrides(
+        cli_engine_config_layers(model_instance, nested)
+    )
 
 
 def route_overrides(
@@ -277,9 +374,13 @@ def route_overrides(
     blueprint_ov: list[Override] = []
     for ov in parse_set_items(items):
         if allow_blueprint and model_accepts_path(BlueprintSchema, ov.path):
-            blueprint_ov.append(ov)
+            blueprint_ov.append(
+                dataclasses.replace(ov, path=collapse_freeform_tail(BlueprintSchema, ov.path))
+            )
         elif model_accepts_path(AqueductConfig, ov.path):
-            config_ov.append(ov)
+            config_ov.append(
+                dataclasses.replace(ov, path=collapse_freeform_tail(AqueductConfig, ov.path))
+            )
         else:
             roots = [AqueductConfig, BlueprintSchema] if allow_blueprint else [AqueductConfig]
             hint = suggest_for_path(roots, ov.path)

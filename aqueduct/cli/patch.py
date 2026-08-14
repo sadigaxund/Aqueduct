@@ -297,6 +297,12 @@ def patch_preview(
                 "detail": config_delta_res.detail,
                 "delta": config_delta_res.delta,
                 "write_targets": {k: list(v) for k, v in config_delta_res.write_targets.items()},
+                # Always present, normally `{}`. `patch preview` takes no
+                # `-s/--set`, so it measures with no CLI layer at all —
+                # emitting the key unconditionally is what lets a consumer
+                # tell "measured without pins" apart from "the field does
+                # not exist in this version".
+                "cli_pinned": {k: list(v) for k, v in config_delta_res.cli_pinned.items()},
             },
         }
         if sandbox_res is not None:
@@ -387,6 +393,9 @@ def patch_preview(
     for _eng, _keys in sorted(config_delta_res.delta.items()):
         for _key, _ba in sorted(_keys.items()):
             click.echo(f"    {_eng}.{_key}: {_ba['before']!r} → {_ba['after']!r}")
+    for _eng, _pinned in sorted(config_delta_res.cli_pinned.items()):
+        for _key in _pinned:
+            click.echo(f"    {_eng}.{_key}: pinned by --set — this patch cannot move it")
 
     if sandbox_res is not None:
         click.echo()
