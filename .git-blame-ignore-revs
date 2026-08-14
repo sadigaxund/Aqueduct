@@ -1,0 +1,10 @@
+# Revisions to skip in `git blame` — see `git config blame.ignoreRevsFile`.
+#
+# Wire it up once per clone:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# Only pure-formatting commits belong here. A commit that changes behaviour
+# must never be listed, or blame will silently hide the change that matters.
+
+# chore(style): run black across the repo for the first time
+9343043b62884efca7056cc81ad0bc8d2ac4931d
