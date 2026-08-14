@@ -14,6 +14,7 @@ from typing import Any
 
 import click
 
+from aqueduct.cli.style import info as _style_info
 from aqueduct.cli.style import warn as _style_warn
 
 
@@ -65,6 +66,22 @@ def emit(
         click.echo(data, err=err)
     else:
         click.echo(str(data), err=err)
+
+
+def emit_info(message: str, *, err: bool = False) -> None:
+    """Dim informational line — an OBSERVATION, not a warning.
+
+    The third state the funnel was missing. ``warn()`` above carries a
+    ``rule_id`` because a warning asserts that something is wrong and the
+    user must be able to suppress it by name. Some output asserts nothing:
+    the warn-only perf note (``aqueduct/patch/perf_attribution.py``)
+    reports a measured ratio with no threshold behind it, so rendering it
+    as ``⚠`` would claim a verdict the code deliberately refuses to make,
+    and rendering it through ``emit()`` would put a diagnostic into the
+    structured-result channel. Routes to ``style.info`` so the one output
+    vocabulary still owns the styling.
+    """
+    _style_info(message, err=err)
 
 
 def warn(

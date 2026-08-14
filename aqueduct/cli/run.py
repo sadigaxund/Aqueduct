@@ -3654,9 +3654,24 @@ def run(
         # failures internally) and never affects the run's outcome or exit
         # code. No-op when the Blueprint carries no `healed_by:` block at all.
         try:
-            from aqueduct.patch.apply import stamp_validated_engine
+            from aqueduct.patch.apply import stamp_perf_observation, stamp_validated_engine
 
             stamp_validated_engine(Path(blueprint), engine)
+            # Warn-only perf attribution: `validated_on` above says the run
+            # was green, which a patch that tripled the runtime also says.
+            # This says what it cost. Reports, never blocks, never judges —
+            # Aqueduct sets no regression threshold, so the ratio is printed
+            # and a human decides.
+            for _obs in stamp_perf_observation(
+                Path(blueprint), engine, obs_store=_obs_store, run_id=result.run_id
+            ):
+                if _obs.get("status") != "observed":
+                    continue
+                from aqueduct.cli.output import emit_info as _emit_info
+
+                _emit_info(f"perf vs pre-patch baseline: {_obs['detail']}")
+                for _caveat in _obs.get("caveats") or []:
+                    _emit_info(f"  {_caveat}")
         except Exception:
             pass  # provenance stamping must never affect a successful run
 

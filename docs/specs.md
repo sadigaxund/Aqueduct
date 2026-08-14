@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.60: Reference Document**
+**Version 2.61: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -1484,6 +1484,20 @@ healed_by:
         memory_limit:
           before: 4GB
           after: 8GB
+    perf_baseline:            # absent when no green run preceded the patch
+      run_id: run_20240410_090000_11bc
+      duration_ms: 50000
+      engines: [duckdb]
+      records_read: 1000000   # null on an engine that records no module_metrics
+      bytes_read: 100000000
+    perf_observations:        # one per engine, written by the same green-run stamp
+      - status: observed      # observed | not_applicable (never pass, never fail)
+        engine: duckdb
+        observed_at: "2026-07-19T04:11:02Z"
+        duration_ratio: 3.2
+        duration_delta_ms: 110000
+        caveats:
+          - wall-clock duration is not attributable to a single cause: ...
 ```
 
 The block is compiler-consumed metadata only: no engine executes it, and it
@@ -1522,6 +1536,43 @@ block exists and X is not already present — a Blueprint with no `healed_by:`
 block is never touched. The stamp is best-effort: a write failure is logged
 and never fails an otherwise-successful run (`aqueduct/patch/apply.py::
 stamp_validated_engine`).
+
+**Perf attribution (warn-only).** `validated_on` is binary: the run after
+the patch either succeeded or it did not. Config-op success is not binary.
+The usual outcome of naive shuffle or partition tuning is a run that
+completes and is much slower, which `validated_on` records as an
+unqualified success while the patch persists into the Blueprint and every
+later run inherits it. Two fields carry the non-binary half.
+
+`perf_baseline` is snapshotted at apply time: the last green run of this
+blueprint that finished before the patch was applied (wall-clock duration
+from `run_records`, plus a volume proxy summed from `module_metrics`). It
+is snapshotted rather than looked up later because the Blueprint travels
+and the observability store does not.
+
+`perf_observations` is written by the same green-run stamp that appends to
+`validated_on`, once per engine, so the list is bounded by the engine count
+rather than the run count. Each note is `observed` (the ratio, both
+durations, and its own caveats) or `not_applicable` (which fact was
+missing). There is no `pass` member, because nothing is judged, and no
+`fail`, because nothing can fail: **Aqueduct sets no regression threshold.**
+There is no measurement behind a number like "3x is a regression", so the
+observed ratio is reported and a human decides. The note never blocks a
+run, never changes acceptance, and never affects an exit code.
+
+Two runs of one Blueprint are not automatically comparable, and the note
+says so rather than implying a causation it cannot support. A baseline
+whose engine set differs from the observing run's is refused outright
+(`not_applicable`) rather than compared; `run_records` carries no `engine`
+column, so the engine set is derived from the per-module `engine` its
+`module_results` JSON already records. The input-volume proxy comes from
+`module_metrics`, which the Spark executor writes per module and the DuckDB
+executor writes only for Handoff modules, so on DuckDB it is reported as
+unavailable with a stated reason, never as a zero. Every remaining
+limitation (co-applied patches, changed input volume, the standing fact
+that wall-clock time has many causes) is written into the note's `caveats`,
+which travel with it into the Blueprint. See
+`aqueduct/patch/perf_attribution.py`.
 
 **Sandbox requirement.** Progressive healing refuses to run with
 `agent.sandbox_mode: off`: a `ConfigError` at heal-start with an

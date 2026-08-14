@@ -190,3 +190,26 @@ class TestRuntimeWarningRollup:
         out = capsys.readouterr().out
         assert "⚠ runtime: 2 warnings" in out
         assert "m1: min_rows got 1" in out and "m2: signal failed" in out
+
+
+class TestEmitInfo:
+    """`emit_info` is the third funnel state: an observation, not a warning."""
+
+    def test_prints_the_message_to_stdout(self, capsys):
+        from aqueduct.cli import output
+        output.emit_info("perf vs pre-patch baseline: 3.2x")
+        out = capsys.readouterr().out
+        assert "perf vs pre-patch baseline: 3.2x" in out
+
+    def test_carries_no_warning_icon_or_rule_id(self, capsys):
+        """It must not look like a `warn()` line.
+
+        A ⚠ or a [rule_id] would claim a suppressible verdict; the perf
+        note that uses this deliberately makes no verdict at all.
+        """
+        from aqueduct.cli import output
+        output.emit_info("observed 3.2x, reported not judged")
+        captured = capsys.readouterr()
+        assert "⚠" not in captured.out
+        assert "[" not in captured.out
+        assert captured.err == ""

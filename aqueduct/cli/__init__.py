@@ -440,6 +440,16 @@ def _write_patch_to_blueprint(
             patch_spec=patch,
             blueprint_after=patched,
         )
+        # Warn-only perf baseline — the last green run before this apply.
+        # Same reasoning (and the same best-effort posture) as the
+        # `aqueduct patch apply` path in patch/apply.py: without it the
+        # auto-apply path would write a provenance record whose only
+        # success signal is the binary `validated_on`.
+        from aqueduct.patch.perf_attribution import capture_baseline_perf
+
+        _perf_baseline = capture_baseline_perf(
+            obs_store, str(bp_raw.get("id") or ""), before=_applied_at
+        )
         _healed_by_record = build_healed_by_record(
             patch_id=patch.patch_id,
             operations=patch.operations,
@@ -447,6 +457,7 @@ def _write_patch_to_blueprint(
             applied_at=_applied_at,
             fallback_run_id=patch.run_id,
             engine_config_delta=_delta_res.delta,
+            perf_baseline=_perf_baseline.to_dict() if _perf_baseline else None,
         )
         patched = _append_healed_by(patched, _healed_by_record)
 

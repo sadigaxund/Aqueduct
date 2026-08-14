@@ -1094,6 +1094,26 @@ class HealedByRecordSchema(BaseModel):
     # for a patch that writes no engine config (the overwhelmingly common
     # pipeline-only heal), never an empty mapping.
     engine_config_delta: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    # WARN-ONLY perf attribution (aqueduct/patch/perf_attribution.py).
+    # `validated_on` above is BINARY — the run after the patch either
+    # succeeded or it did not — but config-op success is not: a shuffle or
+    # partition change routinely completes and is much slower, which
+    # `validated_on` records as an unqualified success. These two fields
+    # carry the non-binary half.
+    #
+    # perf_baseline: the last GREEN run of this blueprint BEFORE the patch
+    # was applied (RunPerf.to_dict()), snapshotted at apply time because the
+    # Blueprint travels and the observability store does not. Absent when no
+    # green run preceded the patch.
+    #
+    # perf_observations: one note per engine, written by the same green-run
+    # stamp that appends to `validated_on` (patch/apply.py::
+    # stamp_perf_observation). Bounded by the engine count, not by the run
+    # count. Each note is `observed` (ratio + both durations + caveats) or
+    # `not_applicable` (which fact was missing) — never `pass`, and never a
+    # verdict: Aqueduct sets no regression threshold.
+    perf_baseline: dict[str, Any] = Field(default_factory=dict)
+    perf_observations: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class BlueprintSchema(BaseModel):

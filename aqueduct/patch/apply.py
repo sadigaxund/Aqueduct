@@ -44,6 +44,11 @@ from aqueduct.patch.config_delta import (
 )
 from aqueduct.patch.grammar import PATCH_META_KEY, PatchSpec, RetiredPatchOpError
 from aqueduct.patch.operations import PatchOperationError, apply_operation
+from aqueduct.patch.perf_attribution import (
+    capture_baseline_perf,
+    capture_run_perf,
+    compare_perf,
+)
 from aqueduct.patch.provenance import build_healed_by_record
 from aqueduct.redaction import redact as _redact
 from aqueduct.stores.object_store import PatchStore
@@ -209,6 +214,95 @@ def stamp_validated_engine(blueprint_path: Path, engine: str) -> bool:
             blueprint_path, engine, exc_info=True,
         )
         return False
+
+
+def stamp_perf_observation(
+    blueprint_path: Path,
+    engine: str,
+    *,
+    obs_store: Any | None = None,
+    run_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Warn-only perf note: append one observation per ``healed_by`` record.
+
+    Runs on the SAME green-run trigger as ``stamp_validated_engine`` above,
+    and for the reason that function alone is not enough: ``validated_on``
+    answers "did it run?", which a patch that tripled the runtime also
+    answers yes to. This answers "what did it cost?".
+
+    Bounded by construction: a record already carrying an observation for
+    *engine* is skipped, so the list grows to at most one entry per engine
+    per patch no matter how many green runs follow. Same shape as
+    ``validated_on``'s one-entry-per-engine append, deliberately — the two
+    are written by the same event and must not diverge in cardinality.
+
+    Each record is compared against ITS OWN ``perf_baseline`` (the green run
+    that preceded THAT patch), so two patches applied at different times
+    produce two genuinely different comparisons rather than one number
+    copied twice. When more than one patch has been applied since a
+    record's baseline, the note says so in its ``caveats`` — the delta is
+    shared between them and this code cannot split it.
+
+    Best-effort and MUST NEVER raise: called from the CLI's run-success
+    path, where a diagnostic must never turn a green run red. Returns the
+    observations written (empty list when nothing was written), so the
+    caller can report them without re-reading the file.
+    """
+    try:
+        if not blueprint_path.exists():
+            return []
+        raw = _yaml_load(blueprint_path)
+        healed_by = raw.get("healed_by") if hasattr(raw, "get") else None
+        if not healed_by:
+            return []
+
+        current = capture_run_perf(obs_store, run_id or "")
+        observed_at = datetime.now(tz=UTC).isoformat()
+        written: list[dict[str, Any]] = []
+        changed = False
+        for rec in healed_by:
+            existing = rec.get("perf_observations")
+            already = {
+                o.get("engine")
+                for o in (existing or [])
+                if hasattr(o, "get")
+            }
+            if engine in already:
+                continue
+            baseline = rec.get("perf_baseline")
+            baseline_dict = dict(baseline) if hasattr(baseline, "get") else None
+            # How many patches this blueprint gained at or after THIS
+            # record's baseline — the shared-attribution count. Derived from
+            # the records themselves (every applied patch is one), never
+            # from a counter someone has to remember to bump.
+            applied_at = str(rec.get("applied_at") or "")
+            co_applied = sum(
+                1 for other in healed_by
+                if str(other.get("applied_at") or "") >= applied_at
+            ) or 1
+            observation = compare_perf(
+                baseline=baseline_dict,
+                current=current,
+                engine=engine,
+                observed_at=observed_at,
+                co_applied_patches=co_applied,
+            ).to_dict()
+            if existing is None:
+                rec["perf_observations"] = _to_ruamel([observation])
+            else:
+                existing.append(_to_ruamel(observation))
+            written.append(observation)
+            changed = True
+        if changed:
+            _yaml_dump(raw, blueprint_path)
+        return written
+    except Exception:
+        logger.warning(
+            "stamp_perf_observation failed for %s (engine=%s) — no perf note "
+            "recorded; run success is unaffected",
+            blueprint_path, engine, exc_info=True,
+        )
+        return []
 
 
 def apply_patch_to_dict(bp: dict, patch_spec: PatchSpec) -> dict:
@@ -559,6 +653,14 @@ def apply_patch_file(
     # HealedByRecordSchema fails the apply atomically like any other
     # operation, and so `validate_unique_module_ids`/schema checks below see
     # the final document.
+    # Warn-only perf baseline (see perf_attribution's module docstring):
+    # the last green run BEFORE this apply. Best-effort — `obs_store` is
+    # optional on this API and `capture_baseline_perf` never raises, so a
+    # store-less apply simply records no baseline and the eventual note
+    # reads `not_applicable`.
+    _perf_baseline = capture_baseline_perf(
+        obs_store, str(bp_raw.get("id") or ""), before=applied_at
+    )
     _healed_by_record = build_healed_by_record(
         patch_id=patch_spec.patch_id,
         operations=patch_spec.operations,
@@ -566,6 +668,7 @@ def apply_patch_file(
         applied_at=applied_at,
         fallback_run_id=patch_spec.run_id,
         engine_config_delta=_config_delta_res.delta,
+        perf_baseline=_perf_baseline.to_dict() if _perf_baseline else None,
     )
     patched = _append_healed_by(patched, _healed_by_record)
 

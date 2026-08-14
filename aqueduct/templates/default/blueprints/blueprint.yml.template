@@ -198,7 +198,10 @@ engine:
 #
 # `aqueduct patch apply` appends a `healed_by:` record here for every applied
 # self-heal patch (engine, classification, applied_at, validated_on, plus
-# engine_config_delta when the patch changed effective engine config — see
+# engine_config_delta when the patch changed effective engine config, plus a
+# warn-only perf_baseline/perf_observations pair comparing this pipeline's
+# wall-clock duration against the last green run before the patch — reported,
+# never judged: Aqueduct sets no regression threshold — see
 # docs/specs.md §8.14). It never affects the compiled Manifest and does not
 # need to be edited by hand; if you see it in a Blueprint, leave it alone.
 

@@ -117,8 +117,11 @@ Arcade sub-blueprint, `hooks:` is ignored — only the top-level blueprint's fir
 
 **`healed_by:`** — machine-written only, never hand-authored. `aqueduct patch
 apply` appends one provenance record per applied self-heal patch (engine,
-classification, applied_at, validated_on, and — only when the patch changed
-effective engine/session config — `engine_config_delta`). Purely compiler-consumed metadata
+classification, applied_at, validated_on, `engine_config_delta` when the patch
+changed effective engine/session config, and a warn-only `perf_baseline` /
+`perf_observations` pair reporting how the pipeline's wall-clock duration
+compares to the last green run before the patch — reported, never judged:
+Aqueduct sets no regression threshold). Purely compiler-consumed metadata
 — no engine executes it, and it never affects the compiled Manifest. See
 docs/specs.md §8.14 for the cross-engine heal-patch gate it feeds.
 

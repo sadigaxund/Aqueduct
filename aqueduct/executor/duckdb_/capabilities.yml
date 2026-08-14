@@ -948,3 +948,17 @@ leaves:
     tests:
       - tests/test_executor_duckdb/test_probe.py::test_value_distribution_full_scan_numeric_default
       - tests/test_executor_duckdb/test_probe.py::test_value_distribution_blocked_by_block_full_actions
+  healed_by.field.perf_baseline:
+    support: supported
+    hint: >-
+      Warn-only perf-attribution provenance — recorded by core from run_records
+      wall-clock time, no engine executes it. The input-volume proxy it carries
+      comes from module_metrics, which the DuckDB executor writes only for
+      Handoff modules, so the note reports volume as unavailable on this engine
+      and says so in its own caveats rather than reporting a zero.
+  healed_by.field.perf_observations:
+    support: supported
+    hint: >-
+      Warn-only perf-attribution provenance — recorded by core from run_records
+      wall-clock time, no engine executes it. Reports an observed ratio only;
+      Aqueduct sets no regression threshold and the note never blocks a run.

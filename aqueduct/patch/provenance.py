@@ -76,6 +76,7 @@ def build_healed_by_record(
     applied_at: str,
     fallback_run_id: str | None = None,
     engine_config_delta: dict[str, dict[str, Any]] | None = None,
+    perf_baseline: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Build one `healed_by:` record dict, or None if there is no heal
     provenance to record.
@@ -100,6 +101,19 @@ def build_healed_by_record(
     shows both the YAML write and the behaviour it bought. Omitted from the
     record when empty (a patch that writes no engine config), so a
     pipeline-only heal's provenance block is byte-identical to before.
+
+    ``perf_baseline`` is the last GREEN run of this blueprint BEFORE the
+    patch (``aqueduct/patch/perf_attribution.py::capture_baseline_perf``),
+    snapshotted here because ``validated_on`` below is binary while
+    config-op success is not: a patch that leaves the pipeline three times
+    slower still records as validated. Same apply-time reasoning as
+    ``engine_config_delta`` — the baseline depends on the observability
+    store this apply ran against, not on anything the patch carries.
+    Omitted when there is no prior green run (the common case for a
+    pipeline that never worked), which is what later makes the observation
+    ``not_applicable`` rather than a comparison against nothing.
+    Snapshotted rather than re-derived on demand on purpose: the Blueprint
+    travels, the observability store does not.
     """
     meta = meta or {}
     engine = meta.get("engine")
@@ -116,6 +130,8 @@ def build_healed_by_record(
     }
     if engine_config_delta:
         record["engine_config_delta"] = engine_config_delta
+    if perf_baseline:
+        record["perf_baseline"] = perf_baseline
     return record
 
 # ── Field-sensitive refinement for set_module_config_key ───────────────────

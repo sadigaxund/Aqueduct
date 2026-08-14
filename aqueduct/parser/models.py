@@ -318,6 +318,12 @@ class HealedByRecord:
     # engine: {engine: {key: {"before": ..., "after": ...}}}. Empty for a
     # patch that writes no engine config.
     engine_config_delta: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Warn-only perf attribution — see HealedByRecordSchema's comments.
+    # `perf_baseline` is the pre-patch green run's snapshot; each entry of
+    # `perf_observations` is one engine's post-patch note. Both are inert
+    # diagnostics: nothing in the compiler or any engine reads them.
+    perf_baseline: dict[str, Any] = field(default_factory=dict)
+    perf_observations: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
