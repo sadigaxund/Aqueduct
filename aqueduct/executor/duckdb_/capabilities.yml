@@ -112,18 +112,6 @@ leaves:
   agent.field.regression_artifact: supported
   agent.field.sandbox_mode: supported
   agent.field.supports_tools: supported
-  agent_cascade_tier.field.allow_defer: supported
-  agent_cascade_tier.field.api_key: supported
-  agent_cascade_tier.field.base_url: supported
-  agent_cascade_tier.field.deep_loop: supported
-  agent_cascade_tier.field.max_reprompts: supported
-  agent_cascade_tier.field.max_seconds: supported
-  agent_cascade_tier.field.max_tokens: supported
-  agent_cascade_tier.field.model: supported
-  agent_cascade_tier.field.provider: supported
-  agent_cascade_tier.field.provider_options: supported
-  agent_cascade_tier.field.supports_tools: supported
-  agent_cascade_tier.field.timeout: supported
   agent_guardrails.field.allowed_paths: supported
   agent_guardrails.field.forbidden_ops: supported
   agent_guardrails.field.heal_on_errors: supported

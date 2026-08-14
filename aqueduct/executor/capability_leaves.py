@@ -40,7 +40,7 @@ same as compiler warning ``rule_id``s):
                                            category is the fix.
   <block>.field.<name>                  — one entry per nested schema block
                                            (agent, agent_guardrails,
-                                           agent_cascade_tier, retry_policy,
+                                           retry_policy,
                                            module_retry, backoff, edge, udf,
                                            warnings, hooks, hook_entry,
                                            healed_by) OR per module-type
@@ -160,7 +160,6 @@ from aqueduct.parser.models import ModuleType
 from aqueduct.parser.schema import (
     AgentSchema,
     BackoffSchema,
-    CascadeTierSchema,
     EdgeSchema,
     GuardrailsSchema,
     HealedByRecordSchema,
@@ -217,10 +216,21 @@ FEATURE_FLAGS: frozenset[str] = frozenset(
 # Nested schema blocks walked for their own field-name leaves. Each entry is
 # (leaf-prefix, pydantic model). Keep in sync with schema.py's actual nested
 # models — a new nested config block should be added here.
+#
+# EVERY entry must be REACHABLE FROM ``BlueprintSchema``. This walker derives
+# BLUEPRINT-grammar leaves, so a model that no Blueprint can reach has no
+# per-engine question to answer and must not be listed here — it would emit
+# rows asking each engine for a verdict on a surface it can never see.
+# ``CascadeTierSchema`` was such an entry: once the Blueprint ``agent:`` block
+# became policy-only, ``cascade:`` lived solely in ``aqueduct.yml``, where it
+# is core-owned (``aqueduct/config.py`` tags it ``engine_scoped: False``) and
+# therefore deliberately excluded from the capability framework by
+# ``config_leaves.py``. Its 12 ``agent_cascade_tier.field.*`` rows survived
+# only because the closure test compares the table against THIS generator, not
+# against Blueprint grammar.
 _SCHEMA_BLOCKS: tuple[tuple[str, type[BaseModel]], ...] = (
     ("agent", AgentSchema),
     ("agent_guardrails", GuardrailsSchema),
-    ("agent_cascade_tier", CascadeTierSchema),
     ("retry_policy", RetryPolicySchema),
     ("module_retry", ModuleRetrySchema),
     ("backoff", BackoffSchema),
