@@ -41,13 +41,16 @@ def _connect_with_retry(path: Path):
     """
     import random
     import time
+
     delay, last = 0.05, None
     for attempt in range(50):
         try:
             return duckdb.connect(str(path))
         except Exception as exc:  # noqa: BLE001 — only retry lock conflicts
             if "lock" not in str(exc).lower():
-                raise StoreConnectionError(f"DuckDB store {path} could not be opened: {exc}") from exc
+                raise StoreConnectionError(
+                    f"DuckDB store {path} could not be opened: {exc}"
+                ) from exc
             last = exc
             time.sleep(min(delay, 1.0) + random.uniform(0, 0.05))
             delay *= 1.5
@@ -92,5 +95,3 @@ class DuckDBDepotStore(_DuckDBRelational, _RelationalDepotMixin, DepotStore):
     """Depot KV backed by DuckDB. Same single-writer constraint as observability/lineage."""
 
     _DDL = DEPOT_KV_DDL
-
-

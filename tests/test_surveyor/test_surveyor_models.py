@@ -19,7 +19,7 @@ def test_run_record_frozen():
         status="running",
         started_at="2024-01-01T00:00:00Z",
         finished_at=None,
-        module_results=()
+        module_results=(),
     )
     with pytest.raises(FrozenInstanceError):
         record.status = "success"  # type: ignore[misc]
@@ -32,7 +32,7 @@ def test_run_record_to_dict():
         status="success",
         started_at="2024-01-01T00:00:00Z",
         finished_at="2024-01-01T00:01:00Z",
-        module_results=({"id": "m1", "status": "success"},)
+        module_results=({"id": "m1", "status": "success"},),
     )
     d = record.to_dict()
     assert d["run_id"] == "r1"
@@ -49,8 +49,9 @@ def test_failure_context_frozen():
         stack_trace=None,
         manifest_json="{}",
         started_at="2024-01-01T00:00:00Z",
-        finished_at="2024-01-01T00:01:00Z"
-    , engine="spark")
+        finished_at="2024-01-01T00:01:00Z",
+        engine="spark",
+    )
     with pytest.raises(FrozenInstanceError):
         ctx.error_message = "hacked"  # type: ignore[misc]
 
@@ -64,8 +65,9 @@ def test_failure_context_to_dict():
         stack_trace="trace",
         manifest_json='{"id": "p1"}',
         started_at="2024-01-01T00:00:00Z",
-        finished_at="2024-01-01T00:01:00Z"
-    , engine="spark")
+        finished_at="2024-01-01T00:01:00Z",
+        engine="spark",
+    )
     d = ctx.to_dict()
     assert d["run_id"] == "r1"
     assert d["failed_module"] == "m1"
@@ -82,8 +84,9 @@ def test_failure_context_to_json():
         stack_trace=None,
         manifest_json="{}",
         started_at="2024-01-01T00:00:00Z",
-        finished_at="2024-01-01T00:01:00Z"
-    , engine="spark")
+        finished_at="2024-01-01T00:01:00Z",
+        engine="spark",
+    )
     js = ctx.to_json()
     data = json.loads(js)
     assert data["run_id"] == "r1"
@@ -102,7 +105,8 @@ def test_failure_context_to_dict_includes_doctor_hints():
         started_at="2024-01-01T00:00:00Z",
         finished_at="2024-01-01T00:01:00Z",
         doctor_hints=("warn: bad path", "fail: missing schema"),
-     engine="spark",)
+        engine="spark",
+    )
     d = ctx.to_dict()
     assert "doctor_hints" in d
     assert d["doctor_hints"] == ["warn: bad path", "fail: missing schema"]
@@ -119,7 +123,8 @@ def test_failure_context_doctor_hints_empty_by_default():
         manifest_json="{}",
         started_at="2024-01-01T00:00:00Z",
         finished_at="2024-01-01T00:01:00Z",
-     engine="spark",)
+        engine="spark",
+    )
     assert ctx.doctor_hints == ()
     d = ctx.to_dict()
     assert d["doctor_hints"] == []
@@ -136,7 +141,8 @@ def test_failure_context_phase35_defaults():
         manifest_json="{}",
         started_at="2024-01-01T00:00:00Z",
         finished_at="2024-01-01T00:01:00Z",
-     engine="spark",)
+        engine="spark",
+    )
     assert ctx.error_class is None
     assert ctx.root_exception is None
     assert ctx.sql_state is None
@@ -155,7 +161,8 @@ def test_failure_context_phase35_frozen():
         manifest_json="{}",
         started_at="2024-01-01T00:00:00Z",
         finished_at="2024-01-01T00:01:00Z",
-     engine="spark",)
+        engine="spark",
+    )
     with pytest.raises(FrozenInstanceError):
         ctx.error_class = "X"  # type: ignore[misc]
     with pytest.raises(FrozenInstanceError):
@@ -178,7 +185,8 @@ def test_failure_context_phase35_to_dict():
         sql_state="42000",
         suggested_columns=("a", "b"),
         object_name="c",
-     engine="spark",)
+        engine="spark",
+    )
     d = ctx.to_dict()
     assert d["error_class"] == "UNRESOLVED_COLUMN"
     assert d["root_exception"] == {"type": "AnalysisException", "message": "msg"}
@@ -189,14 +197,21 @@ def test_failure_context_phase35_to_dict():
 
 # ── Phase 45 — healing_outcomes DDL + record + successful_patch_ids ───────────
 
+
 def test_healing_outcomes_ddl_has_phase45_columns():
     """Fresh DB DDL includes failure_signature + resolution columns."""
     import duckdb
 
     from aqueduct.surveyor.surveyor import _DDL
+
     conn = duckdb.connect(":memory:")
     conn.execute(_DDL)
-    cols = {r[0] for r in conn.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'healing_outcomes'").fetchall()}
+    cols = {
+        r[0]
+        for r in conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'healing_outcomes'"
+        ).fetchall()
+    }
     assert "failure_signature" in cols
     assert "resolution" in cols
     conn.close()
@@ -216,15 +231,23 @@ def test_record_healing_outcome_persists_failure_signature(tmp_path):
     surveyor.start("run-fs-1")
 
     surveyor.record_healing_outcome(
-        run_id="run-fs-1", failed_module="m1", failure_category="test",
-        model="claude", patch_id="fix-1", confidence=0.9,
-        patch_applied=True, run_success_after_patch=True,
-        failure_signature="abc123hash", resolution="llm",
+        run_id="run-fs-1",
+        failed_module="m1",
+        failure_category="test",
+        model="claude",
+        patch_id="fix-1",
+        confidence=0.9,
+        patch_applied=True,
+        run_success_after_patch=True,
+        failure_signature="abc123hash",
+        resolution="llm",
     )
     surveyor.stop()
 
     conn = duckdb.connect(str(store_dir / "observability.db"))
-    row = conn.execute("SELECT failure_signature, resolution FROM healing_outcomes WHERE patch_id = 'fix-1'").fetchone()
+    row = conn.execute(
+        "SELECT failure_signature, resolution FROM healing_outcomes WHERE patch_id = 'fix-1'"
+    ).fetchone()
     conn.close()
     assert row is not None
     assert row[0] == "abc123hash"
@@ -245,14 +268,21 @@ def test_record_healing_outcome_defaults_resolution_llm(tmp_path):
     surveyor.start("run-dflt-1")
 
     surveyor.record_healing_outcome(
-        run_id="run-dflt-1", failed_module="m1", failure_category="test",
-        model="claude", patch_id="fix-dflt", confidence=0.9,
-        patch_applied=True, run_success_after_patch=True,
+        run_id="run-dflt-1",
+        failed_module="m1",
+        failure_category="test",
+        model="claude",
+        patch_id="fix-dflt",
+        confidence=0.9,
+        patch_applied=True,
+        run_success_after_patch=True,
     )
     surveyor.stop()
 
     conn = duckdb.connect(str(store_dir / "observability.db"))
-    row = conn.execute("SELECT resolution FROM healing_outcomes WHERE patch_id = 'fix-dflt'").fetchone()
+    row = conn.execute(
+        "SELECT resolution FROM healing_outcomes WHERE patch_id = 'fix-dflt'"
+    ).fetchone()
     conn.close()
     assert row[0] == "llm"
 
@@ -269,14 +299,24 @@ def test_successful_patch_ids_returns_matching_patches(tmp_path):
     surveyor.start("run-sp-1")
 
     surveyor.record_healing_outcome(
-        run_id="run-sp-1", failed_module="m1", failure_category="test",
-        model="claude", patch_id="success-1", confidence=0.9,
-        patch_applied=True, run_success_after_patch=True,
+        run_id="run-sp-1",
+        failed_module="m1",
+        failure_category="test",
+        model="claude",
+        patch_id="success-1",
+        confidence=0.9,
+        patch_applied=True,
+        run_success_after_patch=True,
     )
     surveyor.record_healing_outcome(
-        run_id="run-sp-2", failed_module="m1", failure_category="test",
-        model="claude", patch_id="failed-1", confidence=0.9,
-        patch_applied=True, run_success_after_patch=False,
+        run_id="run-sp-2",
+        failed_module="m1",
+        failure_category="test",
+        model="claude",
+        patch_id="failed-1",
+        confidence=0.9,
+        patch_applied=True,
+        run_success_after_patch=False,
     )
     surveyor.stop()
 
@@ -299,16 +339,21 @@ def test_successful_patch_ids_empty_on_store_error(tmp_path):
 
 # ── Phase 46 — model_cascade_position ──────────────────────────────────────────
 
+
 def test_healing_outcomes_ddl_has_model_cascade_position():
     """Fresh DB DDL includes model_cascade_position column."""
     import duckdb
 
     from aqueduct.surveyor.surveyor import _DDL
+
     conn = duckdb.connect(":memory:")
     conn.execute(_DDL)
-    cols = {r[0] for r in conn.execute(
-        "SELECT column_name FROM information_schema.columns WHERE table_name = 'healing_outcomes'"
-    ).fetchall()}
+    cols = {
+        r[0]
+        for r in conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'healing_outcomes'"
+        ).fetchall()
+    }
     assert "model_cascade_position" in cols
     conn.close()
 
@@ -327,9 +372,14 @@ def test_record_healing_outcome_persists_model_cascade_position(tmp_path):
     surveyor.start("run-cp-1")
 
     surveyor.record_healing_outcome(
-        run_id="run-cp-1", failed_module="m1", failure_category="test",
-        model="claude", patch_id="fix-cp-1", confidence=0.9,
-        patch_applied=True, run_success_after_patch=True,
+        run_id="run-cp-1",
+        failed_module="m1",
+        failure_category="test",
+        model="claude",
+        patch_id="fix-cp-1",
+        confidence=0.9,
+        patch_applied=True,
+        run_success_after_patch=True,
         model_cascade_position=1,
     )
     surveyor.stop()
@@ -357,9 +407,14 @@ def test_record_healing_outcome_defaults_model_cascade_position_none(tmp_path):
     surveyor.start("run-cp-dflt-1")
 
     surveyor.record_healing_outcome(
-        run_id="run-cp-dflt-1", failed_module="m1", failure_category="test",
-        model="claude", patch_id="fix-cp-dflt", confidence=0.9,
-        patch_applied=True, run_success_after_patch=True,
+        run_id="run-cp-dflt-1",
+        failed_module="m1",
+        failure_category="test",
+        model="claude",
+        patch_id="fix-cp-dflt",
+        confidence=0.9,
+        patch_applied=True,
+        run_success_after_patch=True,
     )
     surveyor.stop()
 
@@ -386,9 +441,14 @@ def test_record_healing_outcome_persists_cascade_model(tmp_path):
     surveyor.start("run-tm-1")
 
     surveyor.record_healing_outcome(
-        run_id="run-tm-1", failed_module="m1", failure_category="test",
-        model="gpt4", patch_id="fix-tm-1", confidence=0.9,
-        patch_applied=True, run_success_after_patch=True,
+        run_id="run-tm-1",
+        failed_module="m1",
+        failure_category="test",
+        model="gpt4",
+        patch_id="fix-tm-1",
+        confidence=0.9,
+        patch_applied=True,
+        run_success_after_patch=True,
         model_cascade_position=1,
     )
     surveyor.stop()

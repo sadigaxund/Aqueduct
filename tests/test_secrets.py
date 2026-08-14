@@ -32,6 +32,7 @@ def _clean_redaction_registry():
 
 # ── provider: env ────────────────────────────────────────────────────────────
 
+
 def test_env_provider_returns_env_value(monkeypatch):
     monkeypatch.setenv("MY_SECRET_KEY", "super-secret")
     assert resolve_secret("MY_SECRET_KEY", provider="env") == "super-secret"
@@ -66,12 +67,20 @@ def test_env_fast_path_takes_priority_over_provider(monkeypatch):
     mock_botocore = MagicMock()
     mock_botocore.exceptions = MagicMock()
 
-    with patch.dict(sys.modules, {"boto3": mock_boto3, "botocore": mock_botocore, "botocore.exceptions": mock_botocore.exceptions}):
+    with patch.dict(
+        sys.modules,
+        {
+            "boto3": mock_boto3,
+            "botocore": mock_botocore,
+            "botocore.exceptions": mock_botocore.exceptions,
+        },
+    ):
         result = resolve_secret("FAST_PATH_KEY", provider="aws")
     assert result == "sdk-value"
 
 
 # ── provider: aws ─────────────────────────────────────────────────────────────
+
 
 def test_aws_sdk_not_installed_raises(monkeypatch):
     monkeypatch.delenv("AWS_SECRET_KEY", raising=False)
@@ -90,7 +99,14 @@ def test_aws_fetches_secret_without_caching_in_environ(monkeypatch, tmp_path):
     mock_botocore = MagicMock()
     mock_botocore.exceptions = MagicMock()
 
-    with patch.dict(sys.modules, {"boto3": mock_boto3, "botocore": mock_botocore, "botocore.exceptions": mock_botocore.exceptions}):
+    with patch.dict(
+        sys.modules,
+        {
+            "boto3": mock_boto3,
+            "botocore": mock_botocore,
+            "botocore.exceptions": mock_botocore.exceptions,
+        },
+    ):
         val1 = resolve_secret("DB_PASSWORD", provider="aws")
         val2 = resolve_secret("DB_PASSWORD", provider="aws")
     assert val1 == "s3cr3t"
@@ -102,17 +118,23 @@ def test_aws_fetches_secret_without_caching_in_environ(monkeypatch, tmp_path):
 
 def test_aws_json_blob_unwraps_matching_key(monkeypatch):
     import json
+
     monkeypatch.delenv("MY_KEY", raising=False)
     mock_boto3 = MagicMock()
     mock_client = MagicMock()
     mock_boto3.client.return_value = mock_client
     # JSON blob with matching key
-    mock_client.get_secret_value.return_value = {
-        "SecretString": json.dumps({"MY_KEY": "jsonval"})
-    }
+    mock_client.get_secret_value.return_value = {"SecretString": json.dumps({"MY_KEY": "jsonval"})}
     mock_botocore = MagicMock()
     mock_botocore.exceptions = MagicMock()
-    with patch.dict(sys.modules, {"boto3": mock_boto3, "botocore": mock_botocore, "botocore.exceptions": mock_botocore.exceptions}):
+    with patch.dict(
+        sys.modules,
+        {
+            "boto3": mock_boto3,
+            "botocore": mock_botocore,
+            "botocore.exceptions": mock_botocore.exceptions,
+        },
+    ):
         val = resolve_secret("MY_KEY", provider="aws")
     assert val == "jsonval"
     monkeypatch.delenv("MY_KEY", raising=False)
@@ -120,12 +142,19 @@ def test_aws_json_blob_unwraps_matching_key(monkeypatch):
 
 # ── provider: gcp ─────────────────────────────────────────────────────────────
 
+
 def test_gcp_sdk_not_installed_raises(monkeypatch):
     monkeypatch.delenv("GCP_SECRET", raising=False)
-    with patch.dict(sys.modules, {
-        "google": None, "google.cloud": None, "google.cloud.secretmanager": None,
-        "google.api_core": None, "google.api_core.exceptions": None,
-    }):
+    with patch.dict(
+        sys.modules,
+        {
+            "google": None,
+            "google.cloud": None,
+            "google.cloud.secretmanager": None,
+            "google.api_core": None,
+            "google.api_core.exceptions": None,
+        },
+    ):
         with pytest.raises(SecretsError, match=r"google-cloud-secret-manager"):
             resolve_secret("GCP_SECRET", provider="gcp")
 
@@ -149,31 +178,46 @@ def test_gcp_short_name_uses_gcp_project_env(monkeypatch):
     mock_api_exceptions.NotFound = type("NotFound", (Exception,), {})
     mock_api_core.exceptions = mock_api_exceptions
 
-    with patch.dict(sys.modules, {
-        "google": mock_google,
-        "google.cloud": mock_google_cloud,
-        "google.cloud.secretmanager": mock_sm,
-        "google.api_core": mock_api_core,
-        "google.api_core.exceptions": mock_api_exceptions,
-    }):
+    with patch.dict(
+        sys.modules,
+        {
+            "google": mock_google,
+            "google.cloud": mock_google_cloud,
+            "google.cloud.secretmanager": mock_sm,
+            "google.api_core": mock_api_core,
+            "google.api_core.exceptions": mock_api_exceptions,
+        },
+    ):
         val = resolve_secret("MY_GCP_SECRET", provider="gcp")
 
     assert val == "gcp-value"
     # Verify full resource path was constructed
     call_args = mock_client_instance.access_secret_version.call_args
-    request = call_args[1]["request"] if "request" in (call_args[1] or {}) else call_args[0][0] if call_args[0] else call_args[1].get("request") or call_args[0]
+    request = (
+        call_args[1]["request"]
+        if "request" in (call_args[1] or {})
+        else call_args[0][0] if call_args[0] else call_args[1].get("request") or call_args[0]
+    )
     assert "my-project" in str(request) or "MY_GCP_SECRET" in str(request)
     monkeypatch.delenv("MY_GCP_SECRET", raising=False)
 
 
 # ── provider: azure ───────────────────────────────────────────────────────────
 
+
 def test_azure_sdk_not_installed_raises(monkeypatch):
     monkeypatch.delenv("AZ_SECRET", raising=False)
-    with patch.dict(sys.modules, {
-        "azure": None, "azure.keyvault": None, "azure.keyvault.secrets": None,
-        "azure.identity": None, "azure.core": None, "azure.core.exceptions": None,
-    }):
+    with patch.dict(
+        sys.modules,
+        {
+            "azure": None,
+            "azure.keyvault": None,
+            "azure.keyvault.secrets": None,
+            "azure.identity": None,
+            "azure.core": None,
+            "azure.core.exceptions": None,
+        },
+    ):
         with pytest.raises(SecretsError, match=r"azure-keyvault-secrets"):
             resolve_secret("AZ_SECRET", provider="azure")
 
@@ -195,14 +239,17 @@ def test_azure_reads_vault_url_from_env(monkeypatch):
     mock_secret.value = "az-value"
     mock_client_instance.get_secret.return_value = mock_secret
 
-    with patch.dict(sys.modules, {
-        "azure": MagicMock(),
-        "azure.keyvault": MagicMock(),
-        "azure.keyvault.secrets": mock_azure_kv_secrets,
-        "azure.identity": mock_azure_identity,
-        "azure.core": mock_azure_core,
-        "azure.core.exceptions": mock_azure_core.exceptions,
-    }):
+    with patch.dict(
+        sys.modules,
+        {
+            "azure": MagicMock(),
+            "azure.keyvault": MagicMock(),
+            "azure.keyvault.secrets": mock_azure_kv_secrets,
+            "azure.identity": mock_azure_identity,
+            "azure.core": mock_azure_core,
+            "azure.core.exceptions": mock_azure_core.exceptions,
+        },
+    ):
         val = resolve_secret("AZURE_SECRET_KEY", provider="azure")
 
     assert val == "az-value"
@@ -210,6 +257,7 @@ def test_azure_reads_vault_url_from_env(monkeypatch):
 
 
 # ── provider: custom ──────────────────────────────────────────────────────────
+
 
 def test_custom_provider_calls_resolver(monkeypatch, tmp_path):
     monkeypatch.delenv("CUSTOM_KEY", raising=False)
@@ -302,9 +350,7 @@ def test_load_resolver_fn_survives_stdlib_name_collision(tmp_path):
     pkg_dir = tmp_path / "secrets"
     pkg_dir.mkdir()
     (pkg_dir / "__init__.py").write_text("")
-    (pkg_dir / "resolver.py").write_text(
-        "def vault_resolver(key):\n    return f'resolved-{key}'\n"
-    )
+    (pkg_dir / "resolver.py").write_text("def vault_resolver(key):\n    return f'resolved-{key}'\n")
 
     sentinel = sys.modules["secrets"]  # the real stdlib module, already imported
     try:
@@ -351,6 +397,7 @@ def test_load_resolver_fn_missing_file_raises(tmp_path):
 # registration happens inside resolve_secret() itself, with no explicit
 # caller-side register() call anywhere in the test body.
 
+
 def test_env_provider_secret_is_redacted_without_caller_registering(monkeypatch):
     monkeypatch.setenv("REDACT_ME_ENV", "a-strong-random-secret-value-12345")
     val = resolve_secret("REDACT_ME_ENV", provider="env")
@@ -374,7 +421,11 @@ def test_aws_provider_secret_is_redacted_without_caller_registering(monkeypatch)
 
     with patch.dict(
         sys.modules,
-        {"boto3": mock_boto3, "botocore": mock_botocore, "botocore.exceptions": mock_botocore.exceptions},
+        {
+            "boto3": mock_boto3,
+            "botocore": mock_botocore,
+            "botocore.exceptions": mock_botocore.exceptions,
+        },
     ):
         val = resolve_secret("REDACT_ME_AWS", provider="aws")
 
@@ -392,7 +443,9 @@ def test_custom_provider_weak_secret_self_gates_without_raising(monkeypatch):
     resolver_mod.fetch = lambda key: "abc"  # below _MIN_SECRET_LENGTH
     sys.modules["_test_weak_secret_mod"] = resolver_mod
     try:
-        val = resolve_secret("REDACT_ME_WEAK", provider="custom", resolver="_test_weak_secret_mod.fetch")
+        val = resolve_secret(
+            "REDACT_ME_WEAK", provider="custom", resolver="_test_weak_secret_mod.fetch"
+        )
     finally:
         del sys.modules["_test_weak_secret_mod"]
 

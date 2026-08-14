@@ -60,20 +60,29 @@ class TestAnthropicToolUse:
         toolbox = _FakeToolBox(result={"yaml": "id: bp\n"})
         tool_state = ToolCallState()
 
-        mock_client_cls.return_value = _mock_client_sequence([
-            {
-                "content": [{"type": "tool_use", "id": "tu1", "name": "read_blueprint", "input": {}}],
-                "usage": {"input_tokens": 100, "output_tokens": 10},
-            },
-            {
-                "content": [{"type": "text", "text": '{"patch_id": "fix-1"}'}],
-                "usage": {"input_tokens": 50, "output_tokens": 20},
-            },
-        ])
+        mock_client_cls.return_value = _mock_client_sequence(
+            [
+                {
+                    "content": [
+                        {"type": "tool_use", "id": "tu1", "name": "read_blueprint", "input": {}}
+                    ],
+                    "usage": {"input_tokens": 100, "output_tokens": 10},
+                },
+                {
+                    "content": [{"type": "text", "text": '{"patch_id": "fix-1"}'}],
+                    "usage": {"input_tokens": 50, "output_tokens": 20},
+                },
+            ]
+        )
 
         text, tin, tout = _call_anthropic(
-            [{"role": "user", "content": "fix it"}], "model", 100, "system",
-            tools=toolbox.declarations(), toolbox=toolbox, max_tool_calls=8,
+            [{"role": "user", "content": "fix it"}],
+            "model",
+            100,
+            "system",
+            tools=toolbox.declarations(),
+            toolbox=toolbox,
+            max_tool_calls=8,
             tool_state=tool_state,
         )
 
@@ -89,13 +98,20 @@ class TestAnthropicToolUse:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
         toolbox = _FakeToolBox()
         tool_state = ToolCallState()
-        mock_client_cls.return_value = _mock_client_sequence([
-            {"content": [{"type": "text", "text": "done"}], "usage": {}},
-        ])
+        mock_client_cls.return_value = _mock_client_sequence(
+            [
+                {"content": [{"type": "text", "text": "done"}], "usage": {}},
+            ]
+        )
 
         text, tin, tout = _call_anthropic(
-            [], "model", 100, "system",
-            tools=toolbox.declarations(), toolbox=toolbox, max_tool_calls=8,
+            [],
+            "model",
+            100,
+            "system",
+            tools=toolbox.declarations(),
+            toolbox=toolbox,
+            max_tool_calls=8,
             tool_state=tool_state,
         )
         assert text == "done"
@@ -110,14 +126,26 @@ class TestAnthropicToolUse:
 
         # Two tool_use turns (exceeding max_tool_calls=1 after the first),
         # then a forced final text answer.
-        mock_client_cls.return_value = _mock_client_sequence([
-            {"content": [{"type": "tool_use", "id": "tu1", "name": "read_blueprint", "input": {}}], "usage": {}},
-            {"content": [{"type": "text", "text": "final"}], "usage": {}},
-        ])
+        mock_client_cls.return_value = _mock_client_sequence(
+            [
+                {
+                    "content": [
+                        {"type": "tool_use", "id": "tu1", "name": "read_blueprint", "input": {}}
+                    ],
+                    "usage": {},
+                },
+                {"content": [{"type": "text", "text": "final"}], "usage": {}},
+            ]
+        )
 
         text, _, _ = _call_anthropic(
-            [], "model", 100, "system",
-            tools=toolbox.declarations(), toolbox=toolbox, max_tool_calls=1,
+            [],
+            "model",
+            100,
+            "system",
+            tools=toolbox.declarations(),
+            toolbox=toolbox,
+            max_tool_calls=1,
             tool_state=tool_state,
         )
         assert text == "final"
@@ -130,9 +158,11 @@ class TestAnthropicToolUse:
     def test_no_toolbox_is_byte_identical_to_pre_phase_75(self, mock_client_cls, monkeypatch):
         """tools=None, toolbox=None must behave exactly like the old call shape."""
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
-        mock_client_cls.return_value = _mock_client_sequence([
-            {"content": [{"text": "hello"}], "usage": {"input_tokens": 1, "output_tokens": 1}},
-        ])
+        mock_client_cls.return_value = _mock_client_sequence(
+            [
+                {"content": [{"text": "hello"}], "usage": {"input_tokens": 1, "output_tokens": 1}},
+            ]
+        )
         text, tin, tout = _call_anthropic([], "model", 100, "system")
         assert text == "hello"
 
@@ -143,26 +173,42 @@ class TestOpenAICompatToolUse:
         toolbox = _FakeToolBox(result={"yaml": "id: bp\n"})
         tool_state = ToolCallState()
 
-        mock_client_cls.return_value = _mock_client_sequence([
-            {
-                "choices": [{"message": {
-                    "content": None,
-                    "tool_calls": [{
-                        "id": "call_1",
-                        "function": {"name": "read_blueprint", "arguments": "{}"},
-                    }],
-                }}],
-                "usage": {"prompt_tokens": 40, "completion_tokens": 5},
-            },
-            {
-                "choices": [{"message": {"content": '{"patch_id": "fix-2"}', "tool_calls": None}}],
-                "usage": {"prompt_tokens": 20, "completion_tokens": 10},
-            },
-        ])
+        mock_client_cls.return_value = _mock_client_sequence(
+            [
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "call_1",
+                                        "function": {"name": "read_blueprint", "arguments": "{}"},
+                                    }
+                                ],
+                            }
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 40, "completion_tokens": 5},
+                },
+                {
+                    "choices": [
+                        {"message": {"content": '{"patch_id": "fix-2"}', "tool_calls": None}}
+                    ],
+                    "usage": {"prompt_tokens": 20, "completion_tokens": 10},
+                },
+            ]
+        )
 
         text, tin, tout = _call_openai_compat(
-            [{"role": "user", "content": "fix it"}], "model", 100, "http://test", "system",
-            tools=toolbox.declarations(), toolbox=toolbox, max_tool_calls=8,
+            [{"role": "user", "content": "fix it"}],
+            "model",
+            100,
+            "http://test",
+            "system",
+            tools=toolbox.declarations(),
+            toolbox=toolbox,
+            max_tool_calls=8,
             tool_state=tool_state,
         )
         assert text == '{"patch_id": "fix-2"}'
@@ -201,9 +247,16 @@ class TestOpenAICompatToolUse:
 
         with caplog.at_level("WARNING"):
             text, _, _ = _call_openai_compat(
-                [], "model", 100, "http://test", "system",
-                tools=toolbox.declarations(), toolbox=toolbox, max_tool_calls=8,
-                supports_tools="auto", tool_state=tool_state,
+                [],
+                "model",
+                100,
+                "http://test",
+                "system",
+                tools=toolbox.declarations(),
+                toolbox=toolbox,
+                max_tool_calls=8,
+                supports_tools="auto",
+                tool_state=tool_state,
             )
 
         assert text == '{"patch_id": "fix-3"}'
@@ -215,8 +268,10 @@ class TestOpenAICompatToolUse:
 
     @patch("httpx.Client")
     def test_no_toolbox_is_byte_identical_to_pre_phase_75(self, mock_client_cls):
-        mock_client_cls.return_value = _mock_client_sequence([
-            {"choices": [{"message": {"content": "hello"}}], "usage": {}},
-        ])
+        mock_client_cls.return_value = _mock_client_sequence(
+            [
+                {"choices": [{"message": {"content": "hello"}}], "usage": {}},
+            ]
+        )
         text, _, _ = _call_openai_compat([], "model", 100, "http://test", "system")
         assert text == "hello"

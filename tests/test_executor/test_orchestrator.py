@@ -68,7 +68,10 @@ def test_handoff_edges_resolves_island_indices():
     manifest = _manifest(
         [a, h, b],
         [Edge(from_id="a", to_id="a__handoff__b"), Edge(from_id="a__handoff__b", to_id="b")],
-        [Island(engine="spark", module_ids=frozenset({"a"})), Island(engine="duckdb", module_ids=frozenset({"b"}))],
+        [
+            Island(engine="spark", module_ids=frozenset({"a"})),
+            Island(engine="duckdb", module_ids=frozenset({"b"})),
+        ],
     )
     edges = _handoff_edges(manifest)
     assert len(edges) == 1
@@ -87,7 +90,10 @@ def test_handoff_edges_ignores_disabled_module():
     manifest = _manifest(
         [a, h, b],
         [Edge(from_id="a", to_id="h"), Edge(from_id="h", to_id="b")],
-        [Island(engine="spark", module_ids=frozenset({"a"})), Island(engine="duckdb", module_ids=frozenset({"b"}))],
+        [
+            Island(engine="spark", module_ids=frozenset({"a"})),
+            Island(engine="duckdb", module_ids=frozenset({"b"})),
+        ],
     )
     assert _handoff_edges(manifest) == []
 
@@ -109,7 +115,10 @@ def test_island_execution_order_linear_dependency():
     manifest = _manifest(
         [a, h, b],
         [Edge(from_id="a", to_id="h"), Edge(from_id="h", to_id="b")],
-        [Island(engine="spark", module_ids=frozenset({"a"})), Island(engine="duckdb", module_ids=frozenset({"b"}))],
+        [
+            Island(engine="spark", module_ids=frozenset({"a"})),
+            Island(engine="duckdb", module_ids=frozenset({"b"})),
+        ],
     )
     handoffs = _handoff_edges(manifest)
     order = _island_execution_order(manifest, handoffs)
@@ -124,7 +133,10 @@ def test_island_execution_order_disjoint_components_sort_stably():
     manifest = _manifest(
         [a, b],
         [],
-        [Island(engine="spark", module_ids=frozenset({"a"})), Island(engine="duckdb", module_ids=frozenset({"b"}))],
+        [
+            Island(engine="spark", module_ids=frozenset({"a"})),
+            Island(engine="duckdb", module_ids=frozenset({"b"})),
+        ],
     )
     order = _island_execution_order(manifest, [])
     assert order == [0, 1]
@@ -138,7 +150,10 @@ def test_island_execution_order_cycle_raises():
     manifest = _manifest(
         [a, h1, h2, b],
         [],
-        [Island(engine="spark", module_ids=frozenset({"a"})), Island(engine="duckdb", module_ids=frozenset({"b"}))],
+        [
+            Island(engine="spark", module_ids=frozenset({"a"})),
+            Island(engine="duckdb", module_ids=frozenset({"b"})),
+        ],
     )
     from aqueduct.executor.orchestrator import _HandoffEdge
 
@@ -160,7 +175,10 @@ def test_sub_manifest_write_side_includes_handoff_and_incoming_edge():
     manifest = _manifest(
         [a, h, b],
         [Edge(from_id="a", to_id="h"), Edge(from_id="h", to_id="b")],
-        [Island(engine="spark", module_ids=frozenset({"a"})), Island(engine="duckdb", module_ids=frozenset({"b"}))],
+        [
+            Island(engine="spark", module_ids=frozenset({"a"})),
+            Island(engine="duckdb", module_ids=frozenset({"b"})),
+        ],
     )
     handoffs = _handoff_edges(manifest)
     sub = _sub_manifest(manifest, manifest.islands[0], handoffs, 0)
@@ -175,7 +193,10 @@ def test_sub_manifest_read_side_includes_handoff_and_outgoing_edge():
     manifest = _manifest(
         [a, h, b],
         [Edge(from_id="a", to_id="h"), Edge(from_id="h", to_id="b")],
-        [Island(engine="spark", module_ids=frozenset({"a"})), Island(engine="duckdb", module_ids=frozenset({"b"}))],
+        [
+            Island(engine="spark", module_ids=frozenset({"a"})),
+            Island(engine="duckdb", module_ids=frozenset({"b"})),
+        ],
     )
     handoffs = _handoff_edges(manifest)
     sub = _sub_manifest(manifest, manifest.islands[1], handoffs, 1)
@@ -189,7 +210,10 @@ def test_sub_manifest_disjoint_island_has_no_handoff_module():
     manifest = _manifest(
         [a, b],
         [],
-        [Island(engine="spark", module_ids=frozenset({"a"})), Island(engine="duckdb", module_ids=frozenset({"b"}))],
+        [
+            Island(engine="spark", module_ids=frozenset({"a"})),
+            Island(engine="duckdb", module_ids=frozenset({"b"})),
+        ],
     )
     sub_a = _sub_manifest(manifest, manifest.islands[0], [], 0)
     sub_b = _sub_manifest(manifest, manifest.islands[1], [], 1)
@@ -209,7 +233,10 @@ def test_spill_uris_for_island_covers_both_sides():
     manifest = _manifest(
         [a, h, b],
         [Edge(from_id="a", to_id="h"), Edge(from_id="h", to_id="b")],
-        [Island(engine="spark", module_ids=frozenset({"a"})), Island(engine="duckdb", module_ids=frozenset({"b"}))],
+        [
+            Island(engine="spark", module_ids=frozenset({"a"})),
+            Island(engine="duckdb", module_ids=frozenset({"b"})),
+        ],
     )
     handoffs = _handoff_edges(manifest)
     write_uris = _spill_uris_for_island(handoffs, 0, "/root", "abc123", "run1")
@@ -225,7 +252,10 @@ def test_resume_spill_uris_only_for_write_side():
     manifest = _manifest(
         [a, h, b],
         [Edge(from_id="a", to_id="h"), Edge(from_id="h", to_id="b")],
-        [Island(engine="spark", module_ids=frozenset({"a"})), Island(engine="duckdb", module_ids=frozenset({"b"}))],
+        [
+            Island(engine="spark", module_ids=frozenset({"a"})),
+            Island(engine="duckdb", module_ids=frozenset({"b"})),
+        ],
     )
     handoffs = _handoff_edges(manifest)
     # Write side (island 0) resolves a resume URI.
@@ -243,7 +273,10 @@ def test_resume_spill_uris_empty_when_no_resume_run_id():
     manifest = _manifest(
         [a, h, b],
         [Edge(from_id="a", to_id="h"), Edge(from_id="h", to_id="b")],
-        [Island(engine="spark", module_ids=frozenset({"a"})), Island(engine="duckdb", module_ids=frozenset({"b"}))],
+        [
+            Island(engine="spark", module_ids=frozenset({"a"})),
+            Island(engine="duckdb", module_ids=frozenset({"b"})),
+        ],
     )
     handoffs = _handoff_edges(manifest)
     assert _resume_spill_uris_for_island(handoffs, 0, "/root", "abc123", None) == {}

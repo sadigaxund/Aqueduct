@@ -78,6 +78,7 @@ def _normalize_message(text: str) -> str:
 def _loc_to_where(loc: tuple[Any, ...]) -> str:
     """Render a Pydantic loc tuple as ``operations[0].op`` style path."""
     from aqueduct.utils import format_error_loc
+
     return format_error_loc(loc)
 
 
@@ -154,7 +155,9 @@ def from_validation_error(exc: Any, *, engine: str) -> ErrorSignature:
 
 def from_json_decode_error(exc: Any, *, engine: str) -> ErrorSignature:
     """JSON parse failure → signature (column/line normalized out)."""
-    return make_signature("json_decode_error", "<root>", str(getattr(exc, "msg", exc)), engine=engine)
+    return make_signature(
+        "json_decode_error", "<root>", str(getattr(exc, "msg", exc)), engine=engine
+    )
 
 
 def from_exception(exc: BaseException, where: str | None = None, *, engine: str) -> ErrorSignature:

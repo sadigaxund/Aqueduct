@@ -2,6 +2,7 @@
 
 Run this once before running the blueprint.
 """
+
 import logging, shutil
 from pyspark.sql import SparkSession
 from pyspark.sql.types import IntegerType, StringType, StructField, StructType
@@ -32,23 +33,26 @@ else:
 with open(".env", "w") as f:
     f.write(f"DELTA_PACKAGE={DELTA_PACKAGE}\n")
 
-spark = SparkSession.builder \
-    .appName("time_travel_setup") \
-    .master("local[*]") \
-    .config("spark.jars.packages", DELTA_PACKAGE) \
-    .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
-    .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
-    .config("spark.log.level", "WARN") \
+spark = (
+    SparkSession.builder.appName("time_travel_setup")
+    .master("local[*]")
+    .config("spark.jars.packages", DELTA_PACKAGE)
+    .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+    .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+    .config("spark.log.level", "WARN")
     .getOrCreate()
+)
 
 # Clean any previous data
 shutil.rmtree("data/delta_events", ignore_errors=True)
 
-schema = StructType([
-    StructField("id", IntegerType()),
-    StructField("name", StringType()),
-    StructField("status", StringType()),
-])
+schema = StructType(
+    [
+        StructField("id", IntegerType()),
+        StructField("name", StringType()),
+        StructField("status", StringType()),
+    ]
+)
 
 # Version 1
 v1 = spark.createDataFrame([(1, "alpha", "new"), (2, "beta", "new")], schema)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
 from pyspark.sql import SparkSession
 from aqueduct.executor.spark.ingress import IngressError, read_ingress
@@ -17,7 +18,9 @@ def test_ingress_unsupported_format(spark: SparkSession):
 
 def test_ingress_missing_path_parquet(spark: SparkSession):
     module = Module(id="m1", type="Ingress", label="M1", config={"format": "parquet"})
-    with pytest.raises(IngressError, match="'path' is required in Ingress config for format='parquet'"):
+    with pytest.raises(
+        IngressError, match="'path' is required in Ingress config for format='parquet'"
+    ):
         read_ingress(module, spark)
 
 
@@ -29,7 +32,9 @@ def test_ingress_missing_path_csv(spark: SparkSession):
 
 def test_ingress_pathless_formats_no_error(spark: SparkSession):
     for fmt in ["jdbc", "kafka", "depot"]:
-        module = Module(id="m1", type="Ingress", label="M1", config={"format": fmt, "options": {"dbtable": "t"}})
+        module = Module(
+            id="m1", type="Ingress", label="M1", config={"format": fmt, "options": {"dbtable": "t"}}
+        )
         try:
             read_ingress(module, spark)
         except IngressError as exc:
@@ -39,7 +44,12 @@ def test_ingress_pathless_formats_no_error(spark: SparkSession):
 
 
 def test_ingress_jdbc_with_path(spark: SparkSession, tmp_path):
-    module = Module(id="m1", type="Ingress", label="M1", config={"format": "jdbc", "path": "jdbc:sqlite::memory:", "options": {"dbtable": "t"}})
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={"format": "jdbc", "path": "jdbc:sqlite::memory:", "options": {"dbtable": "t"}},
+    )
     try:
         read_ingress(module, spark)
     except IngressError as exc:
@@ -52,11 +62,12 @@ def test_ingress_schema_hint_missing_col(spark: SparkSession, tmp_path):
     path = str(tmp_path / "data.parquet")
     spark.range(5).selectExpr("id AS col1").write.parquet(path)
 
-    module = Module(id="m1", type="Ingress", label="M1", config={
-        "format": "parquet",
-        "path": path,
-        "schema_hint": [{"name": "ghost"}]
-    })
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={"format": "parquet", "path": path, "schema_hint": [{"name": "ghost"}]},
+    )
     with pytest.raises(IngressError, match="field 'ghost' not found"):
         read_ingress(module, spark)
 
@@ -65,12 +76,19 @@ def test_ingress_schema_hint_wrong_type(spark: SparkSession, tmp_path):
     path = str(tmp_path / "data.parquet")
     spark.range(5).selectExpr("id AS col1").write.parquet(path)  # col1 is bigint
 
-    module = Module(id="m1", type="Ingress", label="M1", config={
-        "format": "parquet",
-        "path": path,
-        "schema_hint": [{"name": "col1", "type": "string"}]
-    })
-    with pytest.raises(IngressError, match="type mismatch on 'col1': expected 'string', actual 'bigint'"):
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={
+            "format": "parquet",
+            "path": path,
+            "schema_hint": [{"name": "col1", "type": "string"}],
+        },
+    )
+    with pytest.raises(
+        IngressError, match="type mismatch on 'col1': expected 'string', actual 'bigint'"
+    ):
         read_ingress(module, spark)
 
 
@@ -80,7 +98,7 @@ def test_ingress_valid_parquet(spark: SparkSession, tmp_path):
 
     module = Module(id="m1", type="Ingress", label="M1", config={"format": "parquet", "path": path})
     df = read_ingress(module, spark)
-    
+
     assert df.count() == 10
     assert "id" in df.columns
 
@@ -93,7 +111,7 @@ def test_ingress_csv_defaults(spark: SparkSession, tmp_path):
 
     module = Module(id="m1", type="Ingress", label="M1", config={"format": "csv", "path": path})
     df = read_ingress(module, spark)
-    
+
     # Defaults: header=True, inferSchema=True
     assert df.columns == ["col1", "col2"]
     assert df.dtypes == [("col1", "int"), ("col2", "string")]
@@ -105,14 +123,14 @@ def test_ingress_custom_options(spark: SparkSession, tmp_path):
     with open(path, "w") as f:
         f.write(content)
 
-    module = Module(id="m1", type="Ingress", label="M1", config={
-        "format": "csv",
-        "path": path,
-        "header": False,
-        "options": {"sep": "|"}
-    })
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={"format": "csv", "path": path, "header": False, "options": {"sep": "|"}},
+    )
     df = read_ingress(module, spark)
-    
+
     assert df.columns == ["_c0", "_c1"]
     assert df.collect()[0][0] == 1
 
@@ -147,10 +165,15 @@ def test_ingress_format_custom_real_read(spark: SparkSession, tmp_path):
         "    def reader(self, schema):\n"
         "        return _Reader()\n"
     )
-    module = Module(id="m1", type="Ingress", label="M1", config={
-        "format": "custom",
-        "class": "custom_ingress_ds.CustomIngressDS",
-    })
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={
+            "format": "custom",
+            "class": "custom_ingress_ds.CustomIngressDS",
+        },
+    )
     df = read_ingress(module, spark, base_dir=str(tmp_path))
     assert df.columns == ["id", "val"]
     assert [f.dataType.simpleString() for f in df.schema.fields] == ["int", "string"]
@@ -158,16 +181,22 @@ def test_ingress_format_custom_real_read(spark: SparkSession, tmp_path):
 
 # ── schema_hint flat dict form ────────────────────────────────────────────────
 
+
 def test_schema_hint_flat_dict_pass(spark: SparkSession, tmp_path):
     """flat dict {col_name: type} → treated as strict schema check; matching → passes."""
     path = str(tmp_path / "data.parquet")
     spark.range(5).selectExpr("id AS col1").write.parquet(path)
 
-    module = Module(id="m1", type="Ingress", label="M1", config={
-        "format": "parquet",
-        "path": path,
-        "schema_hint": {"col1": "bigint"},  # flat dict
-    })
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={
+            "format": "parquet",
+            "path": path,
+            "schema_hint": {"col1": "bigint"},  # flat dict
+        },
+    )
     df = read_ingress(module, spark)
     assert "col1" in df.columns
 
@@ -177,11 +206,16 @@ def test_schema_hint_flat_dict_wrong_type_raises(spark: SparkSession, tmp_path):
     path = str(tmp_path / "data.parquet")
     spark.range(5).selectExpr("id AS col1").write.parquet(path)  # col1 is bigint
 
-    module = Module(id="m1", type="Ingress", label="M1", config={
-        "format": "parquet",
-        "path": path,
-        "schema_hint": {"col1": "string"},  # wrong type
-    })
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={
+            "format": "parquet",
+            "path": path,
+            "schema_hint": {"col1": "string"},  # wrong type
+        },
+    )
     with pytest.raises(IngressError, match="type mismatch on 'col1'"):
         read_ingress(module, spark)
 
@@ -191,11 +225,16 @@ def test_schema_hint_flat_dict_missing_column_raises(spark: SparkSession, tmp_pa
     path = str(tmp_path / "data.parquet")
     spark.range(5).selectExpr("id AS col1").write.parquet(path)
 
-    module = Module(id="m1", type="Ingress", label="M1", config={
-        "format": "parquet",
-        "path": path,
-        "schema_hint": {"ghost_col": "bigint"},  # non-existent
-    })
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={
+            "format": "parquet",
+            "path": path,
+            "schema_hint": {"ghost_col": "bigint"},  # non-existent
+        },
+    )
     with pytest.raises(IngressError, match="field 'ghost_col' not found"):
         read_ingress(module, spark)
 
@@ -205,11 +244,16 @@ def test_schema_hint_nested_dict_still_works(spark: SparkSession, tmp_path):
     path = str(tmp_path / "data.parquet")
     spark.range(5).selectExpr("id", "id * 2 AS extra").write.parquet(path)
 
-    module = Module(id="m1", type="Ingress", label="M1", config={
-        "format": "parquet",
-        "path": path,
-        "schema_hint": {"mode": "additive", "columns": [{"name": "id", "type": "bigint"}]},
-    })
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={
+            "format": "parquet",
+            "path": path,
+            "schema_hint": {"mode": "additive", "columns": [{"name": "id", "type": "bigint"}]},
+        },
+    )
     df = read_ingress(module, spark)
     assert "id" in df.columns
     assert "extra" in df.columns  # additive: extra columns allowed
@@ -220,27 +264,38 @@ def test_schema_hint_list_form_still_works(spark: SparkSession, tmp_path):
     path = str(tmp_path / "data.parquet")
     spark.range(5).selectExpr("id").write.parquet(path)
 
-    module = Module(id="m1", type="Ingress", label="M1", config={
-        "format": "parquet",
-        "path": path,
-        "schema_hint": [{"name": "id", "type": "bigint"}],
-    })
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={
+            "format": "parquet",
+            "path": path,
+            "schema_hint": [{"name": "id", "type": "bigint"}],
+        },
+    )
     df = read_ingress(module, spark)
     assert "id" in df.columns
 
 
 # ── type alias normalization ──────────────────────────────────────────────────
 
+
 def test_type_alias_long_accepted_as_bigint(spark: SparkSession, tmp_path):
     """LONG accepted as bigint."""
     path = str(tmp_path / "data.parquet")
     spark.range(5).selectExpr("id").write.parquet(path)  # id is bigint
 
-    module = Module(id="m1", type="Ingress", label="M1", config={
-        "format": "parquet",
-        "path": path,
-        "schema_hint": [{"name": "id", "type": "LONG"}],
-    })
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={
+            "format": "parquet",
+            "path": path,
+            "schema_hint": [{"name": "id", "type": "LONG"}],
+        },
+    )
     df = read_ingress(module, spark)
     assert dict(df.dtypes)["id"] == "bigint"
 
@@ -252,11 +307,16 @@ def test_type_alias_integer_accepted_as_int(spark: SparkSession, tmp_path):
     df_cast = df_src.selectExpr("CAST(n AS INT) AS n")
     df_cast.write.parquet(path)
 
-    module = Module(id="m1", type="Ingress", label="M1", config={
-        "format": "parquet",
-        "path": path,
-        "schema_hint": [{"name": "n", "type": "INTEGER"}],
-    })
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={
+            "format": "parquet",
+            "path": path,
+            "schema_hint": [{"name": "n", "type": "INTEGER"}],
+        },
+    )
     df = read_ingress(module, spark)
     assert dict(df.dtypes)["n"] == "int"
 
@@ -267,11 +327,16 @@ def test_type_alias_bool_accepted_as_boolean(spark: SparkSession, tmp_path):
     df_src = spark.createDataFrame([(True,), (False,)], ["flag"])
     df_src.write.parquet(path)
 
-    module = Module(id="m1", type="Ingress", label="M1", config={
-        "format": "parquet",
-        "path": path,
-        "schema_hint": [{"name": "flag", "type": "BOOL"}],
-    })
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={
+            "format": "parquet",
+            "path": path,
+            "schema_hint": [{"name": "flag", "type": "BOOL"}],
+        },
+    )
     df = read_ingress(module, spark)
     assert dict(df.dtypes)["flag"] == "boolean"
 
@@ -283,11 +348,16 @@ def test_type_alias_short_accepted_as_smallint(spark: SparkSession, tmp_path):
     df_cast = df_src.selectExpr("CAST(n AS SMALLINT) AS n")
     df_cast.write.parquet(path)
 
-    module = Module(id="m1", type="Ingress", label="M1", config={
-        "format": "parquet",
-        "path": path,
-        "schema_hint": [{"name": "n", "type": "SHORT"}],
-    })
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={
+            "format": "parquet",
+            "path": path,
+            "schema_hint": [{"name": "n", "type": "SHORT"}],
+        },
+    )
     df = read_ingress(module, spark)
     assert dict(df.dtypes)["n"] == "smallint"
 
@@ -297,11 +367,16 @@ def test_type_alias_mixed_case_normalized(spark: SparkSession, tmp_path):
     path = str(tmp_path / "data.parquet")
     spark.range(5).selectExpr("id").write.parquet(path)  # bigint
 
-    module = Module(id="m1", type="Ingress", label="M1", config={
-        "format": "parquet",
-        "path": path,
-        "schema_hint": [{"name": "id", "type": "Long"}],  # mixed case
-    })
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={
+            "format": "parquet",
+            "path": path,
+            "schema_hint": [{"name": "id", "type": "Long"}],  # mixed case
+        },
+    )
     df = read_ingress(module, spark)
     assert dict(df.dtypes)["id"] == "bigint"
 
@@ -313,11 +388,16 @@ def test_type_not_in_alias_map_lowercased(spark: SparkSession, tmp_path):
     df_cast = df_src.selectExpr("CAST(v AS DOUBLE) AS v")
     df_cast.write.parquet(path)
 
-    module = Module(id="m1", type="Ingress", label="M1", config={
-        "format": "parquet",
-        "path": path,
-        "schema_hint": [{"name": "v", "type": "DOUBLE"}],
-    })
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={
+            "format": "parquet",
+            "path": path,
+            "schema_hint": [{"name": "v", "type": "DOUBLE"}],
+        },
+    )
     df = read_ingress(module, spark)
     assert dict(df.dtypes)["v"] == "double"
 
@@ -337,11 +417,16 @@ def test_schema_hint_hub_timestamp_tz_matches_spark_instant_type(spark: SparkSes
     df_cast = df_src.selectExpr("CAST(ts AS TIMESTAMP) AS ts")  # Spark's instant type
     df_cast.write.parquet(path)
 
-    module = Module(id="m1", type="Ingress", label="M1", config={
-        "format": "parquet",
-        "path": path,
-        "schema_hint": [{"name": "ts", "type": "timestamp_tz"}],
-    })
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={
+            "format": "parquet",
+            "path": path,
+            "schema_hint": [{"name": "ts", "type": "timestamp_tz"}],
+        },
+    )
     df = read_ingress(module, spark)
     assert dict(df.dtypes)["ts"] == "timestamp"
 
@@ -351,24 +436,32 @@ def test_schema_hint_hub_array_matches(spark: SparkSession, tmp_path):
     df_src = spark.range(1).selectExpr("array(1, 2, 3) AS arr")
     df_src.write.parquet(path)
 
-    module = Module(id="m1", type="Ingress", label="M1", config={
-        "format": "parquet",
-        "path": path,
-        "schema_hint": [{"name": "arr", "type": "array<int>"}],
-    })
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={
+            "format": "parquet",
+            "path": path,
+            "schema_hint": [{"name": "arr", "type": "array<int>"}],
+        },
+    )
     df = read_ingress(module, spark)
     assert dict(df.dtypes)["arr"] == "array<int>"
 
 
 # ── partition_filters ─────────────────────────────────────────────────────────
 
+
 def test_partition_filters_applied_as_where(spark: SparkSession, tmp_path):
     """partition_filters set → .where(expr) applied; returned df is filtered."""
     path = str(tmp_path / "pf_data.parquet")
     spark.range(10).write.parquet(path)
     module = Module(
-        id="m1", type="Ingress", label="M1",
-        config={"format": "parquet", "path": path, "partition_filters": "id >= 5"}
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={"format": "parquet", "path": path, "partition_filters": "id >= 5"},
     )
     df = read_ingress(module, spark)
     assert df.count() == 5
@@ -389,8 +482,10 @@ def test_partition_filters_invalid_sql_raises(spark: SparkSession, tmp_path):
     spark.range(5).write.parquet(path)
     bad_filter = "id === INVALID_SYNTAX %%%"
     module = Module(
-        id="m1", type="Ingress", label="M1",
-        config={"format": "parquet", "path": path, "partition_filters": bad_filter}
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={"format": "parquet", "path": path, "partition_filters": bad_filter},
     )
     with pytest.raises(IngressError, match=r"partition_filters"):
         read_ingress(module, spark)
@@ -401,13 +496,15 @@ def test_partition_filters_applied_before_schema_hint(spark: SparkSession, tmp_p
     path = str(tmp_path / "pf_schema.parquet")
     spark.range(10).write.parquet(path)
     module = Module(
-        id="m1", type="Ingress", label="M1",
+        id="m1",
+        type="Ingress",
+        label="M1",
         config={
             "format": "parquet",
             "path": path,
             "partition_filters": "id < 5",
             "schema_hint": {"id": "bigint"},
-        }
+        },
     )
     df = read_ingress(module, spark)
     assert df.count() == 5
@@ -420,24 +517,27 @@ def test_partition_filters_with_date_comparison(spark: SparkSession, tmp_path):
     from datetime import date
 
     path = str(tmp_path / "pf_date.parquet")
-    spark.createDataFrame([
-        Row(id=1, event_date=date(2024, 1, 1)),
-        Row(id=2, event_date=date(2024, 6, 15)),
-        Row(id=3, event_date=date(2023, 12, 31)),
-    ]).write.parquet(path)
+    spark.createDataFrame(
+        [
+            Row(id=1, event_date=date(2024, 1, 1)),
+            Row(id=2, event_date=date(2024, 6, 15)),
+            Row(id=3, event_date=date(2023, 12, 31)),
+        ]
+    ).write.parquet(path)
 
     module = Module(
-        id="m1", type="Ingress", label="M1",
+        id="m1",
+        type="Ingress",
+        label="M1",
         config={
             "format": "parquet",
             "path": path,
             "partition_filters": "event_date >= '2024-01-01'",
-        }
+        },
     )
     df = read_ingress(module, spark)
     ids = sorted(r["id"] for r in df.collect())
     assert ids == [1, 2]
-
 
 
 def test_partition_filters_jdbc_applied_after_pathless_load(spark: SparkSession):
@@ -453,7 +553,9 @@ def test_partition_filters_jdbc_applied_after_pathless_load(spark: SparkSession)
     mock_reader.load.return_value = real_df
 
     module = Module(
-        id="jdbc_in", type="Ingress", label="JDBC",
+        id="jdbc_in",
+        type="Ingress",
+        label="JDBC",
         config={
             "format": "jdbc",
             "options": {
@@ -461,7 +563,7 @@ def test_partition_filters_jdbc_applied_after_pathless_load(spark: SparkSession)
                 "dbtable": "users",
             },
             "partition_filters": "id >= 5",
-        }
+        },
     )
 
     mock_spark = MagicMock()
@@ -493,16 +595,24 @@ from aqueduct.executor.spark.ingress import _apply_time_travel
 
 def test_time_travel_version_sets_option():
     reader = MagicMock()
-    module = Module(id="m1", type="Ingress", label="M1",
-                    config={"format": "delta", "path": "/t", "time_travel": {"version": 12}})
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={"format": "delta", "path": "/t", "time_travel": {"version": 12}},
+    )
     _apply_time_travel(module, reader)
     reader.option.assert_called_once_with("versionAsOf", 12)
 
 
 def test_time_travel_timestamp_sets_option():
     reader = MagicMock()
-    module = Module(id="m1", type="Ingress", label="M1",
-                    config={"format": "delta", "path": "/t", "time_travel": {"timestamp": "2026-01-01"}})
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={"format": "delta", "path": "/t", "time_travel": {"timestamp": "2026-01-01"}},
+    )
     _apply_time_travel(module, reader)
     reader.option.assert_called_once_with("timestampAsOf", "2026-01-01")
 
@@ -516,17 +626,24 @@ def test_time_travel_absent_is_noop():
 
 def test_time_travel_both_raises():
     reader = MagicMock()
-    module = Module(id="m1", type="Ingress", label="M1",
-                    config={"format": "delta", "path": "/t",
-                            "time_travel": {"version": 1, "timestamp": "x"}})
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={"format": "delta", "path": "/t", "time_travel": {"version": 1, "timestamp": "x"}},
+    )
     with pytest.raises(IngressError, match="not both"):
         _apply_time_travel(module, reader)
 
 
 def test_time_travel_empty_raises():
     reader = MagicMock()
-    module = Module(id="m1", type="Ingress", label="M1",
-                    config={"format": "delta", "path": "/t", "time_travel": {}})
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={"format": "delta", "path": "/t", "time_travel": {}},
+    )
     with pytest.raises(IngressError, match="requires 'version' or 'timestamp'"):
         _apply_time_travel(module, reader)
 
@@ -538,38 +655,63 @@ from aqueduct.executor.spark.ingress import _enforce_on_new_columns
 
 def test_ingress_on_new_columns_fail(spark: SparkSession):
     df = spark.createDataFrame([(1, "x")], ["id", "extra"])
-    module = Module(id="m1", type="Ingress", label="M1",
-                    config={"format": "parquet", "path": "/t", "on_new_columns": "fail",
-                            "known_columns": ["id"]})
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={
+            "format": "parquet",
+            "path": "/t",
+            "on_new_columns": "fail",
+            "known_columns": ["id"],
+        },
+    )
     with pytest.raises(IngressError, match="undeclared column"):
         _enforce_on_new_columns(module, df, None)
 
 
 def test_ingress_on_new_columns_alert_ok(spark: SparkSession):
     df = spark.createDataFrame([(1, "x")], ["id", "extra"])
-    module = Module(id="m1", type="Ingress", label="M1",
-                    config={"format": "parquet", "path": "/t", "on_new_columns": "alert",
-                            "known_columns": ["id"]})
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={
+            "format": "parquet",
+            "path": "/t",
+            "on_new_columns": "alert",
+            "known_columns": ["id"],
+        },
+    )
     _enforce_on_new_columns(module, df, None)  # warns, does not raise
     assert df.columns == ["id", "extra"]
 
 
 def test_ingress_on_new_columns_baseline_from_schema_hint(spark: SparkSession):
     df = spark.createDataFrame([(1, "x")], ["id", "extra"])
-    module = Module(id="m1", type="Ingress", label="M1",
-                    config={"format": "parquet", "path": "/t", "on_new_columns": "fail"})
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={"format": "parquet", "path": "/t", "on_new_columns": "fail"},
+    )
     with pytest.raises(IngressError, match="undeclared column"):
         _enforce_on_new_columns(module, df, [{"name": "id", "type": "int"}])
 
 
 def test_ingress_on_new_columns_no_baseline_skips(spark: SparkSession):
     df = spark.createDataFrame([(1, "x")], ["id", "extra"])
-    module = Module(id="m1", type="Ingress", label="M1",
-                    config={"format": "parquet", "path": "/t", "on_new_columns": "fail"})
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={"format": "parquet", "path": "/t", "on_new_columns": "fail"},
+    )
     _enforce_on_new_columns(module, df, None)  # no baseline → skip, no raise
 
 
 # ── Table-first addressing (catalog.schema.table) ──────────────────────────────
+
 
 def test_ingress_table_read_ok(spark: SparkSession):
     """table: reads from local session catalog."""
@@ -591,8 +733,12 @@ def test_ingress_table_missing_raises(spark: SparkSession):
 
 def test_ingress_table_and_path_mutually_exclusive(spark: SparkSession):
     """table: and path: together raise IngressError."""
-    module = Module(id="m1", type="Ingress", label="M1",
-                    config={"table": "t", "path": "/p", "format": "parquet"})
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={"table": "t", "path": "/p", "format": "parquet"},
+    )
     with pytest.raises(IngressError, match="mutually exclusive"):
         read_ingress(module, spark)
 
@@ -601,10 +747,15 @@ def test_ingress_table_with_schema_hint(spark: SparkSession):
     """table: with schema_hint — validates columns against catalog table."""
     spark.sql("DROP TABLE IF EXISTS _aq_test_schema_hint")
     spark.range(5).toDF("num").write.saveAsTable("_aq_test_schema_hint")
-    module = Module(id="m1", type="Ingress", label="M1", config={
-        "table": "_aq_test_schema_hint",
-        "schema_hint": [{"name": "num", "type": "bigint"}],
-    })
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={
+            "table": "_aq_test_schema_hint",
+            "schema_hint": [{"name": "num", "type": "bigint"}],
+        },
+    )
     df = read_ingress(module, spark)
     assert df.count() == 5
     spark.sql("DROP TABLE IF EXISTS _aq_test_schema_hint")
@@ -614,10 +765,15 @@ def test_ingress_table_with_partition_filters(spark: SparkSession):
     """table: with partition_filters — predicate is applied post-read."""
     spark.sql("DROP TABLE IF EXISTS _aq_test_part_filter")
     spark.range(10).toDF("num").write.saveAsTable("_aq_test_part_filter")
-    module = Module(id="m1", type="Ingress", label="M1", config={
-        "table": "_aq_test_part_filter",
-        "partition_filters": "num >= 5",
-    })
+    module = Module(
+        id="m1",
+        type="Ingress",
+        label="M1",
+        config={
+            "table": "_aq_test_part_filter",
+            "partition_filters": "num >= 5",
+        },
+    )
     df = read_ingress(module, spark)
     assert df.count() == 5
     spark.sql("DROP TABLE IF EXISTS _aq_test_part_filter")

@@ -80,7 +80,9 @@ def test_scaffolded_engine_cannot_register_until_verdicts_are_filled_in(tmp_path
     assert "UNDECLARED" in str(exc.value)
     assert "aqueduct dev capabilities sync" in str(exc.value)
     assert "Reinstall" not in str(exc.value)  # wrong advice for this state
-    assert len(exc.value.leaves) == len(governed_leaves(engine="toyengine", require_registered=False))
+    assert len(exc.value.leaves) == len(
+        governed_leaves(engine="toyengine", require_registered=False)
+    )
 
     # …and once every row is a real verdict, the same file loads.
     text = out.read_text(encoding="utf-8").replace(": undeclared", ": unsupported")
@@ -168,7 +170,9 @@ def test_sync_prunes_orphans_by_default(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     monkeypatch.setattr(tooling, "discover_declarations", lambda extra=None: [decl])
-    monkeypatch.setattr(tooling, "governed_leaves", lambda engine=None, **_: frozenset({"feature.a"}))
+    monkeypatch.setattr(
+        tooling, "governed_leaves", lambda engine=None, **_: frozenset({"feature.a"})
+    )
 
     result = CliRunner().invoke(cli, ["dev", "capabilities", "sync"])
     assert result.exit_code == 0
@@ -188,7 +192,9 @@ def test_sync_no_prune_flag_reports_orphans_without_deleting(tmp_path, monkeypat
         encoding="utf-8",
     )
     monkeypatch.setattr(tooling, "discover_declarations", lambda extra=None: [decl])
-    monkeypatch.setattr(tooling, "governed_leaves", lambda engine=None, **_: frozenset({"feature.a"}))
+    monkeypatch.setattr(
+        tooling, "governed_leaves", lambda engine=None, **_: frozenset({"feature.a"})
+    )
 
     result = CliRunner().invoke(cli, ["dev", "capabilities", "sync", "--no-prune"])
     assert result.exit_code == 0

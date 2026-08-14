@@ -32,9 +32,11 @@ _NOW = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
 
 
 def _module_results(engine: str | None) -> str:
-    return json.dumps([
-        {"module_id": "src", "status": "success", "error": None, "engine": engine},
-    ])
+    return json.dumps(
+        [
+            {"module_id": "src", "status": "success", "error": None, "engine": engine},
+        ]
+    )
 
 
 @pytest.fixture
@@ -46,23 +48,35 @@ def store(tmp_path):
     return st
 
 
-def _add_run(store, run_id, *, status="success", start, duration_s,
-             engine="spark", records=None):
+def _add_run(store, run_id, *, status="success", start, duration_s, engine="spark", records=None):
     with store.connect() as cur:
         cur.execute(
             "INSERT INTO run_records (run_id, blueprint_id, status, started_at, "
             "finished_at, module_results, parent_run_id) VALUES (?,?,?,?,?,?,NULL)",
-            [run_id, "bp", status, start.isoformat(),
-             (start + timedelta(seconds=duration_s)).isoformat(),
-             _module_results(engine)],
+            [
+                run_id,
+                "bp",
+                status,
+                start.isoformat(),
+                (start + timedelta(seconds=duration_s)).isoformat(),
+                _module_results(engine),
+            ],
         )
         if records is not None:
             cur.execute(
                 "INSERT INTO module_metrics (run_id, module_id, records_read, "
                 "bytes_read, records_written, bytes_written, duration_ms, captured_at)"
                 " VALUES (?,?,?,?,?,?,?,?)",
-                [run_id, "src", records, records * 10, records, records * 10,
-                 duration_s * 1000, _NOW.isoformat()],
+                [
+                    run_id,
+                    "src",
+                    records,
+                    records * 10,
+                    records,
+                    records * 10,
+                    duration_s * 1000,
+                    _NOW.isoformat(),
+                ],
             )
 
 
@@ -77,10 +91,12 @@ class TestRunEngines:
         assert run_engines([{"module_id": "a", "engine": "spark"}]) == ("spark",)
 
     def test_polyglot_run_reports_every_engine_sorted(self):
-        payload = json.dumps([
-            {"module_id": "a", "engine": "spark"},
-            {"module_id": "b", "engine": "duckdb"},
-        ])
+        payload = json.dumps(
+            [
+                {"module_id": "a", "engine": "spark"},
+                {"module_id": "b", "engine": "duckdb"},
+            ]
+        )
         assert run_engines(payload) == ("duckdb", "spark")
 
     def test_unstamped_row_is_unknown_not_a_default_engine(self):
@@ -110,8 +126,7 @@ class TestCapture:
 
     def test_a_failed_run_is_never_a_baseline(self, store):
         _add_run(store, "green", start=_NOW - timedelta(hours=5), duration_s=10)
-        _add_run(store, "red", status="error",
-                 start=_NOW - timedelta(hours=1), duration_s=2)
+        _add_run(store, "red", status="error", start=_NOW - timedelta(hours=1), duration_s=2)
         got = capture_baseline_perf(store, "bp", before=_NOW.isoformat())
         assert got is not None
         assert got.run_id == "green"
@@ -177,9 +192,13 @@ class TestCapture:
 
 def _perf(run_id="cur", duration_ms=100_000, engines=("spark",), records=None):
     return RunPerf(
-        run_id=run_id, status="success", started_at="2026-05-01T12:00:00+00:00",
-        finished_at="2026-05-01T12:01:40+00:00", duration_ms=duration_ms,
-        engines=engines, records_read=records,
+        run_id=run_id,
+        status="success",
+        started_at="2026-05-01T12:00:00+00:00",
+        finished_at="2026-05-01T12:01:40+00:00",
+        duration_ms=duration_ms,
+        engines=engines,
+        records_read=records,
     )
 
 
@@ -188,7 +207,8 @@ class TestComparePerf:
         obs = compare_perf(
             baseline=_perf("base", 50_000).to_dict(),
             current=_perf("cur", 160_000),
-            engine="spark", observed_at="t",
+            engine="spark",
+            observed_at="t",
         )
         assert obs.status == "observed"
         assert obs.duration_ratio == 3.2
@@ -201,12 +221,11 @@ class TestComparePerf:
         regression nothing measured a bound for.
         """
         for baseline, current in (
-            (_perf("b", 50_000).to_dict(), _perf("c", 500_000)),   # 10x slower
-            (_perf("b", 50_000).to_dict(), _perf("c", 5_000)),     # 10x faster
+            (_perf("b", 50_000).to_dict(), _perf("c", 500_000)),  # 10x slower
+            (_perf("b", 50_000).to_dict(), _perf("c", 5_000)),  # 10x faster
             (None, _perf("c", 5_000)),
         ):
-            obs = compare_perf(baseline=baseline, current=current,
-                               engine="spark", observed_at="t")
+            obs = compare_perf(baseline=baseline, current=current, engine="spark", observed_at="t")
             assert obs.status in ("observed", "not_applicable")
             assert obs.status not in ("pass", "fail", "warn")
 
@@ -214,14 +233,14 @@ class TestComparePerf:
         obs = compare_perf(
             baseline=_perf("b", 100_000).to_dict(),
             current=_perf("c", 25_000),
-            engine="spark", observed_at="t",
+            engine="spark",
+            observed_at="t",
         )
         assert obs.status == "observed"
         assert obs.duration_ratio == 0.25
 
     def test_no_baseline_is_not_applicable_and_says_why(self):
-        obs = compare_perf(baseline=None, current=_perf(),
-                           engine="spark", observed_at="t")
+        obs = compare_perf(baseline=None, current=_perf(), engine="spark", observed_at="t")
         assert obs.status == "not_applicable"
         assert "no green run" in obs.detail
         assert obs.duration_ratio is None
@@ -230,7 +249,8 @@ class TestComparePerf:
         obs = compare_perf(
             baseline=_perf("b", 50_000, engines=("spark",)).to_dict(),
             current=_perf("c", 160_000, engines=("duckdb",)),
-            engine="duckdb", observed_at="t",
+            engine="duckdb",
+            observed_at="t",
         )
         assert obs.status == "not_applicable"
         assert "duckdb" in obs.detail and "spark" in obs.detail
@@ -240,7 +260,8 @@ class TestComparePerf:
         obs = compare_perf(
             baseline=_perf("b", 50_000, engines=()).to_dict(),
             current=_perf("c", 160_000, engines=("spark",)),
-            engine="spark", observed_at="t",
+            engine="spark",
+            observed_at="t",
         )
         assert obs.status == "not_applicable"
         assert obs.duration_ratio is None
@@ -249,7 +270,8 @@ class TestComparePerf:
         obs = compare_perf(
             baseline=_perf("b", 50_000, records=None).to_dict(),
             current=_perf("c", 60_000, records=None),
-            engine="duckdb", observed_at="t",
+            engine="duckdb",
+            observed_at="t",
         )
         assert obs.status == "observed"
         assert VOLUME_UNAVAILABLE in obs.caveats
@@ -258,7 +280,8 @@ class TestComparePerf:
         obs = compare_perf(
             baseline=_perf("b", 50_000, records=1_000).to_dict(),
             current=_perf("c", 500_000, records=10_000),
-            engine="spark", observed_at="t",
+            engine="spark",
+            observed_at="t",
         )
         assert obs.status == "observed"
         assert any("input volume changed" in c for c in obs.caveats)
@@ -268,7 +291,8 @@ class TestComparePerf:
         obs = compare_perf(
             baseline=_perf("b", 50_000, records=1_000).to_dict(),
             current=_perf("c", 60_000, records=1_000),
-            engine="spark", observed_at="t",
+            engine="spark",
+            observed_at="t",
         )
         assert VOLUME_UNAVAILABLE not in obs.caveats
         assert not any("input volume changed" in c for c in obs.caveats)
@@ -277,14 +301,18 @@ class TestComparePerf:
         obs = compare_perf(
             baseline=_perf("b", 50_000, records=1).to_dict(),
             current=_perf("c", 60_000, records=1),
-            engine="spark", observed_at="t", co_applied_patches=3,
+            engine="spark",
+            observed_at="t",
+            co_applied_patches=3,
         )
         assert any("3 patches were applied" in c for c in obs.caveats)
 
     def test_detail_disclaims_a_verdict(self):
         obs = compare_perf(
-            baseline=_perf("b", 50_000).to_dict(), current=_perf("c", 150_000),
-            engine="spark", observed_at="t",
+            baseline=_perf("b", 50_000).to_dict(),
+            current=_perf("c", 150_000),
+            engine="spark",
+            observed_at="t",
         )
         assert "no regression threshold" in obs.detail
 
@@ -332,6 +360,7 @@ class TestStampPerfObservation:
         assert written[0]["status"] == "observed"
         assert written[0]["duration_ratio"] == 3.2
         import yaml
+
         rec = yaml.safe_load(bp.read_text())["healed_by"][0]
         assert len(rec["perf_observations"]) == 1
         assert rec["perf_observations"][0]["engine"] == "spark"
@@ -356,6 +385,7 @@ class TestStampPerfObservation:
         # Baseline ran on spark, this run on duckdb — refused, not compared.
         assert written[0]["status"] == "not_applicable"
         import yaml
+
         rec = yaml.safe_load(bp.read_text())["healed_by"][0]
         assert [o["engine"] for o in rec["perf_observations"]] == ["spark", "duckdb"]
 
@@ -367,9 +397,10 @@ class TestStampPerfObservation:
         assert bp.read_text() == before
 
     def test_missing_blueprint_returns_empty_and_does_not_raise(self, tmp_path, store):
-        assert stamp_perf_observation(
-            tmp_path / "nope.yml", "spark", obs_store=store, run_id="x"
-        ) == []
+        assert (
+            stamp_perf_observation(tmp_path / "nope.yml", "spark", obs_store=store, run_id="x")
+            == []
+        )
 
     def test_broken_store_never_fails_the_run(self, tmp_path):
         """The stamp is on the run-success path — it must never raise."""
@@ -392,26 +423,32 @@ class TestStampPerfObservation:
 
         bp = tmp_path / "bp.yml"
         bp.write_text(_BP_WITH_PROVENANCE.split("healed_by:")[0])
-        _add_run(store, "pre", start=_NOW - timedelta(days=1),
-                 duration_s=42, records=999)
+        _add_run(store, "pre", start=_NOW - timedelta(days=1), duration_s=42, records=999)
         patch = tmp_path / "p.json"
-        patch.write_text(json.dumps({
-            "patch_id": "p9",
-            "rationale": "repoint the source",
-            "operations": [{"op": "set_module_config_key", "module_id": "src",
-                            "key": "path", "value": "in2.parquet"}],
-            "_aq_meta": {"engine": "spark", "run_id": "r"},
-        }))
-        apply_patch_file(bp, patch, patches_dir=tmp_path / "patches",
-                         obs_store=store)
+        patch.write_text(
+            json.dumps(
+                {
+                    "patch_id": "p9",
+                    "rationale": "repoint the source",
+                    "operations": [
+                        {
+                            "op": "set_module_config_key",
+                            "module_id": "src",
+                            "key": "path",
+                            "value": "in2.parquet",
+                        }
+                    ],
+                    "_aq_meta": {"engine": "spark", "run_id": "r"},
+                }
+            )
+        )
+        apply_patch_file(bp, patch, patches_dir=tmp_path / "patches", obs_store=store)
         rec = yaml.safe_load(bp.read_text())["healed_by"][0]
         assert rec["perf_baseline"]["run_id"] == "pre"
         assert rec["perf_baseline"]["duration_ms"] == 42_000
         assert rec["perf_baseline"]["records_read"] == 999
 
-    def test_apply_omits_the_baseline_when_no_green_run_preceded_it(
-        self, tmp_path, store
-    ):
+    def test_apply_omits_the_baseline_when_no_green_run_preceded_it(self, tmp_path, store):
         import yaml
 
         from aqueduct.patch.apply import apply_patch_file
@@ -419,15 +456,24 @@ class TestStampPerfObservation:
         bp = tmp_path / "bp.yml"
         bp.write_text(_BP_WITH_PROVENANCE.split("healed_by:")[0])
         patch = tmp_path / "p.json"
-        patch.write_text(json.dumps({
-            "patch_id": "p9",
-            "rationale": "repoint the source",
-            "operations": [{"op": "set_module_config_key", "module_id": "src",
-                            "key": "path", "value": "in2.parquet"}],
-            "_aq_meta": {"engine": "spark", "run_id": "r"},
-        }))
-        apply_patch_file(bp, patch, patches_dir=tmp_path / "patches",
-                         obs_store=store)
+        patch.write_text(
+            json.dumps(
+                {
+                    "patch_id": "p9",
+                    "rationale": "repoint the source",
+                    "operations": [
+                        {
+                            "op": "set_module_config_key",
+                            "module_id": "src",
+                            "key": "path",
+                            "value": "in2.parquet",
+                        }
+                    ],
+                    "_aq_meta": {"engine": "spark", "run_id": "r"},
+                }
+            )
+        )
+        apply_patch_file(bp, patch, patches_dir=tmp_path / "patches", obs_store=store)
         rec = yaml.safe_load(bp.read_text())["healed_by"][0]
         assert "perf_baseline" not in rec
 

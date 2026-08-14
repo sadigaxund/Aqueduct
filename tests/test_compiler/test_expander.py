@@ -3,6 +3,7 @@
 from __future__ import annotations
 from pathlib import Path
 import pytest
+
 pytestmark = pytest.mark.unit
 from aqueduct.compiler.compiler import CompileError, compile
 from aqueduct.compiler.models import Manifest
@@ -223,6 +224,7 @@ class TestRegulatorCompileAway:
 
     def test_expand_arcades_returns_3_tuple(self):
         from aqueduct.compiler.expander import expand_arcades
+
         path = FIXTURES / "valid_with_arcade.yml"
         bp = parse(path)
         result = expand_arcades(bp.modules, bp.edges, path.parent)
@@ -234,6 +236,7 @@ class TestRegulatorCompileAway:
 
     def test_nested_arcade_provenance_tracked(self, tmp_path):
         from aqueduct.compiler.expander import expand_arcades
+
         nested_file = tmp_path / "nested.yml"
         nested_file.write_text(
             "aqueduct: '1.0'\nid: nested\nname: Nested\n"

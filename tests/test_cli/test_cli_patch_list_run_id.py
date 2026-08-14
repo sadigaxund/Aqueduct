@@ -6,6 +6,7 @@ Covers ⏳ items in TEST_MANIFEST.md § CLI / Trigger — patch_list JSON
   - JSON entries include run_id / blueprint_id / failed_module from _aq_meta
   - Older patches (no _aq_meta) → those fields are None
 """
+
 from __future__ import annotations
 
 import json
@@ -51,10 +52,14 @@ def test_patch_list_json_includes_run_id(tmp_path):
     result = runner.invoke(
         cli,
         [
-            "patch", "list",
-            "--patches-dir", str(patches),
-            "--status", "pending",
-            "--format", "json",
+            "patch",
+            "list",
+            "--patches-dir",
+            str(patches),
+            "--status",
+            "pending",
+            "--format",
+            "json",
         ],
     )
     assert result.exit_code == 0, result.output
@@ -87,10 +92,14 @@ def test_patch_list_json_handles_missing_aq_meta(tmp_path):
     result = runner.invoke(
         cli,
         [
-            "patch", "list",
-            "--patches-dir", str(patches),
-            "--status", "pending",
-            "--format", "json",
+            "patch",
+            "list",
+            "--patches-dir",
+            str(patches),
+            "--status",
+            "pending",
+            "--format",
+            "json",
         ],
     )
     assert result.exit_code == 0

@@ -55,16 +55,16 @@ from __future__ import annotations
 # either one is a relative path a `_register_java_udf` caller resolves
 # against the CWD unless anchored here first.
 _PATH_KEYS: dict[str, tuple[str, ...]] = {
-    "Ingress":  ("path",),
-    "Channel":  (),
-    "Egress":   ("path",),
+    "Ingress": ("path",),
+    "Channel": (),
+    "Egress": ("path",),
     "Junction": (),
-    "Funnel":   (),
-    "Probe":    (),
+    "Funnel": (),
+    "Probe": (),
     "Regulator": (),
-    "Arcade":   (),
-    "Assert":   (),
-    "UDF":      ("jar", "path"),
+    "Arcade": (),
+    "Assert": (),
+    "UDF": ("jar", "path"),
 }
 
 # Module types not in ``_PATH_KEYS`` fall back to this union. Empty now
@@ -93,8 +93,15 @@ PATHLESS_INGRESS_FORMATS: frozenset[str] = frozenset({"jdbc", "kafka", "depot"})
 # filesystem-based validation for remote paths. Engine-agnostic tuple
 # (no pyspark dependency).
 CLOUD_SCHEMES: tuple[str, ...] = (
-    "s3://", "s3a://", "s3n://", "hdfs://", "gs://",
-    "abfs://", "wasbs://", "wasb://", "dbfs://",
+    "s3://",
+    "s3a://",
+    "s3n://",
+    "hdfs://",
+    "gs://",
+    "abfs://",
+    "wasbs://",
+    "wasb://",
+    "dbfs://",
 )
 
 __all__ = ["get_path_keys", "PATHLESS_INGRESS_FORMATS", "CLOUD_SCHEMES"]

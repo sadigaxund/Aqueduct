@@ -3,6 +3,7 @@
 Pyspark-free: seeds module_metrics / run_records directly so it runs in the
 unit lane (no Spark, no executor import).
 """
+
 from __future__ import annotations
 
 import json
@@ -44,6 +45,7 @@ def _mm(c, run, mod, rw, bw, dur):
 
 # ── run-scoped profile ──────────────────────────────────────────────────────
 
+
 def test_profile_run_table_heaviest_first(tmp_path):
     c = _conn(tmp_path)
     _mm(c, "r1", "light", 10, 100, 50)
@@ -63,7 +65,9 @@ def test_profile_run_json_shape(tmp_path):
     _mm(c, "r1", "b", 20, 200, 150)
     c.close()
 
-    res = CliRunner().invoke(cli, ["report", "r1", "--profile", "--store-dir", str(tmp_path), "--format", "json"])
+    res = CliRunner().invoke(
+        cli, ["report", "r1", "--profile", "--store-dir", str(tmp_path), "--format", "json"]
+    )
     assert res.exit_code == 0, res.output
     out = json.loads(res.output)
     assert out["total_duration_ms"] == 200
@@ -79,16 +83,21 @@ def test_profile_run_no_metrics(tmp_path):
 
 # ── trend profile ───────────────────────────────────────────────────────────
 
+
 def test_profile_trend_flags_slowdown(tmp_path):
     c = _conn(tmp_path)
-    for i, (run, ts) in enumerate([("r1", "2026-06-17"), ("r2", "2026-06-18"), ("r3", "2026-06-19")]):
+    for i, (run, ts) in enumerate(
+        [("r1", "2026-06-17"), ("r2", "2026-06-18"), ("r3", "2026-06-19")]
+    ):
         c.execute("INSERT INTO run_records VALUES (?, 'bp', ?)", [run, ts + "T00:00:00+00:00"])
     _mm(c, "r1", "m", 100, 100, 100)
     _mm(c, "r2", "m", 100, 100, 120)
     _mm(c, "r3", "m", 100, 100, 5000)  # latest run 5000 >> avg → slowdown
     c.close()
 
-    res = CliRunner().invoke(cli, ["report", "--profile", "--blueprint", "bp", "--store-dir", str(tmp_path)])
+    res = CliRunner().invoke(
+        cli, ["report", "--profile", "--blueprint", "bp", "--store-dir", str(tmp_path)]
+    )
     assert res.exit_code == 0, res.output
     assert "slowdown" in res.output
 

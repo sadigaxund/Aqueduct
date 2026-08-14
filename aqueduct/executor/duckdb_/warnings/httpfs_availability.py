@@ -36,7 +36,16 @@ logger = logging.getLogger(__name__)
 
 RULE_ID = "duckdb_httpfs_availability"
 
-_REMOTE_SCHEMES: tuple[str, ...] = ("s3://", "s3a://", "s3n://", "gs://", "gcs://", "azure://", "abfss://", "r2://")
+_REMOTE_SCHEMES: tuple[str, ...] = (
+    "s3://",
+    "s3a://",
+    "s3n://",
+    "gs://",
+    "gcs://",
+    "azure://",
+    "abfss://",
+    "r2://",
+)
 
 
 def _remote_paths_in_blueprint(manifest: Any) -> dict[str, list[str]]:

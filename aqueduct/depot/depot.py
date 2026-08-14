@@ -53,6 +53,7 @@ class DepotStore:
             self._backend = backend
         elif db_path is not None:
             from aqueduct.stores.duckdb_ import DuckDBDepotStore
+
             self._backend = DuckDBDepotStore(db_path)
         else:
             raise TypeError("DepotStore requires either db_path or backend")

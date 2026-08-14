@@ -96,7 +96,9 @@ class Manifest:
                     "enabled": m.enabled,
                     "disabled_reason": m.disabled_reason,
                     "retry": (
-                        None if m.retry is None else {
+                        None
+                        if m.retry is None
+                        else {
                             "max_attempts": m.retry.max_attempts,
                             "backoff_strategy": m.retry.backoff_strategy,
                             "backoff_base_seconds": m.retry.backoff_base_seconds,
@@ -143,8 +145,11 @@ class Manifest:
             "hooks": {
                 event: [
                     {
-                        "kind": h.kind, "value": h.value, "timeout": h.timeout,
-                        "when_error": list(h.when_error), "in_process": h.in_process,
+                        "kind": h.kind,
+                        "value": h.value,
+                        "timeout": h.timeout,
+                        "when_error": list(h.when_error),
+                        "in_process": h.in_process,
                     }
                     for h in getattr(self.hooks, event)
                 ]

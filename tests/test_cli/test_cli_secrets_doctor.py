@@ -11,8 +11,8 @@ pytestmark = pytest.mark.unit
 
 from aqueduct.doctor import CheckResult, check_secrets, _check_heal_guardrail_typos
 
-
 # ── check_secrets() ───────────────────────────────────────────────────────────
+
 
 class TestCheckSecrets:
     def test_env_provider_always_ok(self):
@@ -51,6 +51,7 @@ class TestCheckSecrets:
 
     def test_custom_valid_resolver_ok(self):
         import types
+
         mod = types.ModuleType("_check_secrets_test_mod")
         mod.fetch = lambda key: "val"
         sys.modules["_check_secrets_test_mod"] = mod
@@ -62,6 +63,7 @@ class TestCheckSecrets:
 
 
 # ── _check_heal_guardrail_typos() ─────────────────────────────────────────────
+
 
 def _make_mock_manifest(heal_on=(), never_heal=(), assert_modules=()):
     """Build a minimal manifest-like object for typo detection tests."""
@@ -93,16 +95,14 @@ class TestHealGuardrailTypos:
 
     def test_matching_error_type_no_warning(self):
         manifest = _make_mock_manifest(
-            heal_on=["EmptyDataset"],
-            assert_modules=[("assert1", ["EmptyDataset"])]
+            heal_on=["EmptyDataset"], assert_modules=[("assert1", ["EmptyDataset"])]
         )
         results = _check_heal_guardrail_typos(manifest)
         assert not any(r.name == "guardrail_typo" for r in results)
 
     def test_non_matching_heal_on_warns(self):
         manifest = _make_mock_manifest(
-            heal_on=["TypoedErrorType"],
-            assert_modules=[("assert1", ["EmptyDataset"])]
+            heal_on=["TypoedErrorType"], assert_modules=[("assert1", ["EmptyDataset"])]
         )
         results = _check_heal_guardrail_typos(manifest)
         assert len(results) == 1
@@ -111,17 +111,13 @@ class TestHealGuardrailTypos:
 
     def test_never_heal_typo_warns(self):
         manifest = _make_mock_manifest(
-            never_heal=["BadTypo"],
-            assert_modules=[("assert1", ["RealError"])]
+            never_heal=["BadTypo"], assert_modules=[("assert1", ["RealError"])]
         )
         results = _check_heal_guardrail_typos(manifest)
         assert any("BadTypo" in r.detail for r in results)
 
     def test_no_assert_modules_any_entry_warns(self):
-        manifest = _make_mock_manifest(
-            heal_on=["SomeError"],
-            assert_modules=[]
-        )
+        manifest = _make_mock_manifest(heal_on=["SomeError"], assert_modules=[])
         results = _check_heal_guardrail_typos(manifest)
         assert len(results) == 1
         assert results[0].status == "warn"

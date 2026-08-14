@@ -33,7 +33,9 @@ def check(manifest: Any, engine: str = "spark") -> list[str]:
         fmt = (cfg.get("format") or "").lower()
         if fmt not in _PROBLEM_FORMATS:
             continue
-        has_partition = bool(cfg.get("partition_by") or cfg.get("repartition") or cfg.get("coalesce"))
+        has_partition = bool(
+            cfg.get("partition_by") or cfg.get("repartition") or cfg.get("coalesce")
+        )
         if has_partition:
             continue
         out.append(

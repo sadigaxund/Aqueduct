@@ -39,8 +39,10 @@ def manifest():
 def _failing_result(exc: BaseException) -> ExecutionResult:
     mr = ModuleResult(module_id="m1", status=ExecutionStatus.ERROR, error=str(exc))
     return ExecutionResult(
-        run_id="run1", blueprint_id="engine-wiring-test",
-        status=ExecutionStatus.ERROR, module_results=(mr,),
+        run_id="run1",
+        blueprint_id="engine-wiring-test",
+        status=ExecutionStatus.ERROR,
+        module_results=(mr,),
     )
 
 
@@ -65,7 +67,7 @@ def test_duckdb_failure_routes_through_duckdb_extractor(manifest, tmp_path):
     surveyor.start("run1")
 
     try:
-        duckdb.sql('SELECT nonexistent_col FROM (SELECT 1 AS a)')
+        duckdb.sql("SELECT nonexistent_col FROM (SELECT 1 AS a)")
         pytest.fail("expected duckdb.Error")
     except duckdb.Error as exc:
         live_exc: BaseException = exc
@@ -180,10 +182,14 @@ def test_two_engines_same_error_text_different_signatures():
     from aqueduct.surveyor.models import FailureContext
 
     common_kwargs = dict(
-        run_id="r1", blueprint_id="b1", failed_module="m1",
+        run_id="r1",
+        blueprint_id="b1",
+        failed_module="m1",
         error_message="No such file or directory: '/data/in.csv'",
-        stack_trace="", manifest_json="{}",
-        started_at="2024-01-01", finished_at="2024-01-01",
+        stack_trace="",
+        manifest_json="{}",
+        started_at="2024-01-01",
+        finished_at="2024-01-01",
     )
     ctx_spark = FailureContext(engine="spark", **common_kwargs)
     ctx_duckdb = FailureContext(engine="duckdb", **common_kwargs)

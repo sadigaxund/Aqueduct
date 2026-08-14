@@ -35,8 +35,10 @@ def _set_placeholder_env(path: Path, monkeypatch) -> None:
 def test_capability_gate_is_noop_for_snippet(bp_path, monkeypatch):
     _set_placeholder_env(bp_path, monkeypatch)
     manifest = compile_bp(
-        parse(bp_path), blueprint_path=bp_path,
-        deployment_env="local", deployment_target="local",
+        parse(bp_path),
+        blueprint_path=bp_path,
+        deployment_env="local",
+        deployment_target="local",
         engine="spark",
     )
     problems = check_capabilities(manifest, engine="spark")

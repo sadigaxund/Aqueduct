@@ -127,10 +127,23 @@ def upsert(cur: RelationalCursor, row: PatchIndexRow) -> None:
             engine             = EXCLUDED.engine
         """,
         [
-            row.patch_id, row.blueprint_id, row.run_id, row.status, row.object_key,
-            row.signature, row.signature_coarse, row.error_class, row.where_field,
-            row.normalized_message, row.rationale, _json.dumps(list(row.ops)),
-            row.source, row.prompt_version, now, now, row.engine,
+            row.patch_id,
+            row.blueprint_id,
+            row.run_id,
+            row.status,
+            row.object_key,
+            row.signature,
+            row.signature_coarse,
+            row.error_class,
+            row.where_field,
+            row.normalized_message,
+            row.rationale,
+            _json.dumps(list(row.ops)),
+            row.source,
+            row.prompt_version,
+            now,
+            now,
+            row.engine,
         ],
     )
 
@@ -168,9 +181,22 @@ def _row_to_dict(cols: list[str], row: Any) -> dict:
 
 
 _SELECT_COLS = [
-    "patch_id", "blueprint_id", "run_id", "status", "object_key", "signature",
-    "signature_coarse", "error_class", "where_field", "normalized_message",
-    "rationale", "ops", "source", "prompt_version", "created_at", "updated_at",
+    "patch_id",
+    "blueprint_id",
+    "run_id",
+    "status",
+    "object_key",
+    "signature",
+    "signature_coarse",
+    "error_class",
+    "where_field",
+    "normalized_message",
+    "rationale",
+    "ops",
+    "source",
+    "prompt_version",
+    "created_at",
+    "updated_at",
     "engine",
 ]
 _SELECT = ", ".join(_SELECT_COLS)
@@ -199,9 +225,7 @@ def find_pending(cur: RelationalCursor, signature: str) -> dict | None:
     return _row_to_dict(_SELECT_COLS, r) if r else None
 
 
-def find_replay(
-    cur: RelationalCursor, signature: str, successful_ids: set[str]
-) -> dict | None:
+def find_replay(cur: RelationalCursor, signature: str, successful_ids: set[str]) -> dict | None:
     """Newest applied patch matching the signature AND confirmed successful.
 
     ``successful_ids`` comes from ``healing_outcomes.run_success_after_patch``

@@ -19,15 +19,21 @@ from aqueduct.parser.parser import ParseError, parse_dict
 pytestmark = pytest.mark.unit
 
 _SINGLE_MODULE = [
-    {"id": "src", "type": "Ingress", "label": "Source",
-     "config": {"format": "parquet", "path": "s3://bucket/in.parquet"}}
+    {
+        "id": "src",
+        "type": "Ingress",
+        "label": "Source",
+        "config": {"format": "parquet", "path": "s3://bucket/in.parquet"},
+    }
 ]
 BASE_DIR = Path(".")
 
 
 def _make_raw(agent: dict[str, Any] | None = None) -> dict[str, Any]:
     raw: dict[str, Any] = {
-        "aqueduct": "1.0", "id": "test_approval", "name": "Approval Test",
+        "aqueduct": "1.0",
+        "id": "test_approval",
+        "name": "Approval Test",
         "modules": _SINGLE_MODULE,
     }
     if agent is not None:
@@ -75,6 +81,7 @@ class TestApprovalAbsent:
 class TestApprovalSetRouting:
     def test_set_approval_routes_to_blueprint(self):
         from aqueduct.overrides import route_overrides
+
         cfg, bp = route_overrides(["agent.approval=auto"], allow_blueprint=True)
         assert bp == {"agent": {"approval": "auto"}}
         assert cfg == {}

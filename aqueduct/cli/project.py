@@ -3,6 +3,7 @@
 No behaviour change. The click group + shared helpers come from the package;
 commands register onto `cli` when imported at the bottom of __init__.
 """
+
 from __future__ import annotations
 
 import sys
@@ -37,6 +38,7 @@ def completion_cmd(shell: str) -> None:
     command after upgrading Aqueduct to refresh the script.
     """
     from click.shell_completion import get_completion_class
+
     comp_cls = get_completion_class(shell)
     if comp_cls is None:
         raise click.ClickException(f"Unsupported shell: {shell!r}")
@@ -44,8 +46,8 @@ def completion_cmd(shell: str) -> None:
     click.echo(comp.source())
 
 
-
 # ── aqueduct test ────────────────────────────────────────────────────────────
+
 
 @cli.command("test")
 @click.argument("test_file", type=click.Path(exists=True, dir_okay=False))
@@ -123,9 +125,11 @@ def test_cmd(
     try:
         _resolve_and_load_env(
             env_file,
-            Path(config_path) if config_path
-            else Path(blueprint_path) if blueprint_path
-            else Path(test_file),
+            (
+                Path(config_path)
+                if config_path
+                else Path(blueprint_path) if blueprint_path else Path(test_file)
+            ),
             cli_env=cli_env,
         )
         cfg = load_config(Path(config_path) if config_path else None)
@@ -203,7 +207,6 @@ def test_cmd(
         _success(f"all {suite.passed} test(s) passed")
 
 
-
 # ── aqueduct init ─────────────────────────────────────────────────────────────
 
 
@@ -260,10 +263,14 @@ def init() -> None:
 
     # Git
     try:
-        in_git = subprocess.run(
-            ["git", "rev-parse", "--git-dir"],
-            capture_output=True, cwd=cwd,
-        ).returncode == 0
+        in_git = (
+            subprocess.run(
+                ["git", "rev-parse", "--git-dir"],
+                capture_output=True,
+                cwd=cwd,
+            ).returncode
+            == 0
+        )
 
         if not in_git:
             r = subprocess.run(["git", "init"], capture_output=True, text=True, cwd=cwd)
@@ -277,7 +284,9 @@ def init() -> None:
         if add.returncode == 0:
             commit = subprocess.run(
                 ["git", "commit", "-m", f"init: aqueduct project ({project_name})"],
-                capture_output=True, text=True, cwd=cwd,
+                capture_output=True,
+                text=True,
+                cwd=cwd,
             )
             if commit.returncode == 0:
                 click.echo("  git commit  init: aqueduct project")
@@ -293,4 +302,3 @@ def init() -> None:
     click.echo("  1. Create blueprints/<name>.yml  (see blueprint.template.yml for reference)")
     click.echo("  2. aqueduct validate blueprints/<name>.yml")
     click.echo("  3. aqueduct run blueprints/<name>.yml")
-

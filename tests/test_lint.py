@@ -57,7 +57,8 @@ edges:
 
 class TestUnusedModule:
     def test_orphan_module_detected(self, tmp_path):
-        p = bp_yml("""
+        p = bp_yml(
+            """
 aqueduct: "1.0"
 id: lint_orphan
 name: Orphan
@@ -77,7 +78,8 @@ modules:
 edges:
   - from: src
     to: sink
-""")
+"""
+        )
         bp = parse(str(p))
         findings = run_lint(bp)
         f001 = [f for f in findings if f.rule_id == "AQ-LINT001"]
@@ -91,7 +93,8 @@ edges:
         assert "run will fail" in f001[0].message
 
     def test_single_module_no_finding(self, tmp_path):
-        p = bp_yml("""
+        p = bp_yml(
+            """
 aqueduct: "1.0"
 id: lint_single
 name: Single
@@ -100,13 +103,15 @@ modules:
     type: Ingress
     label: Source
     config: {format: parquet, path: data/in.parquet}
-""")
+"""
+        )
         bp = parse(str(p))
         findings = run_lint(bp)
         assert not any(f.rule_id == "AQ-LINT001" for f in findings)
 
     def test_probe_with_attach_to_not_flagged(self, tmp_path):
-        p = bp_yml("""
+        p = bp_yml(
+            """
 aqueduct: "1.0"
 id: lint_probe
 name: Probe Attached
@@ -127,7 +132,8 @@ modules:
 edges:
   - from: src
     to: sink
-""")
+"""
+        )
         bp = parse(str(p))
         findings = run_lint(bp)
         assert not any(f.rule_id == "AQ-LINT001" for f in findings)
@@ -163,7 +169,8 @@ class TestLabel:
 
 class TestDuplicateEdge:
     def test_duplicate_detected(self, tmp_path):
-        p = bp_yml("""
+        p = bp_yml(
+            """
 aqueduct: "1.0"
 id: lint_dup
 name: Dup
@@ -181,7 +188,8 @@ edges:
     to: b
   - from: a
     to: b
-""")
+"""
+        )
         bp = parse(str(p))
         findings = run_lint(bp)
         f003 = [f for f in findings if f.rule_id == "AQ-LINT003"]
@@ -200,7 +208,8 @@ edges:
 
 class TestSelfJoinCollision:
     def test_unaliased_self_join_detected(self, tmp_path):
-        p = bp_yml("""
+        p = bp_yml(
+            """
 aqueduct: "1.0"
 id: lint_sj
 name: SelfJoin
@@ -224,14 +233,16 @@ edges:
     to: ch
   - from: ch
     to: sink
-""")
+"""
+        )
         bp = parse(str(p))
         findings = run_lint(bp)
         f004 = [f for f in findings if f.rule_id == "AQ-LINT004"]
         assert len(f004) == 1
 
     def test_distinct_aliases_clean(self, tmp_path):
-        p = bp_yml("""
+        p = bp_yml(
+            """
 aqueduct: "1.0"
 id: lint_sj_ok
 name: SelfJoinOK
@@ -255,7 +266,8 @@ edges:
     to: ch
   - from: ch
     to: sink
-""")
+"""
+        )
         bp = parse(str(p))
         findings = run_lint(bp)
         assert not any(f.rule_id == "AQ-LINT004" for f in findings)
@@ -264,7 +276,8 @@ edges:
         """Regression (audit 2026-08-01): keying on `tbl.name` alone treated
         `sales.orders` and `hr.orders` — two distinct, fully-qualified
         relations that happen to share a bare table name — as a self-join."""
-        p = bp_yml("""
+        p = bp_yml(
+            """
 aqueduct: "1.0"
 id: lint_sj_qualified
 name: SelfJoinQualified
@@ -288,7 +301,8 @@ edges:
     to: ch
   - from: ch
     to: sink
-""")
+"""
+        )
         bp = parse(str(p))
         findings = run_lint(bp)
         assert not any(f.rule_id == "AQ-LINT004" for f in findings)
@@ -299,7 +313,8 @@ edges:
         reference to the outer table of the same name — `t JOIN (SELECT *
         FROM t) sub` is a legal, non-ambiguous query (the inner `t` is
         scoped to `sub`), not a self-join collision."""
-        p = bp_yml("""
+        p = bp_yml(
+            """
 aqueduct: "1.0"
 id: lint_sj_subquery
 name: SelfJoinSubquery
@@ -323,7 +338,8 @@ edges:
     to: ch
   - from: ch
     to: sink
-""")
+"""
+        )
         bp = parse(str(p))
         findings = run_lint(bp)
         assert not any(f.rule_id == "AQ-LINT004" for f in findings)
@@ -334,7 +350,8 @@ edges:
 
 class TestCartesianJoin:
     def test_join_without_on_detected(self, tmp_path):
-        p = bp_yml("""
+        p = bp_yml(
+            """
 aqueduct: "1.0"
 id: lint_cart
 name: Cartesian
@@ -364,14 +381,16 @@ edges:
     to: ch
   - from: ch
     to: sink
-""")
+"""
+        )
         bp = parse(str(p))
         findings = run_lint(bp)
         f010 = [f for f in findings if f.rule_id == "AQ-LINT010"]
         assert len(f010) == 1
 
     def test_join_with_on_clean(self, tmp_path):
-        p = bp_yml("""
+        p = bp_yml(
+            """
 aqueduct: "1.0"
 id: lint_cart_ok
 name: CartesianOK
@@ -401,13 +420,15 @@ edges:
     to: ch
   - from: ch
     to: sink
-""")
+"""
+        )
         bp = parse(str(p))
         findings = run_lint(bp)
         assert not any(f.rule_id == "AQ-LINT010" for f in findings)
 
     def test_cross_join_not_flagged(self, tmp_path):
-        p = bp_yml("""
+        p = bp_yml(
+            """
 aqueduct: "1.0"
 id: lint_cross
 name: Cross
@@ -437,7 +458,8 @@ edges:
     to: ch
   - from: ch
     to: sink
-""")
+"""
+        )
         bp = parse(str(p))
         findings = run_lint(bp)
         assert not any(f.rule_id == "AQ-LINT010" for f in findings)
@@ -455,7 +477,8 @@ class TestStarIntoEgress:
         assert len(f011) == 1
 
     def test_select_star_not_feeding_egress_clean(self, tmp_path):
-        p = bp_yml("""
+        p = bp_yml(
+            """
 aqueduct: "1.0"
 id: lint_star_ok
 name: StarOK
@@ -473,7 +496,8 @@ modules:
 edges:
   - from: src
     to: ch
-""")
+"""
+        )
         bp = parse(str(p))
         findings = run_lint(bp)
         assert not any(f.rule_id == "AQ-LINT011" for f in findings)
@@ -483,7 +507,8 @@ edges:
         `port == "main"` edges (an include-list), so a Channel's `spillway`
         edge into a quarantine Egress — a documented pattern — was invisible
         to this rule even though it is a direct data feed into an Egress."""
-        p = bp_yml("""
+        p = bp_yml(
+            """
 aqueduct: "1.0"
 id: lint_star_spillway
 name: StarSpillway
@@ -509,7 +534,8 @@ edges:
   - from: ch
     to: quarantine
     port: spillway
-""")
+"""
+        )
         bp = parse(str(p))
         findings = run_lint(bp)
         f011 = [f for f in findings if f.rule_id == "AQ-LINT011"]
@@ -522,7 +548,8 @@ edges:
 
 class TestGroupByMismatch:
     def test_agg_without_groupby_detected(self, tmp_path):
-        p = bp_yml("""
+        p = bp_yml(
+            """
 aqueduct: "1.0"
 id: lint_gb
 name: GroupBy
@@ -546,14 +573,16 @@ edges:
     to: ch
   - from: ch
     to: sink
-""")
+"""
+        )
         bp = parse(str(p))
         findings = run_lint(bp)
         f012 = [f for f in findings if f.rule_id == "AQ-LINT012"]
         assert len(f012) == 1
 
     def test_with_groupby_clean(self, tmp_path):
-        p = bp_yml("""
+        p = bp_yml(
+            """
 aqueduct: "1.0"
 id: lint_gb_ok
 name: GroupByOK
@@ -577,7 +606,8 @@ edges:
     to: ch
   - from: ch
     to: sink
-""")
+"""
+        )
         bp = parse(str(p))
         findings = run_lint(bp)
         assert not any(f.rule_id == "AQ-LINT012" for f in findings)
@@ -589,7 +619,8 @@ edges:
         GROUP BY) was flagged with a fix ("add a GROUP BY clause") that
         collapses the per-row window result and changes the query's
         meaning."""
-        p = bp_yml("""
+        p = bp_yml(
+            """
 aqueduct: "1.0"
 id: lint_gb_window
 name: GroupByWindow
@@ -613,7 +644,8 @@ edges:
     to: ch
   - from: ch
     to: sink
-""")
+"""
+        )
         bp = parse(str(p))
         findings = run_lint(bp)
         assert not any(f.rule_id == "AQ-LINT012" for f in findings)
@@ -623,7 +655,8 @@ edges:
         subquery projection belongs to that subquery's own self-contained
         scope, not to the outer SELECT's aggregation — a bare column
         alongside it needs no GROUP BY on the outer query."""
-        p = bp_yml("""
+        p = bp_yml(
+            """
 aqueduct: "1.0"
 id: lint_gb_subquery
 name: GroupBySubquery
@@ -647,7 +680,8 @@ edges:
     to: ch
   - from: ch
     to: sink
-""")
+"""
+        )
         bp = parse(str(p))
         findings = run_lint(bp)
         assert not any(f.rule_id == "AQ-LINT012" for f in findings)
@@ -658,7 +692,8 @@ edges:
 
 class TestRunLintResilience:
     def test_unparseable_sql_skipped(self, tmp_path):
-        p = bp_yml("""
+        p = bp_yml(
+            """
 aqueduct: "1.0"
 id: lint_bad_sql
 name: BadSQL
@@ -682,14 +717,17 @@ edges:
     to: ch
   - from: ch
     to: sink
-""")
+"""
+        )
         bp = parse(str(p))
         findings = run_lint(bp)
-        assert not any(f.rule_id.startswith("AQ-LINT01") for f in findings
-                       if f.rule_id != "AQ-LINT011")
+        assert not any(
+            f.rule_id.startswith("AQ-LINT01") for f in findings if f.rule_id != "AQ-LINT011"
+        )
 
     def test_findings_sorted_by_rule_id_then_module(self, tmp_path):
-        p = bp_yml("""
+        p = bp_yml(
+            """
 aqueduct: "1.0"
 id: lint_sorted
 name: Sorted
@@ -711,7 +749,8 @@ edges:
     to: sink
   - from: a_mod
     to: sink
-""")
+"""
+        )
         bp = parse(str(p))
         findings = run_lint(bp)
         for i in range(len(findings) - 1):

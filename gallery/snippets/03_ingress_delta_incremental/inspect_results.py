@@ -5,10 +5,13 @@ import os
 
 console = Console()
 
+
 def main():
     path = "data/output/output.parquet"
     if not os.path.exists(path):
-        console.print(f"[bold red]✗[/bold red] {path} not found — did you run 'aqueduct run blueprint.yml'?")
+        console.print(
+            f"[bold red]✗[/bold red] {path} not found — did you run 'aqueduct run blueprint.yml'?"
+        )
         return
 
     console.print(f"[bold green]✓[/bold green] Found results. Reading...\n")
@@ -20,7 +23,10 @@ def main():
         t.add_row(*[str(v) for v in r])
     console.print(t)
     console.print(f"[dim]  Row count: {len(df)}[/dim]")
-    console.print("\n[dim]versionAsOf: 2 reads an older snapshot of the Delta table, before new rows were appended.[/dim]")
+    console.print(
+        "\n[dim]versionAsOf: 2 reads an older snapshot of the Delta table, before new rows were appended.[/dim]"
+    )
+
 
 if __name__ == "__main__":
     main()

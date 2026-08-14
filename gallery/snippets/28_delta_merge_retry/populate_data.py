@@ -20,17 +20,23 @@ def write_csv(filename, rows):
 
 
 def create_csvs():
-    write_csv("orders.csv", [
-        ["order_id", "customer", "amount"],
-        ["101", "Alice", "100.0"],
-        ["102", "Bob", "200.0"],
-        ["103", "Charlie", "150.0"],
-    ])
-    write_csv("updates.csv", [
-        ["order_id", "customer", "amount"],
-        ["101", "Alice", "110.0"],
-        ["104", "Diana", "250.0"],
-    ])
+    write_csv(
+        "orders.csv",
+        [
+            ["order_id", "customer", "amount"],
+            ["101", "Alice", "100.0"],
+            ["102", "Bob", "200.0"],
+            ["103", "Charlie", "150.0"],
+        ],
+    )
+    write_csv(
+        "updates.csv",
+        [
+            ["order_id", "customer", "amount"],
+            ["101", "Alice", "110.0"],
+            ["104", "Diana", "250.0"],
+        ],
+    )
 
 
 def create_delta_table():
@@ -51,16 +57,23 @@ def create_delta_table():
     if target.exists():
         shutil.rmtree(target)
 
-    spark = SparkSession.builder \
-        .appName("PopulateDeltaOrders") \
-        .master("local[*]") \
-        .config("spark.jars.packages", delta_pkg) \
-        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
-        .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
-        .config("spark.log.level", "WARN") \
+    spark = (
+        SparkSession.builder.appName("PopulateDeltaOrders")
+        .master("local[*]")
+        .config("spark.jars.packages", delta_pkg)
+        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+        .config(
+            "spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog"
+        )
+        .config("spark.log.level", "WARN")
         .getOrCreate()
+    )
 
-    df = spark.read.option("header", "true").option("inferSchema", "true").csv(str(Path(DATA_DIR) / "orders.csv"))
+    df = (
+        spark.read.option("header", "true")
+        .option("inferSchema", "true")
+        .csv(str(Path(DATA_DIR) / "orders.csv"))
+    )
     df.write.format("delta").mode("overwrite").save(str(target))
     print(f"Created initial Delta table at {target} with {df.count()} rows")
     spark.stop()

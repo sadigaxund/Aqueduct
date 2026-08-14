@@ -78,12 +78,12 @@ def _to_ruamel(data: Any) -> Any:
     return _ryaml.load(buf.getvalue())
 
 
-
 class PatchOperationError(AqueductError):
     """Raised when an operation cannot be applied to the Blueprint."""
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _find_module(bp: dict, module_id: str) -> dict:
     """Return the module dict with the given id.  Raises PatchOperationError if missing."""
@@ -105,13 +105,11 @@ def _find_module(bp: dict, module_id: str) -> dict:
     # deterministic, no extra dependency. We DO NOT auto-substitute; the
     # nearest match is a hint for the model, not an interpretive recovery.
     import difflib as _difflib
+
     ranked = _difflib.get_close_matches(module_id, available, n=3, cutoff=0.4)
-    closest_hint = (
-        f" Closest match: {ranked[0]!r}." if ranked else ""
-    )
+    closest_hint = f" Closest match: {ranked[0]!r}." if ranked else ""
     raise PatchOperationError(
-        f"Module {module_id!r} not found in Blueprint.{closest_hint} "
-        f"Available: {available}"
+        f"Module {module_id!r} not found in Blueprint.{closest_hint} " f"Available: {available}"
     )
 
 
@@ -122,9 +120,7 @@ def _find_edge_index(bp: dict, from_id: str, to_id: str) -> int:
     for i, edge in enumerate(bp.get("edges", [])):
         if edge.get("from") == from_id and edge.get("to") == to_id:
             return i
-    raise PatchOperationError(
-        f"Edge {from_id!r} → {to_id!r} not found in Blueprint."
-    )
+    raise PatchOperationError(f"Edge {from_id!r} → {to_id!r} not found in Blueprint.")
 
 
 def _set_nested(d: dict, dot_key: str, value: Any) -> None:
@@ -154,7 +150,8 @@ def _remove_edges_matching(bp: dict, edge_specs: list[dict]) -> None:
         to_id = spec.get("to")
         original_len = len(bp.get("edges", []))
         bp["edges"] = [
-            e for e in bp.get("edges", [])
+            e
+            for e in bp.get("edges", [])
             if not (e.get("from") == from_id and e.get("to") == to_id)
         ]
         if len(bp.get("edges", [])) == original_len:
@@ -169,13 +166,12 @@ def _add_edges(bp: dict, edge_specs: list[dict]) -> None:
     bp.setdefault("edges", [])
     for spec in edge_specs:
         if "from" not in spec or "to" not in spec:
-            raise PatchOperationError(
-                f"Edge spec missing 'from' or 'to': {spec!r}"
-            )
+            raise PatchOperationError(f"Edge spec missing 'from' or 'to': {spec!r}")
         bp["edges"].append(spec)
 
 
 # ── Operation implementations ─────────────────────────────────────────────────
+
 
 def apply_replace_module_config(bp: dict, op: ReplaceModuleConfigOp) -> dict:
     """Replace config block of a named Module."""
@@ -200,9 +196,7 @@ def apply_insert_module(bp: dict, op: InsertModuleOp) -> dict:
     # Guard: module ID must not already exist
     existing_ids = [m.get("id") for m in bp.get("modules", [])]
     if new_id in existing_ids:
-        raise PatchOperationError(
-            f"insert_module: module {new_id!r} already exists in Blueprint."
-        )
+        raise PatchOperationError(f"insert_module: module {new_id!r} already exists in Blueprint.")
 
     bp.setdefault("modules", []).append(_to_ruamel(op.module))
     _remove_edges_matching(bp, op.edges_to_remove)
@@ -217,7 +211,8 @@ def apply_remove_module(bp: dict, op: RemoveModuleOp) -> dict:
     bp["modules"] = [m for m in bp.get("modules", []) if m.get("id") != op.module_id]
     # Remove all edges that reference this module
     bp["edges"] = [
-        e for e in bp.get("edges", [])
+        e
+        for e in bp.get("edges", [])
         if e.get("from") != op.module_id and e.get("to") != op.module_id
     ]
     _add_edges(bp, op.edges_to_add)
@@ -300,6 +295,7 @@ def apply_set_module_config_key(bp: dict, op: SetModuleConfigKeyOp) -> dict:
     value = _to_ruamel(op.value) if isinstance(op.value, (dict, list)) else op.value
     if isinstance(op.value, str):
         from ruamel.yaml.scalarstring import DoubleQuotedScalarString
+
         value = DoubleQuotedScalarString(op.value)
     _set_nested(module["config"], op.key, value)
     return bp
@@ -443,6 +439,7 @@ def apply_replace_macro(bp: dict, op: ReplaceMacroOp) -> dict:
     if "\n" in op.value:
         # Multiline SQL renders as a `|` block scalar, not an escaped one-liner.
         from ruamel.yaml.scalarstring import LiteralScalarString as _LS
+
         macros[op.name] = _LS(op.value)
     else:
         macros[op.name] = _quote_strings(op.value)
@@ -452,20 +449,20 @@ def apply_replace_macro(bp: dict, op: ReplaceMacroOp) -> dict:
 # ── Dispatch table ────────────────────────────────────────────────────────────
 
 _DISPATCH = {
-    "replace_module_config":    apply_replace_module_config,
-    "set_module_config_key":    apply_set_module_config_key,
-    "replace_module_label":     apply_replace_module_label,
-    "insert_module":          apply_insert_module,
-    "remove_module":          apply_remove_module,
-    "replace_context_value":  apply_replace_context_value,
-    "add_probe":              apply_add_probe,
-    "replace_edge":           apply_replace_edge,
-    "set_module_on_failure":  apply_set_module_on_failure,
-    "replace_retry_policy":   apply_replace_retry_policy,
-    "add_arcade_ref":         apply_add_arcade_ref,
-    "defer_to_human":         apply_defer_to_human,
-    "set_engine_config":      apply_set_engine_config,
-    "replace_macro":          apply_replace_macro,
+    "replace_module_config": apply_replace_module_config,
+    "set_module_config_key": apply_set_module_config_key,
+    "replace_module_label": apply_replace_module_label,
+    "insert_module": apply_insert_module,
+    "remove_module": apply_remove_module,
+    "replace_context_value": apply_replace_context_value,
+    "add_probe": apply_add_probe,
+    "replace_edge": apply_replace_edge,
+    "set_module_on_failure": apply_set_module_on_failure,
+    "replace_retry_policy": apply_replace_retry_policy,
+    "add_arcade_ref": apply_add_arcade_ref,
+    "defer_to_human": apply_defer_to_human,
+    "set_engine_config": apply_set_engine_config,
+    "replace_macro": apply_replace_macro,
 }
 
 

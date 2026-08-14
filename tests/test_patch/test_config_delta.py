@@ -154,7 +154,9 @@ def test_blueprint_layer_wins_over_aqueduct_yml():
 
 
 def test_pipeline_only_patch_reports_not_applicable_never_pass():
-    bp = _bp(modules=[{"id": "ch1", "type": "Channel", "config": {"op": "sql", "query": "SELECT 1"}}])
+    bp = _bp(
+        modules=[{"id": "ch1", "type": "Channel", "config": {"op": "sql", "query": "SELECT 1"}}]
+    )
     spec = _spec(
         {
             "op": "set_module_config_key",
@@ -188,7 +190,9 @@ def test_write_targets_are_independent_of_whether_the_value_changed():
 
 
 def test_write_targets_empty_for_a_patch_that_writes_no_engine_config():
-    bp = _bp(modules=[{"id": "ch1", "type": "Channel", "config": {"op": "sql", "query": "SELECT 1"}}])
+    bp = _bp(
+        modules=[{"id": "ch1", "type": "Channel", "config": {"op": "sql", "query": "SELECT 1"}}]
+    )
     spec = _spec(
         {"op": "set_module_config_key", "module_id": "ch1", "key": "query", "value": "SELECT 2"}
     )
@@ -318,9 +322,10 @@ def test_apply_patch_file_records_the_effective_delta_in_healed_by(tmp_path):
     from aqueduct.parser.parser import parse
 
     parsed = parse(str(bp_path))
-    assert parsed.healed_by[0].engine_config_delta["spark"][
-        "spark.sql.shuffle.partitions"
-    ]["after"] == 800
+    assert (
+        parsed.healed_by[0].engine_config_delta["spark"]["spark.sql.shuffle.partitions"]["after"]
+        == 800
+    )
 
 
 def test_apply_patch_file_omits_the_field_for_a_pipeline_only_patch(tmp_path):

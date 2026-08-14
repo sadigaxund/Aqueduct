@@ -11,6 +11,7 @@ without spinning up Spark. The relevant snippet (executor/spark/executor.py):
 We exercise it by importing the module and recomputing the clamp directly
 so the assertions don't require a live SparkSession.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -49,6 +50,7 @@ def test_executor_source_matches_clamp_formula():
     clamp or change the default.
     """
     from pathlib import Path
+
     src = Path(__file__).resolve().parents[2] / "aqueduct" / "executor" / "spark" / "executor.py"
     text = src.read_text(encoding="utf-8")
     assert 'max(0.5, float(module.config.get("poll_seconds", 30.0)))' in text

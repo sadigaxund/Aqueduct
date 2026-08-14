@@ -110,6 +110,7 @@ class TestContextResolution:
     def test_sub_ctx_watermark_not_in_map_preserved_verbatim(self):
         """${ctx._watermark} absent from ctx_map → token preserved, no error."""
         from aqueduct.parser.resolver import _sub_ctx
+
         out = _sub_ctx("ts > ${ctx._watermark}", {})
         assert out == "ts > ${ctx._watermark}"
 
@@ -117,12 +118,14 @@ class TestContextResolution:
         """Non-reserved unknown ${ctx.foo} still raises (carve-out is exact-set)."""
         from aqueduct.parser.resolver import _sub_ctx
         from aqueduct.errors import ParseError
+
         with pytest.raises(ParseError, match=r"Undefined context reference: \$\{ctx\.foo\}"):
             _sub_ctx("${ctx.foo}", {})
 
     def test_sub_ctx_preserves_watermark_resolves_others_same_string(self):
         """${ctx._watermark} preserved while a real ${ctx.*} key resolves in one string."""
         from aqueduct.parser.resolver import _sub_ctx
+
         out = _sub_ctx("p=${ctx.real} w=${ctx._watermark}", {"real": "R"})
         assert out == "p=R w=${ctx._watermark}"
 
@@ -144,7 +147,7 @@ class TestContextResolution:
             "    watermark_column: ts\n"
             "    config:\n"
             "      op: sql\n"
-            "      query: \"SELECT * FROM src WHERE ts > ${ctx._watermark}\"\n"
+            '      query: "SELECT * FROM src WHERE ts > ${ctx._watermark}"\n'
             "edges:\n"
             "  - from: src\n    to: inc\n"
         )
@@ -162,7 +165,7 @@ class TestContextResolution:
         bp_file.write_text(
             "aqueduct: '1.0'\nid: sc\nname: SC\n"
             "engine:\n  spark:\n    conf:\n"
-            "      spark.jars.packages: \"${MY_PKG:-org.example:pkg:1.0}\"\n"
+            '      spark.jars.packages: "${MY_PKG:-org.example:pkg:1.0}"\n'
             "modules:\n  - id: m\n    type: Ingress\n    label: M\n"
             "edges: []\n"
         )
@@ -190,7 +193,7 @@ class TestContextResolution:
             "aqueduct: '1.0'\nid: scok\nname: SCOK\n"
             "context:\n  warehouse: /data/wh\n"
             "engine:\n  spark:\n    conf:\n"
-            "      spark.sql.warehouse.dir: \"${ctx.warehouse}\"\n"
+            '      spark.sql.warehouse.dir: "${ctx.warehouse}"\n'
             "modules:\n  - id: m\n    type: Ingress\n    label: M\n"
             "edges: []\n"
         )
@@ -203,7 +206,7 @@ class TestContextResolution:
         bad.write_text(
             "aqueduct: '1.0'\nid: scbad\nname: SCBAD\n"
             "engine:\n  spark:\n    conf:\n"
-            "      spark.sql.warehouse.dir: \"${ctx.does_not_exist}\"\n"
+            '      spark.sql.warehouse.dir: "${ctx.does_not_exist}"\n'
             "modules:\n  - id: m\n    type: Ingress\n    label: M\n"
             "edges: []\n"
         )

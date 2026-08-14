@@ -133,7 +133,8 @@ def delete_spill_tree(uri: str) -> bool:
             "[%s] handoff spill at %r is on a remote root and fsspec is not "
             "installed — cannot delete it. Install aqueduct-core[object-store] "
             "(or any fsspec-backed extra) to enable cleanup.",
-            RULE_ID_HANDOFF_CLEANUP_UNAVAILABLE, uri,
+            RULE_ID_HANDOFF_CLEANUP_UNAVAILABLE,
+            uri,
         )
         return False
     try:
@@ -190,7 +191,8 @@ def _list_run_dirs(root: str, manifest_hash: str) -> list[str]:
         logger.info(
             "[%s] cannot list handoff spill runs under remote root %r — "
             "fsspec is not installed. Orphan sweep skipped for this root.",
-            RULE_ID_HANDOFF_CLEANUP_UNAVAILABLE, base,
+            RULE_ID_HANDOFF_CLEANUP_UNAVAILABLE,
+            base,
         )
         return []
     try:
@@ -225,7 +227,8 @@ def _list_hash_dirs(root: str) -> list[str]:
             "[%s] cannot list handoff spill hash directories under remote "
             "root %r — fsspec is not installed. Orphan sweep skipped for "
             "this root.",
-            RULE_ID_HANDOFF_CLEANUP_UNAVAILABLE, root,
+            RULE_ID_HANDOFF_CLEANUP_UNAVAILABLE,
+            root,
         )
         return []
     try:

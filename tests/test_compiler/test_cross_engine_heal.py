@@ -31,8 +31,18 @@ _BASE_BP: dict = {
     "id": "test_bp",
     "name": "test",
     "modules": [
-        {"id": "in", "label": "in", "type": "Ingress", "config": {"format": "csv", "path": "/tmp/x.csv"}},
-        {"id": "out", "label": "out", "type": "Egress", "config": {"format": "parquet", "path": "/tmp/y", "mode": "overwrite"}},
+        {
+            "id": "in",
+            "label": "in",
+            "type": "Ingress",
+            "config": {"format": "csv", "path": "/tmp/x.csv"},
+        },
+        {
+            "id": "out",
+            "label": "out",
+            "type": "Egress",
+            "config": {"format": "parquet", "path": "/tmp/y", "mode": "overwrite"},
+        },
     ],
     "edges": [{"from": "in", "to": "out"}],
 }
@@ -74,7 +84,9 @@ def test_same_engine_does_not_fire():
 
 
 def test_dialect_neutral_never_fires():
-    bp = parse_dict(_bp_with_healed_by([_record("duckdb", "dialect_neutral")]), base_dir=Path("/tmp"))
+    bp = parse_dict(
+        _bp_with_healed_by([_record("duckdb", "dialect_neutral")]), base_dir=Path("/tmp")
+    )
     assert check_cross_engine_heal(bp, "spark") == []
 
 
@@ -111,7 +123,9 @@ def test_compile_strict_escalates_to_compile_error():
 
 
 def test_compile_strict_does_not_escalate_dialect_neutral():
-    bp = parse_dict(_bp_with_healed_by([_record("duckdb", "dialect_neutral")]), base_dir=Path("/tmp"))
+    bp = parse_dict(
+        _bp_with_healed_by([_record("duckdb", "dialect_neutral")]), base_dir=Path("/tmp")
+    )
     # Should compile cleanly — no engine_shaped problem to escalate.
     manifest = ccompile(bp, engine="spark", warnings_strict={RULE_ID_CROSS_ENGINE_HEAL})
     assert manifest.blueprint_id == "test_bp"

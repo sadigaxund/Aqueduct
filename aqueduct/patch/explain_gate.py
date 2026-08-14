@@ -32,7 +32,7 @@ class ExplainRegression:
     """A single Gate 4 finding for one module."""
 
     module_id: str
-    metric: str            # "exchange" | "python_udf" | "broadcast"
+    metric: str  # "exchange" | "python_udf" | "broadcast"
     before: int
     after: int
     detail: str
@@ -53,6 +53,7 @@ class ExplainGateResult:
 
 
 # ── Plan extraction ───────────────────────────────────────────────────────────
+
 
 def _formatted_plan(df: Any) -> str:
     """Return `df.explain(mode='formatted')` text via py4j (no stdout capture)."""
@@ -105,6 +106,7 @@ def capture_plan_snapshot(df: Any) -> dict[str, Any]:
 
 
 # ── explain gate ────────────────────────────────────────────────────────────────────
+
 
 def run_explain_gate(
     baseline_by_module: dict[str, dict],
@@ -180,23 +182,35 @@ def run_explain_gate(
         a_bcast = int(after.get("broadcast_count") or 0)
 
         if a_exch > b_exch:
-            result.regressions.append(ExplainRegression(
-                module_id=mid, metric="exchange",
-                before=b_exch, after=a_exch,
-                detail=f"module {mid!r} gained {a_exch - b_exch} shuffle node(s)",
-            ))
+            result.regressions.append(
+                ExplainRegression(
+                    module_id=mid,
+                    metric="exchange",
+                    before=b_exch,
+                    after=a_exch,
+                    detail=f"module {mid!r} gained {a_exch - b_exch} shuffle node(s)",
+                )
+            )
         if a_udf > b_udf:
-            result.regressions.append(ExplainRegression(
-                module_id=mid, metric="python_udf",
-                before=b_udf, after=a_udf,
-                detail=f"module {mid!r} gained {a_udf - b_udf} Python UDF node(s)",
-            ))
+            result.regressions.append(
+                ExplainRegression(
+                    module_id=mid,
+                    metric="python_udf",
+                    before=b_udf,
+                    after=a_udf,
+                    detail=f"module {mid!r} gained {a_udf - b_udf} Python UDF node(s)",
+                )
+            )
         if a_bcast < b_bcast:
-            result.regressions.append(ExplainRegression(
-                module_id=mid, metric="broadcast",
-                before=b_bcast, after=a_bcast,
-                detail=f"module {mid!r} lost {b_bcast - a_bcast} broadcast hint(s)",
-            ))
+            result.regressions.append(
+                ExplainRegression(
+                    module_id=mid,
+                    metric="broadcast",
+                    before=b_bcast,
+                    after=a_bcast,
+                    detail=f"module {mid!r} lost {b_bcast - a_bcast} broadcast hint(s)",
+                )
+            )
 
     compared = len(modules) - len(unavailable_modules)
     if unavailable_modules and compared == 0:
@@ -215,9 +229,7 @@ def run_explain_gate(
     else:
         result.detail = f"no plan regression across {compared} module(s)"
         if unavailable_modules:
-            result.detail += (
-                f" ({len(unavailable_modules)} skipped — plan capture unavailable)"
-            )
+            result.detail += f" ({len(unavailable_modules)} skipped — plan capture unavailable)"
 
     if baseline_run_ids:
         result.baseline_run_id = sorted(baseline_run_ids)[0]

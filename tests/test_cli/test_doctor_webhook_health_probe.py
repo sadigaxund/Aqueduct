@@ -60,6 +60,7 @@ class TestCheckWebhookOptionsMode:
 
     def test_options_network_error_is_fail(self):
         import httpx
+
         with patch("httpx.request", side_effect=httpx.ConnectError("refused")):
             result = check_webhook("https://x.test/hook", "POST", None, 10, "options")
         assert result.status == "fail"
@@ -86,8 +87,10 @@ class TestCheckWebhookConnectMode:
         assert result.status == "ok"
 
     def test_connect_https_wraps_tls(self):
-        with patch("socket.create_connection") as mock_sock, \
-             patch("ssl.create_default_context") as mock_ctx:
+        with (
+            patch("socket.create_connection") as mock_sock,
+            patch("ssl.create_default_context") as mock_ctx,
+        ):
             mock_sock.return_value.__enter__.return_value = MagicMock()
             mock_ctx.return_value.wrap_socket.return_value.__enter__.return_value = MagicMock()
             result = check_webhook("https://x.test/hook", "POST", None, 10, "connect")

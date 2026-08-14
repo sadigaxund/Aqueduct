@@ -52,6 +52,7 @@ SINGLE_INPUT_OPS: frozenset[str] = frozenset(
 MULTI_INPUT_OPS: frozenset[str] = frozenset({"union"})
 ALL_OPS: frozenset[str] = SQL_OPS | SINGLE_INPUT_OPS | MULTI_INPUT_OPS
 
+
 def _normalize_cast_type(t: str) -> str:
     """Render a Channel ``op: cast`` column type through the Arrow type hub
     (Phase 80 work package 3) to DuckDB's own CAST spelling.
@@ -80,6 +81,7 @@ class ChannelError(AqueductError):
 
 
 # ── SQL helpers ───────────────────────────────────────────────────────────────
+
 
 def _transpile(module_id: str, query: str) -> str:
     """Transpile a Spark-SQL query string to DuckDB SQL via sqlglot.
@@ -131,7 +133,9 @@ def _build_join_query(module_id: str, cfg: dict) -> str:
             f"Valid: {sorted(_VALID_JOIN_TYPES)}"
         )
     if join_type != "cross" and not condition:
-        raise ChannelError(f"[{module_id}] op=join requires 'condition' for join_type={join_type!r}")
+        raise ChannelError(
+            f"[{module_id}] op=join requires 'condition' for join_type={join_type!r}"
+        )
 
     on_clause = f" ON {condition}" if condition else ""
     # Double-quote the FROM/JOIN table references: `left`/`right` are the
@@ -200,6 +204,7 @@ def _run_sql(
 
 # ── Native relational-API op implementations ──────────────────────────────────
 
+
 def _execute_deduplicate(
     module_id: str, rel: duckdb.DuckDBPyRelation, cfg: dict, con: duckdb.DuckDBPyConnection
 ) -> duckdb.DuckDBPyRelation:
@@ -238,7 +243,9 @@ def _execute_deduplicate(
         raise ChannelError(f"[{module_id}] op=deduplicate failed: {exc}") from exc
 
 
-def _execute_filter(module_id: str, rel: duckdb.DuckDBPyRelation, cfg: dict) -> duckdb.DuckDBPyRelation:
+def _execute_filter(
+    module_id: str, rel: duckdb.DuckDBPyRelation, cfg: dict
+) -> duckdb.DuckDBPyRelation:
     condition: str | None = cfg.get("condition") or cfg.get("expr")
     if not condition:
         raise ChannelError(f"[{module_id}] op=filter requires 'condition'")
@@ -248,7 +255,9 @@ def _execute_filter(module_id: str, rel: duckdb.DuckDBPyRelation, cfg: dict) -> 
         raise ChannelError(f"[{module_id}] op=filter failed: {exc}") from exc
 
 
-def _execute_select(module_id: str, rel: duckdb.DuckDBPyRelation, cfg: dict) -> duckdb.DuckDBPyRelation:
+def _execute_select(
+    module_id: str, rel: duckdb.DuckDBPyRelation, cfg: dict
+) -> duckdb.DuckDBPyRelation:
     columns = cfg.get("columns") or cfg.get("cols")
     if not columns:
         raise ChannelError(f"[{module_id}] op=select requires 'columns'")
@@ -259,7 +268,9 @@ def _execute_select(module_id: str, rel: duckdb.DuckDBPyRelation, cfg: dict) -> 
         raise ChannelError(f"[{module_id}] op=select failed: {exc}") from exc
 
 
-def _parse_column_mapping(module_id: str, cfg: dict, op: str, key_a: str, key_b: str) -> dict[str, str]:
+def _parse_column_mapping(
+    module_id: str, cfg: dict, op: str, key_a: str, key_b: str
+) -> dict[str, str]:
     """Parse a ``columns:`` config into ``{a: b}`` for op=rename / op=cast.
 
     Accepts a dict (``{old: new}`` / ``{col: type}``) or a list of
@@ -280,12 +291,12 @@ def _parse_column_mapping(module_id: str, cfg: dict, op: str, key_a: str, key_b:
                 if a and b:
                     mapping[str(a)] = str(b)
         return mapping
-    raise ChannelError(
-        f"[{module_id}] op={op} 'columns' must be a mapping or a list of objects"
-    )
+    raise ChannelError(f"[{module_id}] op={op} 'columns' must be a mapping or a list of objects")
 
 
-def _execute_cast(module_id: str, rel: duckdb.DuckDBPyRelation, cfg: dict) -> duckdb.DuckDBPyRelation:
+def _execute_cast(
+    module_id: str, rel: duckdb.DuckDBPyRelation, cfg: dict
+) -> duckdb.DuckDBPyRelation:
     """CAST targeted columns in place, preserving column order and the rest.
 
     A projection over ``rel.columns`` that wraps only the targeted columns in
@@ -305,7 +316,9 @@ def _execute_cast(module_id: str, rel: duckdb.DuckDBPyRelation, cfg: dict) -> du
         raise ChannelError(f"[{module_id}] op=cast failed: {exc}") from exc
 
 
-def _execute_rename(module_id: str, rel: duckdb.DuckDBPyRelation, cfg: dict) -> duckdb.DuckDBPyRelation:
+def _execute_rename(
+    module_id: str, rel: duckdb.DuckDBPyRelation, cfg: dict
+) -> duckdb.DuckDBPyRelation:
     """Rename targeted columns, preserving column order and the rest."""
     mapping = _parse_column_mapping(module_id, cfg, "rename", "from", "to")
     exprs: list[str] = []
@@ -320,7 +333,9 @@ def _execute_rename(module_id: str, rel: duckdb.DuckDBPyRelation, cfg: dict) -> 
         raise ChannelError(f"[{module_id}] op=rename failed: {exc}") from exc
 
 
-def _execute_sort(module_id: str, rel: duckdb.DuckDBPyRelation, cfg: dict) -> duckdb.DuckDBPyRelation:
+def _execute_sort(
+    module_id: str, rel: duckdb.DuckDBPyRelation, cfg: dict
+) -> duckdb.DuckDBPyRelation:
     """ORDER BY the given expression(s). ``order_by`` is a string ("age DESC")
     or a list of them, passed to DuckDB's ORDER BY verbatim (same as the
     Blueprint's Spark ``order_by``)."""
@@ -360,6 +375,7 @@ def _execute_union(
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
 
 def execute_channel(
     module: Module,
@@ -427,9 +443,16 @@ def execute_channel(
         return _execute_rename(module.id, rel, cfg)
     if op == "sort":
         return _execute_sort(module.id, rel, cfg)
-    raise ChannelError(f"[{module.id}] unhandled op {op!r}")  # unreachable — ALL_OPS guard above catches unknowns
+    raise ChannelError(
+        f"[{module.id}] unhandled op {op!r}"
+    )  # unreachable — ALL_OPS guard above catches unknowns
 
 
 __all__ = [
-    "ChannelError", "execute_channel", "ALL_OPS", "SQL_OPS", "SINGLE_INPUT_OPS", "MULTI_INPUT_OPS",
+    "ChannelError",
+    "execute_channel",
+    "ALL_OPS",
+    "SQL_OPS",
+    "SINGLE_INPUT_OPS",
+    "MULTI_INPUT_OPS",
 ]

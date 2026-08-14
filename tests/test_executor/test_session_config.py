@@ -139,9 +139,9 @@ class TestSessionConfigFingerprint:
         cfg = AqueductConfig()
         manifest_a = _manifest({"spark": {"a": "1", "b": "2"}})
         manifest_b = _manifest({"spark": {"b": "2", "a": "1"}})
-        assert session_config_fingerprint(
-            cfg, "spark", manifest_a
-        ) == session_config_fingerprint(cfg, "spark", manifest_b)
+        assert session_config_fingerprint(cfg, "spark", manifest_a) == session_config_fingerprint(
+            cfg, "spark", manifest_b
+        )
 
     def test_changed_blueprint_engine_config_changes_the_fingerprint(self):
         """The property the rebuild-on-mismatch check depends on: a

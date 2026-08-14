@@ -1,4 +1,5 @@
 """Test upfront agent-unreachable warning gates on agent.approval, not agent.model."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -16,7 +17,8 @@ pytestmark = pytest.mark.unit
 @pytest.fixture
 def no_agent_bp(tmp_path):
     p = tmp_path / "blueprint.yml"
-    p.write_text("""\
+    p.write_text(
+        """\
 aqueduct: '1.0'
 id: test_bp
 name: Test Blueprint
@@ -26,7 +28,8 @@ modules:
     label: Input
     config: { format: csv, path: input.csv }
 edges: []
-""")
+"""
+    )
     (tmp_path / "input.csv").write_text("a,b\n1,2")
     return p
 
@@ -34,7 +37,8 @@ edges: []
 @pytest.fixture
 def auto_agent_bp(tmp_path):
     p = tmp_path / "blueprint.yml"
-    p.write_text("""\
+    p.write_text(
+        """\
 aqueduct: '1.0'
 id: test_bp
 name: Test Blueprint
@@ -46,7 +50,8 @@ modules:
     label: Input
     config: { format: csv, path: input.csv }
 edges: []
-""")
+"""
+    )
     (tmp_path / "input.csv").write_text("a,b\n1,2")
     return p
 
@@ -56,18 +61,27 @@ def _mock_run(mock_get_executor, mock_gen_patch, mock_surveyor_cls):
     mock_get_executor.return_value = mock_exec
     mock_exec.side_effect = [
         ExecutionResult(
-            blueprint_id="test_bp", run_id="r1", status="error",
+            blueprint_id="test_bp",
+            run_id="r1",
+            status="error",
             module_results=[ModuleResult(module_id="in", status="error", error="Boom")],
         ),
     ]
 
     inst = MagicMock()
     inst.record.return_value = FailureContext(
-        run_id="r1", failed_module="in", error_message="Boom",
-        blueprint_id="test_bp", stack_trace="", manifest_json="{}",
-        started_at="2026-05-11T00:00:00Z", finished_at="2026-05-11T00:00:00Z",
-        blueprint_source_yaml="id: test_bp", doctor_hints=[],
-     engine="spark",)
+        run_id="r1",
+        failed_module="in",
+        error_message="Boom",
+        blueprint_id="test_bp",
+        stack_trace="",
+        manifest_json="{}",
+        started_at="2026-05-11T00:00:00Z",
+        finished_at="2026-05-11T00:00:00Z",
+        blueprint_source_yaml="id: test_bp",
+        doctor_hints=[],
+        engine="spark",
+    )
     inst.observability = None
     inst.patch_store.return_value = None
     mock_surveyor_cls.return_value = inst

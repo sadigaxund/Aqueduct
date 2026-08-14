@@ -18,8 +18,8 @@ from aqueduct.agent.signature import (
     make_signature,
 )
 
-
 # ── make_signature / ErrorSignature ──────────────────────────────────────────
+
 
 class TestMakeSignature:
     def test_same_inputs_produce_same_hash(self):
@@ -63,8 +63,18 @@ class TestMakeSignature:
 
     def test_backtick_quoted_identifiers_normalized(self):
         # Spark 4's UNRESOLVED_COLUMN style: backtick-quoted qualified name.
-        s1 = make_signature("AnalysisException", "mod", "cannot resolve `i`.`bad_col1` given input columns", engine="spark")
-        s2 = make_signature("AnalysisException", "mod", "cannot resolve `i`.`bad_col2` given input columns", engine="spark")
+        s1 = make_signature(
+            "AnalysisException",
+            "mod",
+            "cannot resolve `i`.`bad_col1` given input columns",
+            engine="spark",
+        )
+        s2 = make_signature(
+            "AnalysisException",
+            "mod",
+            "cannot resolve `i`.`bad_col2` given input columns",
+            engine="spark",
+        )
         assert s1.hash == s2.hash
         assert "`x`" in s1.normalized_message
 
@@ -128,6 +138,7 @@ class TestMakeSignature:
 
     def test_frozen_dataclass_mutation_raises(self):
         from dataclasses import FrozenInstanceError
+
         s = make_signature("e", "w", "msg", engine="spark")
         with pytest.raises(FrozenInstanceError):
             s.hash = "new_hash"  # type: ignore[misc]
@@ -143,6 +154,7 @@ class TestMakeSignature:
 
 
 # ── from_validation_error ────────────────────────────────────────────────────
+
 
 class TestFromValidationError:
     def _make_validation_error(self):
@@ -178,7 +190,7 @@ class TestFromValidationError:
         exc = self._make_validation_error()
         sig = from_validation_error(exc, engine="spark")
         assert sig.error_class  # non-empty
-        assert sig.where        # non-empty
+        assert sig.where  # non-empty
 
     def test_renders_loc_as_operations_bracket_style(self):
         """loc rendered as operations[0].op not operations.0.op."""
@@ -200,6 +212,7 @@ class TestFromValidationError:
     def test_empty_errors_falls_back_gracefully(self):
         """Empty errors edge case: should not crash."""
         from unittest.mock import MagicMock
+
         mock_exc = MagicMock()
         mock_exc.errors.return_value = []
         mock_exc.__str__ = lambda self: "validation_error str"
@@ -210,17 +223,18 @@ class TestFromValidationError:
     def test_stable_across_different_error_positions(self):
         """Two JSON errors at same structure but different line numbers → same hash."""
         s1 = from_json_decode_error(
-            _make_json_error("Expecting ',' delimiter", 10, 5)
-        , engine="spark")
+            _make_json_error("Expecting ',' delimiter", 10, 5), engine="spark"
+        )
         s2 = from_json_decode_error(
-            _make_json_error("Expecting ',' delimiter", 99, 3)
-        , engine="spark")
+            _make_json_error("Expecting ',' delimiter", 99, 3), engine="spark"
+        )
         assert s1.hash == s2.hash
 
 
 def _make_json_error(msg: str, lineno: int, colno: int):
     """Build a mock json.JSONDecodeError-like object."""
     from unittest.mock import MagicMock
+
     exc = MagicMock()
     exc.msg = msg
     exc.lineno = lineno
@@ -230,6 +244,7 @@ def _make_json_error(msg: str, lineno: int, colno: int):
 
 
 # ── from_exception ────────────────────────────────────────────────────────────
+
 
 def test_from_exception_uses_type_name():
     exc = ValueError("something broke")
@@ -245,9 +260,14 @@ def test_from_exception_no_where_defaults_root():
 
 # ── from_apply_error ─────────────────────────────────────────────────────────
 
+
 def test_from_apply_error_usable_as_dict_key():
-    s = from_apply_error("guardrail_violation", "op replace_module_config is forbidden",
-                         where="operations[0]", engine="spark")
+    s = from_apply_error(
+        "guardrail_violation",
+        "op replace_module_config is forbidden",
+        where="operations[0]",
+        engine="spark",
+    )
     d: dict = {s: "value"}
     assert d[s] == "value"
 
@@ -259,16 +279,24 @@ def test_from_apply_error_no_where_defaults_root():
 
 # ── from_failure_context ──────────────────────────────────────────────────────
 
+
 class TestFromFailureContext:
     def test_returns_exact_and_coarse_pair(self):
         from aqueduct.agent.signature import from_failure_context
         from aqueduct.surveyor.models import FailureContext
+
         ctx = FailureContext(
-            run_id="r1", blueprint_id="b1", failed_module="m1",
-            error_message="column not found", stack_trace="",
-            manifest_json="{}", started_at="2020-01-01", finished_at="2020-01-01",
+            run_id="r1",
+            blueprint_id="b1",
+            failed_module="m1",
+            error_message="column not found",
+            stack_trace="",
+            manifest_json="{}",
+            started_at="2020-01-01",
+            finished_at="2020-01-01",
             error_class="UNRESOLVED_COLUMN",
-         engine="spark",)
+            engine="spark",
+        )
         exact, coarse = from_failure_context(ctx)
         assert exact.where == "m1"
         assert coarse.where == "<any>"
@@ -279,65 +307,103 @@ class TestFromFailureContext:
     def test_error_class_priority_spark_wins(self):
         from aqueduct.agent.signature import from_failure_context
         from aqueduct.surveyor.models import FailureContext
+
         ctx = FailureContext(
-            run_id="r1", blueprint_id="b1", failed_module="m1",
-            error_message="err", stack_trace="", manifest_json="{}",
-            started_at="2020-01-01", finished_at="2020-01-01",
-            error_class="UNRESOLVED_COLUMN", error_type="MyAssert",
-         engine="spark",)
+            run_id="r1",
+            blueprint_id="b1",
+            failed_module="m1",
+            error_message="err",
+            stack_trace="",
+            manifest_json="{}",
+            started_at="2020-01-01",
+            finished_at="2020-01-01",
+            error_class="UNRESOLVED_COLUMN",
+            error_type="MyAssert",
+            engine="spark",
+        )
         exact, _ = from_failure_context(ctx)
         assert exact.error_class == "UNRESOLVED_COLUMN"  # Spark wins
 
     def test_error_class_priority_assert_when_no_spark(self):
         from aqueduct.agent.signature import from_failure_context
         from aqueduct.surveyor.models import FailureContext
+
         ctx = FailureContext(
-            run_id="r1", blueprint_id="b1", failed_module="m1",
-            error_message="err", stack_trace="", manifest_json="{}",
-            started_at="2020-01-01", finished_at="2020-01-01",
-            error_class=None, error_type="DataQualityViolation",
-         engine="spark",)
+            run_id="r1",
+            blueprint_id="b1",
+            failed_module="m1",
+            error_message="err",
+            stack_trace="",
+            manifest_json="{}",
+            started_at="2020-01-01",
+            finished_at="2020-01-01",
+            error_class=None,
+            error_type="DataQualityViolation",
+            engine="spark",
+        )
         exact, _ = from_failure_context(ctx)
         assert exact.error_class == "DataQualityViolation"
 
     def test_error_class_falls_back_to_root_exception_type(self):
         from aqueduct.agent.signature import from_failure_context
         from aqueduct.surveyor.models import FailureContext
+
         ctx = FailureContext(
-            run_id="r1", blueprint_id="b1", failed_module="m1",
-            error_message="err", stack_trace="", manifest_json="{}",
-            started_at="2020-01-01", finished_at="2020-01-01",
+            run_id="r1",
+            blueprint_id="b1",
+            failed_module="m1",
+            error_message="err",
+            stack_trace="",
+            manifest_json="{}",
+            started_at="2020-01-01",
+            finished_at="2020-01-01",
             root_exception={"type": "PySparkException", "message": "detail"},
-         engine="spark",)
+            engine="spark",
+        )
         exact, _ = from_failure_context(ctx)
         assert exact.error_class == "PySparkException"
 
     def test_error_class_defaults_to_unknown(self):
         from aqueduct.agent.signature import from_failure_context
         from aqueduct.surveyor.models import FailureContext
+
         ctx = FailureContext(
-            run_id="r1", blueprint_id="b1", failed_module="m1",
-            error_message="", stack_trace="", manifest_json="{}",
-            started_at="2020-01-01", finished_at="2020-01-01",
-         engine="spark",)
+            run_id="r1",
+            blueprint_id="b1",
+            failed_module="m1",
+            error_message="",
+            stack_trace="",
+            manifest_json="{}",
+            started_at="2020-01-01",
+            finished_at="2020-01-01",
+            engine="spark",
+        )
         exact, _ = from_failure_context(ctx)
         assert exact.error_class == "unknown"
 
     def test_message_prefers_root_exception_message(self):
         from aqueduct.agent.signature import from_failure_context
         from aqueduct.surveyor.models import FailureContext
+
         ctx = FailureContext(
-            run_id="r1", blueprint_id="b1", failed_module="m1",
-            error_message="shallow error", stack_trace="", manifest_json="{}",
-            started_at="2020-01-01", finished_at="2020-01-01",
+            run_id="r1",
+            blueprint_id="b1",
+            failed_module="m1",
+            error_message="shallow error",
+            stack_trace="",
+            manifest_json="{}",
+            started_at="2020-01-01",
+            finished_at="2020-01-01",
             root_exception={"type": "E", "message": "deep detail"},
-         engine="spark",)
+            engine="spark",
+        )
         exact, _ = from_failure_context(ctx)
         assert "deep detail" in exact.normalized_message
 
     def test_duck_typed_context_never_raises(self):
         from aqueduct.agent.signature import from_failure_context
         from unittest.mock import MagicMock
+
         ctx = MagicMock()
         ctx.error_class = "UNRESOLVED_COLUMN"
         ctx.failed_module = "m1"
@@ -350,12 +416,19 @@ class TestFromFailureContext:
     def test_non_dict_root_exception_does_not_crash(self):
         from aqueduct.agent.signature import from_failure_context
         from aqueduct.surveyor.models import FailureContext
+
         ctx = FailureContext(
-            run_id="r1", blueprint_id="b1", failed_module="m1",
-            error_message="err", stack_trace="", manifest_json="{}",
-            started_at="2020-01-01", finished_at="2020-01-01",
+            run_id="r1",
+            blueprint_id="b1",
+            failed_module="m1",
+            error_message="err",
+            stack_trace="",
+            manifest_json="{}",
+            started_at="2020-01-01",
+            finished_at="2020-01-01",
             root_exception=None,
-         engine="spark",)
+            engine="spark",
+        )
         # Must not raise
         exact, _ = from_failure_context(ctx)
         assert exact.error_class == "unknown"
@@ -363,14 +436,17 @@ class TestFromFailureContext:
 
 # ── from_text ─────────────────────────────────────────────────────────────────
 
+
 def test_from_text_digits_collapsed():
     s = from_text("Some error at line 12 column 7", engine="spark")
     assert "n" in s.normalized_message  # digits → N, lowercased
     assert "12" not in s.normalized_message
 
+
 def test_from_text_default_error_class_is_reprompt():
     s = from_text("Some error at line 12 column 7", engine="spark")
     assert s.error_class == "reprompt"
+
 
 def test_from_text_custom_error_class():
     s = from_text("message", error_class="compile_error", engine="spark")

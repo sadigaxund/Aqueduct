@@ -99,9 +99,7 @@ def test_composed_spark_prompt_is_the_pre_split_prompt(
     generic_after = "- `schema_hint field 'X' not found in source schema."
     from aqueduct.executor.spark.prompt_rules import SPARK_PROMPT_RULES
 
-    assert (
-        generic_before + "\n" + SPARK_PROMPT_RULES.rules + "\n" + generic_after
-    ) in prompt
+    assert (generic_before + "\n" + SPARK_PROMPT_RULES.rules + "\n" + generic_after) in prompt
 
     # 3b. The defer section (allow_defer only) reproduces the pre-split bullets
     #     verbatim, engine-flavored parts back in their original positions.
@@ -217,9 +215,7 @@ def test_composed_prompt_for_non_spark_engine_has_zero_engine_bleed(
     """
     import aqueduct.executor.protocol as protocol
 
-    monkeypatch.setitem(
-        protocol.PROTOCOL_REGISTRY, "fake-engine", _fake_engine_protocol()
-    )
+    monkeypatch.setitem(protocol.PROTOCOL_REGISTRY, "fake-engine", _fake_engine_protocol())
 
     prompt = _build_system_prompt(
         tmp_path,
@@ -249,9 +245,7 @@ def test_engine_pack_is_what_gets_composed_in(tmp_path: Path, monkeypatch):
     scaffold."""
     import aqueduct.executor.protocol as protocol
 
-    monkeypatch.setitem(
-        protocol.PROTOCOL_REGISTRY, "fake-engine", _fake_engine_protocol()
-    )
+    monkeypatch.setitem(protocol.PROTOCOL_REGISTRY, "fake-engine", _fake_engine_protocol())
 
     prompt = _build_system_prompt(
         tmp_path, allow_defer=True, coaching=False, obs_store=None, engine="fake-engine"
@@ -282,9 +276,7 @@ def test_engine_with_no_extra_defer_bullets_renders_cleanly(tmp_path: Path, monk
     trailing structure."""
     import aqueduct.executor.protocol as protocol
 
-    monkeypatch.setitem(
-        protocol.PROTOCOL_REGISTRY, "fake-engine", _fake_engine_protocol()
-    )
+    monkeypatch.setitem(protocol.PROTOCOL_REGISTRY, "fake-engine", _fake_engine_protocol())
     prompt = _build_system_prompt(
         tmp_path, allow_defer=True, coaching=False, obs_store=None, engine="fake-engine"
     )
@@ -338,9 +330,7 @@ def _load_shipped_allowlist(engine: str):
 
 
 @pytest.mark.parametrize("engine", ["spark", "duckdb"])
-def test_whole_engine_config_allowlist_is_disclosed_in_the_prompt(
-    tmp_path: Path, engine: str
-):
+def test_whole_engine_config_allowlist_is_disclosed_in_the_prompt(tmp_path: Path, engine: str):
     """The model is told the WHOLE policy, not a curated subset.
 
     Compared against the SHIPPED yml (data) rather than a hand-listed set of
@@ -349,9 +339,7 @@ def test_whole_engine_config_allowlist_is_disclosed_in_the_prompt(
     until the prompt renders it too.
     """
     allowlist = _load_shipped_allowlist(engine)
-    prompt = _build_system_prompt(
-        tmp_path, coaching=False, obs_store=None, engine=engine
-    )
+    prompt = _build_system_prompt(tmp_path, coaching=False, obs_store=None, engine=engine)
 
     assert "### Engine/session config (`set_engine_config`)" in prompt
     for entry in allowlist.entries:
@@ -369,9 +357,7 @@ def test_whole_engine_config_allowlist_is_disclosed_in_the_prompt(
         assert deny.reason in prompt
 
 
-@pytest.mark.parametrize(
-    ("engine", "other"), [("spark", "duckdb"), ("duckdb", "spark")]
-)
+@pytest.mark.parametrize(("engine", "other"), [("spark", "duckdb"), ("duckdb", "spark")])
 def test_engine_config_policy_never_leaks_another_engines_keys(
     tmp_path: Path, engine: str, other: str
 ):
@@ -385,9 +371,7 @@ def test_engine_config_policy_never_leaks_another_engines_keys(
     mine = _load_shipped_allowlist(engine)
     theirs = _load_shipped_allowlist(other)
 
-    mine_patterns = {e.pattern for e in mine.entries} | {
-        d.pattern for d in mine.deny_entries
-    }
+    mine_patterns = {e.pattern for e in mine.entries} | {d.pattern for d in mine.deny_entries}
     theirs_only = (
         {e.pattern for e in theirs.entries} | {d.pattern for d in theirs.deny_entries}
     ) - mine_patterns
@@ -412,17 +396,11 @@ def test_engine_with_no_shipped_allowlist_is_told_the_op_is_unavailable(
     is unavailable instead."""
     import aqueduct.executor.protocol as protocol
 
-    monkeypatch.setitem(
-        protocol.PROTOCOL_REGISTRY, "fake-engine", _fake_engine_protocol()
-    )
-    prompt = _build_system_prompt(
-        tmp_path, coaching=False, obs_store=None, engine="fake-engine"
-    )
+    monkeypatch.setitem(protocol.PROTOCOL_REGISTRY, "fake-engine", _fake_engine_protocol())
+    prompt = _build_system_prompt(tmp_path, coaching=False, obs_store=None, engine="fake-engine")
 
     assert "### Engine/session config (`set_engine_config`)" in prompt
-    assert (
-        "`set_engine_config` is NOT available for engine `fake-engine`" in prompt
-    )
+    assert "`set_engine_config` is NOT available for engine `fake-engine`" in prompt
     assert "Do NOT emit a `set_engine_config` operation" in prompt
     # No table header, no allow/deny rows — nothing that reads as "here is what
     # you may write".

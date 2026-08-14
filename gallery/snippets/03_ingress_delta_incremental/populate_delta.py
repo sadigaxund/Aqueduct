@@ -26,6 +26,7 @@ if major >= 4:
 else:
     DELTA_PACKAGE = "io.delta:delta-spark_2.12:3.1.0"
 
+
 def _write_delta_env():
     """Persist the just-derived Delta<->Spark package coordinate to a `.env`
     file beside this script (same dir as aqueduct.yml/blueprint.yml).
@@ -56,22 +57,26 @@ def main():
     try:
         import cloudpickle
         from pyspark import cloudpickle as bundled
+
         bundled.dumps = cloudpickle.dumps
         bundled.loads = cloudpickle.loads
     except (ImportError, AttributeError):
         pass
 
-    spark = SparkSession.builder \
-        .appName("PopulateDelta") \
-        .master("local[*]") \
-        .config("spark.jars.packages", DELTA_PACKAGE) \
-        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
-        .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
-        .config("spark.log.level", "WARN") \
+    spark = (
+        SparkSession.builder.appName("PopulateDelta")
+        .master("local[*]")
+        .config("spark.jars.packages", DELTA_PACKAGE)
+        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+        .config(
+            "spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog"
+        )
+        .config("spark.log.level", "WARN")
         .getOrCreate()
+    )
 
     print("Creating Delta table with 3 versions (0-2)...")
-    
+
     # Version 0
     data = [{"user_id": 1, "action": "login", "timestamp": "2024-01-01 10:00:00"}]
     df = spark.createDataFrame(data)
@@ -79,7 +84,9 @@ def main():
 
     # Versions 1 to 2
     for i in range(1, 3):
-        new_data = [{"user_id": 1, "action": f"click_{i}", "timestamp": f"2024-01-01 10:{i:02d}:00"}]
+        new_data = [
+            {"user_id": 1, "action": f"click_{i}", "timestamp": f"2024-01-01 10:{i:02d}:00"}
+        ]
         new_df = spark.createDataFrame(new_data)
         new_df.write.format("delta").mode("append").save(target_dir)
         print(f"  ✓ Created version {i}")
@@ -87,6 +94,7 @@ def main():
     print(f"\nDelta table populated at '{target_dir}'")
     print("Run 'aqueduct run blueprint.yml' to test time-travel (version 2).")
     spark.stop()
+
 
 if __name__ == "__main__":
     main()

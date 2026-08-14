@@ -10,12 +10,14 @@ aren't already covered by test_aggressive_telemetry.py:
   * `aqueduct run` final status line + on_success webhook payload report the
     outer run_id, not the inner iteration uuid.
 """
+
 from __future__ import annotations
 
 import duckdb
 import pytest
 
 from aqueduct.compiler.models import Manifest
+
 try:
     from aqueduct.surveyor.surveyor import Surveyor
 except ImportError:
@@ -157,4 +159,4 @@ def test_outer_run_id_reported_in_status_and_webhook():
     # success-webhook payload.
     assert "_last_run_id" in text
     # Status line + webhook must reference the same outer-run variable.
-    assert 'run_id=run_id' in text or '"run_id": run_id' in text or "run_id=outer_run_id" in text
+    assert "run_id=run_id" in text or '"run_id": run_id' in text or "run_id=outer_run_id" in text

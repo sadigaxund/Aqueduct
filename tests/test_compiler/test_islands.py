@@ -42,15 +42,22 @@ pytestmark = pytest.mark.unit
 
 def _m(id_, type_=ModuleType.Channel, engine=None, attach_to=None, depends_on=()):
     return Module(
-        id=id_, type=type_, label=id_, config={}, engine=engine,
-        attach_to=attach_to, depends_on=tuple(depends_on),
+        id=id_,
+        type=type_,
+        label=id_,
+        config={},
+        engine=engine,
+        attach_to=attach_to,
+        depends_on=tuple(depends_on),
     )
 
 
 def _bp(modules, edges=None):
     return parse_dict(
         {
-            "aqueduct": "1.0", "id": "bp", "name": "t",
+            "aqueduct": "1.0",
+            "id": "bp",
+            "name": "t",
             "modules": modules,
             **({"edges": edges} if edges is not None else {}),
         },
@@ -62,18 +69,31 @@ def _bp(modules, edges=None):
 
 
 def test_module_schema_accepts_explicit_engine_field():
-    bp = _bp([
-        {"id": "in", "label": "in", "type": "Ingress", "engine": "duckdb",
-         "config": {"format": "csv", "path": "/tmp/x.csv"}},
-    ])
+    bp = _bp(
+        [
+            {
+                "id": "in",
+                "label": "in",
+                "type": "Ingress",
+                "engine": "duckdb",
+                "config": {"format": "csv", "path": "/tmp/x.csv"},
+            },
+        ]
+    )
     assert bp.modules[0].engine == "duckdb"
 
 
 def test_module_schema_engine_defaults_to_none():
-    bp = _bp([
-        {"id": "in", "label": "in", "type": "Ingress",
-         "config": {"format": "csv", "path": "/tmp/x.csv"}},
-    ])
+    bp = _bp(
+        [
+            {
+                "id": "in",
+                "label": "in",
+                "type": "Ingress",
+                "config": {"format": "csv", "path": "/tmp/x.csv"},
+            },
+        ]
+    )
     assert bp.modules[0].engine is None
 
 
@@ -82,16 +102,30 @@ def test_module_engine_field_and_blueprint_engine_block_coexist():
     blueprint-level `engine:` BLOCK (per-engine settings, Q4/2.0) are
     deliberately the same word at two levels — both must parse unambiguously
     in the same Blueprint."""
-    bp = _bp([
-        {"id": "in", "label": "in", "type": "Ingress", "engine": "spark",
-         "config": {"format": "csv", "path": "/tmp/x.csv"}},
-    ])
+    bp = _bp(
+        [
+            {
+                "id": "in",
+                "label": "in",
+                "type": "Ingress",
+                "engine": "spark",
+                "config": {"format": "csv", "path": "/tmp/x.csv"},
+            },
+        ]
+    )
     bp = parse_dict(
         {
-            "aqueduct": "1.0", "id": "bp", "name": "t",
+            "aqueduct": "1.0",
+            "id": "bp",
+            "name": "t",
             "modules": [
-                {"id": "in", "label": "in", "type": "Ingress", "engine": "spark",
-                 "config": {"format": "csv", "path": "/tmp/x.csv"}},
+                {
+                    "id": "in",
+                    "label": "in",
+                    "type": "Ingress",
+                    "engine": "spark",
+                    "config": {"format": "csv", "path": "/tmp/x.csv"},
+                },
             ],
             "engine": {"spark": {"conf": {"spark.sql.shuffle.partitions": 10}}},
         },
@@ -109,10 +143,16 @@ def test_blueprint_engine_config_has_an_entry_for_every_registered_engine_block(
     engine (DuckDB today) declares no Blueprint-level fields yet."""
     bp = parse_dict(
         {
-            "aqueduct": "1.0", "id": "bp", "name": "t",
+            "aqueduct": "1.0",
+            "id": "bp",
+            "name": "t",
             "modules": [
-                {"id": "in", "label": "in", "type": "Ingress",
-                 "config": {"format": "csv", "path": "/tmp/x.csv"}},
+                {
+                    "id": "in",
+                    "label": "in",
+                    "type": "Ingress",
+                    "config": {"format": "csv", "path": "/tmp/x.csv"},
+                },
             ],
             "engine": {"spark": {"conf": {"spark.sql.shuffle.partitions": 10}}},
         },
@@ -189,10 +229,20 @@ def test_multiple_differing_parents_without_pin_raises():
 def test_compile_raises_on_ambiguous_engine_inheritance():
     bp = _bp(
         [
-            {"id": "a", "label": "a", "type": "Ingress", "engine": "spark",
-             "config": {"format": "csv", "path": "/tmp/a.csv"}},
-            {"id": "b", "label": "b", "type": "Ingress", "engine": "duckdb",
-             "config": {"format": "csv", "path": "/tmp/b.csv"}},
+            {
+                "id": "a",
+                "label": "a",
+                "type": "Ingress",
+                "engine": "spark",
+                "config": {"format": "csv", "path": "/tmp/a.csv"},
+            },
+            {
+                "id": "b",
+                "label": "b",
+                "type": "Ingress",
+                "engine": "duckdb",
+                "config": {"format": "csv", "path": "/tmp/b.csv"},
+            },
             {"id": "c", "label": "c", "type": "Funnel", "config": {"mode": "union_all"}},
         ],
         edges=[{"from": "a", "to": "c"}, {"from": "b", "to": "c"}],
@@ -213,10 +263,18 @@ def test_no_parents_falls_back_to_default_engine():
 def test_compile_default_engine_param_sets_unpinned_modules():
     bp = _bp(
         [
-            {"id": "in", "label": "in", "type": "Ingress",
-             "config": {"format": "csv", "path": "/tmp/x.csv"}},
-            {"id": "out", "label": "out", "type": "Egress",
-             "config": {"format": "parquet", "path": "/tmp/y", "mode": "overwrite"}},
+            {
+                "id": "in",
+                "label": "in",
+                "type": "Ingress",
+                "config": {"format": "csv", "path": "/tmp/x.csv"},
+            },
+            {
+                "id": "out",
+                "label": "out",
+                "type": "Egress",
+                "config": {"format": "parquet", "path": "/tmp/y", "mode": "overwrite"},
+            },
         ],
         edges=[{"from": "in", "to": "out"}],
     )
@@ -225,19 +283,32 @@ def test_compile_default_engine_param_sets_unpinned_modules():
 
 
 def test_compile_explicit_module_pin_beats_default_engine_param():
-    bp = _bp([
-        {"id": "in", "label": "in", "type": "Ingress", "engine": "spark",
-         "config": {"format": "csv", "path": "/tmp/x.csv"}},
-    ])
+    bp = _bp(
+        [
+            {
+                "id": "in",
+                "label": "in",
+                "type": "Ingress",
+                "engine": "spark",
+                "config": {"format": "csv", "path": "/tmp/x.csv"},
+            },
+        ]
+    )
     manifest = ccompile(bp, engine="duckdb")
     assert manifest.modules[0].engine == "spark"
 
 
 def test_manifest_to_dict_serializes_resolved_engine():
-    bp = _bp([
-        {"id": "in", "label": "in", "type": "Ingress",
-         "config": {"format": "csv", "path": "/tmp/x.csv"}},
-    ])
+    bp = _bp(
+        [
+            {
+                "id": "in",
+                "label": "in",
+                "type": "Ingress",
+                "config": {"format": "csv", "path": "/tmp/x.csv"},
+            },
+        ]
+    )
     manifest = ccompile(bp, engine="duckdb")
     assert manifest.to_dict()["modules"][0]["engine"] == "duckdb"
 
@@ -265,8 +336,10 @@ def test_disjoint_components_different_engines_zero_boundaries():
     selling point: this falls out of the existing (engine-agnostic here)
     connected-component derivation with ZERO handoff nodes needed."""
     modules = [
-        _m("a1", engine="spark"), _m("a2"),
-        _m("b1", engine="duckdb"), _m("b2"),
+        _m("a1", engine="spark"),
+        _m("a2"),
+        _m("b1", engine="duckdb"),
+        _m("b2"),
     ]
     edges = [
         Edge(from_id="a1", to_id="a2"),
@@ -282,7 +355,8 @@ def test_disjoint_components_different_engines_zero_boundaries():
     assert len(islands) == 2
     assert {isl.engine for isl in islands} == {"spark", "duckdb"}
     assert {frozenset(isl.module_ids) for isl in islands} == {
-        frozenset({"a1", "a2"}), frozenset({"b1", "b2"}),
+        frozenset({"a1", "a2"}),
+        frozenset({"b1", "b2"}),
     }
 
 
@@ -292,10 +366,20 @@ def test_compile_two_registered_engines_boundary_gets_a_handoff_module():
     — `extract -> agg` becomes `extract -> handoff -> agg`."""
     bp = _bp(
         [
-            {"id": "extract", "label": "extract", "type": "Channel", "engine": "spark",
-             "config": {"op": "sql", "query": "SELECT 1 AS x"}},
-            {"id": "agg", "label": "agg", "type": "Channel", "engine": "duckdb",
-             "config": {"op": "sql", "query": "SELECT * FROM extract"}},
+            {
+                "id": "extract",
+                "label": "extract",
+                "type": "Channel",
+                "engine": "spark",
+                "config": {"op": "sql", "query": "SELECT 1 AS x"},
+            },
+            {
+                "id": "agg",
+                "label": "agg",
+                "type": "Channel",
+                "engine": "duckdb",
+                "config": {"op": "sql", "query": "SELECT * FROM extract"},
+            },
         ],
         edges=[{"from": "extract", "to": "agg"}],
     )
@@ -338,12 +422,28 @@ def test_assert_mismatch_with_upstream_raises():
 def test_compile_probe_colocation_mismatch_raises():
     bp = _bp(
         [
-            {"id": "in", "label": "in", "type": "Ingress", "engine": "duckdb",
-             "config": {"format": "csv", "path": "/tmp/x.csv"}},
-            {"id": "out", "label": "out", "type": "Egress", "engine": "duckdb",
-             "config": {"format": "parquet", "path": "/tmp/y", "mode": "overwrite"}},
-            {"id": "p", "label": "p", "type": "Probe", "engine": "spark", "attach_to": "in",
-             "config": {"signals": [{"type": "row_count_estimate"}]}},
+            {
+                "id": "in",
+                "label": "in",
+                "type": "Ingress",
+                "engine": "duckdb",
+                "config": {"format": "csv", "path": "/tmp/x.csv"},
+            },
+            {
+                "id": "out",
+                "label": "out",
+                "type": "Egress",
+                "engine": "duckdb",
+                "config": {"format": "parquet", "path": "/tmp/y", "mode": "overwrite"},
+            },
+            {
+                "id": "p",
+                "label": "p",
+                "type": "Probe",
+                "engine": "spark",
+                "attach_to": "in",
+                "config": {"signals": [{"type": "row_count_estimate"}]},
+            },
         ],
         edges=[{"from": "in", "to": "out"}],
     )
@@ -354,12 +454,27 @@ def test_compile_probe_colocation_mismatch_raises():
 def test_compile_assert_colocation_mismatch_raises():
     bp = _bp(
         [
-            {"id": "in", "label": "in", "type": "Ingress", "engine": "duckdb",
-             "config": {"format": "csv", "path": "/tmp/x.csv"}},
-            {"id": "chk", "label": "chk", "type": "Assert", "engine": "spark",
-             "config": {"rules": [{"type": "min_rows", "min": 1}]}},
-            {"id": "out", "label": "out", "type": "Egress", "engine": "duckdb",
-             "config": {"format": "parquet", "path": "/tmp/y", "mode": "overwrite"}},
+            {
+                "id": "in",
+                "label": "in",
+                "type": "Ingress",
+                "engine": "duckdb",
+                "config": {"format": "csv", "path": "/tmp/x.csv"},
+            },
+            {
+                "id": "chk",
+                "label": "chk",
+                "type": "Assert",
+                "engine": "spark",
+                "config": {"rules": [{"type": "min_rows", "min": 1}]},
+            },
+            {
+                "id": "out",
+                "label": "out",
+                "type": "Egress",
+                "engine": "duckdb",
+                "config": {"format": "parquet", "path": "/tmp/y", "mode": "overwrite"},
+            },
         ],
         edges=[{"from": "in", "to": "chk"}, {"from": "chk", "to": "out"}],
     )
@@ -388,14 +503,35 @@ def test_spillway_within_one_island_is_fine():
 def test_compile_spillway_crossing_island_raises():
     bp = _bp(
         [
-            {"id": "in", "label": "in", "type": "Ingress", "engine": "spark",
-             "config": {"format": "csv", "path": "/tmp/x.csv"}},
-            {"id": "ch", "label": "ch", "type": "Channel", "engine": "spark",
-             "config": {"op": "filter", "condition": "a > 1"}, "spillway": "q"},
-            {"id": "out", "label": "out", "type": "Egress", "engine": "spark",
-             "config": {"format": "parquet", "path": "/tmp/y", "mode": "overwrite"}},
-            {"id": "q", "label": "q", "type": "Egress", "engine": "duckdb",
-             "config": {"format": "csv", "path": "/tmp/q.csv", "mode": "overwrite"}},
+            {
+                "id": "in",
+                "label": "in",
+                "type": "Ingress",
+                "engine": "spark",
+                "config": {"format": "csv", "path": "/tmp/x.csv"},
+            },
+            {
+                "id": "ch",
+                "label": "ch",
+                "type": "Channel",
+                "engine": "spark",
+                "config": {"op": "filter", "condition": "a > 1"},
+                "spillway": "q",
+            },
+            {
+                "id": "out",
+                "label": "out",
+                "type": "Egress",
+                "engine": "spark",
+                "config": {"format": "parquet", "path": "/tmp/y", "mode": "overwrite"},
+            },
+            {
+                "id": "q",
+                "label": "q",
+                "type": "Egress",
+                "engine": "duckdb",
+                "config": {"format": "csv", "path": "/tmp/q.csv", "mode": "overwrite"},
+            },
         ],
         edges=[
             {"from": "in", "to": "ch"},
@@ -413,10 +549,20 @@ def test_compile_spillway_crossing_island_raises():
 def test_compile_unregistered_engine_pin_raises():
     bp = _bp(
         [
-            {"id": "in", "label": "in", "type": "Ingress", "engine": "spark",
-             "config": {"format": "csv", "path": "/tmp/x.csv"}},
-            {"id": "out", "label": "out", "type": "Egress", "engine": "flink",
-             "config": {"format": "parquet", "path": "/tmp/y", "mode": "overwrite"}},
+            {
+                "id": "in",
+                "label": "in",
+                "type": "Ingress",
+                "engine": "spark",
+                "config": {"format": "csv", "path": "/tmp/x.csv"},
+            },
+            {
+                "id": "out",
+                "label": "out",
+                "type": "Egress",
+                "engine": "flink",
+                "config": {"format": "parquet", "path": "/tmp/y", "mode": "overwrite"},
+            },
         ],
         edges=[{"from": "in", "to": "out"}],
     )
@@ -465,10 +611,20 @@ def test_handoff_modules_never_reach_the_capability_gate(monkeypatch):
 
     bp = _bp(
         [
-            {"id": "extract", "label": "extract", "type": "Channel", "engine": "spark",
-             "config": {"op": "sql", "query": "SELECT 1 AS x"}},
-            {"id": "agg", "label": "agg", "type": "Channel", "engine": "duckdb",
-             "config": {"op": "sql", "query": "SELECT * FROM extract"}},
+            {
+                "id": "extract",
+                "label": "extract",
+                "type": "Channel",
+                "engine": "spark",
+                "config": {"op": "sql", "query": "SELECT 1 AS x"},
+            },
+            {
+                "id": "agg",
+                "label": "agg",
+                "type": "Channel",
+                "engine": "duckdb",
+                "config": {"op": "sql", "query": "SELECT * FROM extract"},
+            },
         ],
         edges=[{"from": "extract", "to": "agg"}],
     )

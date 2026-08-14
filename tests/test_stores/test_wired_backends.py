@@ -18,6 +18,7 @@ from aqueduct.parser.models import Edge, Module
 
 # ── 1838: DepotStore round-trips a watermark via kv_put / kv_get ──────────────
 
+
 def test_depot_store_watermark_roundtrip(depot_store):
     """DepotStore (DuckDB/Postgres/Redis) round-trips a watermark value."""
     wm_key = "bp1:ch_inc:_watermark"
@@ -36,6 +37,7 @@ def test_depot_store_watermark_roundtrip(depot_store):
 
 # ── 1839: write_lineage() writes rows into column_lineage ─────────────────────
 
+
 def test_write_lineage_into_configured_store(observability_store, tmp_path):
     """write_lineage(..., observability_store=...) inserts column_lineage rows.
 
@@ -45,24 +47,30 @@ def test_write_lineage_into_configured_store(observability_store, tmp_path):
     # Phase 38: column_lineage lives in observability. Run the surveyor DDL
     # to ensure the table exists before write_lineage() attempts to INSERT.
     from aqueduct.surveyor.surveyor import _DDL
+
     with observability_store.connect() as cur:
         cur.execute(_DDL)
 
     from aqueduct.compiler.lineage import write_lineage
 
     modules = (
-        Module(id="src", type="Ingress", label="Src",
-                config={"format": "parquet", "path": "/tmp/x"}),
-        Module(id="ch", type="Channel", label="Ch", config={
-            "op": "sql",
-            "query": "SELECT id AS user_id FROM src",
-        }),
+        Module(
+            id="src", type="Ingress", label="Src", config={"format": "parquet", "path": "/tmp/x"}
+        ),
+        Module(
+            id="ch",
+            type="Channel",
+            label="Ch",
+            config={
+                "op": "sql",
+                "query": "SELECT id AS user_id FROM src",
+            },
+        ),
     )
     edges = (Edge(from_id="src", to_id="ch", port="main"),)
 
     run_id = uuid.uuid4().hex
-    write_lineage("bp_lineage", run_id, modules, edges,
-                  observability_store=observability_store)
+    write_lineage("bp_lineage", run_id, modules, edges, observability_store=observability_store)
 
     with observability_store.connect() as cur:
         rows = cur.execute(
@@ -77,11 +85,13 @@ def test_write_lineage_into_configured_store(observability_store, tmp_path):
 
 # ── 1840: end-to-end execute() persistence into Postgres ──────────────────────
 
+
 @pytest.mark.spark
 @pytest.mark.integration
 def test_execute_persists_into_postgres(spark, tmp_path):
     """execute(..., observability_store=pg) persists rows."""
     from tests.conftest import _pg_dsn, _pg_is_reachable
+
     if not _pg_is_reachable():
         pytest.skip("Postgres not reachable (set AQ_PG_DSN)")
 
@@ -110,20 +120,44 @@ def test_execute_persists_into_postgres(spark, tmp_path):
     spark.range(5).selectExpr("id", "id * 2 AS dbl").write.parquet(in_path)
 
     manifest = Manifest(
-        blueprint_id="bp_e2e", name="E2E", description="", aqueduct_version="1.0",
-        context={}, engine_config={}, retry_policy=RetryPolicy(), agent=None,
-        udf_registry={}, macros={}, checkpoint=False,
-        provenance_map=ProvenanceMap(blueprint_id="bp_e2e", blueprint_path="", modules={}, context={}),
+        blueprint_id="bp_e2e",
+        name="E2E",
+        description="",
+        aqueduct_version="1.0",
+        context={},
+        engine_config={},
+        retry_policy=RetryPolicy(),
+        agent=None,
+        udf_registry={},
+        macros={},
+        checkpoint=False,
+        provenance_map=ProvenanceMap(
+            blueprint_id="bp_e2e", blueprint_path="", modules={}, context={}
+        ),
         inputs_fingerprint={},
         modules=(
-            Module(id="src", type="Ingress", label="In",
-                    config={"format": "parquet", "path": in_path}),
-            Module(id="ch", type="Channel", label="Ch",
-                    config={"op": "sql", "query": "SELECT id, dbl FROM src"}),
-            Module(id="pr", type="Probe", label="Pr", attach_to="ch",
-                    config={"signals": [{"type": "threshold", "expr": "COUNT(*) > 0"}]}),
-            Module(id="out", type="Egress", label="Out",
-                    config={"format": "parquet", "path": out_path, "mode": "overwrite"}),
+            Module(
+                id="src", type="Ingress", label="In", config={"format": "parquet", "path": in_path}
+            ),
+            Module(
+                id="ch",
+                type="Channel",
+                label="Ch",
+                config={"op": "sql", "query": "SELECT id, dbl FROM src"},
+            ),
+            Module(
+                id="pr",
+                type="Probe",
+                label="Pr",
+                attach_to="ch",
+                config={"signals": [{"type": "threshold", "expr": "COUNT(*) > 0"}]},
+            ),
+            Module(
+                id="out",
+                type="Egress",
+                label="Out",
+                config={"format": "parquet", "path": out_path, "mode": "overwrite"},
+            ),
         ),
         edges=(
             Edge(from_id="src", to_id="ch", port="main"),
@@ -138,8 +172,12 @@ def test_execute_persists_into_postgres(spark, tmp_path):
     try:
         surveyor.start(run_id)
         result = execute(
-            manifest, spark, run_id=run_id, store_dir=tmp_path,
-            surveyor=surveyor, depot=depot_store,
+            manifest,
+            spark,
+            run_id=run_id,
+            store_dir=tmp_path,
+            surveyor=surveyor,
+            depot=depot_store,
             observability_store=obs_store,
         )
         assert result.status == "success"
@@ -168,10 +206,12 @@ def test_execute_persists_into_postgres(spark, tmp_path):
 
 # ── 1841: `aqueduct signal` against Postgres signal_overrides ─────────────────
 
+
 @pytest.mark.integration
 def test_signal_cli_postgres_roundtrip(tmp_path):
     """aqueduct signal <id> writes then reads observability.signal_overrides (Postgres)."""
     from tests.conftest import _pg_dsn, _pg_is_reachable
+
     if not _pg_is_reachable():
         pytest.skip("Postgres not reachable (set AQ_PG_DSN)")
 

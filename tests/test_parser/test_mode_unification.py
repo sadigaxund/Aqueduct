@@ -1,8 +1,9 @@
 """2.0 mode config: canonical keys only (deprecated aliases removed).
 
 Removed in 2.0: the `approval_mode` YAML key, `aggressive_max_patches`,
-`danger.allow_aggressive_patching`, and the `--allow-aggressive` CLI flag. 
+`danger.allow_aggressive_patching`, and the `--allow-aggressive` CLI flag.
 """
+
 from __future__ import annotations
 
 import json
@@ -115,11 +116,15 @@ def test_allow_multi_patch_flag_works(tmp_path):
 
     bp = _write_bp(tmp_path, agent_block="agent:\n  approval: auto\n  max_patches: 2\n")
     cfg = tmp_path / "aqueduct.yml"
-    cfg.write_text("aqueduct_config: '1.0'\ndanger:\n  allow_multi_patch: false\n", encoding="utf-8")
+    cfg.write_text(
+        "aqueduct_config: '1.0'\ndanger:\n  allow_multi_patch: false\n", encoding="utf-8"
+    )
 
     runner = CliRunner()
-    with patch("aqueduct.surveyor.surveyor.Surveyor"), \
-         patch("aqueduct.executor.get_executor") as mock_get_exec:
+    with (
+        patch("aqueduct.surveyor.surveyor.Surveyor"),
+        patch("aqueduct.executor.get_executor") as mock_get_exec,
+    ):
         mock_exec = MagicMock()
         mock_exec.return_value = MagicMock(status="success", module_results=(), trigger_agent=False)
         mock_get_exec.return_value = mock_exec
@@ -136,7 +141,9 @@ def test_max_patches_gt_one_blocks_without_danger_or_flag(tmp_path):
 
     bp = _write_bp(tmp_path, agent_block="agent:\n  approval: auto\n  max_patches: 2\n")
     cfg = tmp_path / "aqueduct.yml"
-    cfg.write_text("aqueduct_config: '1.0'\ndanger:\n  allow_multi_patch: false\n", encoding="utf-8")
+    cfg.write_text(
+        "aqueduct_config: '1.0'\ndanger:\n  allow_multi_patch: false\n", encoding="utf-8"
+    )
 
     runner = CliRunner()
     with patch("aqueduct.surveyor.surveyor.Surveyor"):

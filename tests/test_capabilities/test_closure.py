@@ -347,8 +347,8 @@ def _plant(monkeypatch, leaf_id: str) -> None:
 @pytest.mark.parametrize(
     "planted",
     [
-        "module.field.planted_grammar_leaf",   # as if added to parser/schema.py
-        "config.planted_config_key",           # as if added to config.py
+        "module.field.planted_grammar_leaf",  # as if added to parser/schema.py
+        "config.planted_config_key",  # as if added to config.py
     ],
 )
 def test_closure_fails_on_a_planted_leaf_with_no_verdict(monkeypatch, planted):

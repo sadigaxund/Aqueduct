@@ -142,9 +142,7 @@ def test_resolve_test_id_function(tmp_path):
 
 def test_resolve_test_id_class_method(tmp_path):
     f = tmp_path / "test_x.py"
-    f.write_text(
-        "class TestFoo:\n    def test_a(self):\n        assert True\n", encoding="utf-8"
-    )
+    f.write_text("class TestFoo:\n    def test_a(self):\n        assert True\n", encoding="utf-8")
     ok, reason = resolve_test_id("test_x.py::TestFoo::test_a", repo_root=tmp_path)
     assert ok, reason
 
@@ -194,7 +192,8 @@ def test_sync_preserves_existing_tests_key(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(tooling, "discover_declarations", lambda extra=None: [decl])
     monkeypatch.setattr(
-        tooling, "governed_leaves",
+        tooling,
+        "governed_leaves",
         lambda engine=None, **_: frozenset({"feature.a", "feature.new"}),
     )
 

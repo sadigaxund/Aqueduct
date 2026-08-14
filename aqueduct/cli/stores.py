@@ -2,6 +2,7 @@
 
 Extracted verbatim from aqueduct/cli/__init__.py — no behaviour change.
 """
+
 from __future__ import annotations
 
 import sys
@@ -35,18 +36,14 @@ def stores_group() -> None:
     help="Path to aqueduct.yml",
 )
 @_env_options
-def stores_info(
-    config_path: str | None, env_file: str | None, cli_env: tuple[str, ...]
-) -> None:
+def stores_info(config_path: str | None, env_file: str | None, cli_env: tuple[str, ...]) -> None:
     """Print each store's resolved backend + location label."""
     from aqueduct.cli.style import error as _error
     from aqueduct.config import ConfigError, load_config
     from aqueduct.stores import get_stores
 
     try:
-        _resolve_and_load_env(
-            env_file, Path(config_path) if config_path else None, cli_env=cli_env
-        )
+        _resolve_and_load_env(env_file, Path(config_path) if config_path else None, cli_env=cli_env)
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
@@ -56,9 +53,9 @@ def stores_info(
     bundle = get_stores(cfg)
     rows = [
         ("observability", bundle.observability.backend, bundle.observability.location_label),
-        ("depot",         bundle.depot.backend,         bundle.depot.location_label),
-        ("blob",          cfg.stores.blob.backend,      cfg.stores.blob.path or "(default)"),
-        ("benchmark",     cfg.stores.benchmark.backend,  cfg.stores.benchmark.path or "(default)"),
+        ("depot", bundle.depot.backend, bundle.depot.location_label),
+        ("blob", cfg.stores.blob.backend, cfg.stores.blob.path or "(default)"),
+        ("benchmark", cfg.stores.benchmark.backend, cfg.stores.benchmark.path or "(default)"),
     ]
     w0 = max(len(r[0]) for r in rows)
     w1 = max(len(r[1]) for r in rows)
@@ -97,8 +94,11 @@ def stores_info(
 )
 @_env_options
 def stores_migrate(
-    config_path: str | None, from_path: str, store: str,
-    env_file: str | None, cli_env: tuple[str, ...],
+    config_path: str | None,
+    from_path: str,
+    store: str,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
 ) -> None:
     """Copy KV rows from a DuckDB file into the configured target backend.
 
@@ -117,9 +117,7 @@ def stores_migrate(
         sys.exit(exit_codes.USAGE_ERROR)
 
     try:
-        _resolve_and_load_env(
-            env_file, Path(config_path) if config_path else None, cli_env=cli_env
-        )
+        _resolve_and_load_env(env_file, Path(config_path) if config_path else None, cli_env=cli_env)
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
@@ -128,7 +126,10 @@ def stores_migrate(
 
     bundle = get_stores(cfg)
     target_label = f"{bundle.depot.backend}:{bundle.depot.location_label}"
-    if bundle.depot.backend == "duckdb" and Path(bundle.depot.location_label) == Path(from_path).resolve():
+    if (
+        bundle.depot.backend == "duckdb"
+        and Path(bundle.depot.location_label) == Path(from_path).resolve()
+    ):
         _error("source and target depot are the same DuckDB file; nothing to migrate")
         sys.exit(exit_codes.CONFIG_ERROR)
 

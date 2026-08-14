@@ -18,7 +18,8 @@ from aqueduct.exit_codes import HEAL_PENDING
 
 
 def _write_bp(path: Path, extra: str):
-    path.write_text("""\
+    path.write_text(
+        """\
 aqueduct: '1.0'
 id: heal_cache
 name: heal_cache
@@ -30,11 +31,14 @@ modules:
 edges: []
 agent:
   %s
-""" % extra)
+"""
+        % extra
+    )
 
 
 def _write_config(path: Path, extra: str = ""):
-    path.write_text("""\
+    path.write_text(
+        """\
 aqueduct_config: "1.0"
 stores:
   observability:
@@ -44,21 +48,29 @@ agent:
   model: claude-3
   base_url: https://api.anthropic.example
   %s
-""" % (path.parent, extra))
+"""
+        % (path.parent, extra)
+    )
 
 
 def _run_err():
     from aqueduct.executor.models import ExecutionResult, ModuleResult
+
     return ExecutionResult(
-        blueprint_id="heal_cache", run_id="r1", status="error",
+        blueprint_id="heal_cache",
+        run_id="r1",
+        status="error",
         module_results=(ModuleResult("m1", "error", error="fail"),),
     )
 
 
 def _run_ok():
     from aqueduct.executor.models import ExecutionResult, ModuleResult
+
     return ExecutionResult(
-        blueprint_id="heal_cache", run_id="r2", status="success",
+        blueprint_id="heal_cache",
+        run_id="r2",
+        status="success",
         module_results=(ModuleResult("m1", "success"),),
     )
 
@@ -67,14 +79,17 @@ def _make_executor(side_effects):
     """Build a mock executor callable that returns the given results in order,
     falling back to _run_ok() after exhaustion."""
     seq = list(side_effects)
+
     def _exec(*args, **kwargs):
         return seq.pop(0) if seq else _run_ok()
+
     mock = MagicMock(side_effect=_exec)
     mock._seq = seq
     return mock
 
 
 # ── PATH 1: Pending hit ─────────────────────────────────────────────────────
+
 
 def test_pending_hit_skips_llm_exits_heal_pending(tmp_path):
     """Pending hit → LLM skipped, HEAL_PENDING(3) exit."""
@@ -85,8 +100,10 @@ def test_pending_hit_skips_llm_exits_heal_pending(tmp_path):
     _write_config(cfg_path)
 
     from aqueduct.agent.memory import PendingHit
-    hit = PendingHit(object_key="pending/001_fix.json",
-                     patch_id="fix-1", staged_at=None, source="llm")
+
+    hit = PendingHit(
+        object_key="pending/001_fix.json", patch_id="fix-1", staged_at=None, source="llm"
+    )
 
     os.environ["ANTHROPIC_API_KEY"] = "test-key"
 
@@ -101,6 +118,7 @@ def test_pending_hit_skips_llm_exits_heal_pending(tmp_path):
 
 # ── PATH 2: Replay hit (auto mode) ──────────────────────────────────────────
 
+
 def test_replay_hit_auto_mode_zero_llm(tmp_path):
     """Replay candidate passes gates → zero LLM calls."""
     runner = CliRunner()
@@ -110,9 +128,14 @@ def test_replay_hit_auto_mode_zero_llm(tmp_path):
     _write_config(cfg_path)
 
     from aqueduct.patch.grammar import PatchSpec
-    spec = PatchSpec(patch_id="replay-1", rationale="replay",
-                     operations=[{"op": "set_module_config_key",
-                                  "module_id": "m1", "key": "path", "value": "/fixed.csv"}])
+
+    spec = PatchSpec(
+        patch_id="replay-1",
+        rationale="replay",
+        operations=[
+            {"op": "set_module_config_key", "module_id": "m1", "key": "path", "value": "/fixed.csv"}
+        ],
+    )
 
     mock_candidate = MagicMock()
     mock_candidate.patch_id = "replay-1"
@@ -141,6 +164,7 @@ def test_replay_hit_auto_mode_zero_llm(tmp_path):
 
     # Verify that the replayed healing outcome recorded a NULL model column.
     import duckdb
+
     obs_db = tmp_path / "obs" / "heal_cache" / "observability.db"
     conn = duckdb.connect(str(obs_db))
     row = conn.execute("SELECT model FROM healing_outcomes WHERE patch_id = 'replay-1'").fetchone()
@@ -150,6 +174,7 @@ def test_replay_hit_auto_mode_zero_llm(tmp_path):
 
 
 # ── PATH 2b: Replay candidate names a RETIRED op → fall through, no crash ──
+
 
 def test_replay_candidate_with_retired_op_falls_through_to_llm(tmp_path):
     """A patch_index-indexed body persisted before the set_spark_config →
@@ -182,9 +207,14 @@ def test_replay_candidate_with_retired_op_falls_through_to_llm(tmp_path):
     }
 
     from aqueduct.patch.grammar import PatchSpec
-    llm_spec = PatchSpec(patch_id="llm-fix-1", rationale="fix",
-                          operations=[{"op": "set_module_config_key",
-                                       "module_id": "m1", "key": "path", "value": "/fixed.csv"}])
+
+    llm_spec = PatchSpec(
+        patch_id="llm-fix-1",
+        rationale="fix",
+        operations=[
+            {"op": "set_module_config_key", "module_id": "m1", "key": "path", "value": "/fixed.csv"}
+        ],
+    )
 
     os.environ["ANTHROPIC_API_KEY"] = "test-key"
 
@@ -196,8 +226,11 @@ def test_replay_candidate_with_retired_op_falls_through_to_llm(tmp_path):
             with patch("aqueduct.agent.memory.find_replay_candidate", return_value=mock_candidate):
                 with patch("aqueduct.agent.generate_agent_patch") as mock_gap:
                     from aqueduct.agent import AgentPatchResult
+
                     mock_gap.return_value = AgentPatchResult(
-                        patch=llm_spec, attempts=1, stop_reason=StopReason.SOLVED,
+                        patch=llm_spec,
+                        attempts=1,
+                        stop_reason=StopReason.SOLVED,
                     )
                     # Only the LLM patch's own gate call happens now — the
                     # retired-op candidate never reaches run_sandbox_gate at
@@ -221,6 +254,7 @@ def test_replay_candidate_with_retired_op_falls_through_to_llm(tmp_path):
 
 # ── PATH 2c: Replay candidate carries set_engine_config → never replayed ────
 
+
 def test_replay_candidate_with_set_engine_config_falls_through_to_llm(tmp_path):
     """A cached patch that includes a `set_engine_config` op parses fine and
     is otherwise a perfectly valid PatchSpec — but engine/session config is
@@ -237,20 +271,30 @@ def test_replay_candidate_with_set_engine_config_falls_through_to_llm(tmp_path):
     _write_config(cfg_path)
 
     from aqueduct.patch.grammar import PatchSpec
+
     cached_spec = PatchSpec(
-        patch_id="replay-cfg-1", rationale="bump shuffle partitions",
-        operations=[{
-            "op": "set_engine_config", "engine": "spark",
-            "key": "spark.sql.shuffle.partitions", "value": 200,
-        }],
+        patch_id="replay-cfg-1",
+        rationale="bump shuffle partitions",
+        operations=[
+            {
+                "op": "set_engine_config",
+                "engine": "spark",
+                "key": "spark.sql.shuffle.partitions",
+                "value": 200,
+            }
+        ],
     )
     mock_candidate = MagicMock()
     mock_candidate.patch_id = "replay-cfg-1"
     mock_candidate.payload = json.loads(cached_spec.model_dump_json())
 
-    llm_spec = PatchSpec(patch_id="llm-fix-1", rationale="fix",
-                          operations=[{"op": "set_module_config_key",
-                                       "module_id": "m1", "key": "path", "value": "/fixed.csv"}])
+    llm_spec = PatchSpec(
+        patch_id="llm-fix-1",
+        rationale="fix",
+        operations=[
+            {"op": "set_module_config_key", "module_id": "m1", "key": "path", "value": "/fixed.csv"}
+        ],
+    )
 
     os.environ["ANTHROPIC_API_KEY"] = "test-key"
 
@@ -262,8 +306,11 @@ def test_replay_candidate_with_set_engine_config_falls_through_to_llm(tmp_path):
             with patch("aqueduct.agent.memory.find_replay_candidate", return_value=mock_candidate):
                 with patch("aqueduct.agent.generate_agent_patch") as mock_gap:
                     from aqueduct.agent import AgentPatchResult
+
                     mock_gap.return_value = AgentPatchResult(
-                        patch=llm_spec, attempts=1, stop_reason=StopReason.SOLVED,
+                        patch=llm_spec,
+                        attempts=1,
+                        stop_reason=StopReason.SOLVED,
                     )
                     # The disqualified candidate never reaches the gate
                     # pyramid at all — only the LLM patch's own gate call
@@ -284,6 +331,7 @@ def test_replay_candidate_with_set_engine_config_falls_through_to_llm(tmp_path):
 
 # ── PATH 3: Replay gate-fail → fall through to LLM ──────────────────────────
 
+
 def test_replay_gate_fail_falls_through_to_llm(tmp_path):
     """Replay candidate fails sandbox → falls through to LLM."""
     runner = CliRunner()
@@ -293,9 +341,14 @@ def test_replay_gate_fail_falls_through_to_llm(tmp_path):
     _write_config(cfg_path)
 
     from aqueduct.patch.grammar import PatchSpec
-    spec = PatchSpec(patch_id="replay-fail-1", rationale="replay",
-                     operations=[{"op": "set_module_config_key",
-                                  "module_id": "m1", "key": "path", "value": "/fixed.csv"}])
+
+    spec = PatchSpec(
+        patch_id="replay-fail-1",
+        rationale="replay",
+        operations=[
+            {"op": "set_module_config_key", "module_id": "m1", "key": "path", "value": "/fixed.csv"}
+        ],
+    )
 
     mock_candidate = MagicMock()
     mock_candidate.patch_id = "replay-fail-1"
@@ -317,8 +370,11 @@ def test_replay_gate_fail_falls_through_to_llm(tmp_path):
             with patch("aqueduct.agent.memory.find_replay_candidate", return_value=mock_candidate):
                 with patch("aqueduct.agent.generate_agent_patch") as mock_gap:
                     from aqueduct.agent import AgentPatchResult
+
                     mock_gap.return_value = AgentPatchResult(
-                        patch=spec, attempts=1, stop_reason=StopReason.SOLVED,
+                        patch=spec,
+                        attempts=1,
+                        stop_reason=StopReason.SOLVED,
                     )
                     # The replay-gate path (Phase 79) runs run_sandbox_gate
                     # through the TARGET ENGINE's own ExecutorProtocol, not the
@@ -340,7 +396,8 @@ def test_replay_gate_fail_falls_through_to_llm(tmp_path):
                     with patch("aqueduct.patch.preview.run_sandbox_gate") as mock_sandbox:
                         mock_sandbox.side_effect = [
                             SandboxGateResult(
-                                status="fail", detail="replay candidate no longer applies",
+                                status="fail",
+                                detail="replay candidate no longer applies",
                             ),
                             SandboxGateResult(status="pass", detail="ok"),
                         ]
@@ -353,6 +410,7 @@ def test_replay_gate_fail_falls_through_to_llm(tmp_path):
 
 # ── PATH 5: Replay in human mode → staged as pending with source='replay' ───
 
+
 def test_replay_human_mode_stages_pending(tmp_path):
     """Replay in human mode → staged to pending with source='replay'."""
     runner = CliRunner()
@@ -362,9 +420,14 @@ def test_replay_human_mode_stages_pending(tmp_path):
     _write_config(cfg_path)
 
     from aqueduct.patch.grammar import PatchSpec
-    spec = PatchSpec(patch_id="replay-human-1", rationale="replay",
-                     operations=[{"op": "set_module_config_key",
-                                  "module_id": "m1", "key": "path", "value": "/fixed.csv"}])
+
+    spec = PatchSpec(
+        patch_id="replay-human-1",
+        rationale="replay",
+        operations=[
+            {"op": "set_module_config_key", "module_id": "m1", "key": "path", "value": "/fixed.csv"}
+        ],
+    )
 
     mock_candidate = MagicMock()
     mock_candidate.patch_id = "replay-human-1"
@@ -387,18 +450,24 @@ def test_replay_human_mode_stages_pending(tmp_path):
 
 # ── PATH 6: memory.replay: false → straight to LLM ──────────────────────────
 
+
 def test_memory_replay_false_skips_pending_replay_lookups(tmp_path):
     """agent.memory.replay: false → pending/replay lookups skipped, LLM called."""
     runner = CliRunner()
     bp_path = tmp_path / "bp.yml"
     _write_bp(bp_path, "approval: auto")
     cfg_path = tmp_path / "aq.yml"
-    _write_config(cfg_path, 'memory: {replay: false, coaching: false}')
+    _write_config(cfg_path, "memory: {replay: false, coaching: false}")
 
     from aqueduct.patch.grammar import PatchSpec
-    spec = PatchSpec(patch_id="llm-fix", rationale="fix",
-                     operations=[{"op": "set_module_config_key",
-                                  "module_id": "m1", "key": "path", "value": "/fixed.csv"}])
+
+    spec = PatchSpec(
+        patch_id="llm-fix",
+        rationale="fix",
+        operations=[
+            {"op": "set_module_config_key", "module_id": "m1", "key": "path", "value": "/fixed.csv"}
+        ],
+    )
 
     os.environ["ANTHROPIC_API_KEY"] = "test-key"
 
@@ -410,8 +479,11 @@ def test_memory_replay_false_skips_pending_replay_lookups(tmp_path):
             with patch("aqueduct.agent.memory.find_replay_candidate") as mock_frc:
                 with patch("aqueduct.agent.generate_agent_patch") as mock_gap:
                     from aqueduct.agent import AgentPatchResult
+
                     mock_gap.return_value = AgentPatchResult(
-                        patch=spec, attempts=1, stop_reason=StopReason.SOLVED,
+                        patch=spec,
+                        attempts=1,
+                        stop_reason=StopReason.SOLVED,
                     )
                     # See test_llm_heal_stamps_resolution_and_signature above —
                     # the inline sandbox gate must be mocked too, or it starts
@@ -428,6 +500,7 @@ def test_memory_replay_false_skips_pending_replay_lookups(tmp_path):
 
 # ── PATH 6b: aqueduct runs --heal-coverage ─────────────────────────────────
 
+
 def test_heal_coverage_aggregates_resolutions(tmp_path):
     """aqueduct runs --heal-coverage aggregates by resolution and reports zero-token %."""
     import duckdb
@@ -439,13 +512,15 @@ def test_heal_coverage_aggregates_resolutions(tmp_path):
     obs_dir.mkdir(parents=True)
     db_path = obs_dir / "observability.db"
     conn = duckdb.connect(str(db_path))
-    conn.execute("""
+    conn.execute(
+        """
         CREATE TABLE healing_outcomes (
             id VARCHAR PRIMARY KEY,
             run_id VARCHAR, patch_id VARCHAR,
             resolution VARCHAR, failure_signature VARCHAR
         )
-    """)
+    """
+    )
     conn.execute("INSERT INTO healing_outcomes VALUES ('1', 'r1', 'p1', 'llm', 'h1')")
     conn.execute("INSERT INTO healing_outcomes VALUES ('2', 'r1', 'p2', 'cached', 'h2')")
     conn.execute("INSERT INTO healing_outcomes VALUES ('3', 'r2', 'p3', 'replayed', 'h3')")
@@ -454,10 +529,15 @@ def test_heal_coverage_aggregates_resolutions(tmp_path):
 
     runner = CliRunner()
     os.environ["ANTHROPIC_API_KEY"] = "test-key"
-    res = runner.invoke(cli, [
-        "runs", "--heal-coverage",
-        "--store-dir", str(tmp_path / ".aqueduct" / "observability" / "test_bp"),
-    ])
+    res = runner.invoke(
+        cli,
+        [
+            "runs",
+            "--heal-coverage",
+            "--store-dir",
+            str(tmp_path / ".aqueduct" / "observability" / "test_bp"),
+        ],
+    )
 
     assert res.exit_code == 0
     assert "llm" in res.output
@@ -476,21 +556,28 @@ def test_heal_coverage_empty_db_shows_no_healings(tmp_path):
     obs_dir.mkdir(parents=True)
     db_path = obs_dir / "observability.db"
     conn = duckdb.connect(str(db_path))
-    conn.execute("""
+    conn.execute(
+        """
         CREATE TABLE healing_outcomes (
             id VARCHAR PRIMARY KEY,
             run_id VARCHAR, patch_id VARCHAR,
             resolution VARCHAR, failure_signature VARCHAR
         )
-    """)
+    """
+    )
     conn.close()
 
     runner = CliRunner()
     os.environ["ANTHROPIC_API_KEY"] = "test-key"
-    res = runner.invoke(cli, [
-        "runs", "--heal-coverage",
-        "--store-dir", str(tmp_path / ".aqueduct" / "observability" / "test_bp"),
-    ])
+    res = runner.invoke(
+        cli,
+        [
+            "runs",
+            "--heal-coverage",
+            "--store-dir",
+            str(tmp_path / ".aqueduct" / "observability" / "test_bp"),
+        ],
+    )
 
     # No rows → no error message
     assert res.exit_code == 0
@@ -503,15 +590,21 @@ def test_heal_coverage_no_db_no_runs(tmp_path):
 
     runner = CliRunner()
     os.environ["ANTHROPIC_API_KEY"] = "test-key"
-    res = runner.invoke(cli, [
-        "runs", "--heal-coverage",
-        "--store-dir", str(tmp_path / "empty"),
-    ])
+    res = runner.invoke(
+        cli,
+        [
+            "runs",
+            "--heal-coverage",
+            "--store-dir",
+            str(tmp_path / "empty"),
+        ],
+    )
 
     assert "No runs found" in res.output
 
 
 # ── PATH 7: LLM-resolution stamps ──────────────────────────────────────────
+
 
 def test_llm_heal_stamps_resolution_and_signature(tmp_path):
     """LLM-generated patch records resolution='llm' and failure_signature in healing_outcomes."""
@@ -522,9 +615,14 @@ def test_llm_heal_stamps_resolution_and_signature(tmp_path):
     _write_config(cfg_path)
 
     from aqueduct.patch.grammar import PatchSpec
-    spec = PatchSpec(patch_id="llm-stamp-1", rationale="fix",
-                     operations=[{"op": "set_module_config_key",
-                                  "module_id": "m1", "key": "path", "value": "/fixed.csv"}])
+
+    spec = PatchSpec(
+        patch_id="llm-stamp-1",
+        rationale="fix",
+        operations=[
+            {"op": "set_module_config_key", "module_id": "m1", "key": "path", "value": "/fixed.csv"}
+        ],
+    )
 
     os.environ["ANTHROPIC_API_KEY"] = "test-key"
 
@@ -536,8 +634,11 @@ def test_llm_heal_stamps_resolution_and_signature(tmp_path):
             with patch("aqueduct.agent.memory.find_replay_candidate", return_value=None):
                 with patch("aqueduct.agent.generate_agent_patch") as mock_gap:
                     from aqueduct.agent import AgentPatchResult
+
                     mock_gap.return_value = AgentPatchResult(
-                        patch=spec, attempts=1, stop_reason=StopReason.SOLVED,
+                        patch=spec,
+                        attempts=1,
+                        stop_reason=StopReason.SOLVED,
                     )
                     # The inline patch-gates path (Phase 79) runs
                     # run_sandbox_gate through the TARGET ENGINE's own
@@ -557,6 +658,7 @@ def test_llm_heal_stamps_resolution_and_signature(tmp_path):
 
     # Check healing_outcomes in observability DB
     import duckdb
+
     obs_db = tmp_path / "obs" / "heal_cache" / "observability.db"
     if obs_db.exists():
         conn = duckdb.connect(str(obs_db))

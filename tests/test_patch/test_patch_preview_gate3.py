@@ -97,13 +97,20 @@ def test_gate3_pass_detail_states_scope_for_config_only_patch(spark, sample_data
         ],
         "edges": [{"from": "in", "to": "out"}],
     }
-    config_only_patch = PatchSpec.model_validate({
-        "patch_id": "cfg-1", "rationale": "bump shuffle partitions",
-        "operations": [{
-            "op": "set_engine_config", "engine": "spark",
-            "key": "spark.sql.shuffle.partitions", "value": 200,
-        }],
-    })
+    config_only_patch = PatchSpec.model_validate(
+        {
+            "patch_id": "cfg-1",
+            "rationale": "bump shuffle partitions",
+            "operations": [
+                {
+                    "op": "set_engine_config",
+                    "engine": "spark",
+                    "key": "spark.sql.shuffle.partitions",
+                    "value": 200,
+                }
+            ],
+        }
+    )
 
     result = run_sandbox_gate(
         bp,
@@ -152,13 +159,20 @@ def test_gate3_pass_detail_unchanged_for_module_patch(spark, sample_data, tmp_pa
         ],
         "edges": [{"from": "in", "to": "out"}],
     }
-    module_patch = PatchSpec.model_validate({
-        "patch_id": "mod-1", "rationale": "fix format",
-        "operations": [{
-            "op": "set_module_config_key", "module_id": "in",
-            "key": "format", "value": "parquet",
-        }],
-    })
+    module_patch = PatchSpec.model_validate(
+        {
+            "patch_id": "mod-1",
+            "rationale": "fix format",
+            "operations": [
+                {
+                    "op": "set_module_config_key",
+                    "module_id": "in",
+                    "key": "format",
+                    "value": "parquet",
+                }
+            ],
+        }
+    )
 
     result = run_sandbox_gate(
         bp,

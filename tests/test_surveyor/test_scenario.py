@@ -19,7 +19,6 @@ from aqueduct.surveyor.scenario import (
     run_scenario,
 )
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 _MINIMAL_BP_YAML = """\
@@ -79,6 +78,7 @@ def _fake_patch(**kwargs):
 
 # ── load_scenario ─────────────────────────────────────────────────────────────
 
+
 class TestLoadScenario:
     def test_valid_scenario_parsed(self, tmp_path):
         sc = _write_scenario(tmp_path)
@@ -126,13 +126,8 @@ class TestLoadScenario:
         assert isinstance(s.expected_patch, dict)
 
 
-
-
-
-
-
-
 # ── _check_assertions ─────────────────────────────────────────────────────────
+
 
 class TestCheckAssertions:
     def test_patch_is_valid_true_patch_none_fails(self):
@@ -249,7 +244,8 @@ class TestCheckAssertions:
         """allow_defer: true + LLM defers → PASS (gating satisfied)."""
         failures, soft_failures, *_ = _check_assertions(
             [{"patch_is_valid": True, "allow_defer": True}],
-            patch=self._defer_patch(), blueprint_path=None,
+            patch=self._defer_patch(),
+            blueprint_path=None,
         )
         assert failures == []
 
@@ -257,7 +253,8 @@ class TestCheckAssertions:
         """no allow_defer assertion + LLM defers → FAIL with guidance message."""
         failures, soft_failures, *_ = _check_assertions(
             [{"patch_is_valid": True}],
-            patch=self._defer_patch(), blueprint_path=None,
+            patch=self._defer_patch(),
+            blueprint_path=None,
         )
         assert any("add allow_defer: true" in f for f in failures)
 
@@ -266,12 +263,14 @@ class TestCheckAssertions:
         p = _fake_patch()
         failures, soft_failures, *_ = _check_assertions(
             [{"allow_defer": True}],
-            patch=p, blueprint_path=None,
+            patch=p,
+            blueprint_path=None,
         )
         assert any("expected defer_to_human" in f for f in failures)
 
 
 # ── run_scenario ──────────────────────────────────────────────────────────────
+
 
 class TestRunScenario:
     def test_bad_blueprint_path_returns_failed_result(self, tmp_path):
@@ -343,23 +342,26 @@ assertions:
         # - category = "other" (miss)
         # - root_cause = "column missing" (hit)
         from aqueduct.patch.grammar import PatchSpec
+
         patch_obj = PatchSpec(
             patch_id="fix-1",
             rationale="test",
             confidence=0.5,
             category="other",
             root_cause="column missing",
-            operations=[{"op": "replace_module_label", "module_id": "src", "label": "New Label"}]
+            operations=[{"op": "replace_module_label", "module_id": "src", "label": "New Label"}],
         )
-        
+
         mock_result = MagicMock()
         mock_result.patch = patch_obj
         mock_result.attempts = 1
         mock_result.reprompt_errors = []
 
         # We mock _try_apply_patch in scenario.py to succeed so patch_applies passes
-        with patch("aqueduct.agent.generate_agent_patch", return_value=mock_result), \
-             patch("aqueduct.surveyor.scenario._try_apply_patch", return_value=(True, "", None, {})):
+        with (
+            patch("aqueduct.agent.generate_agent_patch", return_value=mock_result),
+            patch("aqueduct.surveyor.scenario._try_apply_patch", return_value=(True, "", None, {})),
+        ):
             result = run_scenario(
                 scenario,
                 model="claude-3",
@@ -370,7 +372,7 @@ assertions:
         assert result.passed is True  # correct fix passes even with imperfect diagnosis!
         assert len(result.failures) == 0
         assert len(result.soft_failures) == 2  # min_confidence and expected_category missed
-        
+
         # 2. Check diag_score
         # root_cause_contains is a hit (1/1), expected_category is a miss (0/1)
         # So diag_score = 0.5
@@ -398,19 +400,30 @@ expected_patch:
         scenario = load_scenario(sc_path)
 
         from aqueduct.patch.grammar import PatchSpec
+
         patch_obj = PatchSpec(
             patch_id="fix-1",
             rationale="test",
-            operations=[{"op": "replace_module_label", "module_id": "src", "label": "New Label"}]
+            operations=[{"op": "replace_module_label", "module_id": "src", "label": "New Label"}],
         )
-        
+
         mock_result = MagicMock()
         mock_result.patch = patch_obj
         mock_result.attempts = 1
         mock_result.reprompt_errors = []
 
-        with patch("aqueduct.agent.generate_agent_patch", return_value=mock_result), \
-             patch("aqueduct.surveyor.scenario._try_apply_patch", return_value=(True, "", None, {"modules": [{"id": "src", "config": {"path": "/wrong/path"}}]})):
+        with (
+            patch("aqueduct.agent.generate_agent_patch", return_value=mock_result),
+            patch(
+                "aqueduct.surveyor.scenario._try_apply_patch",
+                return_value=(
+                    True,
+                    "",
+                    None,
+                    {"modules": [{"id": "src", "config": {"path": "/wrong/path"}}]},
+                ),
+            ),
+        ):
             result = run_scenario(
                 scenario,
                 model="claude-3",
@@ -438,9 +451,11 @@ assertions:
         scenario = load_scenario(sc_path)
 
         from aqueduct.patch.grammar import PatchSpec
+
         patch_obj = PatchSpec(
-            patch_id="fix-1", rationale="test",
-            operations=[{"op": "remove_module", "module_id": "src"}]
+            patch_id="fix-1",
+            rationale="test",
+            operations=[{"op": "remove_module", "module_id": "src"}],
         )
         mock_result = MagicMock()
         mock_result.patch = patch_obj
@@ -448,16 +463,20 @@ assertions:
         mock_result.reprompt_errors = []
 
         # Return a non-None violated_guardrails from _try_apply_patch
-        with patch("aqueduct.agent.generate_agent_patch", return_value=mock_result), \
-             patch("aqueduct.surveyor.scenario._try_apply_patch", return_value=(False, "violated", ["replace_module_config"], None)):
-            result = run_scenario(
-                scenario, model="claude-3", patches_dir=tmp_path / "patches"
-            )
+        with (
+            patch("aqueduct.agent.generate_agent_patch", return_value=mock_result),
+            patch(
+                "aqueduct.surveyor.scenario._try_apply_patch",
+                return_value=(False, "violated", ["replace_module_config"], None),
+            ),
+        ):
+            result = run_scenario(scenario, model="claude-3", patches_dir=tmp_path / "patches")
 
         assert result.violated_guardrails == ["replace_module_config"]
 
 
 # ── Phase 75 — agentic mode benchmark plumbing ──────────────────────────────
+
 
 class TestRunScenarioAgenticMode:
     """Minimal benchmark plumbing (design item 6): agent.mode: agentic must be
@@ -470,9 +489,14 @@ class TestRunScenarioAgenticMode:
         scenario = load_scenario(sc)
 
         from aqueduct.patch.grammar import PatchSpec
+
         patch_obj = PatchSpec(
-            patch_id="fix-agentic", rationale="test", root_cause="rc",
-            operations=[{"op": "set_module_config_key", "module_id": "src", "key": "path", "value": "y.csv"}],
+            patch_id="fix-agentic",
+            rationale="test",
+            root_cause="rc",
+            operations=[
+                {"op": "set_module_config_key", "module_id": "src", "key": "path", "value": "y.csv"}
+            ],
         )
         mock_result = MagicMock()
         mock_result.patch = patch_obj
@@ -487,8 +511,11 @@ class TestRunScenarioAgenticMode:
 
         with patch("aqueduct.agent.generate_agent_patch", side_effect=_fake_generate_agent_patch):
             result = run_scenario(
-                scenario, model="claude-3", patches_dir=tmp_path / "patches",
-                mode="agentic", max_tool_calls=5,
+                scenario,
+                model="claude-3",
+                patches_dir=tmp_path / "patches",
+                mode="agentic",
+                max_tool_calls=5,
             )
 
         assert isinstance(result, ScenarioResult)
@@ -496,6 +523,7 @@ class TestRunScenarioAgenticMode:
         assert captured_kwargs["max_tool_calls"] == 5
         # A ToolBox must have been built (not None) for an agentic-mode run.
         from aqueduct.agent.toolbox import ToolBox
+
         assert isinstance(captured_kwargs["toolbox"], ToolBox)
         # Scenarios never start Spark — session-bound tools must degrade.
         assert captured_kwargs["toolbox"].spark_session is None
@@ -524,9 +552,17 @@ class TestRunScenarioAgenticMode:
 
 # ── format_benchmark_table ────────────────────────────────────────────────────
 
-def _make_result(scenario_id: str, model: str, *, passed: bool = True,
-                 confidence: float | None = 0.9, patch_valid: bool = True,
-                 patch_applies: bool = True, violated_guardrails: list[str] | None = None) -> ScenarioResult:
+
+def _make_result(
+    scenario_id: str,
+    model: str,
+    *,
+    passed: bool = True,
+    confidence: float | None = 0.9,
+    patch_valid: bool = True,
+    patch_applies: bool = True,
+    violated_guardrails: list[str] | None = None,
+) -> ScenarioResult:
     return ScenarioResult(
         scenario_id=scenario_id,
         model=model,
@@ -538,7 +574,7 @@ def _make_result(scenario_id: str, model: str, *, passed: bool = True,
         duration_seconds=1.5,
         confidence=confidence,
         attempts_to_parse=1,
-        violated_guardrails=violated_guardrails
+        violated_guardrails=violated_guardrails,
     )
 
 
@@ -655,7 +691,7 @@ class TestFormatBenchmarkTable:
                     attempts_to_parse=1,
                     diag_score=1.0,
                 )
-            }
+            },
         }
         table = format_benchmark_table(results, models=["m1"])
 
@@ -668,7 +704,7 @@ class TestFormatBenchmarkTable:
         assert "100%" in table
         # Diag score summary row at the bottom.
         assert "Diag score" in table
-        
+
         # Check Diag score summary row: (0.5 + 1.0) / 2 = 0.75 -> 75%
         assert "Diag score" in table
         assert "75%" in table
@@ -693,12 +729,12 @@ class TestFormatBenchmarkTable:
             }
         }
         table = format_benchmark_table(results, models=["m1"])
-        
+
         # Cell has no d%
         s1_line = [line for line in table.split("\n") if "s1" in line][0]
         # In s1 row, verify the d% indicator is omitted (e.g. no "d" character in cell details)
         assert "d" not in s1_line.split("s1")[1]
-        
+
         # Summary row has —
         assert "Diag score" in table
         # Find the line containing "Diag score" and assert it ends with "—" or has it
@@ -707,6 +743,7 @@ class TestFormatBenchmarkTable:
 
 
 # ── _try_apply_patch ──────────────────────────────────────────────────────────
+
 
 class TestTryApplyPatch:
     def _create_bp(self, tmp_path: Path, guardrails: str | None = None) -> Path:
@@ -720,17 +757,17 @@ class TestTryApplyPatch:
 
     def _make_patch(self, op: str, **kwargs):
         from aqueduct.patch.grammar import PatchSpec
+
         return PatchSpec(
-            patch_id="test",
-            rationale="test",
-            operations=[{"op": op, "module_id": "src", **kwargs}]
+            patch_id="test", rationale="test", operations=[{"op": op, "module_id": "src", **kwargs}]
         )
 
     def test_no_guardrails_block_returns_none(self, tmp_path):
         from aqueduct.surveyor.scenario import _try_apply_patch
+
         bp_path = self._create_bp(tmp_path)
         patch = self._make_patch("set_module_config_key", key="path", value="/new")
-        
+
         success, err, violated, patched_dict = _try_apply_patch(patch, bp_path)
         assert success is True
         assert violated is None
@@ -739,9 +776,10 @@ class TestTryApplyPatch:
 
     def test_defined_and_clean_returns_empty_list(self, tmp_path):
         from aqueduct.surveyor.scenario import _try_apply_patch
+
         bp_path = self._create_bp(tmp_path, "forbidden_ops: [replace_module_config]")
         patch = self._make_patch("set_module_config_key", key="path", value="/new")
-        
+
         success, err, violated, patched_dict = _try_apply_patch(patch, bp_path)
         assert success is True
         assert violated == []
@@ -749,9 +787,10 @@ class TestTryApplyPatch:
 
     def test_forbidden_ops_violation(self, tmp_path):
         from aqueduct.surveyor.scenario import _try_apply_patch
+
         bp_path = self._create_bp(tmp_path, "forbidden_ops: [replace_module_config]")
         patch = self._make_patch("replace_module_config", config={"path": "/new"})
-        
+
         success, err, violated, patched_dict = _try_apply_patch(patch, bp_path)
         assert success is False
         assert "guardrails violated" in err
@@ -763,9 +802,10 @@ class TestTryApplyPatch:
 
     def test_allowed_paths_violation(self, tmp_path):
         from aqueduct.surveyor.scenario import _try_apply_patch
+
         bp_path = self._create_bp(tmp_path, "allowed_paths: [blueprints/orders.yml]")
         patch = self._make_patch("set_module_config_key", key="path", value="data/other.csv")
-        
+
         success, err, violated, patched_dict = _try_apply_patch(patch, bp_path)
         assert success is False
         assert "guardrails violated" in err
@@ -777,43 +817,61 @@ class TestTryApplyPatch:
     def test_parse_compile_failure_returns_none_patched_dict(self, tmp_path):
         from aqueduct.surveyor.scenario import _try_apply_patch
         from aqueduct.patch.grammar import PatchSpec
+
         bp_path = self._create_bp(tmp_path)
         # Apply a patch that breaks the blueprint (invalid type for format fails parsing)
         patch = PatchSpec(
             patch_id="test",
             rationale="test",
-            operations=[{"op": "set_module_config_key", "module_id": "src", "key": "format", "value": ["a list"]}]
+            operations=[
+                {
+                    "op": "set_module_config_key",
+                    "module_id": "src",
+                    "key": "format",
+                    "value": ["a list"],
+                }
+            ],
         )
-        
+
         success, err, violated, patched_dict = _try_apply_patch(patch, bp_path)
         assert success is False
-        assert "ParseError" in err or "validation" in err.lower() or "unhashable" in err.lower() or "list" in err.lower()
+        assert (
+            "ParseError" in err
+            or "validation" in err.lower()
+            or "unhashable" in err.lower()
+            or "list" in err.lower()
+        )
         assert violated is None
         assert patched_dict is None
 
 
 # ── _normalize_sql ────────────────────────────────────────────────────────────
 
+
 class TestNormalizeSql:
     def test_collapses_whitespace(self):
         from aqueduct.surveyor.scenario import _normalize_sql
+
         result = _normalize_sql("SELECT  a , b  FROM  t")
         assert "a" in result and "b" in result and "t" in result
         assert "  " not in result
 
     def test_equivalent_queries_produce_same_canonical_form(self):
         from aqueduct.surveyor.scenario import _normalize_sql
+
         r1 = _normalize_sql("SELECT a, b FROM t")
         r2 = _normalize_sql("select   a,b from   t")
         assert r1.lower() == r2.lower()
 
     def test_event_time_substring_found_after_normalization(self):
         from aqueduct.surveyor.scenario import _normalize_sql
+
         full = "SELECT CAST(event_ts AS timestamp) AS event_time FROM t"
         assert "event_time" in _normalize_sql(full).lower()
 
     def test_fallback_on_malformed_sql_does_not_crash(self):
         from aqueduct.surveyor.scenario import _normalize_sql
+
         result = _normalize_sql("@@@INVALID!!!SQL###")
         assert isinstance(result, str)
 
@@ -821,6 +879,7 @@ class TestNormalizeSql:
         """When sqlglot.parse_one raises, result equals ' '.join(text.lower().split())."""
         from unittest.mock import patch as mock_patch
         from aqueduct.surveyor.scenario import _normalize_sql
+
         text = "NOT SQL  multiple   spaces"
         with mock_patch("sqlglot.parse_one", side_effect=Exception("parse error")):
             result = _normalize_sql(text)
@@ -847,6 +906,7 @@ _SAMPLE_PATCHED_DICT = {
 class TestCheckExpectedEffect:
     def _call(self, expected, patched_dict=_SAMPLE_PATCHED_DICT):
         from aqueduct.surveyor.scenario import _check_expected_effect
+
         return _check_expected_effect(expected, patched_dict)
 
     def test_empty_expected_returns_no_failures(self):
@@ -866,61 +926,69 @@ class TestCheckExpectedEffect:
         assert "not found" in failures[0]
 
     def test_sql_key_substring_present_no_failures(self):
-        failures = self._call({
-            "effect": {
-                "module": "clean_events",
-                "config_contains": {"query": "event_time"},
+        failures = self._call(
+            {
+                "effect": {
+                    "module": "clean_events",
+                    "config_contains": {"query": "event_time"},
+                }
             }
-        })
+        )
         assert failures == []
 
     def test_sql_key_substring_absent_reports_failure(self):
-        failures = self._call({
-            "effect": {
-                "module": "clean_events",
-                "config_contains": {"query": "nonexistent_column"},
+        failures = self._call(
+            {
+                "effect": {
+                    "module": "clean_events",
+                    "config_contains": {"query": "nonexistent_column"},
+                }
             }
-        })
+        )
         assert len(failures) == 1
         assert "nonexistent_column" in failures[0]
         assert "AST-normalized" in failures[0] or "normalized" in failures[0].lower()
 
     def test_non_sql_key_substring_present_no_failures(self):
-        failures = self._call({
-            "effect": {
-                "module": "clean_events",
-                "config_contains": {"path": "events"},
+        failures = self._call(
+            {
+                "effect": {
+                    "module": "clean_events",
+                    "config_contains": {"path": "events"},
+                }
             }
-        })
+        )
         assert failures == []
 
     def test_non_sql_key_substring_absent_reports_failure(self):
-        failures = self._call({
-            "effect": {
-                "module": "clean_events",
-                "config_contains": {"path": "nonexistent/path"},
+        failures = self._call(
+            {
+                "effect": {
+                    "module": "clean_events",
+                    "config_contains": {"path": "nonexistent/path"},
+                }
             }
-        })
+        )
         assert len(failures) == 1
         assert "nonexistent/path" in failures[0]
         assert "AST-normalized" not in failures[0]
 
     def test_bool_true_strict_equality_pass(self):
-        failures = self._call({
-            "effect": {"module": "clean_events", "config_contains": {"header": True}}
-        })
+        failures = self._call(
+            {"effect": {"module": "clean_events", "config_contains": {"header": True}}}
+        )
         assert failures == []
 
     def test_int_strict_equality_pass(self):
-        failures = self._call({
-            "effect": {"module": "clean_events", "config_contains": {"max_rows": 1000}}
-        })
+        failures = self._call(
+            {"effect": {"module": "clean_events", "config_contains": {"max_rows": 1000}}}
+        )
         assert failures == []
 
     def test_bool_wrong_value_fails(self):
-        failures = self._call({
-            "effect": {"module": "clean_events", "config_contains": {"header": False}}
-        })
+        failures = self._call(
+            {"effect": {"module": "clean_events", "config_contains": {"header": False}}}
+        )
         assert len(failures) == 1
         assert "header" in failures[0]
 
@@ -973,6 +1041,7 @@ class TestCheckExpectedEffect:
 
     def test_patched_dict_none_skips_grader(self):
         from aqueduct.surveyor.scenario import _check_expected_effect
+
         failures = _check_expected_effect(
             {"effect": {"module": "clean_events", "config_contains": {"query": "event_time"}}},
             None,
@@ -1009,6 +1078,7 @@ class TestGalleryScenarios:
     def test_scenario_05_empty_expected_patch_no_failures(self):
         """Scenario 05 has expected_patch: {} — effect grader returns no failures."""
         from aqueduct.surveyor.scenario import _check_expected_effect
+
         failures = _check_expected_effect(
             {},
             {"modules": [{"id": "clean_events", "config": {}}]},
@@ -1018,6 +1088,7 @@ class TestGalleryScenarios:
     def test_scenario_06_blueprint_declares_forbidden_ops(self):
         """Scenario 06 blueprint declares agent.guardrails.forbidden_ops."""
         from aqueduct.parser.parser import parse
+
         matches = list(_GALLERY_DIR.glob("06_*.aqscenario.yml"))
         assert matches, "Scenario 06 not found"
         scenario = load_scenario(matches[0])
@@ -1035,6 +1106,7 @@ class TestGalleryScenarios:
         """The guardrail surfaces in _build_guardrails_section(bp.agent.guardrails)."""
         from aqueduct.agent.prompts import _build_guardrails_section
         from aqueduct.parser.parser import parse
+
         bp_path = _GALLERY_DIR / "blueprints" / "06_guardrail_forbidden_op.yml"
         bp = parse(str(bp_path))
         section = _build_guardrails_section(bp.agent.guardrails)
@@ -1044,9 +1116,11 @@ class TestGalleryScenarios:
 
 # ── Phase 34 Benchmark = Production Parity ────────────────────────────────────
 
+
 class TestPhase34BenchmarkParity:
     def test_run_scenario_budget_none_synthesizes_from_max_reprompts(self, tmp_path):
         from aqueduct.surveyor.scenario import run_scenario, load_scenario
+
         sc_path = _write_scenario(tmp_path)
         scenario = load_scenario(sc_path)
 
@@ -1065,6 +1139,7 @@ class TestPhase34BenchmarkParity:
     def test_run_scenario_installs_apply_callback(self, tmp_path):
         """If blueprint_path resolves, run_scenario installs an apply_callback on the loop."""
         from aqueduct.surveyor.scenario import run_scenario, load_scenario
+
         sc_path = _write_scenario(tmp_path)
         scenario = load_scenario(sc_path)
 
@@ -1081,13 +1156,16 @@ class TestPhase34BenchmarkParity:
 
     def test_scenario_result_stop_reason_populated(self, tmp_path):
         from aqueduct.surveyor.scenario import run_scenario, load_scenario
+
         sc_path = _write_scenario(tmp_path)
         scenario = load_scenario(sc_path)
 
         with patch("aqueduct.agent.generate_agent_patch") as m_gap:
-            m_gap.return_value = _fake_agent_result(stop_reason=StopReason.STUCK_SIGNATURE, escalated=True, tin=10, tout=20)
+            m_gap.return_value = _fake_agent_result(
+                stop_reason=StopReason.STUCK_SIGNATURE, escalated=True, tin=10, tout=20
+            )
             res = run_scenario(scenario, "model", tmp_path)
-            
+
             assert res.stop_reason == StopReason.STUCK_SIGNATURE
             assert res.escalated is True
             assert res.tokens_in_total == 10
@@ -1096,21 +1174,27 @@ class TestPhase34BenchmarkParity:
     def test_run_benchmark_forwards_budget(self, tmp_path):
         from aqueduct.surveyor.scenario import run_benchmark
         from aqueduct.agent.budget import BudgetConfig
-        
+
         sc_path = _write_scenario(tmp_path)
         b = BudgetConfig(max_reprompts=9, max_seconds=300)
-        
+
         with patch("aqueduct.surveyor.scenario.run_scenario") as m_rs:
             run_benchmark(sc_path, ["model"], tmp_path, budget=b)
-            
+
             kwargs = m_rs.call_args[1]
             assert kwargs["budget"] == b
 
+
 def _fake_agent_result(stop_reason=StopReason.SOLVED, escalated=False, tin=0, tout=0):
     from aqueduct.agent import AgentPatchResult
+
     return AgentPatchResult(
-        patch=None, attempts=1, stop_reason=stop_reason, escalated=escalated,
-        tokens_in_total=tin, tokens_out_total=tout
+        patch=None,
+        attempts=1,
+        stop_reason=stop_reason,
+        escalated=escalated,
+        tokens_in_total=tin,
+        tokens_out_total=tout,
     )
 
 
@@ -1171,9 +1255,9 @@ class TestPhase35StructuredPropagation:
             "  structured:\n"
             '    error_class: "X"\n'
             '    object_name: "y"\n'
-            "    suggested_columns: [\"a\", \"b\"]\n"
+            '    suggested_columns: ["a", "b"]\n'
             '    sql_state: "42703"\n'
-            "    root_exception: {type: \"Z\", message: \"msg\"}\n"
+            '    root_exception: {type: "Z", message: "msg"}\n'
         )
         sc_path = _write_scenario(tmp_path, body)
         scenario = load_scenario(sc_path)
@@ -1199,10 +1283,7 @@ class TestPhase35StructuredPropagation:
     def test_suggested_columns_str_normalised_to_tuple(self, tmp_path):
         from aqueduct.surveyor.scenario import load_scenario, _build_failure_ctx
 
-        body = _scenario_with_structured(
-            "  structured:\n"
-            '    suggested_columns: "single"\n'
-        )
+        body = _scenario_with_structured("  structured:\n" '    suggested_columns: "single"\n')
         sc_path = _write_scenario(tmp_path, body)
         scenario = load_scenario(sc_path)
         ctx, _bp, _manifest = _build_failure_ctx(scenario)
@@ -1211,9 +1292,7 @@ class TestPhase35StructuredPropagation:
     def test_structured_value_not_dict_coerced_to_empty(self, tmp_path):
         from aqueduct.surveyor.scenario import load_scenario, _build_failure_ctx
 
-        body = _scenario_with_structured(
-            '  structured: "not a dict"\n'
-        )
+        body = _scenario_with_structured('  structured: "not a dict"\n')
         sc_path = _write_scenario(tmp_path, body)
         scenario = load_scenario(sc_path)
         # Must not raise.

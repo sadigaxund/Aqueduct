@@ -1,6 +1,7 @@
 """Central CLI presentation: icons, colors, message + warning rendering.
 Single source of truth so error/status styling stays consistent across commands.
 """
+
 from __future__ import annotations
 
 import logging
@@ -9,8 +10,22 @@ import sys
 
 import click
 
-ICON = {"ok": "\u2713", "fail": "\u2717", "warn": "\u26a0", "skip": "-", "info": "\u00b7", "header": "\u25b6"}
-COLOR = {"ok": "green", "fail": "red", "warn": "yellow", "skip": None, "info": "bright_black", "header": "cyan"}
+ICON = {
+    "ok": "\u2713",
+    "fail": "\u2717",
+    "warn": "\u26a0",
+    "skip": "-",
+    "info": "\u00b7",
+    "header": "\u25b6",
+}
+COLOR = {
+    "ok": "green",
+    "fail": "red",
+    "warn": "yellow",
+    "skip": None,
+    "info": "bright_black",
+    "header": "cyan",
+}
 
 
 def _color_enabled() -> bool:
@@ -79,8 +94,15 @@ def dim(text: str) -> str:
 
 # Semantic icon → colour. ✓ success, ✗ failure, ⚠ warning, ⓘ/◆/↻/▸/⏭/✎ accents.
 _ICON_COLOR = {
-    "✓": "green", "✗": "red", "⚠": "yellow",
-    "ⓘ": "cyan", "◆": "cyan", "↻": "cyan", "▸": "cyan", "⏭": "cyan", "✎": "cyan",
+    "✓": "green",
+    "✗": "red",
+    "⚠": "yellow",
+    "ⓘ": "cyan",
+    "◆": "cyan",
+    "↻": "cyan",
+    "▸": "cyan",
+    "⏭": "cyan",
+    "✎": "cyan",
 }
 # Structure / sub-detail glyphs recede (dim).
 _DIM_GLYPHS = ("├─", "└─", "│", "┆", "↳", "↑")
@@ -134,7 +156,11 @@ def _short_warning(msg: str, limit: int = 100) -> str:
 
 
 def emit_warning_pairs(
-    pairs: list, *, label: str = "", verbose: bool = False, err: bool = True,
+    pairs: list,
+    *,
+    label: str = "",
+    verbose: bool = False,
+    err: bool = True,
 ) -> None:
     """Render ``(rule_id, message)`` pairs as one collapsed ``⚠ N warnings`` block.
 
@@ -148,7 +174,10 @@ def emit_warning_pairs(
     prefix = f"{label} " if label else ""
     hint = "" if verbose else click.style("  ·  -v for full text", dim=True)
     click.echo(
-        click.style(f"{ICON['warn']} {prefix}{n} warning{'' if n == 1 else 's'}", fg="yellow", bold=True) + hint,
+        click.style(
+            f"{ICON['warn']} {prefix}{n} warning{'' if n == 1 else 's'}", fg="yellow", bold=True
+        )
+        + hint,
         err=err,
     )
     for rid, rest in pairs:
@@ -157,7 +186,9 @@ def emit_warning_pairs(
         click.echo(f"  · {tag} {body}", err=err)
 
 
-def emit_warnings(caught: list, *, verbose: bool = False, err: bool = True, label: str = "") -> None:
+def emit_warnings(
+    caught: list, *, verbose: bool = False, err: bool = True, label: str = ""
+) -> None:
     """Render a list of ``warnings.catch_warnings(record=True)`` records as one
     collapsed ``\u26a0 N warnings`` block.  AqueductWarning bodies of the form
     ``[aqueduct:rule_id] msg`` keep the copy-pasteable rule_id; other UserWarnings
@@ -177,7 +208,7 @@ def emit_warnings(caught: list, *, verbose: bool = False, err: bool = True, labe
     for w in caught:
         msg = str(w.message)
         if issubclass(w.category, AqueductWarning) and msg.startswith(_AQ_PREFIX):
-            body = msg[len(_AQ_PREFIX):]
+            body = msg[len(_AQ_PREFIX) :]
             try:
                 rid, rest = body.split("] ", 1)
             except ValueError:

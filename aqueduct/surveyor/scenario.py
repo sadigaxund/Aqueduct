@@ -48,16 +48,18 @@ logger = logging.getLogger(__name__)
 
 # ── Scenario model ────────────────────────────────────────────────────────────
 
+
 @dataclass(frozen=True)
 class AqScenario:
     """Parsed .aqscenario.yml file."""
+
     id: str
     description: str
-    blueprint: str                  # path relative to scenario file
+    blueprint: str  # path relative to scenario file
     inject_failure: dict[str, Any]
     expected_patch: dict[str, Any]  # {ops: [...], forbidden_ops: [...]}
     assertions: list[dict[str, Any]]
-    source_path: Path               # absolute path of the .aqscenario.yml file
+    source_path: Path  # absolute path of the .aqscenario.yml file
 
 
 def load_scenario(path: Path) -> AqScenario:
@@ -87,27 +89,34 @@ def load_scenario(path: Path) -> AqScenario:
 
 # ── Result model ──────────────────────────────────────────────────────────────
 
+
 @dataclass
 class ScenarioResult:
     scenario_id: str
     model: str
     passed: bool
-    patch_valid: bool             # PatchSpec parsed without error
-    patch_applies: bool           # patch can be applied to blueprint
-    failures: list[str]           # GATING failures only (correctness) — these flip passed
-    patch: Any                    # PatchSpec | None
+    patch_valid: bool  # PatchSpec parsed without error
+    patch_applies: bool  # patch can be applied to blueprint
+    failures: list[str]  # GATING failures only (correctness) — these flip passed
+    patch: Any  # PatchSpec | None
     duration_seconds: float
     confidence: float | None = None
-    attempts_to_parse: int = 0    # LLM calls made (1=first try, >1=reprompts needed, 0=API error)
+    attempts_to_parse: int = 0  # LLM calls made (1=first try, >1=reprompts needed, 0=API error)
     reprompt_errors: list[str] = field(default_factory=list)  # validation error per failed attempt
-    root_cause_match: bool | None = None   # None = assertion not configured
-    category_match: bool | None = None     # None = assertion not configured
-    soft_failures: list[str] = field(default_factory=list)  # quality misses — reported, NEVER flip passed
-    diag_score: float | None = None  # fraction of configured diagnosis signals hit; None = none configured
+    root_cause_match: bool | None = None  # None = assertion not configured
+    category_match: bool | None = None  # None = assertion not configured
+    soft_failures: list[str] = field(
+        default_factory=list
+    )  # quality misses — reported, NEVER flip passed
+    diag_score: float | None = (
+        None  # fraction of configured diagnosis signals hit; None = none configured
+    )
     # Persistence + regression detection
-    prompt_version: str | None = None  # agent.PROMPT_VERSION at time of run; carried into benchmark_results
-    provider: str | None = None        # LLM provider used (anthropic | openai_compat)
-    base_url: str | None = None        # LLM endpoint base_url (may be None for hosted providers)
+    prompt_version: str | None = (
+        None  # agent.PROMPT_VERSION at time of run; carried into benchmark_results
+    )
+    provider: str | None = None  # LLM provider used (anthropic | openai_compat)
+    base_url: str | None = None  # LLM endpoint base_url (may be None for hosted providers)
     # Guardrail compliance chain.
     # None when scenario blueprint declares no agent.guardrails (excluded from
     # guardrail-clean rate); [] when defined-and-clean; non-empty when violated.
@@ -118,7 +127,7 @@ class ScenarioResult:
     # agent.budget.STOP_REASONS). Persisted to benchmark_results so leaderboard
     # consumers can distinguish "model gave up" from "ran out of attempts".
     stop_reason: str | None = None
-    escalated: bool = False           # stuck-signature escalation was applied
+    escalated: bool = False  # stuck-signature escalation was applied
     tokens_in_total: int = 0
     tokens_out_total: int = 0
 
@@ -137,7 +146,10 @@ class ScenarioResult:
 
 # ── Failure context builder ───────────────────────────────────────────────────
 
-def _build_failure_ctx(scenario: AqScenario) -> tuple[Any, Any, Any]:  # (FailureContext, Blueprint, Manifest)
+
+def _build_failure_ctx(
+    scenario: AqScenario,
+) -> tuple[Any, Any, Any]:  # (FailureContext, Blueprint, Manifest)
     """Build a synthetic FailureContext + return parsed Blueprint + compiled Manifest.
 
     Returns the Blueprint alongside the FailureContext so callers can extract
@@ -232,6 +244,7 @@ def _normalize_sql(text: str) -> str:
     """
     try:
         import sqlglot
+
         parsed = sqlglot.parse_one(text)
         return parsed.sql()
     except Exception:
@@ -280,9 +293,7 @@ def _check_expected_effect(
         return failures
 
     if not isinstance(effect, dict):
-        failures.append(
-            f"expected_patch.effect: must be a mapping, got {type(effect).__name__}"
-        )
+        failures.append(f"expected_patch.effect: must be a mapping, got {type(effect).__name__}")
         return failures
 
     module_id = effect.get("module")
@@ -379,7 +390,9 @@ def _check_expected_effect(
     return failures
 
 
-def _try_apply_patch(patch: Any, blueprint_path: Path) -> tuple[bool, str, list[str] | None, dict | None]:
+def _try_apply_patch(
+    patch: Any, blueprint_path: Path
+) -> tuple[bool, str, list[str] | None, dict | None]:
     """Try applying patch to blueprint.
 
     Returns (success, error_message, violated_guardrails, patched_dict).
@@ -431,6 +444,7 @@ def _try_apply_patch(patch: Any, blueprint_path: Path) -> tuple[bool, str, list[
         # helper was written to end. `violated` still means *guardrail*
         # violation specifically, so a non-guardrail refusal leaves it as-is.
         from aqueduct.config import load_config as _load_config
+
         try:
             _check_guardrails(patch, bp_raw, provenance_map=None, cfg=_load_config(None))
         except PatchError as exc:
@@ -461,7 +475,9 @@ def _check_assertions(
     patch: Any,  # PatchSpec | None
     blueprint_path: Path | None,
     attempts: int = 0,
-) -> tuple[list[str], list[str], bool, bool, bool | None, bool | None, list[str] | None, dict | None]:
+) -> tuple[
+    list[str], list[str], bool, bool, bool | None, bool | None, list[str] | None, dict | None
+]:
     """Evaluate assertion list, split into gating vs scoring.
 
     Returns (hard_failures, soft_failures, patch_valid, patch_applies,
@@ -480,12 +496,12 @@ def _check_assertions(
     the soft misses are reported and rolled into the diagnosis score.
     root_cause_match / category_match are None when not configured.
     """
-    failures: list[str] = []        # gating (correctness)
-    soft_failures: list[str] = []   # scoring (quality, non-gating)
+    failures: list[str] = []  # gating (correctness)
+    soft_failures: list[str] = []  # scoring (quality, non-gating)
     patch_valid = patch is not None
     patch_applies = False
     violated_guardrails: list[str] | None = None  # None = scenario blueprint has no guardrails
-    patched_dict: dict | None = None              # post-patch dict reused by the effect grader
+    patched_dict: dict | None = None  # post-patch dict reused by the effect grader
     root_cause_match: bool | None = None
     category_match: bool | None = None
 
@@ -512,7 +528,9 @@ def _check_assertions(
                         "(which is valid under allow_defer)"
                     )
             elif expected_val and not patch_valid:
-                failures.append("patch_is_valid: patch is None (LLM failed to produce valid PatchSpec)")
+                failures.append(
+                    "patch_is_valid: patch is None (LLM failed to produce valid PatchSpec)"
+                )
             elif not expected_val and patch_valid:
                 failures.append("patch_is_valid: expected invalid patch but got a valid one")
 
@@ -523,9 +541,7 @@ def _check_assertions(
                     "allow_defer: expected defer_to_human but LLM produced a regular patch"
                 )
             elif not expected_defer and did_defer:
-                failures.append(
-                    "allow_defer: LLM deferred when a fix was expected"
-                )
+                failures.append("allow_defer: LLM deferred when a fix was expected")
 
         if "patch_applies" in assertion:
             expected_val = bool(assertion["patch_applies"])
@@ -541,7 +557,9 @@ def _check_assertions(
                     if expected_val and not ok:
                         failures.append(f"patch_applies: patch failed to apply: {err}")
                     elif not expected_val and ok:
-                        failures.append("patch_applies: expected patch to fail but it applied successfully")
+                        failures.append(
+                            "patch_applies: expected patch to fail but it applied successfully"
+                        )
                 else:
                     logger.warning("patch_applies assertion: blueprint path not found; skipped")
 
@@ -557,11 +575,11 @@ def _check_assertions(
             min_conf = float(assertion["min_confidence"])
             actual_conf = patch.confidence if patch else None
             if actual_conf is None:
-                soft_failures.append(f"min_confidence: patch has no confidence field (expected >= {min_conf})")
-            elif actual_conf < min_conf:
                 soft_failures.append(
-                    f"min_confidence: {actual_conf:.2f} < {min_conf:.2f}"
+                    f"min_confidence: patch has no confidence field (expected >= {min_conf})"
                 )
+            elif actual_conf < min_conf:
+                soft_failures.append(f"min_confidence: {actual_conf:.2f} < {min_conf:.2f}")
 
         if "expected_category" in assertion:
             expected_cat = str(assertion["expected_category"])
@@ -583,12 +601,19 @@ def _check_assertions(
                 )
 
     return (
-        failures, soft_failures, patch_valid, patch_applies,
-        root_cause_match, category_match, violated_guardrails, patched_dict,
+        failures,
+        soft_failures,
+        patch_valid,
+        patch_applies,
+        root_cause_match,
+        category_match,
+        violated_guardrails,
+        patched_dict,
     )
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
+
 
 def run_scenario(
     scenario: AqScenario,
@@ -662,6 +687,7 @@ def run_scenario(
 
     apply_cb: Any = None
     if blueprint_path is not None:
+
         def apply_cb(patch_spec: Any, _bp_path: Path = blueprint_path) -> tuple:
             ok, err, violated, _patched = _try_apply_patch(patch_spec, _bp_path)
             if ok:
@@ -672,6 +698,7 @@ def run_scenario(
     _toolbox: Any = None
     if mode == "agentic":
         from aqueduct.agent.toolbox import ToolBox
+
         _toolbox = ToolBox(
             manifest=scenario_manifest,
             failure_ctx=failure_ctx,
@@ -708,9 +735,17 @@ def run_scenario(
     # Check assertions — gating (correctness) vs soft (quality)
     # blueprint_path already resolved above; reused for _check_assertions.
     (
-        hard_failures, soft_failures, patch_valid, patch_applies,
-        root_cause_match, category_match, violated_guardrails, patched_dict,
-    ) = _check_assertions(scenario.assertions, patch, blueprint_path, attempts=agent_result.attempts)
+        hard_failures,
+        soft_failures,
+        patch_valid,
+        patch_applies,
+        root_cause_match,
+        category_match,
+        violated_guardrails,
+        patched_dict,
+    ) = _check_assertions(
+        scenario.assertions, patch, blueprint_path, attempts=agent_result.attempts
+    )
 
     # expected_patch is a correctness/effect check → gating. Effect-based
     # grader inspects the POST-PATCH blueprint (patched_dict) rather than
@@ -825,6 +860,7 @@ def run_benchmark(
         """Stderr-only — separators must never pollute --format json stdout."""
         try:
             import click as _click
+
             _click.echo(line, err=True)
         except Exception:
             # click not importable from this context (shouldn't happen, but
@@ -888,7 +924,11 @@ def run_benchmark(
                 # is serialised by the loop, so lines never interleave.
                 if not serial:
                     status = "PASS" if result.passed else "FAIL"
-                    diag = f"diag={result.diag_score:.0%}" if result.diag_score is not None else "diag=—"
+                    diag = (
+                        f"diag={result.diag_score:.0%}"
+                        if result.diag_score is not None
+                        else "diag=—"
+                    )
                     _emit(
                         f"[{done}/{len(pairs)}] {status}  {sid}  ·  {model}  "
                         f"{diag}  {result.duration_seconds:.1f}s"
@@ -945,10 +985,7 @@ def format_benchmark_table(
     lines: list[str] = [h_heavy, header, h_heavy]
 
     for sid in scenario_ids:
-        cells = [
-            f"{_format_cell(results[sid].get(m)):<{model_col_w_by_model[m]}}"
-            for m in models
-        ]
+        cells = [f"{_format_cell(results[sid].get(m)):<{model_col_w_by_model[m]}}" for m in models]
         lines.append(f"{sid:<{id_col_w}}  │ " + " │ ".join(cells))
 
     lines.append(h_light)
@@ -958,34 +995,58 @@ def format_benchmark_table(
         ("Parse rate", lambda rs: f"{sum(1 for r in rs if r.patch_valid) / len(rs):.0%}"),
         ("Apply rate", lambda rs: f"{sum(1 for r in rs if r.patch_applies) / len(rs):.0%}"),
         ("Pass rate", lambda rs: f"{sum(1 for r in rs if r.passed) / len(rs):.0%}"),
-        ("Avg confidence", lambda rs: (
-            f"{sum(r.confidence for r in rs if r.confidence is not None) / max(1, sum(1 for r in rs if r.confidence is not None)):.2f}"
-            if any(r.confidence is not None for r in rs) else "—"
-        )),
-        ("Avg attempts", lambda rs: (
-            f"{sum(r.attempts_to_parse for r in rs if r.attempts_to_parse > 0) / max(1, sum(1 for r in rs if r.attempts_to_parse > 0)):.1f}"
-            if any(r.attempts_to_parse > 0 for r in rs) else "—"
-        )),
-        ("1-shot rate", lambda rs: (
-            f"{sum(1 for r in rs if r.attempts_to_parse == 1) / max(1, sum(1 for r in rs if r.attempts_to_parse > 0)):.0%}"
-            if any(r.attempts_to_parse > 0 for r in rs) else "—"
-        )),
-        ("Diag-only rate", lambda rs: (
-            f"{sum(1 for r in rs if r.diag_correct is True and not r.patch_applies) / max(1, sum(1 for r in rs if r.diag_correct is not None)):.0%}"
-            if any(r.diag_correct is not None for r in rs) else "—"
-        )),
-        ("Diag score", lambda rs: (
-            f"{sum(r.diag_score for r in rs if r.diag_score is not None) / max(1, sum(1 for r in rs if r.diag_score is not None)):.0%}"
-            if any(r.diag_score is not None for r in rs) else "—"
-        )),
+        (
+            "Avg confidence",
+            lambda rs: (
+                f"{sum(r.confidence for r in rs if r.confidence is not None) / max(1, sum(1 for r in rs if r.confidence is not None)):.2f}"
+                if any(r.confidence is not None for r in rs)
+                else "—"
+            ),
+        ),
+        (
+            "Avg attempts",
+            lambda rs: (
+                f"{sum(r.attempts_to_parse for r in rs if r.attempts_to_parse > 0) / max(1, sum(1 for r in rs if r.attempts_to_parse > 0)):.1f}"
+                if any(r.attempts_to_parse > 0 for r in rs)
+                else "—"
+            ),
+        ),
+        (
+            "1-shot rate",
+            lambda rs: (
+                f"{sum(1 for r in rs if r.attempts_to_parse == 1) / max(1, sum(1 for r in rs if r.attempts_to_parse > 0)):.0%}"
+                if any(r.attempts_to_parse > 0 for r in rs)
+                else "—"
+            ),
+        ),
+        (
+            "Diag-only rate",
+            lambda rs: (
+                f"{sum(1 for r in rs if r.diag_correct is True and not r.patch_applies) / max(1, sum(1 for r in rs if r.diag_correct is not None)):.0%}"
+                if any(r.diag_correct is not None for r in rs)
+                else "—"
+            ),
+        ),
+        (
+            "Diag score",
+            lambda rs: (
+                f"{sum(r.diag_score for r in rs if r.diag_score is not None) / max(1, sum(1 for r in rs if r.diag_score is not None)):.0%}"
+                if any(r.diag_score is not None for r in rs)
+                else "—"
+            ),
+        ),
         # Guardrail-clean rate. N/A when no scenario in the suite declares
         # guardrails on its blueprint (violated_guardrails is None on every
         # result). Otherwise: fraction of (scenario, model) pairs with
         # violated_guardrails == [] among those where it's non-None.
-        ("Guardrail-clean", lambda rs: (
-            f"{sum(1 for r in rs if r.violated_guardrails == []) / max(1, sum(1 for r in rs if r.violated_guardrails is not None)):.0%}"
-            if any(getattr(r, 'violated_guardrails', None) is not None for r in rs) else "—"
-        )),
+        (
+            "Guardrail-clean",
+            lambda rs: (
+                f"{sum(1 for r in rs if r.violated_guardrails == []) / max(1, sum(1 for r in rs if r.violated_guardrails is not None)):.0%}"
+                if any(getattr(r, "violated_guardrails", None) is not None for r in rs)
+                else "—"
+            ),
+        ),
     ]:
         cells = []
         for model in models:

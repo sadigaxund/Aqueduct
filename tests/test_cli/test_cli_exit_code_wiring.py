@@ -11,6 +11,7 @@ Covers the 5 ⏳ items in TEST_MANIFEST.md § CLI — HEAL_PENDING exit code wir
 All tests use CliRunner (no network, no real LLM).
 The Spark executor and Surveyor are mocked so no SparkSession is needed.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -30,6 +31,7 @@ pytestmark = [pytest.mark.integration]
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
+
 def _make_patch(patch_id: str = "p-001") -> PatchSpec:
     return PatchSpec(
         patch_id=patch_id,
@@ -37,9 +39,7 @@ def _make_patch(patch_id: str = "p-001") -> PatchSpec:
         confidence=0.9,
         category="other",
         root_cause="test",
-        operations=[
-            {"op": "replace_module_label", "module_id": "src", "label": "Fixed"}
-        ],
+        operations=[{"op": "replace_module_label", "module_id": "src", "label": "Fixed"}],
     )
 
 
@@ -48,9 +48,7 @@ def _failed_exec_result(bp_id: str = "test_bp") -> ExecutionResult:
         blueprint_id=bp_id,
         run_id=str(uuid.uuid4()),
         status="error",
-        module_results=(
-            ModuleResult(module_id="src", status="error", error="simulated failure"),
-        ),
+        module_results=(ModuleResult(module_id="src", status="error", error="simulated failure"),),
     )
 
 
@@ -59,9 +57,7 @@ def _ok_exec_result(bp_id: str = "test_bp") -> ExecutionResult:
         blueprint_id=bp_id,
         run_id=str(uuid.uuid4()),
         status="success",
-        module_results=(
-            ModuleResult(module_id="src", status="success", error=None),
-        ),
+        module_results=(ModuleResult(module_id="src", status="success", error=None),),
     )
 
 
@@ -118,17 +114,17 @@ def _make_failure_context(run_id: str) -> FailureContext:
         manifest_json='{"id": "test_bp", "modules": [{"id": "src", "type": "Ingress"}]}',
         started_at="2026-01-01T00:00:00Z",
         finished_at="2026-01-01T00:00:01Z",
-     engine="spark",)
+        engine="spark",
+    )
 
 
 # ── tests ─────────────────────────────────────────────────────────────────────
 
+
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 @patch("aqueduct.executor.get_executor")
 @patch("aqueduct.agent.generate_agent_patch")
-def test_run_human_mode_stages_patch_exits_3(
-    mock_gen, mock_get_exec, mock_surveyor_cls, tmp_path
-):
+def test_run_human_mode_stages_patch_exits_3(mock_gen, mock_get_exec, mock_surveyor_cls, tmp_path):
     """approval: human — runtime failure → patch staged → exit 3 (HEAL_PENDING)."""
     bp, cfg = _write_project(tmp_path, "human")
 
@@ -150,9 +146,9 @@ def test_run_human_mode_stages_patch_exits_3(
     with patch("aqueduct.cli._agent_usable", return_value=True):
         result = runner.invoke(cli, ["run", str(bp), "--config", str(cfg)])
 
-    assert result.exit_code == 3, (
-        f"Expected HEAL_PENDING (3), got {result.exit_code}\n{result.output}"
-    )
+    assert (
+        result.exit_code == 3
+    ), f"Expected HEAL_PENDING (3), got {result.exit_code}\n{result.output}"
     pending = list((tmp_path / "patches" / "pending").glob("*.json"))
     assert len(pending) >= 1, "Expected a patch under patches/pending/"
 
@@ -160,9 +156,7 @@ def test_run_human_mode_stages_patch_exits_3(
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 @patch("aqueduct.executor.get_executor")
 @patch("aqueduct.agent.generate_agent_patch")
-def test_run_ci_mode_stages_patch_exits_3(
-    mock_gen, mock_get_exec, mock_surveyor_cls, tmp_path
-):
+def test_run_ci_mode_stages_patch_exits_3(mock_gen, mock_get_exec, mock_surveyor_cls, tmp_path):
     """approval: ci — runtime failure → patch staged → exit 3 (HEAL_PENDING)."""
     bp, cfg = _write_project(tmp_path, "ci")
 
@@ -183,18 +177,16 @@ def test_run_ci_mode_stages_patch_exits_3(
     with patch("aqueduct.cli._agent_usable", return_value=True):
         result = runner.invoke(cli, ["run", str(bp), "--config", str(cfg)])
 
-    assert result.exit_code == 3, (
-        f"Expected HEAL_PENDING (3), got {result.exit_code}\n{result.output}"
-    )
+    assert (
+        result.exit_code == 3
+    ), f"Expected HEAL_PENDING (3), got {result.exit_code}\n{result.output}"
     pending = list((tmp_path / "patches" / "pending").glob("*.json"))
     assert len(pending) >= 1, "Expected a patch under patches/pending/"
 
 
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 @patch("aqueduct.executor.get_executor")
-def test_run_disabled_mode_no_patch_exits_2(
-    mock_get_exec, mock_surveyor_cls, tmp_path
-):
+def test_run_disabled_mode_no_patch_exits_2(mock_get_exec, mock_surveyor_cls, tmp_path):
     """approval: disabled — runtime failure → no staging → exit 2 (DATA_OR_RUNTIME)."""
     bp, cfg = _write_project(tmp_path, "disabled")
 
@@ -210,9 +202,9 @@ def test_run_disabled_mode_no_patch_exits_2(
     runner = CliRunner()
     result = runner.invoke(cli, ["run", str(bp), "--config", str(cfg)])
 
-    assert result.exit_code == 2, (
-        f"Expected DATA_OR_RUNTIME (2), got {result.exit_code}\n{result.output}"
-    )
+    assert (
+        result.exit_code == 2
+    ), f"Expected DATA_OR_RUNTIME (2), got {result.exit_code}\n{result.output}"
     pending_dir = tmp_path / "patches" / "pending"
     pending = list(pending_dir.glob("*.json")) if pending_dir.exists() else []
     assert len(pending) == 0, "No patch should be staged in disabled mode"
@@ -221,9 +213,7 @@ def test_run_disabled_mode_no_patch_exits_2(
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 @patch("aqueduct.executor.get_executor")
 @patch("aqueduct.agent.generate_agent_patch")
-def test_run_auto_mode_patch_succeeds_exits_0(
-    mock_gen, mock_get_exec, mock_surveyor_cls, tmp_path
-):
+def test_run_auto_mode_patch_succeeds_exits_0(mock_gen, mock_get_exec, mock_surveyor_cls, tmp_path):
     """approval: auto — failure → patch applied in-memory → re-run succeeds → exit 0."""
     bp, cfg = _write_project(tmp_path, "auto")
 
@@ -237,7 +227,7 @@ def test_run_auto_mode_patch_succeeds_exits_0(
     mock_surveyor = MagicMock()
     mock_surveyor.record.side_effect = [
         _make_failure_context(fail_res.run_id),
-        None,   # second record after patch success
+        None,  # second record after patch success
     ]
     mock_surveyor_cls.return_value = mock_surveyor
     mock_surveyor.observability = None
@@ -252,22 +242,20 @@ def test_run_auto_mode_patch_succeeds_exits_0(
     mock_gen.return_value = gen_result
 
     runner = CliRunner()
-    with patch("aqueduct.cli._agent_usable", return_value=True), \
-         patch("aqueduct.cli._run_patch_gates_inline", return_value=(None, None, None, True)), \
-         patch("aqueduct.cli._apply_patch_in_memory", return_value=MagicMock()):
+    with (
+        patch("aqueduct.cli._agent_usable", return_value=True),
+        patch("aqueduct.cli._run_patch_gates_inline", return_value=(None, None, None, True)),
+        patch("aqueduct.cli._apply_patch_in_memory", return_value=MagicMock()),
+    ):
         result = runner.invoke(cli, ["run", str(bp), "--config", str(cfg)])
 
-    assert result.exit_code == 0, (
-        f"Expected SUCCESS (0), got {result.exit_code}\n{result.output}"
-    )
+    assert result.exit_code == 0, f"Expected SUCCESS (0), got {result.exit_code}\n{result.output}"
 
 
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 @patch("aqueduct.executor.get_executor")
 @patch("aqueduct.agent.generate_agent_patch")
-def test_run_auto_mode_gate_rejected_exits_4(
-    mock_gen, mock_get_exec, mock_surveyor_cls, tmp_path
-):
+def test_run_auto_mode_gate_rejected_exits_4(mock_gen, mock_get_exec, mock_surveyor_cls, tmp_path):
     """approval: auto, max_patches=1 (default) — a validation gate (sandbox)
     rejects the only patch attempt the budget allows -> exit 4
     (VALIDATION_GATE), not 2 (DATA_OR_RUNTIME).
@@ -302,16 +290,18 @@ def test_run_auto_mode_gate_rejected_exits_4(
     gate_fail = MagicMock(status="fail", detail="sandbox says no")
 
     runner = CliRunner()
-    with patch("aqueduct.cli._agent_usable", return_value=True), \
-         patch(
-             "aqueduct.cli._run_patch_gates_inline",
-             return_value=(None, gate_fail, None, False),
-         ):
+    with (
+        patch("aqueduct.cli._agent_usable", return_value=True),
+        patch(
+            "aqueduct.cli._run_patch_gates_inline",
+            return_value=(None, gate_fail, None, False),
+        ),
+    ):
         result = runner.invoke(cli, ["run", str(bp), "--config", str(cfg)])
 
-    assert result.exit_code == 4, (
-        f"Expected VALIDATION_GATE (4), got {result.exit_code}\n{result.output}"
-    )
+    assert (
+        result.exit_code == 4
+    ), f"Expected VALIDATION_GATE (4), got {result.exit_code}\n{result.output}"
 
 
 def test_run_parse_error_exits_1(tmp_path):
@@ -329,6 +319,6 @@ def test_run_parse_error_exits_1(tmp_path):
     runner = CliRunner()
     result = runner.invoke(cli, ["run", str(bad_bp), "--config", str(cfg)])
 
-    assert result.exit_code == 1, (
-        f"Expected CONFIG_ERROR (1), got {result.exit_code}\n{result.output}"
-    )
+    assert (
+        result.exit_code == 1
+    ), f"Expected CONFIG_ERROR (1), got {result.exit_code}\n{result.output}"

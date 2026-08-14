@@ -78,7 +78,9 @@ class TestSchemaValidation:
 
     def test_audit_01_strict_schema_validation(self):
         """Verify that unknown fields at top-level and module-level raise ParseError."""
-        blueprint_path = FIXTURES / "audit" / "01-strict-schema-validation" / "invalid_blueprint.yml"
+        blueprint_path = (
+            FIXTURES / "audit" / "01-strict-schema-validation" / "invalid_blueprint.yml"
+        )
         with pytest.raises(ParseError) as excinfo:
             parse(blueprint_path)
         error_msg = str(excinfo.value)
@@ -199,6 +201,7 @@ class TestCheckpointField:
             "edges: []\n"
         )
         from aqueduct.compiler.compiler import compile as cc
+
         bp = parse(bp_file)
         manifest = cc(bp, blueprint_path=bp_file)
         assert manifest.checkpoint is True
@@ -294,6 +297,7 @@ class TestPromptContext:
             "edges: []\n"
         )
         from aqueduct.compiler.compiler import compile as cc
+
         bp = parse(bp_file)
         manifest = cc(bp, blueprint_path=bp_file)
         m_dict = manifest.to_dict()
@@ -306,7 +310,8 @@ class TestErrorTypesValidation:
     def test_error_types_on_non_spillway_edge_raises(self, tmp_path):
         """error_types on a main-port edge → ParseError mentioning port='spillway'."""
         bp_file = tmp_path / "bp.yml"
-        bp_file.write_text("""
+        bp_file.write_text(
+            """
 aqueduct: '1.0'
 id: test
 name: Test
@@ -323,15 +328,18 @@ edges:
   - from: src
     to: sink
     error_types: ["DataQualityViolation"]
-""")
+"""
+        )
         from aqueduct.parser.parser import ParseError, parse
+
         with pytest.raises(ParseError, match="spillway"):
             parse(str(bp_file))
 
     def test_error_types_on_spillway_edge_parses(self, tmp_path):
         """error_types on a spillway edge parses successfully."""
         bp_file = tmp_path / "bp.yml"
-        bp_file.write_text("""
+        bp_file.write_text(
+            """
 aqueduct: '1.0'
 id: test
 name: Test
@@ -349,8 +357,10 @@ edges:
     to: sink
     port: spillway
     error_types: ["DataQualityViolation"]
-""")
+"""
+        )
         from aqueduct.parser.parser import parse
+
         bp = parse(str(bp_file))
         assert len(bp.edges) == 1
         assert bp.edges[0].port == "spillway"
@@ -358,6 +368,7 @@ edges:
 
 
 # ── Phase 46 — agent.model: list[str] sugar ──────────────────────────────────
+
 
 class TestAgentModelListSugarRemoved:
     """2.59 — the `agent.model: [list]` cascade shorthand (and `model`/
@@ -372,18 +383,23 @@ class TestAgentModelListSugarRemoved:
 
     def test_model_list_rejected(self):
         from aqueduct.parser.schema import AgentSchema
+
         with pytest.raises(ValidationError):
             AgentSchema.model_validate({"model": ["claude", "gpt4"], "approval": "auto"})
 
     def test_plain_string_model_rejected(self):
         from aqueduct.parser.schema import AgentSchema
+
         with pytest.raises(ValidationError):
             AgentSchema.model_validate({"model": "claude", "approval": "auto"})
 
     def test_cascade_block_rejected(self):
         from aqueduct.parser.schema import AgentSchema
+
         with pytest.raises(ValidationError):
-            AgentSchema.model_validate({
-                "cascade": [{"model": "claude"}],
-                "approval": "auto",
-            })
+            AgentSchema.model_validate(
+                {
+                    "cascade": [{"model": "claude"}],
+                    "approval": "auto",
+                }
+            )

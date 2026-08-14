@@ -25,8 +25,8 @@ from aqueduct.parser.models import Edge, Module
 from aqueduct.compiler.models import Manifest
 from aqueduct.patch.preview import build_sandbox_manifest
 
-
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
 
 def _module(id: str, type: str, **config_kw) -> Module:
     return Module(id=id, type=type, label=id.capitalize(), config=dict(**config_kw))
@@ -48,11 +48,14 @@ def _manifest(modules: list[Module], edges: list[Edge]) -> Manifest:
 
 # ── Egress stripping ───────────────────────────────────────────────────────────
 
+
 class TestEgressStripping:
     def test_egress_is_removed_from_modules(self):
         m = _manifest(
-            [_module("in1", "Ingress", format="parquet", path="/p"),
-             _module("eg1", "Egress", format="parquet", path="/out", mode="overwrite")],
+            [
+                _module("in1", "Ingress", format="parquet", path="/p"),
+                _module("eg1", "Egress", format="parquet", path="/out", mode="overwrite"),
+            ],
             [_edge("in1", "eg1")],
         )
         sandboxed, targets = build_sandbox_manifest(m, sample_rows=0)
@@ -60,8 +63,10 @@ class TestEgressStripping:
 
     def test_egress_snapshot_captured(self):
         m = _manifest(
-            [_module("in1", "Ingress", format="parquet", path="/p"),
-             _module("eg1", "Egress", format="delta", path="/out", mode="append")],
+            [
+                _module("in1", "Ingress", format="parquet", path="/p"),
+                _module("eg1", "Egress", format="delta", path="/out", mode="append"),
+            ],
             [_edge("in1", "eg1")],
         )
         _, targets = build_sandbox_manifest(m, sample_rows=0)
@@ -74,9 +79,11 @@ class TestEgressStripping:
 
     def test_multiple_egress_all_stripped(self):
         m = _manifest(
-            [_module("in1", "Ingress", format="parquet", path="/p"),
-             _module("eg1", "Egress", format="parquet", path="/o1", mode="overwrite"),
-             _module("eg2", "Egress", format="csv", path="/o2", mode="append")],
+            [
+                _module("in1", "Ingress", format="parquet", path="/p"),
+                _module("eg1", "Egress", format="parquet", path="/o1", mode="overwrite"),
+                _module("eg2", "Egress", format="csv", path="/o2", mode="append"),
+            ],
             [_edge("in1", "eg1"), _edge("in1", "eg2")],
         )
         sandboxed, targets = build_sandbox_manifest(m, sample_rows=0)
@@ -113,6 +120,7 @@ class TestEgressStripping:
 
 # ── Sandbox limit injection ────────────────────────────────────────────────────
 
+
 class TestSandboxLimit:
     def test_sample_rows_positive_adds_sandbox_limit_to_ingress(self):
         m = _manifest(
@@ -146,8 +154,10 @@ class TestSandboxLimit:
 
     def test_non_ingress_modules_are_not_given_sandbox_limit(self):
         m = _manifest(
-            [_module("in1", "Ingress", format="parquet", path="/p"),
-             _module("ch1", "Channel", op="sql", query="SELECT * FROM in1")],
+            [
+                _module("in1", "Ingress", format="parquet", path="/p"),
+                _module("ch1", "Channel", op="sql", query="SELECT * FROM in1"),
+            ],
             [_edge("in1", "ch1")],
         )
         sandboxed, _ = build_sandbox_manifest(m, sample_rows=5)
@@ -156,9 +166,11 @@ class TestSandboxLimit:
 
     def test_multiple_ingress_all_receive_sandbox_limit(self):
         m = _manifest(
-            [_module("in1", "Ingress", format="parquet", path="/p1"),
-             _module("in2", "Ingress", format="csv", path="/p2"),
-             _module("ch1", "Channel", op="sql", query="SELECT * FROM in1")],
+            [
+                _module("in1", "Ingress", format="parquet", path="/p1"),
+                _module("in2", "Ingress", format="csv", path="/p2"),
+                _module("ch1", "Channel", op="sql", query="SELECT * FROM in1"),
+            ],
             [_edge("in1", "ch1"), _edge("in2", "ch1")],
         )
         sandboxed, _ = build_sandbox_manifest(m, sample_rows=7)
@@ -178,11 +190,14 @@ class TestSandboxLimit:
 
 # ── Edge pruning ───────────────────────────────────────────────────────────────
 
+
 class TestEdgePruning:
     def test_edge_to_egress_is_dropped(self):
         m = _manifest(
-            [_module("in1", "Ingress", format="parquet", path="/p"),
-             _module("eg1", "Egress", format="parquet", path="/o")],
+            [
+                _module("in1", "Ingress", format="parquet", path="/p"),
+                _module("eg1", "Egress", format="parquet", path="/o"),
+            ],
             [_edge("in1", "eg1")],
         )
         sandboxed, _ = build_sandbox_manifest(m, sample_rows=0)
@@ -190,9 +205,11 @@ class TestEdgePruning:
 
     def test_edge_between_survivors_is_kept(self):
         m = _manifest(
-            [_module("in1", "Ingress", format="parquet", path="/p"),
-             _module("ch1", "Channel", op="sql", query="SELECT * FROM in1"),
-             _module("eg1", "Egress", format="parquet", path="/o")],
+            [
+                _module("in1", "Ingress", format="parquet", path="/p"),
+                _module("ch1", "Channel", op="sql", query="SELECT * FROM in1"),
+                _module("eg1", "Egress", format="parquet", path="/o"),
+            ],
             [_edge("in1", "ch1"), _edge("ch1", "eg1")],
         )
         sandboxed, _ = build_sandbox_manifest(m, sample_rows=5)
@@ -211,8 +228,10 @@ class TestEdgePruning:
     def test_edges_from_egress_are_also_dropped(self):
         """If an Egress feeds downstream (unusual but possible), those edges go too."""
         m = _manifest(
-            [_module("eg1", "Egress", format="parquet", path="/o"),
-             _module("ch1", "Channel", op="sql", query="SELECT * FROM eg1")],
+            [
+                _module("eg1", "Egress", format="parquet", path="/o"),
+                _module("ch1", "Channel", op="sql", query="SELECT * FROM eg1"),
+            ],
             [_edge("eg1", "ch1")],
         )
         sandboxed, _ = build_sandbox_manifest(m, sample_rows=0)
@@ -220,6 +239,7 @@ class TestEdgePruning:
 
 
 # ── Return type + frozen-safe replacement ─────────────────────────────────────
+
 
 class TestReturnType:
     def test_returns_two_tuple(self):
@@ -238,8 +258,10 @@ class TestReturnType:
     def test_original_manifest_not_mutated(self):
         """Manifest is frozen=True; build_sandbox_manifest must not attempt in-place mutation."""
         m = _manifest(
-            [_module("in1", "Ingress", format="parquet", path="/p"),
-             _module("eg1", "Egress", format="parquet", path="/o")],
+            [
+                _module("in1", "Ingress", format="parquet", path="/p"),
+                _module("eg1", "Egress", format="parquet", path="/o"),
+            ],
             [_edge("in1", "eg1")],
         )
         # Capture original state

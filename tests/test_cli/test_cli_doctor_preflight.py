@@ -5,6 +5,7 @@ Three branches:
 2. With ``--preflight`` + Ingress → ``"ok"`` if object exists, ``"fail"`` if not.
 3. With ``--preflight`` + Egress → ``"ok"`` if parent prefix resolves.
 """
+
 from __future__ import annotations
 
 import time
@@ -62,8 +63,11 @@ def test_preflight_ingress_object_exists():
     with patch("pyspark.sql.SparkSession", return_value=mock_spark) as MockSS:
         MockSS.builder.getOrCreate.return_value = mock_spark
         result = _cloud_uri_check(
-            "ingress:in", "s3a://bucket/obj.parquet",
-            ModuleType.Ingress, time.monotonic(), preflight=True,
+            "ingress:in",
+            "s3a://bucket/obj.parquet",
+            ModuleType.Ingress,
+            time.monotonic(),
+            preflight=True,
         )
 
     assert result.status == "ok"
@@ -82,8 +86,11 @@ def test_preflight_ingress_object_missing():
     with patch("pyspark.sql.SparkSession", return_value=mock_spark) as MockSS:
         MockSS.builder.getOrCreate.return_value = mock_spark
         result = _cloud_uri_check(
-            "ingress:in", "s3a://bucket/missing.parquet",
-            ModuleType.Ingress, time.monotonic(), preflight=True,
+            "ingress:in",
+            "s3a://bucket/missing.parquet",
+            ModuleType.Ingress,
+            time.monotonic(),
+            preflight=True,
         )
 
     assert result.status == "fail"
@@ -96,8 +103,11 @@ def test_preflight_ingress_fs_throws_warning():
     with patch("pyspark.sql.SparkSession", return_value=mock_spark) as MockSS:
         MockSS.builder.getOrCreate.return_value = mock_spark
         result = _cloud_uri_check(
-            "ingress:in", "s3a://bucket/obj.parquet",
-            ModuleType.Ingress, time.monotonic(), preflight=True,
+            "ingress:in",
+            "s3a://bucket/obj.parquet",
+            ModuleType.Ingress,
+            time.monotonic(),
+            preflight=True,
         )
 
     assert result.status == "warn"
@@ -119,8 +129,11 @@ def test_preflight_egress_parent_prefix_resolves():
     with patch("pyspark.sql.SparkSession", return_value=mock_spark) as MockSS:
         MockSS.builder.getOrCreate.return_value = mock_spark
         result = _cloud_uri_check(
-            "egress:out", "s3a://bucket/prefix/",
-            ModuleType.Egress, time.monotonic(), preflight=True,
+            "egress:out",
+            "s3a://bucket/prefix/",
+            ModuleType.Egress,
+            time.monotonic(),
+            preflight=True,
         )
 
     assert result.status == "ok"

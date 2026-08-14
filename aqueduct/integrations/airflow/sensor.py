@@ -6,6 +6,7 @@ exists for the split-task pattern where the operator runs in ``ci`` mode and
 exits cleanly with ``HEAL_PENDING``, and a downstream sensor waits for
 approval before triggering a rerun task.
 """
+
 from __future__ import annotations
 
 from datetime import timedelta
@@ -45,9 +46,7 @@ class AqueductPatchSensor(BaseSensorOperator):
 
     # ------------------------------------------------------------------
     def execute(self, context: dict[str, Any]) -> None:
-        timeout = (
-            timedelta(seconds=self.patch_timeout) if self.patch_timeout is not None else None
-        )
+        timeout = timedelta(seconds=self.patch_timeout) if self.patch_timeout is not None else None
         self.defer(
             trigger=AqueductPatchTrigger(
                 run_id=self.run_id,
@@ -64,9 +63,7 @@ class AqueductPatchSensor(BaseSensorOperator):
             timeout=timeout,
         )
 
-    def resume_from_patch(
-        self, context: dict[str, Any], event: dict[str, Any]
-    ) -> dict[str, Any]:
+    def resume_from_patch(self, context: dict[str, Any], event: dict[str, Any]) -> dict[str, Any]:
         status = event.get("status")
         if status == "approved":
             return event
@@ -75,6 +72,4 @@ class AqueductPatchSensor(BaseSensorOperator):
                 f"Patch rejected for run_id={self.run_id!r}: "
                 f"{event.get('reason') or 'no reason given'}"
             )
-        raise AirflowException(
-            f"AqueductPatchTrigger fired with unexpected status: {event!r}"
-        )
+        raise AirflowException(f"AqueductPatchTrigger fired with unexpected status: {event!r}")

@@ -15,7 +15,17 @@ from __future__ import annotations
 
 SQL_OPS: frozenset[str] = frozenset({"sql", "join"})
 SINGLE_INPUT_OPS: frozenset[str] = frozenset(
-    {"deduplicate", "filter", "select", "rename", "cast", "sort", "repartition", "coalesce", "cache"}
+    {
+        "deduplicate",
+        "filter",
+        "select",
+        "rename",
+        "cast",
+        "sort",
+        "repartition",
+        "coalesce",
+        "cache",
+    }
 )
 MULTI_INPUT_OPS: frozenset[str] = frozenset({"union"})
 

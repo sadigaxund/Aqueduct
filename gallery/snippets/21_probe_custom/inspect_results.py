@@ -10,7 +10,9 @@ console = Console()
 def main():
     db_path = ".aqueduct/observability.db"
     if not os.path.exists(db_path):
-        console.print(f"[bold red]✗[/bold red] Observability DB not found at {db_path}. Did you run 'aqueduct run blueprint.yml'?")
+        console.print(
+            f"[bold red]✗[/bold red] Observability DB not found at {db_path}. Did you run 'aqueduct run blueprint.yml'?"
+        )
         return
 
     con = duckdb.connect(db_path)
@@ -35,8 +37,10 @@ def main():
         t.add_row(str(signal_type), str(estimate), full_payload, str(captured_at))
 
     console.print(t)
-    console.print("\n[dim]Custom probe signals use a Python callable to compute arbitrary metrics "
-                  "at runtime; results are stored in probe_signals with signal_type=custom.[/dim]")
+    console.print(
+        "\n[dim]Custom probe signals use a Python callable to compute arbitrary metrics "
+        "at runtime; results are stored in probe_signals with signal_type=custom.[/dim]"
+    )
 
 
 if __name__ == "__main__":

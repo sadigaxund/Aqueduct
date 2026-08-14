@@ -7,6 +7,7 @@ finding, infra unit). Direct coverage here pins the contracts those callers
 rely on so a change to any of them fails at the source, not three call sites
 downstream.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -30,6 +31,7 @@ pytestmark = [pytest.mark.unit]
 
 
 # ── retry_after_seconds ──────────────────────────────────────────────────────
+
 
 def _resp_with_header(value: str | None) -> MagicMock:
     resp = MagicMock()
@@ -55,6 +57,7 @@ def test_retry_after_seconds_negative_clamped_to_zero():
 
 # ── backoff_delay ─────────────────────────────────────────────────────────────
 
+
 def test_backoff_delay_no_jitter_is_deterministic_exponential():
     assert backoff_delay(1, 2.0) == 2.0
     assert backoff_delay(2, 2.0) == 4.0
@@ -73,6 +76,7 @@ def test_backoff_delay_jitter_stays_within_documented_bounds():
 
 
 # ── sign_body ─────────────────────────────────────────────────────────────────
+
 
 def test_sign_body_produces_matching_hmac_sha256():
     body = {"b": 2, "a": 1}
@@ -96,6 +100,7 @@ def test_sign_body_different_secrets_produce_different_signatures():
 
 
 # ── RETRYABLE_DELIVERY_STATUS vs RETRYABLE_PROVIDER_STATUS ──────────────────
+
 
 def test_retryable_status_sets_are_distinct_frozensets():
     assert isinstance(RETRYABLE_DELIVERY_STATUS, frozenset)
@@ -125,6 +130,7 @@ def test_both_sets_share_429_and_503():
 
 # ── deliver_with_retry ───────────────────────────────────────────────────────
 
+
 def _mock_response(status_code: int) -> MagicMock:
     resp = MagicMock()
     resp.status_code = status_code
@@ -134,34 +140,53 @@ def _mock_response(status_code: int) -> MagicMock:
 def test_deliver_with_retry_succeeds_on_first_2xx_no_retry():
     with patch("httpx.request", return_value=_mock_response(200)) as mock_request:
         deliver_with_retry(
-            "POST", "https://example.com/hook",
-            json={"a": 1}, headers={}, timeout=5, label="test",
-            attempts=3, backoff_seconds=0,
+            "POST",
+            "https://example.com/hook",
+            json={"a": 1},
+            headers={},
+            timeout=5,
+            label="test",
+            attempts=3,
+            backoff_seconds=0,
         )
     assert mock_request.call_count == 1
 
 
 def test_deliver_with_retry_retries_on_retryable_status_then_succeeds():
-    with patch(
-        "httpx.request", side_effect=[_mock_response(503), _mock_response(200)]
-    ) as mock_request, patch("time.sleep") as mock_sleep:
+    with (
+        patch(
+            "httpx.request", side_effect=[_mock_response(503), _mock_response(200)]
+        ) as mock_request,
+        patch("time.sleep") as mock_sleep,
+    ):
         deliver_with_retry(
-            "POST", "https://example.com/hook",
-            json={"a": 1}, headers={}, timeout=5, label="test",
-            attempts=3, backoff_seconds=0,
+            "POST",
+            "https://example.com/hook",
+            json={"a": 1},
+            headers={},
+            timeout=5,
+            label="test",
+            attempts=3,
+            backoff_seconds=0,
         )
     assert mock_request.call_count == 2
     mock_sleep.assert_called_once()
 
 
 def test_deliver_with_retry_gives_up_after_exhausting_attempts():
-    with patch(
-        "httpx.request", return_value=_mock_response(503)
-    ) as mock_request, patch("time.sleep"):
+    with (
+        patch("httpx.request", return_value=_mock_response(503)) as mock_request,
+        patch("time.sleep"),
+    ):
         deliver_with_retry(
-            "POST", "https://example.com/hook",
-            json={"a": 1}, headers={}, timeout=5, label="test",
-            attempts=2, backoff_seconds=0,
+            "POST",
+            "https://example.com/hook",
+            json={"a": 1},
+            headers={},
+            timeout=5,
+            label="test",
+            attempts=2,
+            backoff_seconds=0,
         )
     assert mock_request.call_count == 2  # never a 3rd try
 
@@ -169,22 +194,35 @@ def test_deliver_with_retry_gives_up_after_exhausting_attempts():
 def test_deliver_with_retry_does_not_retry_non_retryable_status():
     with patch("httpx.request", return_value=_mock_response(404)) as mock_request:
         deliver_with_retry(
-            "POST", "https://example.com/hook",
-            json={"a": 1}, headers={}, timeout=5, label="test",
-            attempts=3, backoff_seconds=0,
+            "POST",
+            "https://example.com/hook",
+            json={"a": 1},
+            headers={},
+            timeout=5,
+            label="test",
+            attempts=3,
+            backoff_seconds=0,
         )
     assert mock_request.call_count == 1
 
 
 def test_deliver_with_retry_retries_on_request_error():
-    with patch(
-        "httpx.request",
-        side_effect=[httpx.ConnectError("boom"), _mock_response(200)],
-    ) as mock_request, patch("time.sleep"):
+    with (
+        patch(
+            "httpx.request",
+            side_effect=[httpx.ConnectError("boom"), _mock_response(200)],
+        ) as mock_request,
+        patch("time.sleep"),
+    ):
         deliver_with_retry(
-            "POST", "https://example.com/hook",
-            json={"a": 1}, headers={}, timeout=5, label="test",
-            attempts=3, backoff_seconds=0,
+            "POST",
+            "https://example.com/hook",
+            json={"a": 1},
+            headers={},
+            timeout=5,
+            label="test",
+            attempts=3,
+            backoff_seconds=0,
         )
     assert mock_request.call_count == 2
 
@@ -195,7 +233,12 @@ def test_deliver_with_retry_never_raises_on_unexpected_exception():
     caller to report failure to)."""
     with patch("httpx.request", side_effect=RuntimeError("unexpected")):
         deliver_with_retry(
-            "POST", "https://example.com/hook",
-            json={"a": 1}, headers={}, timeout=5, label="test",
-            attempts=3, backoff_seconds=0,
+            "POST",
+            "https://example.com/hook",
+            json={"a": 1},
+            headers={},
+            timeout=5,
+            label="test",
+            attempts=3,
+            backoff_seconds=0,
         )  # must return normally, not raise

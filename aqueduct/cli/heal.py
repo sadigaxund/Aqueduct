@@ -3,6 +3,7 @@
 No behaviour change. The click group + shared helpers come from the package;
 commands register onto `cli` when imported at the bottom of __init__.
 """
+
 from __future__ import annotations
 
 import json
@@ -22,6 +23,7 @@ from aqueduct.cli import (
 from aqueduct.cli.output import emit
 
 # ── aqueduct heal ─────────────────────────────────────────────────────────────
+
 
 def _print_prompt(prompt: dict, fmt: str) -> None:
     """Print system+user prompt to stdout in the requested format."""
@@ -71,12 +73,14 @@ def _print_prompt(prompt: dict, fmt: str) -> None:
     "the model. Bare = text; `--print-prompt json` for JSON.",
 )
 @click.option(
-    "-s", "--set", "set_items",
+    "-s",
+    "--set",
+    "set_items",
     multiple=True,
     metavar="PATH=VALUE",
     help="Override an aqueduct.yml value for this run only (repeatable, "
-         "in-memory). Dotted path — e.g. --set agent.model=claude-opus-4-8 "
-         "--set agent.timeout=600.",
+    "in-memory). Dotted path — e.g. --set agent.model=claude-opus-4-8 "
+    "--set agent.timeout=600.",
 )
 @_env_options
 def heal(
@@ -128,6 +132,7 @@ def heal(
     # ── -s/--set overrides (config-only) ───────────────────────────────────────
     if set_items:
         from aqueduct.overrides import OverrideError, apply_to_model, route_overrides
+
         try:
             _cfg_set_nested, _ = route_overrides(set_items, allow_blueprint=False)
             cfg = apply_to_model(cfg, _cfg_set_nested)
@@ -157,6 +162,7 @@ def heal(
     # ── Register agent API key for redaction ─────────────────────────────────
     if resolved_api_key:
         from aqueduct.redaction import register as _register_secret
+
         _register_secret(resolved_api_key, key_hint="agent.api_key")
 
     if resolved_model is None and not print_prompt:
@@ -180,6 +186,7 @@ def heal(
     store = open_obs_read(cfg, store_dir, run_id=run_id)
     if store is None:
         from aqueduct.cli.observability import _store_not_found
+
         _store_not_found(cfg, run_id=run_id, store_dir=store_dir)
 
     with store.connect() as cur:
@@ -204,8 +211,15 @@ def heal(
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     (
-        fc_run_id, blueprint_id, failed_module, error_message,
-        stack_trace, manifest_json_raw, provenance_json_raw, started_at, finished_at,
+        fc_run_id,
+        blueprint_id,
+        failed_module,
+        error_message,
+        stack_trace,
+        manifest_json_raw,
+        provenance_json_raw,
+        started_at,
+        finished_at,
         recorded_engine,
     ) = fc_row
 
@@ -216,17 +230,26 @@ def heal(
     # (Postgres — no obs file) the per-blueprint routing dir the run materialised
     # them into. Object-store blob backends (s3/gcs/adls) ignore this base.
     from aqueduct.stores.object_store import make_blob_store
+
     if cfg.stores.observability.backend == "duckdb":
-        _obs_file = resolve_duckdb_obs_path(cfg, store_dir, run_id=run_id, blueprint_id=blueprint_id)
-        _blob_base = _obs_file.parent if _obs_file else resolve_obs_store_dir(cfg, blueprint_id, store_dir)
+        _obs_file = resolve_duckdb_obs_path(
+            cfg, store_dir, run_id=run_id, blueprint_id=blueprint_id
+        )
+        _blob_base = (
+            _obs_file.parent if _obs_file else resolve_obs_store_dir(cfg, blueprint_id, store_dir)
+        )
     else:
         _blob_base = resolve_obs_store_dir(cfg, blueprint_id, store_dir)
     _blob = make_blob_store(cfg.stores.blob.backend, cfg.stores.blob.path, _blob_base)
-    _manifest_str = _blob.materialize(manifest_json_raw if isinstance(manifest_json_raw, str) else "")
+    _manifest_str = _blob.materialize(
+        manifest_json_raw if isinstance(manifest_json_raw, str) else ""
+    )
     _stack_str = _blob.materialize(stack_trace or "")
     # ISSUE-047 #2 — provenance is externalised to a blob marker too; without
     # materialising it the agent prompt loses its provenance section.
-    _prov_str = _blob.materialize(provenance_json_raw if isinstance(provenance_json_raw, str) else "")
+    _prov_str = _blob.materialize(
+        provenance_json_raw if isinstance(provenance_json_raw, str) else ""
+    )
 
     target_module = module_id or failed_module
 
@@ -262,8 +285,11 @@ def heal(
 
     if print_prompt:
         prompt = build_prompt(
-            failure_ctx, patches_path, resolved_engine_prompt_context,
-            guardrails=_guardrails_for_prompt, engine=resolved_engine,
+            failure_ctx,
+            patches_path,
+            resolved_engine_prompt_context,
+            guardrails=_guardrails_for_prompt,
+            engine=resolved_engine,
         )
         _print_prompt(prompt, print_prompt)
         return
@@ -276,6 +302,7 @@ def heal(
     from aqueduct.agent import resolve_budget as _resolve_budget
     from aqueduct.agent.transcript import TranscriptWriter
     from aqueduct.cli.style import colorize_line as _style_heal_line
+
     _transcript = TranscriptWriter(verbose=False, write=lambda s: emit(_style_heal_line(s)))
 
     _budget = _resolve_budget(
@@ -297,6 +324,7 @@ def heal(
         from types import SimpleNamespace
 
         from aqueduct.agent.toolbox import ToolBox
+
         _manifest_dict: dict = {}
         try:
             _manifest_dict = json.loads(_manifest_str) if _manifest_str else {}
@@ -305,7 +333,8 @@ def heal(
         _toolbox_manifest = SimpleNamespace(
             modules=tuple(
                 SimpleNamespace(id=m.get("id"), type=m.get("type"))
-                for m in (_manifest_dict.get("modules") or []) if isinstance(m, dict)
+                for m in (_manifest_dict.get("modules") or [])
+                if isinstance(m, dict)
             ),
             base_dir=_manifest_dict.get("base_dir", "") if isinstance(_manifest_dict, dict) else "",
         )
@@ -334,6 +363,7 @@ def heal(
         # entirely.
         try:
             from aqueduct.patch.apply import PatchError, _check_guardrails
+
             # `aqueduct heal` runs from the observability store with no live
             # Blueprint file, so the engine layer here is `aqueduct.yml`'s
             # only. That makes the delta check STRICTLY WEAKER on this path
@@ -398,8 +428,8 @@ def heal(
     # not a hardcoded local dir — otherwise on a remote backend the body lands on
     # the local FS and `patch list`/`apply` (which read the store) never see it.
     from aqueduct.stores.object_store import make_patch_store
+
     _patch_store = make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, patches_path)
     stage_patch_for_human(patch, patches_path, failure_ctx, patch_store=_patch_store)
     click.echo(f"✓ patch staged → {_patch_store.location_label}/pending/  (id={patch.patch_id})")
     click.echo(f"  apply with: aqueduct patch apply {patch.patch_id} --blueprint <path>")
-

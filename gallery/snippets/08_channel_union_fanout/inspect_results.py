@@ -5,6 +5,7 @@ import os
 
 console = Console()
 
+
 def main():
     outputs = [
         ("High (val>15)", "data/output/high.parquet", "bold green"),
@@ -12,7 +13,9 @@ def main():
     ]
     for _, path, _ in outputs:
         if not os.path.exists(path):
-            console.print(f"[bold red]✗[/bold red] {path} not found — did you run 'aqueduct run blueprint.yml'?")
+            console.print(
+                f"[bold red]✗[/bold red] {path} not found — did you run 'aqueduct run blueprint.yml'?"
+            )
             return
 
     for title, path, style in outputs:
@@ -25,8 +28,11 @@ def main():
         console.print(t)
         console.print(f"[dim]  Row count: {len(df)}[/dim]\n")
 
-    console.print("[dim]Fan-out: a single Channel feeds two downstream consumers. "
-                  "Each consumer gets the same data, processed independently.[/dim]")
+    console.print(
+        "[dim]Fan-out: a single Channel feeds two downstream consumers. "
+        "Each consumer gets the same data, processed independently.[/dim]"
+    )
+
 
 if __name__ == "__main__":
     main()

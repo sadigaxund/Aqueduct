@@ -5,10 +5,13 @@ import os
 
 console = Console()
 
+
 def main():
     path = "data/output/output.parquet"
     if not os.path.exists(path):
-        console.print(f"[bold red]✗[/bold red] {path} not found — did you run 'aqueduct run blueprint.yml'?")
+        console.print(
+            f"[bold red]✗[/bold red] {path} not found — did you run 'aqueduct run blueprint.yml'?"
+        )
         return
 
     console.print(f"[bold green]✓[/bold green] Found results in {path}. Reading...\n")
@@ -19,8 +22,11 @@ def main():
     for _, r in df.head(10).iterrows():
         t.add_row(*[str(v) for v in r])
     console.print(t)
-    console.print(f"[dim]  Row count: {len(df)} — order_id 1 and 5 only (status=active, year>=2026)[/dim]")
+    console.print(
+        f"[dim]  Row count: {len(df)} — order_id 1 and 5 only (status=active, year>=2026)[/dim]"
+    )
     console.print("\n[dim]{{ macros.name }} expands reusable SQL snippets at compile time.[/dim]")
+
 
 if __name__ == "__main__":
     main()

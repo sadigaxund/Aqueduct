@@ -41,10 +41,22 @@ _SINGLE_MODULE_CONFIG_OPS = frozenset({"set_module_config_key", "replace_module_
 # Matches the vocabulary `schema_hint` / aqtest `schema:` blocks already use
 # (see aqueduct/executor/spark/test_runner.py::_schema_ddl / _create_df).
 _DUMMY_VALUES: dict[str, Any] = {
-    "string": "sample", "varchar": "sample", "char": "sample",
-    "int": 1, "integer": 1, "tinyint": 1, "smallint": 1, "bigint": 1, "long": 1, "short": 1, "byte": 1,
-    "double": 1.0, "float": 1.0, "decimal": 1.0,
-    "boolean": True, "bool": True,
+    "string": "sample",
+    "varchar": "sample",
+    "char": "sample",
+    "int": 1,
+    "integer": 1,
+    "tinyint": 1,
+    "smallint": 1,
+    "bigint": 1,
+    "long": 1,
+    "short": 1,
+    "byte": 1,
+    "double": 1.0,
+    "float": 1.0,
+    "decimal": 1.0,
+    "boolean": True,
+    "bool": True,
     "date": "2026-01-01",
     "timestamp": "2026-01-01 00:00:00",
 }
@@ -122,7 +134,10 @@ def _build_fixture(
             return {}, f"upstream module {uid!r} not found in manifest"
         hint = upstream.config.get("schema_hint") if isinstance(upstream.config, dict) else None
         if not hint or not isinstance(hint, list):
-            return {}, f"upstream module {uid!r} has no schema_hint — cannot synthesize fixture rows"
+            return (
+                {},
+                f"upstream module {uid!r} has no schema_hint — cannot synthesize fixture rows",
+            )
         schema: dict[str, str] = {}
         row: list[Any] = []
         for field in hint:
@@ -134,7 +149,10 @@ def _build_fixture(
                 return {}, f"upstream module {uid!r} schema_hint entry missing name/type"
             value, mapped = _dummy_value_for_type(str(ftype))
             if not mapped:
-                return {}, f"upstream module {uid!r} schema_hint field {name!r} has unmapped type {ftype!r}"
+                return (
+                    {},
+                    f"upstream module {uid!r} schema_hint field {name!r} has unmapped type {ftype!r}",
+                )
             schema[str(name)] = str(ftype)
             row.append(value)
         inputs[uid] = {"schema": schema, "rows": [row]}
@@ -176,7 +194,9 @@ def generate(
 
     module = _find_module(manifest, module_id)
     if module is None:
-        return RegressionArtifactResult(written=False, skip_reason=f"patched module {module_id!r} not found in manifest")
+        return RegressionArtifactResult(
+            written=False, skip_reason=f"patched module {module_id!r} not found in manifest"
+        )
 
     if module.type not in TESTABLE_MODULE_TYPES:
         return RegressionArtifactResult(
@@ -190,7 +210,8 @@ def generate(
     upstream_ids = _upstream_module_ids(manifest, module_id)
     if not upstream_ids:
         return RegressionArtifactResult(
-            written=False, skip_reason=f"module {module_id!r} has no upstream inputs to build a fixture from"
+            written=False,
+            skip_reason=f"module {module_id!r} has no upstream inputs to build a fixture from",
         )
 
     inputs, skip_reason = _build_fixture(manifest, upstream_ids)
@@ -198,7 +219,9 @@ def generate(
         return RegressionArtifactResult(written=False, skip_reason=skip_reason)
 
     if not blueprint_path.exists():
-        return RegressionArtifactResult(written=False, skip_reason=f"blueprint path {blueprint_path} does not exist")
+        return RegressionArtifactResult(
+            written=False, skip_reason=f"blueprint path {blueprint_path} does not exist"
+        )
 
     aqtests_dir = blueprint_path.parent / "aqtests"
     aqtests_dir.mkdir(parents=True, exist_ok=True)
@@ -228,7 +251,9 @@ def generate(
 
     out_path = _unique_path(aqtests_dir, f"{module_id}_regression")
     _write_aqtest(out_path, doc, patch, failure_ctx)
-    logger.info("[regression_artifact] wrote %s (module=%s, patch=%s)", out_path, module_id, patch.patch_id)
+    logger.info(
+        "[regression_artifact] wrote %s (module=%s, patch=%s)", out_path, module_id, patch.patch_id
+    )
     return RegressionArtifactResult(written=True, path=out_path)
 
 
@@ -240,7 +265,9 @@ def _relative_blueprint_ref(aqtests_dir: Path, blueprint_path: Path) -> str:
         return str(blueprint_path)
 
 
-def _write_aqtest(out_path: Path, doc: dict[str, Any], patch: PatchSpec, failure_ctx: FailureContext) -> None:
+def _write_aqtest(
+    out_path: Path, doc: dict[str, Any], patch: PatchSpec, failure_ctx: FailureContext
+) -> None:
     import yaml
 
     header = (

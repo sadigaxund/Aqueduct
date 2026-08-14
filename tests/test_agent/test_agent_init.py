@@ -31,12 +31,13 @@ from aqueduct.agent.prompts import (
 from aqueduct.agent.budget import BudgetConfig, StopReason
 from aqueduct.config import AgentBudgetConfig, AgentConnectionConfig
 
-
 # ── _detect_structural_error ──────────────────────────────────────────────────
+
 
 class TestDetectStructuralError:
     def _make_exc(self, json_str: str) -> ValidationError:
         from aqueduct.patch.grammar import PatchSpec
+
         try:
             PatchSpec.model_validate_json(json_str)
         except ValidationError as e:
@@ -69,6 +70,7 @@ class TestDetectStructuralError:
 
 
 # ── _format_reprompt_for_next_turn ───────────────────────────────────────────
+
 
 class TestFormatReprompt:
     def test_not_escalated_no_hint_uses_standard_template(self):
@@ -110,6 +112,7 @@ class TestFormatReprompt:
 # tests/test_surveyor/test_agent.py, is spark-marked and only drives
 # _parse_patch_spec, never this function).
 
+
 class TestFormatReprompError:
     def _base_op(self, **overrides):
         op = {"op": "set_module_config_key", "module_id": "m", "key": "path", "value": "v"}
@@ -118,9 +121,13 @@ class TestFormatReprompError:
 
     def _validate(self, op: dict):
         from aqueduct.patch.grammar import PatchSpec
+
         payload = {
-            "patch_id": "p1", "rationale": "r", "confidence": 0.9,
-            "root_cause": "c", "operations": [op],
+            "patch_id": "p1",
+            "rationale": "r",
+            "confidence": 0.9,
+            "root_cause": "c",
+            "operations": [op],
         }
         raw = json.dumps(payload)
         try:
@@ -170,7 +177,7 @@ class TestFormatReprompError:
         del op["op"]
         exc, raw = self._validate(op)
         result = _format_reprompt_error(exc, raw)
-        assert 'invalid operation' in result
+        assert "invalid operation" in result
         assert '"op" field is missing entirely' in result
         assert "Valid ops:" in result
 
@@ -197,6 +204,7 @@ class TestFormatReprompError:
 
 # ── resolve_budget ────────────────────────────────────────────────────────────
 
+
 class TestResolveBudget:
     def test_copies_from_agent_budget_config(self):
         abc = AgentBudgetConfig(max_reprompts=7, same_error_consecutive=4)
@@ -220,6 +228,7 @@ class TestResolveBudget:
 
 # ── AgentBudgetConfig ─────────────────────────────────────────────────────────
 
+
 class TestAgentBudgetConfig:
     def test_frozen_and_extra_forbid(self):
         b = AgentBudgetConfig()
@@ -241,6 +250,7 @@ class TestAgentBudgetConfig:
 
 # ── generate_agent_patch ──────────────────────────────────────────────────────
 
+
 class TestGenerateAgentPatch:
     @pytest.fixture
     def mock_call(self):
@@ -250,19 +260,25 @@ class TestGenerateAgentPatch:
     @pytest.fixture
     def fctx(self):
         from aqueduct.surveyor.models import FailureContext
+
         return FailureContext(
-            run_id="run1", blueprint_id="bp1", failed_module="m1",
-            error_message="msg", stack_trace="", manifest_json="{}",
-            started_at="2020-01-01T00:00:00Z", finished_at="2020-01-01T00:00:00Z",
+            run_id="run1",
+            blueprint_id="bp1",
+            failed_module="m1",
+            error_message="msg",
+            stack_trace="",
+            manifest_json="{}",
+            started_at="2020-01-01T00:00:00Z",
+            finished_at="2020-01-01T00:00:00Z",
             engine="spark",
         )
 
     def test_single_attempt_success(self, mock_call, fctx, tmp_path):
         valid_json = '{"patch_id": "p", "rationale": "r", "operations": [{"op": "set_module_config_key", "module_id": "m1", "key": "k", "value": "v"}]}'
         mock_call.return_value = (valid_json, 10, 20)
-        
+
         res = generate_agent_patch(fctx, "model", tmp_path)
-        
+
         assert res.patch is not None
         assert res.attempts == 1
         assert res.stop_reason == StopReason.SOLVED
@@ -277,9 +293,9 @@ class TestGenerateAgentPatch:
             (invalid_json, 10, 20),
             (valid_json, 15, 25),
         ]
-        
+
         res = generate_agent_patch(fctx, "model", tmp_path, max_reprompts=3)
-        
+
         assert res.patch is not None
         assert res.attempts == 2
         assert res.stop_reason == StopReason.SOLVED
@@ -292,17 +308,18 @@ class TestGenerateAgentPatch:
     def test_apply_callback_gate_rejection(self, mock_call, fctx, tmp_path):
         valid_json = '{"patch_id": "p", "rationale": "r", "operations": [{"op": "set_module_config_key", "module_id": "m1", "key": "k", "value": "v"}]}'
         mock_call.return_value = (valid_json, 10, 20)
-        
+
         cb_calls = 0
+
         def _cb(p):
             nonlocal cb_calls
             cb_calls += 1
             if cb_calls == 1:
                 return (False, "guardrail_violation", "msg", None)
             return (True, None, None, None)
-            
+
         res = generate_agent_patch(fctx, "model", tmp_path, max_reprompts=3, apply_callback=_cb)
-        
+
         assert res.attempts == 2
         assert cb_calls == 2
         assert res.attempt_records[0].gate_that_rejected == "apply"
@@ -311,12 +328,12 @@ class TestGenerateAgentPatch:
     def test_apply_callback_exception_caught(self, mock_call, fctx, tmp_path):
         valid_json = '{"patch_id": "p", "rationale": "r", "operations": [{"op": "set_module_config_key", "module_id": "m1", "key": "k", "value": "v"}]}'
         mock_call.return_value = (valid_json, 10, 20)
-        
+
         def _cb(p):
             raise RuntimeError("unexpected")
-            
+
         res = generate_agent_patch(fctx, "model", tmp_path, max_reprompts=1, apply_callback=_cb)
-        
+
         assert res.patch is None
         assert res.attempts == 1
         assert res.attempt_records[0].gate_that_rejected == "apply"
@@ -324,34 +341,41 @@ class TestGenerateAgentPatch:
 
     def test_provider_exception_caught(self, mock_call, fctx, tmp_path):
         mock_call.side_effect = Exception("api down")
-        
+
         res = generate_agent_patch(fctx, "model", tmp_path)
-        
+
         assert res.patch is None
         assert res.stop_reason == StopReason.API_ERROR
         assert len(res.attempt_records) == 1
         assert res.attempt_records[0].gate_that_rejected == "provider"
 
     def test_on_attempt_invoked(self, mock_call, fctx, tmp_path):
-        mock_call.return_value = ('{"patch_id": "p", "rationale": "r", "operations": [{"op": "set_module_config_key", "module_id": "m1", "key": "k", "value": "v"}]}', 10, 20)
-        
+        mock_call.return_value = (
+            '{"patch_id": "p", "rationale": "r", "operations": [{"op": "set_module_config_key", "module_id": "m1", "key": "k", "value": "v"}]}',
+            10,
+            20,
+        )
+
         cb_calls = 0
+
         def _cb(rec):
             nonlocal cb_calls
             cb_calls += 1
-            
+
         generate_agent_patch(fctx, "model", tmp_path, on_attempt=_cb)
-        
+
         assert cb_calls == 1
 
     def test_stuck_consecutive_escalation(self, mock_call, fctx, tmp_path):
         invalid_json = '{"patch_id": "p"}'
         mock_call.return_value = (invalid_json, 10, 20)
-        
+
         budget = BudgetConfig(max_reprompts=5, same_error_consecutive=2, same_signature_overall=10)
         res = generate_agent_patch(fctx, "model", tmp_path, budget=budget)
-        
-        assert res.attempts == 3  # 1st fail, 2nd fail (trips consecutive), 3rd is escalated fail (aborts)
+
+        assert (
+            res.attempts == 3
+        )  # 1st fail, 2nd fail (trips consecutive), 3rd is escalated fail (aborts)
         assert res.escalated is True
         assert res.attempt_records[2].escalated is True
 
@@ -368,8 +392,11 @@ class TestGenerateAgentPatch:
         valid_json = '{"patch_id": "p", "rationale": "r", "operations": [{"op": "set_module_config_key", "module_id": "m1", "key": "k", "value": "v"}]}'
         mock_call.return_value = (valid_json, 10, 20)
         generate_agent_patch(
-            fctx, "model", tmp_path,
-            retry_max_retries=5, retry_backoff_seconds=3.0,
+            fctx,
+            "model",
+            tmp_path,
+            retry_max_retries=5,
+            retry_backoff_seconds=3.0,
         )
         _cfg = mock_call.call_args[0][1]  # _ProviderConfig is second positional arg
         assert _cfg.retry_max_retries == 5
@@ -377,6 +404,7 @@ class TestGenerateAgentPatch:
 
 
 # ── _call_anthropic / _call_openai_compat ────────────────────────────────────
+
 
 class TestCallProviders:
     """Provider transport tests.
@@ -402,13 +430,16 @@ class TestCallProviders:
     @patch("httpx.Client")
     def test_call_anthropic_returns_tuple(self, mock_client_cls, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
-        mock_client, _ = self._mock_client({
-            "content": [{"text": "hello"}],
-            "usage": {"input_tokens": 10, "output_tokens": 20},
-        })
+        mock_client, _ = self._mock_client(
+            {
+                "content": [{"text": "hello"}],
+                "usage": {"input_tokens": 10, "output_tokens": 20},
+            }
+        )
         mock_client_cls.return_value = mock_client
 
         from aqueduct.agent.providers import _call_anthropic
+
         text, tin, tout = _call_anthropic([], "model", 100, "system")
         assert text == "hello"
         assert tin == 10
@@ -421,6 +452,7 @@ class TestCallProviders:
         mock_client_cls.return_value = mock_client
 
         from aqueduct.agent.providers import _call_anthropic
+
         _call_anthropic([], "model", 100, "system", temperature_override=0.8)
 
         kwargs = mock_client.post.call_args[1]
@@ -428,13 +460,16 @@ class TestCallProviders:
 
     @patch("httpx.Client")
     def test_call_openai_compat_returns_tuple(self, mock_client_cls):
-        mock_client, _ = self._mock_client({
-            "choices": [{"message": {"content": "hello"}}],
-            "usage": {"prompt_tokens": 15, "completion_tokens": 25},
-        })
+        mock_client, _ = self._mock_client(
+            {
+                "choices": [{"message": {"content": "hello"}}],
+                "usage": {"prompt_tokens": 15, "completion_tokens": 25},
+            }
+        )
         mock_client_cls.return_value = mock_client
 
         from aqueduct.agent.providers import _call_openai_compat
+
         text, tin, tout = _call_openai_compat([], "model", 100, "http://test", "system")
         assert text == "hello"
         assert tin == 15
@@ -442,14 +477,17 @@ class TestCallProviders:
 
     @patch("httpx.Client")
     def test_call_openai_compat_temperature_override(self, mock_client_cls):
-        mock_client, _ = self._mock_client(
-            {"choices": [{"message": {"content": "hello"}}]}
-        )
+        mock_client, _ = self._mock_client({"choices": [{"message": {"content": "hello"}}]})
         mock_client_cls.return_value = mock_client
 
         from aqueduct.agent.providers import _call_openai_compat
+
         _call_openai_compat(
-            [], "model", 100, "http://test", "system",
+            [],
+            "model",
+            100,
+            "http://test",
+            "system",
             provider_options={"ollama_temperature": 0.1},
             temperature_override=0.8,
         )
@@ -467,6 +505,7 @@ class TestCallProviders:
         mock_client_cls.return_value = mock_client
 
         from aqueduct.agent.providers import _call_anthropic
+
         _call_anthropic([], "model", 100, "system", timeout=120.0, deadline=5.0)
 
         call_kwargs = mock_client.post.call_args[1]
@@ -479,6 +518,7 @@ class TestCallProviders:
         mock_client_cls.return_value = mock_client
 
         from aqueduct.agent.providers import _call_anthropic
+
         _call_anthropic([], "model", 100, "system", timeout=120.0, deadline=None)
 
         call_kwargs = mock_client.post.call_args[1]
@@ -490,9 +530,15 @@ class TestCallProviders:
         mock_client_cls.return_value = mock_client
 
         from aqueduct.agent.providers import _call_openai_compat
+
         _call_openai_compat(
-            [], "model", 100, "http://test", "system",
-            timeout=120.0, deadline=3.0,
+            [],
+            "model",
+            100,
+            "http://test",
+            "system",
+            timeout=120.0,
+            deadline=3.0,
         )
 
         call_kwargs = mock_client.post.call_args[1]
@@ -504,22 +550,26 @@ class TestCallProviders:
 
 # ── Phase 46 — _retry_after_seconds ──────────────────────────────────────────
 
+
 class TestRetryAfterSeconds:
     @patch("aqueduct.agent.providers._RETRYABLE_STATUS", {429, 503, 529})
     def test_no_retry_after_header_returns_none(self):
         from aqueduct.agent.providers import _retry_after_seconds
+
         resp = MagicMock()
         resp.headers = {}
         assert _retry_after_seconds(resp) is None
 
     def test_valid_retry_after_returns_float(self):
         from aqueduct.agent.providers import _retry_after_seconds
+
         resp = MagicMock()
         resp.headers = {"retry-after": "5.0"}
         assert _retry_after_seconds(resp) == 5.0
 
     def test_malformed_retry_after_returns_none(self):
         from aqueduct.agent.providers import _retry_after_seconds
+
         resp = MagicMock()
         resp.headers = {"retry-after": "Fri, 31 Dec 1999 23:59:59 GMT"}
         assert _retry_after_seconds(resp) is None
@@ -527,9 +577,11 @@ class TestRetryAfterSeconds:
 
 # ── Phase 46 — _post_with_retry ──────────────────────────────────────────────
 
+
 class TestPostWithRetry:
     def test_2xx_first_try_returns_no_retry(self):
         from aqueduct.agent.providers import _post_with_retry
+
         do_post = MagicMock()
         resp = MagicMock(status_code=200)
         do_post.return_value = resp
@@ -541,6 +593,7 @@ class TestPostWithRetry:
         import httpx
 
         from aqueduct.agent.providers import _post_with_retry
+
         do_post = MagicMock()
         resp = MagicMock(status_code=401)
         resp.raise_for_status.side_effect = httpx.HTTPStatusError(
@@ -555,6 +608,7 @@ class TestPostWithRetry:
         import httpx
 
         from aqueduct.agent.providers import _post_with_retry
+
         do_post = MagicMock()
         resp = MagicMock(status_code=429)
         resp.raise_for_status.side_effect = httpx.HTTPStatusError(
@@ -571,6 +625,7 @@ class TestPostWithRetry:
         import httpx
 
         from aqueduct.agent.providers import _post_with_retry
+
         do_post = MagicMock()
         resp = MagicMock(status_code=503)
         resp.raise_for_status.side_effect = httpx.HTTPStatusError(
@@ -587,6 +642,7 @@ class TestPostWithRetry:
         import httpx
 
         from aqueduct.agent.providers import _post_with_retry
+
         do_post = MagicMock()
         resp = MagicMock(status_code=429)
         resp.raise_for_status.side_effect = httpx.HTTPStatusError(
@@ -603,6 +659,7 @@ class TestPostWithRetry:
         import httpx
 
         from aqueduct.agent.providers import _post_with_retry
+
         do_post = MagicMock()
         resp = MagicMock(status_code=429)
         resp.raise_for_status.side_effect = httpx.HTTPStatusError(
@@ -617,17 +674,22 @@ class TestPostWithRetry:
 
 # ── Phase 46 — _call_anthropic base_url + provider_options ───────────────────
 
+
 class TestCallAnthropicBaseUrl:
     @patch("httpx.Client")
     def test_custom_base_url_used_in_request(self, mock_client_cls, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
         from aqueduct.agent.providers import _call_anthropic
+
         mock_client = MagicMock()
         mock_client.__enter__.return_value = mock_client
         mock_client_cls.return_value = mock_client
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.json.return_value = {"content": [{"text": "ok"}], "usage": {"input_tokens": 5, "output_tokens": 10}}
+        mock_resp.json.return_value = {
+            "content": [{"text": "ok"}],
+            "usage": {"input_tokens": 5, "output_tokens": 10},
+        }
         mock_client.post.return_value = mock_resp
 
         _call_anthropic([], "model", 100, "system", base_url="https://gateway.example.com")
@@ -638,12 +700,16 @@ class TestCallAnthropicBaseUrl:
     def test_default_base_url(self, mock_client_cls, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
         from aqueduct.agent.providers import _call_anthropic
+
         mock_client = MagicMock()
         mock_client.__enter__.return_value = mock_client
         mock_client_cls.return_value = mock_client
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.json.return_value = {"content": [{"text": "ok"}], "usage": {"input_tokens": 5, "output_tokens": 10}}
+        mock_resp.json.return_value = {
+            "content": [{"text": "ok"}],
+            "usage": {"input_tokens": 5, "output_tokens": 10},
+        }
         mock_client.post.return_value = mock_resp
 
         _call_anthropic([], "model", 100, "system")
@@ -654,16 +720,23 @@ class TestCallAnthropicBaseUrl:
     def test_provider_options_merged_into_payload(self, mock_client_cls, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
         from aqueduct.agent.providers import _call_anthropic
+
         mock_client = MagicMock()
         mock_client.__enter__.return_value = mock_client
         mock_client_cls.return_value = mock_client
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.json.return_value = {"content": [{"text": "ok"}], "usage": {"input_tokens": 5, "output_tokens": 10}}
+        mock_resp.json.return_value = {
+            "content": [{"text": "ok"}],
+            "usage": {"input_tokens": 5, "output_tokens": 10},
+        }
         mock_client.post.return_value = mock_resp
 
         _call_anthropic(
-            [], "model", 100, "system",
+            [],
+            "model",
+            100,
+            "system",
             provider_options={"temperature": 0.5, "top_p": 0.9},
         )
         payload = mock_client.post.call_args[1]["json"]
@@ -671,19 +744,28 @@ class TestCallAnthropicBaseUrl:
         assert payload["top_p"] == 0.9
 
     @patch("httpx.Client")
-    def test_provider_options_ollama_keys_stripped_for_anthropic(self, mock_client_cls, monkeypatch):
+    def test_provider_options_ollama_keys_stripped_for_anthropic(
+        self, mock_client_cls, monkeypatch
+    ):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
         from aqueduct.agent.providers import _call_anthropic
+
         mock_client = MagicMock()
         mock_client.__enter__.return_value = mock_client
         mock_client_cls.return_value = mock_client
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.json.return_value = {"content": [{"text": "ok"}], "usage": {"input_tokens": 5, "output_tokens": 10}}
+        mock_resp.json.return_value = {
+            "content": [{"text": "ok"}],
+            "usage": {"input_tokens": 5, "output_tokens": 10},
+        }
         mock_client.post.return_value = mock_resp
 
         _call_anthropic(
-            [], "model", 100, "system",
+            [],
+            "model",
+            100,
+            "system",
             provider_options={"ollama_num_thread": 8, "temperature": 0.5},
         )
         payload = mock_client.post.call_args[1]["json"]
@@ -691,19 +773,28 @@ class TestCallAnthropicBaseUrl:
         assert payload["temperature"] == 0.5
 
     @patch("httpx.Client")
-    def test_provider_options_response_format_stripped_for_anthropic(self, mock_client_cls, monkeypatch):
+    def test_provider_options_response_format_stripped_for_anthropic(
+        self, mock_client_cls, monkeypatch
+    ):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
         from aqueduct.agent.providers import _call_anthropic
+
         mock_client = MagicMock()
         mock_client.__enter__.return_value = mock_client
         mock_client_cls.return_value = mock_client
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.json.return_value = {"content": [{"text": "ok"}], "usage": {"input_tokens": 5, "output_tokens": 10}}
+        mock_resp.json.return_value = {
+            "content": [{"text": "ok"}],
+            "usage": {"input_tokens": 5, "output_tokens": 10},
+        }
         mock_client.post.return_value = mock_resp
 
         _call_anthropic(
-            [], "model", 100, "system",
+            [],
+            "model",
+            100,
+            "system",
             provider_options={"response_format": {"type": "json_object"}},
         )
         payload = mock_client.post.call_args[1]["json"]
@@ -713,12 +804,16 @@ class TestCallAnthropicBaseUrl:
     def test_provider_options_none_leaves_payload_unchanged(self, mock_client_cls, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
         from aqueduct.agent.providers import _call_anthropic
+
         mock_client = MagicMock()
         mock_client.__enter__.return_value = mock_client
         mock_client_cls.return_value = mock_client
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.json.return_value = {"content": [{"text": "ok"}], "usage": {"input_tokens": 5, "output_tokens": 10}}
+        mock_resp.json.return_value = {
+            "content": [{"text": "ok"}],
+            "usage": {"input_tokens": 5, "output_tokens": 10},
+        }
         mock_client.post.return_value = mock_resp
 
         _call_anthropic([], "model", 100, "system", provider_options=None)
@@ -737,9 +832,15 @@ class TestCallAnthropicBaseUrl:
             "usage": {"prompt_tokens": 5, "completion_tokens": 10},
         }
         from aqueduct.agent.providers import _call_openai_compat
+
         text, tin, tout = _call_openai_compat(
-            [], "model", 100, "http://test/v1", "system",
-            max_retries=3, backoff_seconds=5.0,
+            [],
+            "model",
+            100,
+            "http://test/v1",
+            "system",
+            max_retries=3,
+            backoff_seconds=5.0,
         )
         assert mock_retry.called
         _, kw = mock_retry.call_args
@@ -756,9 +857,14 @@ class TestCallAnthropicBaseUrl:
             "usage": {"input_tokens": 5, "output_tokens": 10},
         }
         from aqueduct.agent.providers import _call_anthropic
+
         text, tin, tout = _call_anthropic(
-            [], "model", 100, "system",
-            max_retries=3, backoff_seconds=5.0,
+            [],
+            "model",
+            100,
+            "system",
+            max_retries=3,
+            backoff_seconds=5.0,
         )
         assert mock_retry.called
         _, kw = mock_retry.call_args
@@ -809,9 +915,7 @@ class TestGenerateAgentPatchPhase34Extra:
         # the stop reason is StopReason.SOLVED and only 1 LLM call was made.
         with patch("aqueduct.agent.loop._call_agent") as mock_call:
             mock_call.return_value = (_VALID_PATCH_JSON, 10, 20)
-            res = generate_agent_patch(
-                fctx, "model", tmp_path, budget=None, max_reprompts=4
-            )
+            res = generate_agent_patch(fctx, "model", tmp_path, budget=None, max_reprompts=4)
         assert res.attempts == 1
         assert res.stop_reason == StopReason.SOLVED
 
@@ -825,9 +929,7 @@ class TestGenerateAgentPatchPhase34Extra:
 
         with patch("aqueduct.agent.loop._call_agent") as mock_call:
             mock_call.return_value = (_VALID_PATCH_JSON, 10, 20)
-            res = generate_agent_patch(
-                fctx, "model", tmp_path, apply_callback=_cb, max_reprompts=3
-            )
+            res = generate_agent_patch(fctx, "model", tmp_path, apply_callback=_cb, max_reprompts=3)
         assert res.stop_reason == StopReason.SOLVED
         assert res.attempts == 1
         assert cb_calls == 1
@@ -840,9 +942,7 @@ class TestGenerateAgentPatchPhase34Extra:
                 (invalid_json, 100, 50),
                 (_VALID_PATCH_JSON, 80, 60),
             ]
-            res = generate_agent_patch(
-                fctx, "model", tmp_path, max_reprompts=3
-            )
+            res = generate_agent_patch(fctx, "model", tmp_path, max_reprompts=3)
         assert res.tokens_in_total == 180
         assert res.tokens_out_total == 110
 
@@ -870,14 +970,21 @@ class TestDeepLoop:
             mock_call.return_value = (_VALID_PATCH_JSON, 10, 20)
 
             budget = BudgetConfig(
-                max_reprompts=5, max_seconds=120, max_tokens_total=50000,
-                same_error_consecutive=10, same_signature_overall=10,
+                max_reprompts=5,
+                max_seconds=120,
+                max_tokens_total=50000,
+                same_error_consecutive=10,
+                same_signature_overall=10,
                 progress_stalled_window=10,
             )
             res = generate_agent_patch(
-                fctx, "model", tmp_path,
-                deep_loop=True, validate_callback=_validate,
-                budget=budget, max_reprompts=5,
+                fctx,
+                "model",
+                tmp_path,
+                deep_loop=True,
+                validate_callback=_validate,
+                budget=budget,
+                max_reprompts=5,
             )
 
         # Validation kept failing until exhausted_attempts (budget disables stuck detection)
@@ -887,6 +994,7 @@ class TestDeepLoop:
 
     def test_deep_loop_validation_passes_proceeds_to_apply(self, fctx, tmp_path):
         """validate_callback returning (True, "") proceeds to apply_callback normally."""
+
         def _validate(p):
             return (True, "")
 
@@ -897,8 +1005,11 @@ class TestDeepLoop:
             mock_call.return_value = (_VALID_PATCH_JSON, 10, 20)
 
             res = generate_agent_patch(
-                fctx, "model", tmp_path,
-                deep_loop=True, validate_callback=_validate,
+                fctx,
+                "model",
+                tmp_path,
+                deep_loop=True,
+                validate_callback=_validate,
                 apply_callback=_apply,
             )
 
@@ -918,8 +1029,11 @@ class TestDeepLoop:
             mock_call.return_value = (_VALID_PATCH_JSON, 10, 20)
 
             generate_agent_patch(
-                fctx, "model", tmp_path,
-                deep_loop=False, validate_callback=_validate,
+                fctx,
+                "model",
+                tmp_path,
+                deep_loop=False,
+                validate_callback=_validate,
             )
 
         assert cb_calls == 0
@@ -934,8 +1048,11 @@ class TestDeepLoop:
             mock_call.return_value = (_VALID_PATCH_JSON, 10, 20)
 
             res = generate_agent_patch(
-                fctx, "model", tmp_path,
-                deep_loop=True, validate_callback=_validate,
+                fctx,
+                "model",
+                tmp_path,
+                deep_loop=True,
+                validate_callback=_validate,
                 max_reprompts=3,
             )
 
@@ -954,8 +1071,11 @@ class TestDeepLoop:
             mock_call.return_value = (_VALID_PATCH_JSON, 10, 20)
 
             res = generate_agent_patch(
-                fctx, "model", tmp_path,
-                deep_loop=True, validate_callback=_validate,
+                fctx,
+                "model",
+                tmp_path,
+                deep_loop=True,
+                validate_callback=_validate,
                 max_reprompts=1,
             )
 
@@ -987,8 +1107,11 @@ class TestDeferToHuman:
         with patch("aqueduct.agent.loop._call_agent") as mock_call:
             mock_call.return_value = (self._DEFER_PATCH_JSON, 10, 20)
             res = generate_agent_patch(
-                fctx, "model", tmp_path,
-                allow_defer=True, max_reprompts=3,
+                fctx,
+                "model",
+                tmp_path,
+                allow_defer=True,
+                max_reprompts=3,
             )
         assert res.stop_reason == StopReason.DEFERRED
         assert res.patch is not None
@@ -1003,8 +1126,11 @@ class TestDeferToHuman:
                 (_VALID_PATCH_JSON, 15, 25),
             ]
             res = generate_agent_patch(
-                fctx, "model", tmp_path,
-                allow_defer=False, max_reprompts=5,
+                fctx,
+                "model",
+                tmp_path,
+                allow_defer=False,
+                max_reprompts=5,
             )
         assert res.stop_reason == StopReason.SOLVED
         assert res.attempts == 3
@@ -1015,9 +1141,11 @@ class TestDeferMixedOps:
 
     def test_mixed_defer_and_real_ops_raises(self):
         from aqueduct.patch.grammar import PatchSpec
+
         with pytest.raises(ValueError, match=r"defer_to_human cannot be mixed"):
             PatchSpec(
-                patch_id="p", rationale="mixed",
+                patch_id="p",
+                rationale="mixed",
                 operations=[
                     {"op": "set_module_config_key", "module_id": "m1", "key": "k", "value": "v"},
                     {"op": "defer_to_human", "diagnosis": "cannot fix"},
@@ -1053,8 +1181,11 @@ class TestPhase40BudgetEnforcement:
             btime.monotonic = _fast_time
             try:
                 res = generate_agent_patch(
-                    fctx, "model", tmp_path,
-                    budget=budget, max_reprompts=5,
+                    fctx,
+                    "model",
+                    tmp_path,
+                    budget=budget,
+                    max_reprompts=5,
                 )
             finally:
                 btime.monotonic = original_monotonic
@@ -1081,9 +1212,11 @@ class TestAgentPatchResultBackwardCompat:
         from aqueduct.patch.grammar import PatchSpec
 
         p = PatchSpec(
-            patch_id="p", rationale="r",
-            operations=[{"op": "set_module_config_key",
-                         "module_id": "m1", "key": "k", "value": "v"}],
+            patch_id="p",
+            rationale="r",
+            operations=[
+                {"op": "set_module_config_key", "module_id": "m1", "key": "k", "value": "v"}
+            ],
         )
         r = AgentPatchResult(patch=p, attempts=1)
         assert r.stop_reason is None
@@ -1096,8 +1229,10 @@ class TestAgentPatchResultBackwardCompat:
 class TestFormatRepromptExtra:
     def test_escalated_template_contains_patch_skeleton_verbatim(self):
         res = _format_reprompt_for_next_turn(
-            friendly="ERR", raw='{"x": 1}',
-            escalated=True, structural_hint="",
+            friendly="ERR",
+            raw='{"x": 1}',
+            escalated=True,
+            structural_hint="",
         )
         assert _PATCH_SKELETON in res
 
@@ -1169,14 +1304,17 @@ class TestBuildRootCauseSection:
 class TestUserPromptTemplate:
     def test_user_prompt_template_lacks_truncated_marker(self):
         from aqueduct.agent.prompts import _USER_PROMPT_TEMPLATE
+
         assert "Stack trace (truncated)" not in _USER_PROMPT_TEMPLATE
 
     def test_user_prompt_template_has_root_cause_placeholder(self):
         from aqueduct.agent.prompts import _USER_PROMPT_TEMPLATE
+
         assert "{root_cause_section}" in _USER_PROMPT_TEMPLATE
 
     def test_truncate_stack_and_constant_not_importable(self):
         import aqueduct.agent as agent_mod
+
         # Phase 35 retired _truncate_stack + _STACK_TRACE_MAX_LINES; the raw
         # stack trace is now rendered verbatim by _build_root_cause_section.
         assert not hasattr(agent_mod, "_truncate_stack")

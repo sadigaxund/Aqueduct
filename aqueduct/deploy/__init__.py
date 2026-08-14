@@ -53,8 +53,7 @@ def get_submitter(target: str, cfg: AqueductConfig) -> Submitter:
         )
 
     raise DeployError(
-        f"No submitter for target {target!r}. "
-        f"Supported remote targets: databricks."
+        f"No submitter for target {target!r}. " f"Supported remote targets: databricks."
     )
 
 

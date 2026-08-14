@@ -23,7 +23,9 @@ from aqueduct.parser.models import ModuleType
 RULE_ID = "custom_probe_driver_code"
 
 
-def check(manifest: Any, engine: str = "spark") -> list[str]:  # noqa: ARG001 — engine kept for RULES call-signature parity
+def check(
+    manifest: Any, engine: str = "spark"
+) -> list[str]:  # noqa: ARG001 — engine kept for RULES call-signature parity
     """Fires on every engine — the risk and wording are both engine-neutral
     (see module docstring). ``engine`` is accepted only because ``run_all()``
     calls every rule uniformly as ``check(manifest, engine)``."""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 pytestmark = pytest.mark.unit
 from aqueduct.patch.grammar import (
     AddArcadeRefOp,
@@ -33,13 +34,8 @@ def base_bp():
             {"id": "in", "type": "Ingress", "config": {"path": "p1"}},
             {"id": "out", "type": "Egress", "config": {"path": "p2"}},
         ],
-        "edges": [
-            {"from": "in", "to": "out", "port": "main"}
-        ],
-        "context": {
-            "env": "dev",
-            "paths": {"input": "/old/path"}
-        }
+        "edges": [{"from": "in", "to": "out", "port": "main"}],
+        "context": {"env": "dev", "paths": {"input": "/old/path"}},
     }
 
 
@@ -69,14 +65,14 @@ def test_insert_module(base_bp):
         edges_to_add=[
             {"from": "in", "to": "chan", "port": "main"},
             {"from": "chan", "to": "out", "port": "main"},
-        ]
+        ],
     )
     patched = apply_operation(base_bp, op)
-    
+
     # Check module added
     assert len(patched["modules"]) == 3
     assert patched["modules"][-1]["id"] == "chan"
-    
+
     # Check edges updated
     assert len(patched["edges"]) == 2
     assert patched["edges"][0] == {"from": "in", "to": "chan", "port": "main"}
@@ -92,14 +88,14 @@ def test_remove_module(base_bp):
     op = RemoveModuleOp(
         op="remove_module",
         module_id="in",
-        edges_to_add=[{"from": "new_in", "to": "out", "port": "main"}]
+        edges_to_add=[{"from": "new_in", "to": "out", "port": "main"}],
     )
     patched = apply_operation(base_bp, op)
-    
+
     # Module removed
     assert len(patched["modules"]) == 1
     assert patched["modules"][0]["id"] == "out"
-    
+
     # Edge referencing 'in' removed, new edge added
     assert len(patched["edges"]) == 1
     assert patched["edges"][0] == {"from": "new_in", "to": "out", "port": "main"}
@@ -122,7 +118,7 @@ def test_replace_context_value(base_bp):
     op = ReplaceContextValueOp(op="replace_context_value", key="env", value="prod")
     patched = apply_operation(base_bp, op)
     assert patched["context"]["env"] == "prod"
-    
+
     # Nested
     op = ReplaceContextValueOp(op="replace_context_value", key="paths.input", value="/new")
     patched = apply_operation(base_bp, op)
@@ -137,9 +133,7 @@ def test_replace_context_value(base_bp):
 def test_add_probe(base_bp):
     probe = {"id": "p1", "type": "Probe", "attach_to": "in", "config": {}}
     op = AddProbeOp(
-        op="add_probe",
-        module=probe,
-        edges_to_add=[{"from": "p1", "to": "reg", "port": "signal"}]
+        op="add_probe", module=probe, edges_to_add=[{"from": "p1", "to": "reg", "port": "signal"}]
     )
     patched = apply_operation(base_bp, op)
     assert patched["modules"][-1]["id"] == "p1"
@@ -166,7 +160,9 @@ def test_add_arcade_ref(base_bp):
 
 
 def test_set_module_on_failure(base_bp):
-    op = SetModuleOnFailureOp(op="set_module_on_failure", module_id="in", on_failure={"mode": "skip"})
+    op = SetModuleOnFailureOp(
+        op="set_module_on_failure", module_id="in", on_failure={"mode": "skip"}
+    )
     patched = apply_operation(base_bp, op)
     assert patched["modules"][0]["on_failure"] == {"mode": "skip"}
 
@@ -267,8 +263,10 @@ def test_apply_set_engine_config_string_value_survives_yaml_roundtrip(base_bp, k
     from aqueduct.patch.apply import _yaml_dumps
 
     op = SetEngineConfigOp(
-        op="set_engine_config", engine="spark",
-        key="spark.eventLog.enabled", value=keyword_value,
+        op="set_engine_config",
+        engine="spark",
+        key="spark.eventLog.enabled",
+        value=keyword_value,
     )
     patched = apply_operation(base_bp, op)
     dumped = _yaml_dumps(patched)
@@ -278,7 +276,9 @@ def test_apply_set_engine_config_string_value_survives_yaml_roundtrip(base_bp, k
 
 
 @pytest.mark.parametrize("keyword_value", ["on", "off", "yes", "no", "true", "false"])
-def test_apply_set_engine_config_typed_field_string_value_survives_yaml_roundtrip(base_bp, keyword_value):
+def test_apply_set_engine_config_typed_field_string_value_survives_yaml_roundtrip(
+    base_bp, keyword_value
+):
     """Same regression as the conf-bag test above, for the typed-field
     (DuckDB) addressing path — `memory_limit` is a plain str field, equally
     exposed to the ruamel-dump/PyYAML-reparse boolean-coercion trap."""
@@ -287,8 +287,10 @@ def test_apply_set_engine_config_typed_field_string_value_survives_yaml_roundtri
     from aqueduct.patch.apply import _yaml_dumps
 
     op = SetEngineConfigOp(
-        op="set_engine_config", engine="duckdb",
-        key="memory_limit", value=keyword_value,
+        op="set_engine_config",
+        engine="duckdb",
+        key="memory_limit",
+        value=keyword_value,
     )
     patched = apply_operation(base_bp, op)
     dumped = _yaml_dumps(patched)
@@ -320,6 +322,7 @@ def test_replace_macro_success_single_line(base_bp):
     bp = dict(base_bp)
     bp["macros"] = {"mymacro": "SELECT 1"}
     from aqueduct.patch.grammar import ReplaceMacroOp
+
     op = ReplaceMacroOp(op="replace_macro", name="mymacro", value="SELECT 2")
     patched = apply_operation(bp, op)
     assert patched["macros"]["mymacro"] == "SELECT 2"
@@ -331,6 +334,7 @@ def test_replace_macro_success_multiline(base_bp):
     bp = dict(base_bp)
     bp["macros"] = {"mymacro": "SELECT 1"}
     from aqueduct.patch.grammar import ReplaceMacroOp
+
     multi = "SELECT *\nFROM table\nWHERE col = 1"
     op = ReplaceMacroOp(op="replace_macro", name="mymacro", value=multi)
     patched = apply_operation(bp, op)
@@ -342,6 +346,7 @@ def test_replace_macro_unknown_name_raises(base_bp):
     bp = dict(base_bp)
     bp["macros"] = {"existing": "SELECT 1"}
     from aqueduct.patch.grammar import ReplaceMacroOp
+
     op = ReplaceMacroOp(op="replace_macro", name="missing", value="SELECT 2")
     with pytest.raises(PatchOperationError, match="Macro"):
         apply_operation(bp, op)
@@ -350,6 +355,7 @@ def test_replace_macro_unknown_name_raises(base_bp):
 def test_replace_macro_missing_macros_block_raises(base_bp):
     bp = dict(base_bp)  # no macros key
     from aqueduct.patch.grammar import ReplaceMacroOp
+
     op = ReplaceMacroOp(op="replace_macro", name="any", value="SELECT 1")
     with pytest.raises(PatchOperationError, match="no macros"):
         apply_operation(bp, op)

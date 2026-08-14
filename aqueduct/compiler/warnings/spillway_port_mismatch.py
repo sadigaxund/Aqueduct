@@ -32,9 +32,7 @@ def check(manifest: Any, engine: str = "spark") -> list[str]:
             continue
         cfg = m.config or {}
         has_condition = bool(cfg.get("spillway_condition"))
-        has_edge = any(
-            e.from_id == m.id and e.port == "spillway" for e in manifest.edges
-        )
+        has_edge = any(e.from_id == m.id and e.port == "spillway" for e in manifest.edges)
         if has_condition and not has_edge:
             out.append(
                 f"Channel '{m.id}' has spillway_condition but no spillway edge; all "

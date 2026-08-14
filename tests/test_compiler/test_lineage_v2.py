@@ -3,6 +3,7 @@
 Pure-compiler unit tests (no Spark, no store). CLI-level rendering and the
 store changelog round-trip are covered by stubs in tests/test_backlog.py.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -30,6 +31,7 @@ def _h(s: str) -> str:
 
 # ── fingerprints ────────────────────────────────────────────────────────────
 
+
 def test_fingerprint_ignores_formatting_and_comments():
     a = _canonicalize("SELECT  a, b  FROM t WHERE x = 1  -- note")
     b = _canonicalize("select a,b from t where x=1")
@@ -46,7 +48,9 @@ def test_compute_fingerprints_only_sql_channels():
     mods = (
         _ingress("load"),
         _ch("clean", "SELECT a FROM load"),
-        Module(id="dedup", type=ModuleType.Channel, label="d", config={"op": "deduplicate", "key": "a"}),
+        Module(
+            id="dedup", type=ModuleType.Channel, label="d", config={"op": "deduplicate", "key": "a"}
+        ),
     )
     rows = compute_channel_fingerprints(mods)
     assert {r["channel_id"] for r in rows} == {"clean"}
@@ -60,6 +64,7 @@ def test_fingerprint_unparseable_sql_still_hashes():
 
 
 # ── type-tracked chains ─────────────────────────────────────────────────────
+
 
 def test_chain_tracks_cast_type_and_passthrough():
     mods = (

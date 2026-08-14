@@ -4,9 +4,11 @@ Covers ⏳ items from TEST_MANIFEST.md Phase 18 git-lifecycle section:
 - aqueduct log <blueprint>
 - aqueduct rollback <blueprint> --to <patch_id>
 """
+
 import json
 import subprocess
 import pytest
+
 pytestmark = pytest.mark.integration
 
 from pathlib import Path
@@ -34,6 +36,7 @@ GIT_LOG_WITH_AQ_BLOCK = (
 class TestLogCmd:
     def test_no_git_history_prints_message(self, bp_file, monkeypatch):
         """No git commits for blueprint → prints 'No git history'."""
+
         def mock_run(args, **kwargs):
             return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
@@ -46,6 +49,7 @@ class TestLogCmd:
 
     def test_commit_with_aq_block_shows_patch_and_ops(self, bp_file, monkeypatch):
         """Commit with ---aqueduct--- block → patch_id and ops shown."""
+
         def mock_run(args, **kwargs):
             return subprocess.CompletedProcess(args, 0, stdout=GIT_LOG_WITH_AQ_BLOCK, stderr="")
 
@@ -59,6 +63,7 @@ class TestLogCmd:
 
     def test_commit_without_aq_block_shows_manual_change(self, bp_file, monkeypatch):
         """Commit without ---aqueduct--- block → shown as '(manual change)'."""
+
         def mock_run(args, **kwargs):
             return subprocess.CompletedProcess(args, 0, stdout=GIT_LOG_WITH_AQ_BLOCK, stderr="")
 
@@ -71,6 +76,7 @@ class TestLogCmd:
 
     def test_format_json_returns_array_with_required_fields(self, bp_file, monkeypatch):
         """--format json → array of objects with hash, date, patches, ops, run_id."""
+
         def mock_run(args, **kwargs):
             return subprocess.CompletedProcess(args, 0, stdout=GIT_LOG_WITH_AQ_BLOCK, stderr="")
 
@@ -143,6 +149,7 @@ class TestRollbackCmd:
 
     def test_patch_id_not_found_exits_2_with_hint(self, bp_file, monkeypatch):
         """patch_id not in git log → error with hint to run aqueduct log; exits 1."""
+
         def mock_run(args, **kwargs):
             if "log" in args:
                 return subprocess.CompletedProcess(args, 0, stdout=GIT_LOG_FOR_ROLLBACK, stderr="")
@@ -153,6 +160,7 @@ class TestRollbackCmd:
         result = runner.invoke(cli, ["patch", "rollback", str(bp_file), "--to", "GHOST_PATCH"])
 
         from aqueduct.exit_codes import DATA_OR_RUNTIME
+
         assert result.exit_code == DATA_OR_RUNTIME
         assert "GHOST_PATCH" in result.output
         assert "aqueduct log" in result.output
@@ -168,6 +176,7 @@ class TestRollbackCmd:
 
     def test_git_checkout_failure_exits_2(self, bp_file, monkeypatch):
         """git checkout fails → exits 1 with stderr content."""
+
         def mock_run(args, **kwargs):
             if "log" in args:
                 return subprocess.CompletedProcess(args, 0, stdout=GIT_LOG_FOR_ROLLBACK, stderr="")
@@ -175,7 +184,10 @@ class TestRollbackCmd:
                 return subprocess.CompletedProcess(args, 0, stdout="def5678", stderr="")
             if "checkout" in args:
                 return subprocess.CompletedProcess(
-                    args, 1, stdout="", stderr="error: pathspec 'blueprint.yml' did not match any file(s)"
+                    args,
+                    1,
+                    stdout="",
+                    stderr="error: pathspec 'blueprint.yml' did not match any file(s)",
                 )
             if "diff-tree" in args:
                 return subprocess.CompletedProcess(args, 0, stdout="blueprint.yml\n", stderr="")
@@ -186,5 +198,6 @@ class TestRollbackCmd:
         result = runner.invoke(cli, ["patch", "rollback", str(bp_file), "--to", "P001"])
 
         from aqueduct.exit_codes import DATA_OR_RUNTIME
+
         assert result.exit_code == DATA_OR_RUNTIME
         assert "error: pathspec" in result.output

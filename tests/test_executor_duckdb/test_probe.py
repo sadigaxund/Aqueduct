@@ -56,6 +56,7 @@ def _last_signal(con, store_dir, run_id, probe_id, signal_type):
 
 # ── schema_snapshot — zero query ────────────────────────────────────────────
 
+
 def test_schema_snapshot_zero_query_metadata(duckdb_con, tmp_path):
     rel = duckdb_con.sql("SELECT 1 AS id, 'x' AS name")
     mod = _probe_module([{"type": "schema_snapshot"}])
@@ -68,6 +69,7 @@ def test_schema_snapshot_zero_query_metadata(duckdb_con, tmp_path):
 
 
 # ── row_count_estimate — exact, footer vs. count ────────────────────────────
+
 
 def test_row_count_estimate_parquet_footer_when_attached_directly_to_ingress(duckdb_con, tmp_path):
     path = _write_parquet(duckdb_con, tmp_path, "src", "SELECT * FROM range(37) t(a)")
@@ -111,6 +113,7 @@ def test_row_count_estimate_not_gated_by_block_full_actions(duckdb_con, tmp_path
 
 # ── null_rates ───────────────────────────────────────────────────────────
 
+
 def test_null_rates_full_scan(duckdb_con, tmp_path):
     rel = duckdb_con.sql("SELECT * FROM (VALUES (1), (NULL), (3), (NULL)) t(a)")
     mod = _probe_module([{"type": "null_rates", "columns": ["a"], "fraction": 0.0}])
@@ -131,6 +134,7 @@ def test_null_rates_blocked_by_block_full_actions(duckdb_con, tmp_path):
 
 # ── sample_rows ──────────────────────────────────────────────────────────
 
+
 def test_sample_rows_limit(duckdb_con, tmp_path):
     rel = duckdb_con.sql("SELECT * FROM range(100) t(a)")
     mod = _probe_module([{"type": "sample_rows", "n": 3}])
@@ -150,6 +154,7 @@ def test_sample_rows_capped_by_max_sample_rows(duckdb_con, tmp_path):
 
 
 # ── value_distribution ───────────────────────────────────────────────────
+
 
 def test_value_distribution_full_scan_numeric_default(duckdb_con, tmp_path):
     rel = duckdb_con.sql("SELECT * FROM (VALUES (1, 'x'), (2, 'y'), (3, 'z')) t(n, s)")
@@ -174,6 +179,7 @@ def test_value_distribution_blocked_by_block_full_actions(duckdb_con, tmp_path):
 
 # ── distinct_count ────────────────────────────────────────────────────────
 
+
 def test_distinct_count_full_scan(duckdb_con, tmp_path):
     rel = duckdb_con.sql("SELECT * FROM (VALUES (1), (1), (2), (3)) t(a)")
     mod = _probe_module([{"type": "distinct_count", "columns": ["a"], "fraction": 0.0}])
@@ -191,6 +197,7 @@ def test_distinct_count_blocked_by_block_full_actions(duckdb_con, tmp_path):
 
 
 # ── data_freshness ────────────────────────────────────────────────────────
+
 
 def test_data_freshness_full_scan(duckdb_con, tmp_path):
     rel = duckdb_con.sql(
@@ -223,6 +230,7 @@ def test_data_freshness_missing_column_raises_config_error(duckdb_con, tmp_path)
 
 # ── partition_stats — deliberate non-implementation ──────────────────────
 
+
 def test_partition_stats_not_implemented_writes_no_signal(duckdb_con, tmp_path):
     rel = duckdb_con.sql("SELECT 1 AS a")
     mod = _probe_module([{"type": "partition_stats"}])
@@ -239,6 +247,7 @@ def test_partition_stats_not_implemented_writes_no_signal(duckdb_con, tmp_path):
 
 
 # ── threshold — the Regulator-gate signal, never gated ───────────────────
+
 
 def test_threshold_passes(duckdb_con, tmp_path):
     rel = duckdb_con.sql("SELECT * FROM (VALUES (1), (2), (3)) t(a)")
@@ -266,11 +275,18 @@ def test_threshold_not_gated_by_block_full_actions(duckdb_con, tmp_path):
 
 # ── custom — inline SQL form ──────────────────────────────────────────────
 
+
 def test_custom_inline_sql_estimate_and_passed_when(duckdb_con, tmp_path):
     rel = duckdb_con.sql("SELECT * FROM (VALUES (10), (20), (30)) t(price)")
-    mod = _probe_module([{
-        "type": "custom", "sql": "MAX(price)", "passed_when": "MAX(price) < 100",
-    }])
+    mod = _probe_module(
+        [
+            {
+                "type": "custom",
+                "sql": "MAX(price)",
+                "passed_when": "MAX(price) < 100",
+            }
+        ]
+    )
     execute_probe(mod, rel, duckdb_con, "r1", tmp_path)
     payload = _last_signal(duckdb_con, tmp_path, "r1", "probe1", "custom")
     assert payload["custom"] is True
@@ -279,6 +295,7 @@ def test_custom_inline_sql_estimate_and_passed_when(duckdb_con, tmp_path):
 
 
 # ── custom — module pointer form (driver code, resolved via module_loading) ─
+
 
 def test_custom_module_pointer_form(duckdb_con, tmp_path):
     (tmp_path / "probes.py").write_text(
@@ -294,9 +311,15 @@ def test_custom_module_pointer_form(duckdb_con, tmp_path):
 
 # ── report: stdout ────────────────────────────────────────────────────────
 
+
 def test_report_stdout_returns_note_lines(duckdb_con, tmp_path):
     rel = duckdb_con.sql("SELECT 1 AS a")
-    mod = _module("probe1", "Probe", {"report": "stdout", "signals": [{"type": "schema_snapshot"}]}, attach_to="src")
+    mod = _module(
+        "probe1",
+        "Probe",
+        {"report": "stdout", "signals": [{"type": "schema_snapshot"}]},
+        attach_to="src",
+    )
     notes = execute_probe(mod, rel, duckdb_con, "r1", tmp_path)
     assert notes  # non-empty — schema_snapshot rendered as a note line
     assert any("schema_snapshot" in n for n in notes)
@@ -311,6 +334,7 @@ def test_no_report_stdout_returns_empty_notes(duckdb_con, tmp_path):
 
 # ── module.type.Probe driven end to end through execute() ────────────────
 
+
 def test_module_type_probe_driven_through_execute(duckdb_con, tmp_path):
     src_path = _write_parquet(duckdb_con, tmp_path, "src", "SELECT * FROM range(10) t(a)")
     out_path = str(tmp_path / "out.parquet")
@@ -320,7 +344,9 @@ def test_module_type_probe_driven_through_execute(duckdb_con, tmp_path):
         _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}),
     )
     edges = (Edge(from_id="ing", to_id="eg", port="main"),)
-    manifest = Manifest(blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={})
+    manifest = Manifest(
+        blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={}
+    )
     result = execute(manifest, duckdb_con, run_id="r_probe_e2e", store_dir=tmp_path)
     assert result.status == ExecutionStatus.SUCCESS
     statuses = {r.module_id: r.status for r in result.module_results}
@@ -340,7 +366,9 @@ def test_probe_skipped_when_attach_to_unresolved_no_store_dir(duckdb_con, tmp_pa
         _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}),
     )
     edges = (Edge(from_id="ing", to_id="eg", port="main"),)
-    manifest = Manifest(blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={})
+    manifest = Manifest(
+        blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={}
+    )
     result = execute(manifest, duckdb_con, run_id="r_probe_no_store", store_dir=None)
     assert result.status == ExecutionStatus.SUCCESS
     statuses = {r.module_id: r.status for r in result.module_results}
@@ -348,6 +376,7 @@ def test_probe_skipped_when_attach_to_unresolved_no_store_dir(duckdb_con, tmp_pa
 
 
 # ── Regulator gated by a real Probe signal, through the real Surveyor ────
+
 
 def test_regulator_gated_by_probe_threshold_end_to_end(duckdb_con, tmp_path):
     """The path the brief asks to verify explicitly: Probe writes a
@@ -360,7 +389,9 @@ def test_regulator_gated_by_probe_threshold_end_to_end(duckdb_con, tmp_path):
     out_path = str(tmp_path / "out.parquet")
     modules = (
         _module("ing", "Ingress", {"format": "parquet", "path": src_path}),
-        _probe_module([{"type": "threshold", "expr": "MAX(a) < 100"}], attach_to="ing", id_="gate_probe"),
+        _probe_module(
+            [{"type": "threshold", "expr": "MAX(a) < 100"}], attach_to="ing", id_="gate_probe"
+        ),
         _module("reg", "Regulator", {"on_block": "skip"}),
         _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}),
     )
@@ -369,7 +400,9 @@ def test_regulator_gated_by_probe_threshold_end_to_end(duckdb_con, tmp_path):
         Edge(from_id="gate_probe", to_id="reg", port="signal"),
         Edge(from_id="reg", to_id="eg", port="main"),
     )
-    manifest = Manifest(blueprint_id="bp_gate", context={}, modules=modules, edges=edges, engine_config={})
+    manifest = Manifest(
+        blueprint_id="bp_gate", context={}, modules=modules, edges=edges, engine_config={}
+    )
 
     surveyor = Surveyor(manifest, store_dir=tmp_path, engine="duckdb")
     run_id = "r_gate_closed"
@@ -382,6 +415,7 @@ def test_regulator_gated_by_probe_threshold_end_to_end(duckdb_con, tmp_path):
     assert statuses["reg"] == "skipped"
     assert statuses["eg"] == "skipped"
     from pathlib import Path
+
     assert not Path(out_path).exists()
 
 
@@ -393,7 +427,9 @@ def test_regulator_gated_by_probe_threshold_open_end_to_end(duckdb_con, tmp_path
     out_path = str(tmp_path / "out.parquet")
     modules = (
         _module("ing", "Ingress", {"format": "parquet", "path": src_path}),
-        _probe_module([{"type": "threshold", "expr": "MAX(a) < 100"}], attach_to="ing", id_="gate_probe"),
+        _probe_module(
+            [{"type": "threshold", "expr": "MAX(a) < 100"}], attach_to="ing", id_="gate_probe"
+        ),
         _module("reg", "Regulator", {"on_block": "skip"}),
         _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}),
     )
@@ -402,7 +438,9 @@ def test_regulator_gated_by_probe_threshold_open_end_to_end(duckdb_con, tmp_path
         Edge(from_id="gate_probe", to_id="reg", port="signal"),
         Edge(from_id="reg", to_id="eg", port="main"),
     )
-    manifest = Manifest(blueprint_id="bp_gate_open", context={}, modules=modules, edges=edges, engine_config={})
+    manifest = Manifest(
+        blueprint_id="bp_gate_open", context={}, modules=modules, edges=edges, engine_config={}
+    )
 
     surveyor = Surveyor(manifest, store_dir=tmp_path, engine="duckdb")
     run_id = "r_gate_open"
@@ -418,6 +456,7 @@ def test_regulator_gated_by_probe_threshold_open_end_to_end(duckdb_con, tmp_path
 
 # ── config.probes.* sampling knobs, driven through execute() ─────────────
 
+
 def test_config_probes_sampling_knobs_threaded_through_execute(duckdb_con, tmp_path):
     """config.probes.max_sample_rows/default_sample_fraction, genuinely
     consumed now (Pass F) — backs the `supported` verdict on both leaves."""
@@ -429,9 +468,13 @@ def test_config_probes_sampling_knobs_threaded_through_execute(duckdb_con, tmp_p
         _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}),
     )
     edges = (Edge(from_id="ing", to_id="eg", port="main"),)
-    manifest = Manifest(blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={})
+    manifest = Manifest(
+        blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={}
+    )
     sampling = ProbeSampling(max_sample_rows=5, default_sample_fraction=0.1)
-    result = execute(manifest, duckdb_con, run_id="r_sampling", store_dir=tmp_path, sampling=sampling)
+    result = execute(
+        manifest, duckdb_con, run_id="r_sampling", store_dir=tmp_path, sampling=sampling
+    )
     assert result.status == ExecutionStatus.SUCCESS
     payload = _last_signal(duckdb_con, tmp_path, "r_sampling", "probe1", "sample_rows")
     assert payload["n"] == 5  # requested 30, capped to max_sample_rows=5
@@ -441,7 +484,9 @@ def test_config_danger_allow_full_probe_actions_gates_via_block_full_actions(duc
     """config.danger.allow_full_probe_actions=False -> block_full_actions=True
     (the CLI's inversion, mirrored here directly) genuinely blocks a sampled
     signal end to end through execute()."""
-    src_path = _write_parquet(duckdb_con, tmp_path, "src", "SELECT * FROM (VALUES (1), (NULL)) t(a)")
+    src_path = _write_parquet(
+        duckdb_con, tmp_path, "src", "SELECT * FROM (VALUES (1), (NULL)) t(a)"
+    )
     out_path = str(tmp_path / "out.parquet")
     modules = (
         _module("ing", "Ingress", {"format": "parquet", "path": src_path}),
@@ -449,8 +494,12 @@ def test_config_danger_allow_full_probe_actions_gates_via_block_full_actions(duc
         _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}),
     )
     edges = (Edge(from_id="ing", to_id="eg", port="main"),)
-    manifest = Manifest(blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={})
-    result = execute(manifest, duckdb_con, run_id="r_blocked", store_dir=tmp_path, block_full_actions=True)
+    manifest = Manifest(
+        blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={}
+    )
+    result = execute(
+        manifest, duckdb_con, run_id="r_blocked", store_dir=tmp_path, block_full_actions=True
+    )
     assert result.status == ExecutionStatus.SUCCESS
     payload = _last_signal(duckdb_con, tmp_path, "r_blocked", "probe1", "null_rates")
     assert payload["blocked"] is True

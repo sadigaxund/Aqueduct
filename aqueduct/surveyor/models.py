@@ -17,9 +17,9 @@ class RunRecord:
 
     run_id: str
     blueprint_id: str
-    status: str                     # "running" | "success" | "error"
-    started_at: str                 # ISO-8601 UTC
-    finished_at: str | None         # None while running
+    status: str  # "running" | "success" | "error"
+    started_at: str  # ISO-8601 UTC
+    finished_at: str | None  # None while running
     module_results: tuple[dict, ...]
 
     def to_dict(self) -> dict[str, Any]:
@@ -44,24 +44,36 @@ class FailureContext:
 
     run_id: str
     blueprint_id: str
-    failed_module: str          # module_id of the first failing module, or "_executor"
+    failed_module: str  # module_id of the first failing module, or "_executor"
     error_message: str
     stack_trace: str | None
-    manifest_json: str          # JSON-serialised Manifest.to_dict()
-    started_at: str             # ISO-8601 UTC
-    finished_at: str            # ISO-8601 UTC
-    provenance_json: str | None = None        # JSON-serialized ProvenanceMap slice for failed module + context
+    manifest_json: str  # JSON-serialised Manifest.to_dict()
+    started_at: str  # ISO-8601 UTC
+    finished_at: str  # ISO-8601 UTC
+    provenance_json: str | None = (
+        None  # JSON-serialized ProvenanceMap slice for failed module + context
+    )
     blueprint_source_yaml: str | None = None  # raw uncompiled YAML text of the blueprint file
-    doctor_hints: tuple[str, ...] = field(default_factory=tuple)  # warn/fail results from check_blueprint_sources
-    error_type: str | None = None             # user-defined label from Assert rule's error_type field; None for infra errors
+    doctor_hints: tuple[str, ...] = field(
+        default_factory=tuple
+    )  # warn/fail results from check_blueprint_sources
+    error_type: str | None = (
+        None  # user-defined label from Assert rule's error_type field; None for infra errors
+    )
     # Structured Spark/Py4J error extraction. Populated by
     # surveyor._extract_structured_error when the raised exception carries
     # Spark 4.0 condition metadata. All optional; legacy callers see None.
-    error_class: str | None = None            # Spark condition name (e.g. UNRESOLVED_COLUMN.WITH_SUGGESTION) or innermost exception type
-    root_exception: dict[str, Any] | None = None  # {"type": str, "message": str} — innermost Python or Java throwable
-    sql_state: str | None = None              # Spark getSqlState() when available
-    suggested_columns: tuple[str, ...] = field(default_factory=tuple)  # extracted "did you mean" suggestions
-    object_name: str | None = None            # offending column/table/relation name from messageParameters
+    error_class: str | None = (
+        None  # Spark condition name (e.g. UNRESOLVED_COLUMN.WITH_SUGGESTION) or innermost exception type
+    )
+    root_exception: dict[str, Any] | None = (
+        None  # {"type": str, "message": str} — innermost Python or Java throwable
+    )
+    sql_state: str | None = None  # Spark getSqlState() when available
+    suggested_columns: tuple[str, ...] = field(
+        default_factory=tuple
+    )  # extracted "did you mean" suggestions
+    object_name: str | None = None  # offending column/table/relation name from messageParameters
     # The execution engine this failure occurred on (e.g. "spark", "duckdb").
     # Stamped by Surveyor.record() from its required `engine` constructor arg
     # (see Surveyor.__init__). Required and keyword-only — every construction

@@ -32,9 +32,16 @@ class TestDeclarations:
         tb = ToolBox(manifest=_manifest(), failure_ctx=_FakeFailureCtx())
         names = {d["name"] for d in tb.declarations()}
         for expected in (
-            "list_runs", "run_detail", "lineage", "patch_list", "patch_show",
-            "probe_signals", "blueprint_history",
-            "read_blueprint", "get_source_schema", "sample_rows",
+            "list_runs",
+            "run_detail",
+            "lineage",
+            "patch_list",
+            "patch_show",
+            "probe_signals",
+            "blueprint_history",
+            "read_blueprint",
+            "get_source_schema",
+            "sample_rows",
         ):
             assert expected in names
 
@@ -95,7 +102,9 @@ class TestSessionBoundTools:
     def test_sample_rows_rejects_non_ingress_module(self):
         session = object()
         mod = types.SimpleNamespace(id="chan1", type=ModuleType.Channel)
-        tb = ToolBox(manifest=_manifest((mod,)), failure_ctx=_FakeFailureCtx(), spark_session=session)
+        tb = ToolBox(
+            manifest=_manifest((mod,)), failure_ctx=_FakeFailureCtx(), spark_session=session
+        )
         result = tb.call("sample_rows", {"module_id": "chan1"})
         assert result["available"] is False
         assert "not an Ingress module" in result["reason"]
@@ -103,7 +112,9 @@ class TestSessionBoundTools:
     def test_sample_rows_caps_n_hard_limit(self):
         session = object()
         mod = types.SimpleNamespace(id="src", type=ModuleType.Ingress)
-        tb = ToolBox(manifest=_manifest((mod,)), failure_ctx=_FakeFailureCtx(), spark_session=session)
+        tb = ToolBox(
+            manifest=_manifest((mod,)), failure_ctx=_FakeFailureCtx(), spark_session=session
+        )
 
         fake_rows = [types.SimpleNamespace(asDict=lambda recursive=True: {"a": 1})] * 3
 
@@ -127,8 +138,10 @@ class TestSessionBoundTools:
 class TestRegistryDispatch:
     def test_forwards_config_path_and_store_dir_when_unset(self):
         tb = ToolBox(
-            manifest=_manifest(), failure_ctx=_FakeFailureCtx(),
-            config_path="/proj/aqueduct.yml", store_dir="/proj/.aqueduct",
+            manifest=_manifest(),
+            failure_ctx=_FakeFailureCtx(),
+            config_path="/proj/aqueduct.yml",
+            store_dir="/proj/.aqueduct",
         )
         captured = {}
 
@@ -144,7 +157,8 @@ class TestRegistryDispatch:
 
     def test_explicit_config_path_wins_over_toolbox_default(self):
         tb = ToolBox(
-            manifest=_manifest(), failure_ctx=_FakeFailureCtx(),
+            manifest=_manifest(),
+            failure_ctx=_FakeFailureCtx(),
             config_path="/proj/aqueduct.yml",
         )
         captured = {}

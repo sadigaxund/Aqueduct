@@ -1,6 +1,7 @@
 """Tests for aqueduct/infra/module_loading.py — the shared user-code loader
 behind custom Assert rules, Probe pointers, python UDFs, custom DataSources,
 and the secrets resolver (Phase: custom-callable-import-not-standardized)."""
+
 from __future__ import annotations
 
 import sys

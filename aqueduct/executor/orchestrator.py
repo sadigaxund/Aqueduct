@@ -81,7 +81,7 @@ class OrchestratorError(Exception):
 
 @dataclass(frozen=True)
 class _HandoffEdge:
-    module: Module          # the synthetic Handoff module
+    module: Module  # the synthetic Handoff module
     from_module: str
     to_module: str
     from_island_idx: int
@@ -112,10 +112,15 @@ def _handoff_edges(manifest: Manifest) -> list[_HandoffEdge]:
                 f"island (from_module={from_module!r}, to_module={to_module!r}) "
                 "— this should be unreachable; please report this as a bug."
             )
-        out.append(_HandoffEdge(
-            module=m, from_module=from_module, to_module=to_module,
-            from_island_idx=from_idx, to_island_idx=to_idx,
-        ))
+        out.append(
+            _HandoffEdge(
+                module=m,
+                from_module=from_module,
+                to_module=to_module,
+                from_island_idx=from_idx,
+                to_island_idx=to_idx,
+            )
+        )
     return out
 
 
@@ -176,10 +181,7 @@ def _sub_manifest(
             module_ids.add(h.module.id)
 
     modules = tuple(m for m in manifest.modules if m.id in module_ids)
-    edges = tuple(
-        e for e in manifest.edges
-        if e.from_id in module_ids and e.to_id in module_ids
-    )
+    edges = tuple(e for e in manifest.edges if e.from_id in module_ids and e.to_id in module_ids)
     return replace(manifest, modules=modules, edges=edges)
 
 
@@ -399,8 +401,10 @@ def run_polyglot(
         )
     else:
         sweep_orphan_spills(
-            handoff_root, current_run_id=run_id,
-            keep_on_failure=keep_on_failure, obs_store=obs_store,
+            handoff_root,
+            current_run_id=run_id,
+            keep_on_failure=keep_on_failure,
+            obs_store=obs_store,
         )
 
     handoffs = _handoff_edges(manifest)
@@ -413,7 +417,9 @@ def run_polyglot(
         island = manifest.islands[island_idx]
         sub_manifest = _sub_manifest(manifest, island, handoffs, island_idx)
 
-        this_run_uris = _spill_uris_for_island(handoffs, island_idx, handoff_root, manifest_h, run_id)
+        this_run_uris = _spill_uris_for_island(
+            handoffs, island_idx, handoff_root, manifest_h, run_id
+        )
         # `setdefault`, not `update`: a handoff's WRITE-side island always
         # precedes its READ-side island in `order` (see
         # `_island_execution_order`), so by the time a downstream island's
@@ -427,7 +433,11 @@ def run_polyglot(
             run_spill_uris.setdefault(_hid, _uri)
 
         resume_uris = _resume_spill_uris_for_island(
-            handoffs, island_idx, handoff_root, manifest_h, resume_run_id,
+            handoffs,
+            island_idx,
+            handoff_root,
+            manifest_h,
+            resume_run_id,
         )
         resumable_exits = [h for h in handoffs if h.from_island_idx == island_idx]
         can_resume = bool(resumable_exits) and all(
@@ -438,7 +448,9 @@ def run_polyglot(
             logger.info(
                 "Island (engine=%s) skipped — resuming from run %r's existing "
                 "handoff spill for %s",
-                island.engine, resume_run_id, [h.module.id for h in resumable_exits],
+                island.engine,
+                resume_run_id,
+                [h.module.id for h in resumable_exits],
             )
             for m in sub_manifest.modules:
                 acc.module_results.append(_skipped_result(m.id))
@@ -484,7 +496,8 @@ def run_polyglot(
                 # warning instead of a TypeError.
                 result = call_execute(
                     island.engine,
-                    sub_manifest, session,
+                    sub_manifest,
+                    session,
                     run_id=run_id,
                     store_dir=store_dir,
                     checkpoint_root=checkpoint_root,
@@ -538,7 +551,9 @@ def run_polyglot(
                     run_id=run_id,
                     status=ExecutionStatus.ERROR,
                     module_results=(
-                        ModuleResult(module_id="_executor", status=ExecutionStatus.ERROR, error=str(exc)),
+                        ModuleResult(
+                            module_id="_executor", status=ExecutionStatus.ERROR, error=str(exc)
+                        ),
                     ),
                 )
         finally:

@@ -36,7 +36,9 @@ def _module(id_, type_, config, **kw):
 
 
 def _manifest(modules, edges):
-    return Manifest(blueprint_id="test_bp", context={}, modules=modules, edges=edges, engine_config={})
+    return Manifest(
+        blueprint_id="test_bp", context={}, modules=modules, edges=edges, engine_config={}
+    )
 
 
 def _write_parquet(con, tmp_path, name, rows_sql):
@@ -48,7 +50,9 @@ def _write_parquet(con, tmp_path, name, rows_sql):
 def test_incremental_watermark_no_prior(duckdb_con, tmp_path):
     """materialize=incremental, no prior watermark -> ${ctx._watermark} replaced with sentinel."""
     in_path = _write_parquet(
-        duckdb_con, tmp_path, "in",
+        duckdb_con,
+        tmp_path,
+        "in",
         "SELECT CAST('2024-01-01 10:00:00' AS TIMESTAMP) AS ts, i AS id FROM range(5) t(i)",
     )
     depot = MockDepot()
@@ -56,9 +60,11 @@ def test_incremental_watermark_no_prior(duckdb_con, tmp_path):
         modules=(
             _module("src", "Ingress", {"format": "parquet", "path": in_path}),
             _module(
-                "inc", "Channel",
+                "inc",
+                "Channel",
                 {"op": "sql", "query": "SELECT * FROM src WHERE ts > ${ctx._watermark}"},
-                materialize="incremental", watermark_column="ts",
+                materialize="incremental",
+                watermark_column="ts",
             ),
         ),
         edges=(Edge(from_id="src", to_id="inc", port="main"),),
@@ -70,7 +76,9 @@ def test_incremental_watermark_no_prior(duckdb_con, tmp_path):
 def test_incremental_watermark_with_prior(duckdb_con, tmp_path):
     """materialize=incremental, prior watermark in Depot -> query substituted with stored value."""
     in_path = _write_parquet(
-        duckdb_con, tmp_path, "in_prior",
+        duckdb_con,
+        tmp_path,
+        "in_prior",
         "SELECT * FROM (VALUES "
         "(CAST('2024-01-01 10:00:00' AS TIMESTAMP), 1), "
         "(CAST('2024-01-01 12:00:00' AS TIMESTAMP), 2)"
@@ -82,9 +90,11 @@ def test_incremental_watermark_with_prior(duckdb_con, tmp_path):
         modules=(
             _module("src", "Ingress", {"format": "parquet", "path": in_path}),
             _module(
-                "inc_p", "Channel",
+                "inc_p",
+                "Channel",
                 {"op": "sql", "query": "SELECT * FROM src WHERE ts > ${ctx._watermark}"},
-                materialize="incremental", watermark_column="ts",
+                materialize="incremental",
+                watermark_column="ts",
             ),
             _module("out", "Egress", {"format": "parquet", "path": out_path}),
         ),
@@ -106,7 +116,9 @@ def test_incremental_watermark_with_prior(duckdb_con, tmp_path):
 def test_incremental_watermark_failure_not_updated(duckdb_con, tmp_path):
     """materialize=incremental, Channel fails -> watermark NOT updated in Depot."""
     in_path = _write_parquet(
-        duckdb_con, tmp_path, "in_fail",
+        duckdb_con,
+        tmp_path,
+        "in_fail",
         "SELECT CAST('2024-01-01 10:00:00' AS TIMESTAMP) AS ts, i AS id FROM range(5) t(i)",
     )
     depot = MockDepot({"test_bp:inc_f:_watermark": "2024-01-01 09:00:00"})
@@ -114,8 +126,11 @@ def test_incremental_watermark_failure_not_updated(duckdb_con, tmp_path):
         modules=(
             _module("src", "Ingress", {"format": "parquet", "path": in_path}),
             _module(
-                "inc_f", "Channel", {"op": "sql", "query": "SELECT * FROM non_existent"},
-                materialize="incremental", watermark_column="ts",
+                "inc_f",
+                "Channel",
+                {"op": "sql", "query": "SELECT * FROM non_existent"},
+                materialize="incremental",
+                watermark_column="ts",
             ),
         ),
         edges=(Edge(from_id="src", to_id="inc_f", port="main"),),
@@ -128,16 +143,26 @@ def test_incremental_watermark_failure_not_updated(duckdb_con, tmp_path):
 def test_incremental_egress_overwrite_warning(duckdb_con, tmp_path, caplog):
     """materialize=incremental, downstream Egress has mode=overwrite -> warning logged."""
     in_path = _write_parquet(
-        duckdb_con, tmp_path, "in_warn", "SELECT CAST('2024-01-01 10:00:00' AS TIMESTAMP) AS ts",
+        duckdb_con,
+        tmp_path,
+        "in_warn",
+        "SELECT CAST('2024-01-01 10:00:00' AS TIMESTAMP) AS ts",
     )
     manifest = _manifest(
         modules=(
             _module("src", "Ingress", {"format": "parquet", "path": in_path}),
             _module(
-                "inc", "Channel", {"op": "sql", "query": "SELECT * FROM src"},
-                materialize="incremental", watermark_column="ts",
+                "inc",
+                "Channel",
+                {"op": "sql", "query": "SELECT * FROM src"},
+                materialize="incremental",
+                watermark_column="ts",
             ),
-            _module("out", "Egress", {"format": "parquet", "path": str(tmp_path / "out"), "mode": "overwrite"}),
+            _module(
+                "out",
+                "Egress",
+                {"format": "parquet", "path": str(tmp_path / "out"), "mode": "overwrite"},
+            ),
         ),
         edges=(
             Edge(from_id="src", to_id="inc", port="main"),
@@ -152,13 +177,18 @@ def test_incremental_egress_overwrite_warning(duckdb_con, tmp_path, caplog):
 def test_incremental_no_materialize_no_logic(duckdb_con, tmp_path):
     """no materialize field -> normal Channel execution, no watermark logic."""
     in_path = _write_parquet(
-        duckdb_con, tmp_path, "in_none", "SELECT CAST('2024-01-01 10:00:00' AS TIMESTAMP) AS ts",
+        duckdb_con,
+        tmp_path,
+        "in_none",
+        "SELECT CAST('2024-01-01 10:00:00' AS TIMESTAMP) AS ts",
     )
     depot = MockDepot()
     manifest = _manifest(
         modules=(
             _module("src", "Ingress", {"format": "parquet", "path": in_path}),
-            _module("inc", "Channel", {"op": "sql", "query": "SELECT * FROM src"}, watermark_column="ts"),
+            _module(
+                "inc", "Channel", {"op": "sql", "query": "SELECT * FROM src"}, watermark_column="ts"
+            ),
         ),
         edges=(Edge(from_id="src", to_id="inc", port="main"),),
     )
@@ -169,14 +199,20 @@ def test_incremental_no_materialize_no_logic(duckdb_con, tmp_path):
 def test_incremental_depot_none_no_crash(duckdb_con, tmp_path):
     """materialize=incremental, depot=None -> query uses sentinel, no crash."""
     in_path = _write_parquet(
-        duckdb_con, tmp_path, "in_nodepot", "SELECT CAST('2024-01-01 10:00:00' AS TIMESTAMP) AS ts",
+        duckdb_con,
+        tmp_path,
+        "in_nodepot",
+        "SELECT CAST('2024-01-01 10:00:00' AS TIMESTAMP) AS ts",
     )
     manifest = _manifest(
         modules=(
             _module("src", "Ingress", {"format": "parquet", "path": in_path}),
             _module(
-                "inc", "Channel", {"op": "sql", "query": "SELECT * FROM src WHERE ts > ${ctx._watermark}"},
-                materialize="incremental", watermark_column="ts",
+                "inc",
+                "Channel",
+                {"op": "sql", "query": "SELECT * FROM src WHERE ts > ${ctx._watermark}"},
+                materialize="incremental",
+                watermark_column="ts",
             ),
         ),
         edges=(Edge(from_id="src", to_id="inc", port="main"),),
@@ -190,7 +226,9 @@ def test_incremental_two_runs_real_incremental_behavior(duckdb_con, tmp_path):
     watermark, not the whole file — the DuckDB equivalent of snippet
     19_depot_incremental's two-run walkthrough."""
     in_path = _write_parquet(
-        duckdb_con, tmp_path, "in_e2e",
+        duckdb_con,
+        tmp_path,
+        "in_e2e",
         "SELECT * FROM (VALUES "
         "(CAST('2024-01-01 10:00:00' AS TIMESTAMP), 1), "
         "(CAST('2024-01-01 11:00:00' AS TIMESTAMP), 2), "
@@ -205,11 +243,15 @@ def test_incremental_two_runs_real_incremental_behavior(duckdb_con, tmp_path):
             modules=(
                 _module("src", "Ingress", {"format": "parquet", "path": in_path}),
                 _module(
-                    "inc", "Channel",
+                    "inc",
+                    "Channel",
                     {"op": "sql", "query": "SELECT * FROM src WHERE ts > ${ctx._watermark}"},
-                    materialize="incremental", watermark_column="ts",
+                    materialize="incremental",
+                    watermark_column="ts",
                 ),
-                _module("out", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}),
+                _module(
+                    "out", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}
+                ),
             ),
             edges=(
                 Edge(from_id="src", to_id="inc", port="main"),

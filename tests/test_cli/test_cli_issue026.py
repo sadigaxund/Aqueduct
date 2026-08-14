@@ -32,7 +32,7 @@ def bp_and_test(tmp_path):
         "    label: L\n"
         "    config:\n"
         "      op: sql\n"
-        "      query: \"SELECT id * 2 as val FROM in1\"\n"
+        '      query: "SELECT id * 2 as val FROM in1"\n'
         "edges: []\n"
     )
     aqt = tmp_path / "pass.aqtest.yml"

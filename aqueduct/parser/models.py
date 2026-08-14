@@ -22,6 +22,7 @@ class ModuleType(StrEnum):
     a cross-engine island boundary (`aqueduct.compiler.handoff`), always
     with `Module.synthetic=True`.
     """
+
     Ingress = "Ingress"
     Channel = "Channel"
     Egress = "Egress"
@@ -56,15 +57,22 @@ class RetryPolicy:
 
 @dataclass(frozen=True)
 class GuardrailsConfig:
-    forbidden_ops: tuple[str, ...] = ()   # PatchSpec op names blocked from auto-apply
-    allowed_paths: tuple[str, ...] = ()   # fnmatch patterns for config path values; empty = unrestricted
-    heal_on_errors: tuple[str, ...] = ()  # LLM only fires when error_type matches; empty = no restriction
-    never_heal_errors: tuple[str, ...] = ()  # LLM never fires when error_type matches; takes priority
+    forbidden_ops: tuple[str, ...] = ()  # PatchSpec op names blocked from auto-apply
+    allowed_paths: tuple[
+        str, ...
+    ] = ()  # fnmatch patterns for config path values; empty = unrestricted
+    heal_on_errors: tuple[
+        str, ...
+    ] = ()  # LLM only fires when error_type matches; empty = no restriction
+    never_heal_errors: tuple[
+        str, ...
+    ] = ()  # LLM never fires when error_type matches; takes priority
 
 
 @dataclass(frozen=True)
 class CascadeTierConfig:
     """Phase 44 — Per-tier config in a multi-model healing cascade."""
+
     model: str
     provider: str | None = None
     base_url: str | None = None
@@ -94,8 +102,8 @@ class AgentConfig:
     ``aqueduct/config.py``), resolved by ``aqueduct.cli.resolve_agent_connection``.
     """
 
-    approval_mode: str = "disabled"       # YAML key `approval`: "disabled" | "human" | "auto" | "ci"
-    on_pending_patches: str = "warn"      # "ignore" | "warn" | "block"
+    approval_mode: str = "disabled"  # YAML key `approval`: "disabled" | "human" | "auto" | "ci"
+    on_pending_patches: str = "warn"  # "ignore" | "warn" | "block"
     # `max_patches` (default 1). Multi-patch loop opt-in: set > 1 AND
     # `danger.allow_multi_patch: true`.
     max_patches: int = 1
@@ -267,6 +275,7 @@ class HookEntry:
     execute the target Blueprint in the same Python process, reusing the
     live SparkSession, instead of spawning an `aqueduct run` subprocess.
     """
+
     kind: str
     value: Any
     timeout: int = 300
@@ -281,6 +290,7 @@ class Hooks:
     fire mid-run at heal milestones (mirroring the engine-level `webhooks:`
     vocabulary). Never change the run's exit code. Distinct from the
     engine-level `webhooks:` block in aqueduct.yml (ops-owned alerting)."""
+
     on_success: tuple[HookEntry, ...] = ()
     on_failure: tuple[HookEntry, ...] = ()
     on_patch_pending: tuple[HookEntry, ...] = ()
@@ -307,6 +317,7 @@ HOOK_EVENTS: tuple[str, ...] = tuple(f.name for f in fields(Hooks))
 class HealedByRecord:
     """One self-heal provenance record — parsed mirror of
     ``parser.schema.HealedByRecordSchema``. See that model's docstring."""
+
     patch_id: str
     engine: str
     classification: str

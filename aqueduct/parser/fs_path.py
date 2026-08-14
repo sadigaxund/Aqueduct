@@ -32,6 +32,7 @@ class FsPath:
     fields can be added later without churning call sites because the
     callable form is already stable.
     """
+
     allow_uri: bool = True
 
 

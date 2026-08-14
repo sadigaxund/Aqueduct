@@ -4,12 +4,14 @@ Covers TEST_MANIFEST.md ⏳ item:
   "Aggressive heal with 3 iterations produces 3 `run_records` rows. Iteration
    0 row carries `parent_run_id=NULL`, iterations 1+ carry the outer run_id."
 """
+
 from __future__ import annotations
 
 import duckdb
 import pytest
 
 from aqueduct.compiler.models import Manifest
+
 try:
     from aqueduct.executor.models import ExecutionResult, ModuleResult
 except ImportError:

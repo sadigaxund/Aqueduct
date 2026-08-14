@@ -47,7 +47,9 @@ def module_type_spellings(module: Any) -> list[tuple[str, str]]:
         if isinstance(columns, dict):
             for col_name, col_type in columns.items():
                 if col_type is not None:
-                    out.append((f"Channel {module.id!r} op=cast column {col_name!r}", str(col_type)))
+                    out.append(
+                        (f"Channel {module.id!r} op=cast column {col_name!r}", str(col_type))
+                    )
         elif isinstance(columns, list):
             for item in columns:
                 if not isinstance(item, dict):
@@ -55,7 +57,9 @@ def module_type_spellings(module: Any) -> list[tuple[str, str]]:
                 col_name = item.get("column") or item.get("name")
                 col_type = item.get("type")
                 if col_type is not None:
-                    out.append((f"Channel {module.id!r} op=cast column {col_name!r}", str(col_type)))
+                    out.append(
+                        (f"Channel {module.id!r} op=cast column {col_name!r}", str(col_type))
+                    )
     elif mtype == ModuleType.Ingress:
         hint_raw = cfg.get("schema_hint")
         hint_fields: list = []
@@ -74,7 +78,10 @@ def module_type_spellings(module: Any) -> list[tuple[str, str]]:
             ftype = field_hint.get("type")
             if ftype is not None:
                 out.append(
-                    (f"Ingress {module.id!r} schema_hint field {field_hint.get('name')!r}", str(ftype))
+                    (
+                        f"Ingress {module.id!r} schema_hint field {field_hint.get('name')!r}",
+                        str(ftype),
+                    )
                 )
     return out
 

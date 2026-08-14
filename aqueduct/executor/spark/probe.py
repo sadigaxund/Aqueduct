@@ -155,6 +155,7 @@ def _utcnow_iso() -> str:
 
 def _json_dumps(obj: Any) -> str:
     """json.dumps that coerces Spark-native types (datetime, Decimal, bytes)."""
+
     def _default(o: Any) -> Any:
         if isinstance(o, (datetime, date)):
             return o.isoformat()
@@ -163,10 +164,12 @@ def _json_dumps(obj: Any) -> str:
         if isinstance(o, bytes):
             return o.hex()
         return str(o)
+
     return json.dumps(obj, default=_default)
 
 
 # ── Signal implementations ────────────────────────────────────────────────────
+
 
 def _schema_snapshot(
     probe_id: str,
@@ -182,8 +185,7 @@ def _schema_snapshot(
     pod on an ephemeral filesystem leaves no artefacts."""
     # df.schema is always available on a lazy DataFrame
     fields = [
-        {"name": f.name, "type": str(f.dataType), "nullable": f.nullable}
-        for f in df.schema.fields
+        {"name": f.name, "type": str(f.dataType), "nullable": f.nullable} for f in df.schema.fields
     ]
     return {"fields": fields}
 
@@ -210,6 +212,7 @@ def _row_count_estimate(
         if observability_store is None and store_dir is not None:
             try:
                 from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+
                 db_path = store_dir / "observability.db"
                 if not db_path.exists():
                     return {"method": "spark_listener", "estimate": None}
@@ -238,13 +241,24 @@ def _row_count_estimate(
 
     # method: sample
     if block_full_actions:
-        logger.warning("[runtime_probe_blocked] Probe %r: block_full_actions=True; skipping row_count_estimate sample.", probe_id)
-        _add_module_warning("runtime_probe_blocked", f"Probe {probe_id!r}: block_full_actions=True; skipping row_count_estimate sample.")
+        logger.warning(
+            "[runtime_probe_blocked] Probe %r: block_full_actions=True; skipping row_count_estimate sample.",
+            probe_id,
+        )
+        _add_module_warning(
+            "runtime_probe_blocked",
+            f"Probe {probe_id!r}: block_full_actions=True; skipping row_count_estimate sample.",
+        )
         return {"method": "sample", "blocked": True, "estimate": None}
     fraction = float(signal_cfg.get("fraction", sampling.default_sample_fraction))
     sample_count = df.sample(fraction=fraction).count()
     estimate = int(round(sample_count / fraction)) if fraction > 0 else 0
-    return {"method": "sample", "fraction": fraction, "sample_count": sample_count, "estimate": estimate}
+    return {
+        "method": "sample",
+        "fraction": fraction,
+        "sample_count": sample_count,
+        "estimate": estimate,
+    }
 
 
 def _null_rates(
@@ -260,8 +274,12 @@ def _null_rates(
     fraction = float(signal_cfg.get("fraction", sampling.default_sample_fraction))
 
     if block_full_actions:
-        logger.warning("[runtime_probe_blocked] Probe: block_full_actions=True; skipping null_rates sample.")
-        _add_module_warning("runtime_probe_blocked", "block_full_actions=True; skipping null_rates sample.")
+        logger.warning(
+            "[runtime_probe_blocked] Probe: block_full_actions=True; skipping null_rates sample."
+        )
+        _add_module_warning(
+            "runtime_probe_blocked", "block_full_actions=True; skipping null_rates sample."
+        )
         return {"fraction": fraction, "blocked": True, "null_rates": {c: None for c in columns}}
 
     sample_df = df.sample(fraction=fraction).select(columns)
@@ -270,9 +288,11 @@ def _null_rates(
     if total == 0:
         return {"fraction": fraction, "sample_size": 0, "null_rates": {c: None for c in columns}}
 
-    null_counts_row = sample_df.select(
-        [F.sum(F.col(c).isNull().cast("int")).alias(c) for c in columns]
-    ).collect()[0].asDict()
+    null_counts_row = (
+        sample_df.select([F.sum(F.col(c).isNull().cast("int")).alias(c) for c in columns])
+        .collect()[0]
+        .asDict()
+    )
 
     rates = {c: round(null_counts_row[c] / total, 6) for c in columns}
     return {"fraction": fraction, "sample_size": total, "null_rates": rates}
@@ -309,8 +329,12 @@ def _value_distribution(
     percentiles: list[float] = signal_cfg.get("percentiles", [0.25, 0.5, 0.75])
 
     if block_full_actions:
-        logger.warning("[runtime_probe_blocked] Probe: block_full_actions=True; skipping value_distribution.")
-        _add_module_warning("runtime_probe_blocked", "block_full_actions=True; skipping value_distribution.")
+        logger.warning(
+            "[runtime_probe_blocked] Probe: block_full_actions=True; skipping value_distribution."
+        )
+        _add_module_warning(
+            "runtime_probe_blocked", "block_full_actions=True; skipping value_distribution."
+        )
         return {"blocked": True, "fraction": fraction, "stats": {}}
 
     # Default to numeric columns only when caller didn't specify
@@ -372,9 +396,17 @@ def _distinct_count(
     columns: list[str] = signal_cfg.get("columns") or df.columns
 
     if block_full_actions:
-        logger.warning("[runtime_probe_blocked] Probe: block_full_actions=True; skipping distinct_count.")
-        _add_module_warning("runtime_probe_blocked", "block_full_actions=True; skipping distinct_count.")
-        return {"blocked": True, "fraction": fraction, "distinct_counts": {c: None for c in columns}}
+        logger.warning(
+            "[runtime_probe_blocked] Probe: block_full_actions=True; skipping distinct_count."
+        )
+        _add_module_warning(
+            "runtime_probe_blocked", "block_full_actions=True; skipping distinct_count."
+        )
+        return {
+            "blocked": True,
+            "fraction": fraction,
+            "distinct_counts": {c: None for c in columns},
+        }
 
     source = df.sample(fraction=fraction).select(columns) if fraction > 0 else df.select(columns)
     agg_exprs = [F.approx_count_distinct(c).alias(c) for c in columns]
@@ -469,9 +501,7 @@ def _custom(
     call_cfg = {**sig_cfg, "block_full_actions": block_full_actions}
     result = fn(df, call_cfg)
     if not isinstance(result, dict):
-        raise ConfigError(
-            f"custom probe callable must return a dict, got {type(result).__name__}"
-        )
+        raise ConfigError(f"custom probe callable must return a dict, got {type(result).__name__}")
     return {"custom": True, **result}
 
 
@@ -496,6 +526,7 @@ def _threshold(df: DataFrame, sig_cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
 
 def _stdout_report_lines(sig_type: str, payload: Any) -> list[str]:
     """Human-readable lines for `report: stdout` (per signal).
@@ -574,6 +605,7 @@ def execute_probe(
 
         if observability_store is None:
             from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+
             observability_store = DuckDBObservabilityStore(store_dir / "observability.db")
 
         with observability_store.connect() as cur:
@@ -586,7 +618,8 @@ def execute_probe(
                         payload = _schema_snapshot(module.id, run_id, df, store_dir)
                     elif sig_type == "row_count_estimate":
                         payload = _row_count_estimate(
-                            df, sig_cfg,
+                            df,
+                            sig_cfg,
                             probe_id=module.attach_to or module.id,
                             run_id=run_id,
                             store_dir=store_dir,
@@ -595,24 +628,41 @@ def execute_probe(
                             sampling=sampling,
                         )
                     elif sig_type == "null_rates":
-                        payload = _null_rates(df, sig_cfg, block_full_actions=block_full_actions, sampling=sampling)
+                        payload = _null_rates(
+                            df, sig_cfg, block_full_actions=block_full_actions, sampling=sampling
+                        )
                     elif sig_type == "sample_rows":
                         payload = _sample_rows(df, sig_cfg, sampling=sampling)
                     elif sig_type == "value_distribution":
-                        payload = _value_distribution(df, sig_cfg, block_full_actions=block_full_actions, sampling=sampling)
+                        payload = _value_distribution(
+                            df, sig_cfg, block_full_actions=block_full_actions, sampling=sampling
+                        )
                     elif sig_type == "distinct_count":
-                        payload = _distinct_count(df, sig_cfg, block_full_actions=block_full_actions, sampling=sampling)
+                        payload = _distinct_count(
+                            df, sig_cfg, block_full_actions=block_full_actions, sampling=sampling
+                        )
                     elif sig_type == "data_freshness":
-                        payload = _data_freshness(df, sig_cfg, block_full_actions=block_full_actions, sampling=sampling)
+                        payload = _data_freshness(
+                            df, sig_cfg, block_full_actions=block_full_actions, sampling=sampling
+                        )
                     elif sig_type == "partition_stats":
                         payload = _partition_stats(df)
                     elif sig_type == "threshold":
                         payload = _threshold(df, sig_cfg)
                     elif sig_type == "custom":
-                        payload = _custom(df, sig_cfg, block_full_actions=block_full_actions, base_dir=base_dir)
+                        payload = _custom(
+                            df, sig_cfg, block_full_actions=block_full_actions, base_dir=base_dir
+                        )
                     else:
-                        logger.warning("[runtime_probe_unknown_signal] Probe %r: unknown signal type %r; skipping.", module.id, sig_type)
-                        _add_module_warning("runtime_probe_unknown_signal", f"Probe {module.id!r}: unknown signal type {sig_type!r}; skipping.")
+                        logger.warning(
+                            "[runtime_probe_unknown_signal] Probe %r: unknown signal type %r; skipping.",
+                            module.id,
+                            sig_type,
+                        )
+                        _add_module_warning(
+                            "runtime_probe_unknown_signal",
+                            f"Probe {module.id!r}: unknown signal type {sig_type!r}; skipping.",
+                        )
                         continue
 
                     cur.execute(
@@ -626,15 +676,26 @@ def execute_probe(
                     if _report_stdout:
                         try:
                             _notes.extend(_stdout_report_lines(sig_type, payload))
-                        except Exception:  # noqa: BLE001 — report formatting must never fail the probe
+                        except (
+                            Exception
+                        ):  # noqa: BLE001 — report formatting must never fail the probe
                             pass
                 except Exception as exc:
                     logger.warning(
                         "[runtime_probe_signal_error] Probe %r signal %r failed: %s",
-                        module.id, sig_type, exc,
+                        module.id,
+                        sig_type,
+                        exc,
                     )
-                    _add_module_warning("runtime_probe_signal_error", f"Probe {module.id!r} signal {sig_type!r} failed: {exc}")
+                    _add_module_warning(
+                        "runtime_probe_signal_error",
+                        f"Probe {module.id!r} signal {sig_type!r} failed: {exc}",
+                    )
     except Exception as exc:
-        logger.warning("[runtime_probe_error] execute_probe %r: unexpected error: %s", module.id, exc)
-        _add_module_warning("runtime_probe_error", f"execute_probe {module.id!r}: unexpected error: {exc}")
+        logger.warning(
+            "[runtime_probe_error] execute_probe %r: unexpected error: %s", module.id, exc
+        )
+        _add_module_warning(
+            "runtime_probe_error", f"execute_probe {module.id!r}: unexpected error: {exc}"
+        )
     return tuple(_notes)

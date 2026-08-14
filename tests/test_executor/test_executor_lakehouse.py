@@ -20,6 +20,7 @@ In CI the ``executor-tests`` job (test-suite.yml) and the ``compat`` matrix
 (version-matrix.yml) set ``AQ_LAKEHOUSE=1``; the coordinates are derived per
 matrix Spark version, so no version is hardcoded and no local jar is required.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -63,33 +64,40 @@ def test_hudi_roundtrip_with_maintenance(spark, tmp_path):
     spark.range(100).write.parquet(str(data_dir / "input.parquet"))
     out = tmp_path / "hudi_out"
 
-    bp = parse_dict({
-        "aqueduct": "1.0",
-        "id": "hudi-test",
-        "name": "Hudi round-trip",
-        "modules": [
-            {
-                "id": "src", "type": "Ingress", "label": "src",
-                "config": {"format": "parquet", "path": str(data_dir / "input.parquet")},
-            },
-            {
-                "id": "sink", "type": "Egress", "label": "sink",
-                "config": {
-                    "format": "hudi",
-                    "mode": "overwrite",
-                    "path": str(out),
-                    # Hudi mandates a table name + record key on every write;
-                    # forwarded verbatim to the writer via cfg["options"].
-                    "options": {
-                        "hoodie.table.name": "hudi_test_table",
-                        "hoodie.datasource.write.recordkey.field": "id",
-                    },
-                    "maintenance": {"compaction": True, "clean": True},
+    bp = parse_dict(
+        {
+            "aqueduct": "1.0",
+            "id": "hudi-test",
+            "name": "Hudi round-trip",
+            "modules": [
+                {
+                    "id": "src",
+                    "type": "Ingress",
+                    "label": "src",
+                    "config": {"format": "parquet", "path": str(data_dir / "input.parquet")},
                 },
-            },
-        ],
-        "edges": [{"from": "src", "to": "sink"}],
-    }, base_dir=tmp_path)
+                {
+                    "id": "sink",
+                    "type": "Egress",
+                    "label": "sink",
+                    "config": {
+                        "format": "hudi",
+                        "mode": "overwrite",
+                        "path": str(out),
+                        # Hudi mandates a table name + record key on every write;
+                        # forwarded verbatim to the writer via cfg["options"].
+                        "options": {
+                            "hoodie.table.name": "hudi_test_table",
+                            "hoodie.datasource.write.recordkey.field": "id",
+                        },
+                        "maintenance": {"compaction": True, "clean": True},
+                    },
+                },
+            ],
+            "edges": [{"from": "src", "to": "sink"}],
+        },
+        base_dir=tmp_path,
+    )
 
     manifest = compiler_compile(bp, blueprint_path=tmp_path)
     result = executor_execute(manifest, spark)
@@ -109,27 +117,34 @@ def test_iceberg_roundtrip_with_maintenance(spark, tmp_path):
     data_dir.mkdir()
     spark.range(100).write.parquet(str(data_dir / "input.parquet"))
 
-    bp = parse_dict({
-        "aqueduct": "1.0",
-        "id": "iceberg-test",
-        "name": "Iceberg round-trip",
-        "modules": [
-            {
-                "id": "src", "type": "Ingress", "label": "src",
-                "config": {"format": "parquet", "path": str(data_dir / "input.parquet")},
-            },
-            {
-                "id": "sink", "type": "Egress", "label": "sink",
-                "config": {
-                    "format": "iceberg",
-                    "mode": "overwrite",
-                    "table": "local.db.test_table",
-                    "maintenance": {"rewrite_data_files": True, "expire_snapshots": True},
+    bp = parse_dict(
+        {
+            "aqueduct": "1.0",
+            "id": "iceberg-test",
+            "name": "Iceberg round-trip",
+            "modules": [
+                {
+                    "id": "src",
+                    "type": "Ingress",
+                    "label": "src",
+                    "config": {"format": "parquet", "path": str(data_dir / "input.parquet")},
                 },
-            },
-        ],
-        "edges": [{"from": "src", "to": "sink"}],
-    }, base_dir=tmp_path)
+                {
+                    "id": "sink",
+                    "type": "Egress",
+                    "label": "sink",
+                    "config": {
+                        "format": "iceberg",
+                        "mode": "overwrite",
+                        "table": "local.db.test_table",
+                        "maintenance": {"rewrite_data_files": True, "expire_snapshots": True},
+                    },
+                },
+            ],
+            "edges": [{"from": "src", "to": "sink"}],
+        },
+        base_dir=tmp_path,
+    )
 
     manifest = compiler_compile(bp, blueprint_path=tmp_path)
     result = executor_execute(manifest, spark)

@@ -35,6 +35,7 @@ try:
     from airflow.exceptions import AirflowException
     from airflow.sensors.base import BaseSensorOperator
     from airflow.triggers.base import BaseTrigger, TriggerEvent
+
     AIRFLOW_INSTALLED = True
 except ImportError:
     AIRFLOW_INSTALLED = False
@@ -43,11 +44,13 @@ if not AIRFLOW_INSTALLED:
     # Define and inject mock classes/modules
     class BaseOperatorMock:
         template_fields = ()
+
         def __init__(self, task_id, **kwargs):
             self.task_id = task_id
             self.log = MagicMock()
             for k, v in kwargs.items():
                 setattr(self, k, v)
+
         def defer(self, trigger, method_name, timeout=None):
             pass
 
@@ -78,16 +81,20 @@ if not AIRFLOW_INSTALLED:
     make_fake_module("airflow.sensors", {})
     make_fake_module("airflow.sensors.base", {"BaseSensorOperator": BaseSensorOperatorMock})
     make_fake_module("airflow.triggers", {})
-    make_fake_module("airflow.triggers.base", {
-        "BaseTrigger": BaseTriggerMock,
-        "TriggerEvent": TriggerEventMock,
-    })
+    make_fake_module(
+        "airflow.triggers.base",
+        {
+            "BaseTrigger": BaseTriggerMock,
+            "TriggerEvent": TriggerEventMock,
+        },
+    )
 
     # Alias mock exceptions to the ones we expect tests to raise
     AirflowException = AirflowExceptionMock
 
 
 # ── Lazy Loading Tests ────────────────────────────────────────────────────────
+
 
 def test_lazy_loading():
     import aqueduct.integrations.airflow as integration
@@ -111,6 +118,7 @@ def test_lazy_loading():
 
 # ── AqueductOperator Unit Tests ────────────────────────────────────────────────
 
+
 def test_operator_build_command():
     from aqueduct.integrations.airflow.operator import AqueductOperator
 
@@ -124,12 +132,19 @@ def test_operator_build_command():
         blueprint="my_bp.yml",
         run_id="my_run",
         config="my_config.yml",
-        extra_args=["--parallel", "--from", "m1"]
+        extra_args=["--parallel", "--from", "m1"],
     )
     assert op2._build_command() == [
-        "aqueduct", "run", "my_bp.yml", "--run-id", "my_run",
-        "--config", "my_config.yml",
-        "--parallel", "--from", "m1"
+        "aqueduct",
+        "run",
+        "my_bp.yml",
+        "--run-id",
+        "my_run",
+        "--config",
+        "my_config.yml",
+        "--parallel",
+        "--from",
+        "m1",
     ]
 
 
@@ -150,11 +165,11 @@ def test_operator_template_fields_and_env():
     assert AqueductOperator.template_fields == ("blueprint", "run_id", "extra_args", "env")
 
     op = AqueductOperator(task_id="t1", blueprint="bp.yml", env={"MY_VAR": "VAL1"})
-    
+
     with patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0)
         op.execute(context={})
-        
+
         # Check that environment was passed and merged
         called_args, called_kwargs = mock_run.call_args
         called_env = called_kwargs.get("env")
@@ -167,7 +182,7 @@ def test_operator_template_fields_and_env():
 def test_operator_execute_exit_codes():
     from aqueduct.integrations.airflow.operator import AqueductOperator
     from aqueduct.integrations.airflow.trigger import AqueductPatchTrigger
-    
+
     # Case 0: SUCCESS
     op = AqueductOperator(task_id="t1", blueprint="bp.yml", run_id="run-0")
     with patch("subprocess.run") as mock_run, patch.object(op, "defer") as mock_defer:
@@ -186,11 +201,7 @@ def test_operator_execute_exit_codes():
 
     # Case 3: HEAL_PENDING
     op = AqueductOperator(
-        task_id="t1",
-        blueprint="bp.yml",
-        run_id="run-3",
-        poll_interval=15.0,
-        patch_timeout=120.0
+        task_id="t1", blueprint="bp.yml", run_id="run-3", poll_interval=15.0, patch_timeout=120.0
     )
     with patch("subprocess.run") as mock_run, patch.object(op, "defer") as mock_defer:
         mock_run.return_value = MagicMock(returncode=3)
@@ -224,7 +235,9 @@ def test_operator_resume_from_patch():
     # approved
     with patch.object(op, "execute") as mock_execute:
         mock_execute.return_value = {"status": "success"}
-        res = op.resume_from_patch(context={"ctx_key": "val"}, event={"status": "approved", "patch_id": "p-123"})
+        res = op.resume_from_patch(
+            context={"ctx_key": "val"}, event={"status": "approved", "patch_id": "p-123"}
+        )
         mock_execute.assert_called_once_with({"ctx_key": "val"})
         assert res == {"status": "success"}
 
@@ -239,6 +252,7 @@ def test_operator_resume_from_patch():
 
 # ── AqueductPatchTrigger Unit Tests ───────────────────────────────────────────
 
+
 def test_trigger_serialize():
     from aqueduct.integrations.airflow.trigger import AqueductPatchTrigger
 
@@ -247,7 +261,7 @@ def test_trigger_serialize():
         blueprint="bp.yml",
         patches_dir="patches",
         aqueduct_cmd=["/usr/bin/aqueduct"],
-        poll_interval=10.0
+        poll_interval=10.0,
     )
     classpath, kwargs = trigger.serialize()
     assert classpath == "aqueduct.integrations.airflow.trigger.AqueductPatchTrigger"
@@ -257,7 +271,7 @@ def test_trigger_serialize():
         "patches_dir": "patches",
         "config": None,
         "aqueduct_cmd": ["/usr/bin/aqueduct"],
-        "poll_interval": 10.0
+        "poll_interval": 10.0,
     }
 
 
@@ -276,7 +290,10 @@ def test_trigger_build_command_omits_patches_dir_when_unset():
     assert cmd[-2:] == ["--blueprint", "bp.yml"]
 
     t_override = AqueductPatchTrigger(
-        run_id="run-1", blueprint="bp.yml", patches_dir="/custom/patches", config="my.yml",
+        run_id="run-1",
+        blueprint="bp.yml",
+        patches_dir="/custom/patches",
+        config="my.yml",
     )
     cmd2 = t_override._build_command()
     assert "--patches-dir" in cmd2 and "/custom/patches" in cmd2
@@ -293,7 +310,7 @@ def test_trigger_matches_run():
     assert t1._matches_run({"run_id": "some-other-run"}) is False
 
     t2 = AqueductPatchTrigger(run_id="run-123", blueprint="bp.yml", patches_dir="patches")
-    
+
     # 1. Exact run_id match wins
     assert t2._matches_run({"run_id": "run-123", "file": "other.json"}) is True
     # run_id mismatch (substring) -> False (even if file contains the string, because run_id is present)
@@ -326,25 +343,26 @@ def test_trigger_check_once():
 
     # Case 3: Applied JSON entry matching run_id
     with patch("subprocess.run") as mock_run:
-        payload = [
-            {"status": "applied", "file": "run-123_patch.json", "patch_id": "p-123"}
-        ]
+        payload = [{"status": "applied", "file": "run-123_patch.json", "patch_id": "p-123"}]
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(payload))
         assert t._check_once() == ("approved", "p-123", None)
 
     # Case 4: Rejected entry matching run_id
     with patch("subprocess.run") as mock_run:
         payload = [
-            {"status": "rejected", "file": "run-123_patch.json", "patch_id": "p-123", "rationale": "no good"}
+            {
+                "status": "rejected",
+                "file": "run-123_patch.json",
+                "patch_id": "p-123",
+                "rationale": "no good",
+            }
         ]
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(payload))
         assert t._check_once() == ("rejected", "p-123", "no good")
 
     # Case 5: Only pending entries
     with patch("subprocess.run") as mock_run:
-        payload = [
-            {"status": "pending", "file": "run-123_patch.json", "patch_id": "p-123"}
-        ]
+        payload = [{"status": "pending", "file": "run-123_patch.json", "patch_id": "p-123"}]
         mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(payload))
         assert t._check_once() == ("pending", None, None)
 
@@ -375,12 +393,11 @@ def test_trigger_run_approved_sync():
     import asyncio
     from aqueduct.integrations.airflow.trigger import AqueductPatchTrigger
 
-    t = AqueductPatchTrigger(run_id="run-123", blueprint="bp.yml", patches_dir="patches", poll_interval=5.0)
+    t = AqueductPatchTrigger(
+        run_id="run-123", blueprint="bp.yml", patches_dir="patches", poll_interval=5.0
+    )
 
-    checks = [
-        ("pending", None, None),
-        ("approved", "p-123", None)
-    ]
+    checks = [("pending", None, None), ("approved", "p-123", None)]
     check_index = 0
 
     def mock_check_once():
@@ -395,7 +412,10 @@ def test_trigger_run_approved_sync():
             events.append(event)
         return events
 
-    with patch.object(t, "_check_once", side_effect=mock_check_once), patch("asyncio.sleep") as mock_sleep:
+    with (
+        patch.object(t, "_check_once", side_effect=mock_check_once),
+        patch("asyncio.sleep") as mock_sleep,
+    ):
         events = asyncio.run(run_test())
         assert len(events) == 1
         assert events[0].payload == {"status": "approved", "patch_id": "p-123", "run_id": "run-123"}
@@ -404,12 +424,15 @@ def test_trigger_run_approved_sync():
 
 # ── AqueductPatchSensor Unit Tests ────────────────────────────────────────────
 
+
 def test_sensor_execute():
     from aqueduct.integrations.airflow.sensor import AqueductPatchSensor
     from aqueduct.integrations.airflow.trigger import AqueductPatchTrigger
 
     # Case 1: patch_timeout=None
-    s1 = AqueductPatchSensor(task_id="s1", run_id="run-1", blueprint="bp.yml", patches_dir="patches")
+    s1 = AqueductPatchSensor(
+        task_id="s1", run_id="run-1", blueprint="bp.yml", patches_dir="patches"
+    )
     with patch.object(s1, "defer") as mock_defer:
         s1.execute(context={})
         mock_defer.assert_called_once()
@@ -450,6 +473,7 @@ def test_sensor_resume_from_patch():
 
 # ── pyproject.toml & specs.md Verification Tests ────────────────────────────────
 
+
 def test_pyproject_airflow_extras():
     import tomllib
     from pathlib import Path
@@ -477,9 +501,7 @@ def test_specs_exit_codes():
     # The exit-code table lives in cli_reference.md per the documentation
     # map (specs.md owns engine semantics; cli_reference.md owns the CLI
     # surface, exit codes included).
-    cli_ref_path = (
-        Path(__file__).resolve().parents[1] / "docs" / "cli_reference.md"
-    )
+    cli_ref_path = Path(__file__).resolve().parents[1] / "docs" / "cli_reference.md"
     with open(cli_ref_path, "r", encoding="utf-8") as f:
         content = f.read()
 
@@ -505,10 +527,13 @@ def test_specs_exit_codes():
         found_codes[const_name] = int(code_str)
 
     for k, v in expected_codes.items():
-        assert found_codes.get(k) == v, f"Exit code mismatch in specs.md for {k}: expected {v}, found {found_codes.get(k)}"
+        assert (
+            found_codes.get(k) == v
+        ), f"Exit code mismatch in specs.md for {k}: expected {v}, found {found_codes.get(k)}"
 
 
 # ── Airflow Integration / Scenario Tests ──────────────────────────────────────
+
 
 @pytest.mark.airflow
 def test_dagbag_import():
@@ -520,7 +545,8 @@ def test_dagbag_import():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         dag_file = Path(tmpdir) / "test_dag.py"
-        dag_file.write_text("""
+        dag_file.write_text(
+            """
 from datetime import datetime
 from airflow import DAG
 from aqueduct.integrations.airflow import AqueductOperator
@@ -536,7 +562,8 @@ with DAG(
         blueprint="etl.blueprint.yml",
         run_id="run_123",
     )
-""")
+"""
+        )
         db = DagBag(dag_folder=tmpdir, include_examples=False)
         assert len(db.import_errors) == 0, f"Import errors: {db.import_errors}"
         assert "test_aqueduct_dag" in db.dags
@@ -557,7 +584,8 @@ def test_airflow_integration_happy_path(tmp_path):
 
     # Create a tiny blueprint
     blueprint_path = tmp_path / "bp.yml"
-    blueprint_path.write_text(f"""
+    blueprint_path.write_text(
+        f"""
 aqueduct: '1.0'
 id: integration_happy
 name: Happy Integration
@@ -581,12 +609,14 @@ modules:
 edges:
   - from: src
     to: sink
-""")
+"""
+    )
 
     # Create a minimal aqueduct config so the CLI doesn't fail with
     # CONFIG_ERROR (exit 1) when it can't find one.
     cfg = tmp_path / "aqueduct.yml"
-    cfg.write_text("""\
+    cfg.write_text(
+        """\
 aqueduct_config: "1.0"
 stores:
   observability:
@@ -597,12 +627,15 @@ stores:
       backend: duckdb
       path: "{dep}"
 """.format(
-        obs=str(tmp_path / "obs_store"),  # 2.0: duckdb observability path must be a directory
-        dep=str(tmp_path / "dep.duckdb"),
-    ), encoding="utf-8")
+            obs=str(tmp_path / "obs_store"),  # 2.0: duckdb observability path must be a directory
+            dep=str(tmp_path / "dep.duckdb"),
+        ),
+        encoding="utf-8",
+    )
 
     import sys
     from pathlib import Path
+
     _aq = str(Path(sys.executable).parent / "aqueduct")
     op = AqueductOperator(
         task_id="test_happy_task",
@@ -639,11 +672,11 @@ def test_airflow_integration_defect_healing(tmp_path):
             res = op.execute(context={})
             assert res == {}
             mock_defer.assert_called_once()
-            
+
             # Extract arguments passed to defer
             trigger = mock_defer.call_args[1]["trigger"]
             method_name = mock_defer.call_args[1]["method_name"]
-            
+
             assert isinstance(trigger, AqueductPatchTrigger)
             assert method_name == "resume_from_patch"
 
@@ -655,70 +688,105 @@ def test_airflow_integration_defect_healing(tmp_path):
         # First check returns pending, second returns approved.
         trigger_mock_runs = [
             # Check 1: returns pending
-            MagicMock(returncode=0, stdout=json.dumps([{"status": "pending", "file": "run-defect-123_patch.json"}])),
+            MagicMock(
+                returncode=0,
+                stdout=json.dumps([{"status": "pending", "file": "run-defect-123_patch.json"}]),
+            ),
             # Check 2: returns approved
-            MagicMock(returncode=0, stdout=json.dumps([{"status": "applied", "file": "run-defect-123_patch.json", "patch_id": "p-001"}])),
+            MagicMock(
+                returncode=0,
+                stdout=json.dumps(
+                    [
+                        {
+                            "status": "applied",
+                            "file": "run-defect-123_patch.json",
+                            "patch_id": "p-001",
+                        }
+                    ]
+                ),
+            ),
         ]
 
-        with patch("subprocess.run", side_effect=trigger_mock_runs), patch("asyncio.sleep") as mock_sleep:
+        with (
+            patch("subprocess.run", side_effect=trigger_mock_runs),
+            patch("asyncio.sleep") as mock_sleep,
+        ):
             import asyncio
+
             events = []
+
             async def run_trigger():
                 async for event in trigger.run():
                     events.append(event)
+
             asyncio.run(run_trigger())
             assert len(events) == 1
-            assert events[0].payload == {"status": "approved", "patch_id": "p-001", "run_id": "run-defect-123"}
+            assert events[0].payload == {
+                "status": "approved",
+                "patch_id": "p-001",
+                "run_id": "run-defect-123",
+            }
             mock_sleep.assert_called_once_with(1.0)
 
         # 3. Simulate resuming from the patch event.
         # It calls resume_from_patch on the operator.
         # This re-invokes execute, which now succeeds (mock exit code 0).
-        with patch.object(op, "execute", return_value={"run_id": "run-defect-123", "exit_code": 0}) as mock_execute:
+        with patch.object(
+            op, "execute", return_value={"run_id": "run-defect-123", "exit_code": 0}
+        ) as mock_execute:
             res = op.resume_from_patch(context={}, event=events[0].payload)
             mock_execute.assert_called_once()
             assert res == {"run_id": "run-defect-123", "exit_code": 0}
-            
+
     else:
         # Run under real Airflow if installed
         # Since running real Airflow triggers requires full triggerer process,
         # we still mock the defer/resume interaction internally to run deterministically.
         from aqueduct.integrations.airflow.operator import AqueductOperator
-        
+
         op = AqueductOperator(
             task_id="test_defect_task",
             blueprint="bp.yml",
             run_id="run-defect-123",
         )
-        
+
         with patch("subprocess.run") as mock_run, patch.object(op, "defer") as mock_defer:
             mock_run.return_value = MagicMock(returncode=3)
             op.execute(context={})
             mock_defer.assert_called_once()
-            
+
             trigger = mock_defer.call_args[1]["trigger"]
-            
+
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
                 returncode=0,
-                stdout=json.dumps([{"status": "applied", "file": "run-defect-123_patch.json", "patch_id": "p-001"}])
+                stdout=json.dumps(
+                    [
+                        {
+                            "status": "applied",
+                            "file": "run-defect-123_patch.json",
+                            "patch_id": "p-001",
+                        }
+                    ]
+                ),
             )
             # Run check once to verify it sees the approved patch
             status, patch_id, rationale = trigger._check_once()
             assert status == "approved"
             assert patch_id == "p-001"
-            
+
         with patch.object(op, "execute", return_value={"run_id": "run-defect-123", "exit_code": 0}):
-            res = op.resume_from_patch(context={}, event={"status": "approved", "patch_id": "p-001", "run_id": "run-defect-123"})
+            res = op.resume_from_patch(
+                context={},
+                event={"status": "approved", "patch_id": "p-001", "run_id": "run-defect-123"},
+            )
             assert res == {"run_id": "run-defect-123", "exit_code": 0}
 
 
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 @patch("aqueduct.executor.get_executor")
 @patch("aqueduct.agent.generate_agent_patch")
-def test_airflow_trigger_end_to_end_flow(
-    mock_gen, mock_get_exec, mock_surveyor_cls, tmp_path
-):
+def test_airflow_trigger_end_to_end_flow(mock_gen, mock_get_exec, mock_surveyor_cls, tmp_path):
     """End-to-end: operator deferral -> trigger polling -> patch apply -> operator resume."""
     import subprocess
     from click.testing import CliRunner
@@ -739,11 +807,13 @@ def test_airflow_trigger_end_to_end_flow(
             manifest_json='{"id": "test_bp", "modules": [{"id": "src", "type": "Ingress"}]}',
             started_at="2026-01-01T00:00:00Z",
             finished_at="2026-01-01T00:00:01Z",
-         engine="spark",)
+            engine="spark",
+        )
 
     # 1. Write blueprint and config
     bp = tmp_path / "bp.yml"
-    bp.write_text("""\
+    bp.write_text(
+        """\
 aqueduct: '1.0'
 id: test_bp
 name: Test BP
@@ -755,10 +825,13 @@ modules:
     label: Src
     config: {format: csv, path: /nonexistent/data.csv}
 edges: []
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     cfg = tmp_path / "aqueduct.yml"
-    cfg.write_text("""\
+    cfg.write_text(
+        """\
 aqueduct_config: "1.0"
 # duckdb, not the default spark engine. This test exercises the OPERATOR's
 # exit-code plumbing (HEAL_PENDING -> defer -> trigger -> resume), which is
@@ -778,9 +851,11 @@ stores:
       backend: duckdb
       path: "{dep}"
 """.format(
-        obs=str(tmp_path / "obs"),
-        dep=str(tmp_path / "dep.duckdb"),
-    ), encoding="utf-8")
+            obs=str(tmp_path / "obs"),
+            dep=str(tmp_path / "dep.duckdb"),
+        ),
+        encoding="utf-8",
+    )
 
     # 2. Setup mock return values for the CLI run invocations
     run_id = "run-e2e-123"
@@ -790,17 +865,13 @@ stores:
         blueprint_id="test_bp",
         run_id=run_id,
         status="error",
-        module_results=(
-            ModuleResult(module_id="src", status="error", error="simulated failure"),
-        ),
+        module_results=(ModuleResult(module_id="src", status="error", error="simulated failure"),),
     )
     ok_res = ExecutionResult(
         blueprint_id="test_bp",
         run_id=run_id,
         status="success",
-        module_results=(
-            ModuleResult(module_id="src", status="success", error=None),
-        ),
+        module_results=(ModuleResult(module_id="src", status="success", error=None),),
     )
 
     mock_executor_fail = MagicMock()
@@ -832,7 +903,12 @@ stores:
         category="other",
         root_cause="test",
         operations=[
-            {"op": "set_module_config_key", "module_id": "src", "key": "path", "value": valid_csv_path}
+            {
+                "op": "set_module_config_key",
+                "module_id": "src",
+                "key": "path",
+                "value": valid_csv_path,
+            }
         ],
     )
     mock_gen.return_value = MagicMock(patch=patch_spec)
@@ -849,15 +925,14 @@ stores:
                 self.returncode = returncode
                 self.stdout = stdout
                 self.stderr = stderr
+
             def raise_for_status(self):
                 if self.returncode != 0:
-                    raise subprocess.CalledProcessError(self.returncode, cmd, self.stdout, self.stderr)
+                    raise subprocess.CalledProcessError(
+                        self.returncode, cmd, self.stdout, self.stderr
+                    )
 
-        return MockCompletedProcess(
-            returncode=result.exit_code,
-            stdout=result.output,
-            stderr=""
-        )
+        return MockCompletedProcess(returncode=result.exit_code, stdout=result.output, stderr="")
 
     # 4. Instantiate and execute the operator
     op = AqueductOperator(
@@ -875,9 +950,11 @@ stores:
         deferred_trigger = trigger
         deferred_method = method_name
 
-    with patch("subprocess.run", side_effect=run_cli_in_process), \
-         patch.object(op, "defer", side_effect=mock_defer), \
-         patch("aqueduct.cli._agent_usable", return_value=True):
+    with (
+        patch("subprocess.run", side_effect=run_cli_in_process),
+        patch.object(op, "defer", side_effect=mock_defer),
+        patch("aqueduct.cli._agent_usable", return_value=True),
+    ):
 
         # This will fail, stage a patch, and call defer()
         op.execute(context={})
@@ -902,7 +979,9 @@ stores:
 
     # Apply the patch using the CLI
     runner = CliRunner()
-    apply_res = runner.invoke(cli, ["patch", "apply", str(staged_patch_file), "--blueprint", str(bp)])
+    apply_res = runner.invoke(
+        cli, ["patch", "apply", str(staged_patch_file), "--blueprint", str(bp)]
+    )
     assert apply_res.exit_code == 0
 
     # 7. Check trigger polling again (after applying patch)

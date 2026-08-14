@@ -24,6 +24,7 @@ from aqueduct.agent.providers import _ESCALATION_TEMPERATURE
 # -v raw-response dump is capped so a verbose model can't flood the terminal.
 _MAX_RAW_LINES = 40
 
+
 def _cost_str(tokens_in: int, tokens_out: int, model: str | None = None) -> str:
     """Token usage as ``<in>→<out> tok`` (input prompt → output patch).
 
@@ -83,9 +84,9 @@ class TranscriptWriter:
     and redaction.  Engine-agnostic — no ``pyspark``, no ``click``.
     """
 
-    _RAIL = "\u2502"      # \u2502  vertical rail down the heal branch
+    _RAIL = "\u2502"  # \u2502  vertical rail down the heal branch
     _NODE = "\u251c\u2500"  # \u251c\u2500 a tier branch node
-    _END = "\u2514\u2500"   # \u2514\u2500 the closing summary node
+    _END = "\u2514\u2500"  # \u2514\u2500 the closing summary node
 
     def __init__(
         self,
@@ -156,8 +157,12 @@ class TranscriptWriter:
         self._turn_in_tier += 1
         if self._verbose:
             self._write_verbose(
-                rec, patch_spec, model=model, cascade_position=cascade_position,
-                cache_status=cache_status, reprompt_reason=reprompt_reason,
+                rec,
+                patch_spec,
+                model=model,
+                cascade_position=cascade_position,
+                cache_status=cache_status,
+                reprompt_reason=reprompt_reason,
             )
         else:
             self._write_terse(rec, model=model, cache_status=cache_status)
@@ -223,7 +228,7 @@ class TranscriptWriter:
 
         # Phase 75 — one line per tool call this attempt: name, args summary,
         # duration, truncated (already-redacted) result preview.
-        for call in (getattr(rec, "_aq_tool_calls", None) or ()):
+        for call in getattr(rec, "_aq_tool_calls", None) or ():
             name = call.get("name", "?")
             args = call.get("args_summary", "")
             dur = call.get("duration_ms", 0)
@@ -248,10 +253,7 @@ class TranscriptWriter:
                 f"{o.op}({getattr(o, 'module_id', '') or getattr(o, 'key', '') or ''})"
                 for o in patch_spec.operations
             )
-            conf = (
-                f"{patch_spec.confidence:.0%}"
-                if patch_spec.confidence is not None else "n/a"
-            )
+            conf = f"{patch_spec.confidence:.0%}" if patch_spec.confidence is not None else "n/a"
             self._emit(f"{sub}parsed: {ops or '(none)'} \u00b7 confidence {conf}")
             if patch_spec.rationale:
                 self._emit(f"{sub}rationale: {patch_spec.rationale}")
@@ -281,7 +283,14 @@ class TranscriptWriter:
         "budget_tokens_exceeded": "token budget exceeded",
     }
 
-    def summary(self, stop_reason: str | None, attempts: int, tokens_in: int, tokens_out: int, model: str | None = None) -> None:
+    def summary(
+        self,
+        stop_reason: str | None,
+        attempts: int,
+        tokens_in: int,
+        tokens_out: int,
+        model: str | None = None,
+    ) -> None:
         """Close the heal branch with a terminal └─ node."""
         cost = _cost_str(tokens_in, tokens_out, model)
         reason = stop_reason or "unknown"

@@ -290,8 +290,7 @@ def load_declaration(path: Path | str, leaf_ids: frozenset[str]) -> EngineCapabi
         raw = yaml.safe_load(p.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
         raise CapabilityDeclarationError(
-            f"capability declaration {p} could not be read/parsed: "
-            f"{type(exc).__name__}: {exc}",
+            f"capability declaration {p} could not be read/parsed: " f"{type(exc).__name__}: {exc}",
             path=str(p),
         ) from exc
 

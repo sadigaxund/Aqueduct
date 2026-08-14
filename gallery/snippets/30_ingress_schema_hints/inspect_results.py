@@ -22,7 +22,9 @@ def main():
             for row in rows:
                 t.add_row(*[str(v) for v in row])
             console.print(t)
-            console.print(f"  [dim]Row count: {len(rows)} — schema_hint overrides Spark's inferred types[/dim]\n")
+            console.print(
+                f"  [dim]Row count: {len(rows)} — schema_hint overrides Spark's inferred types[/dim]\n"
+            )
         finally:
             con.close()
 
@@ -41,7 +43,9 @@ def main():
                 for f in fields:
                     t.add_row(f.get("name", "?"), f.get("type", "?"))
                 console.print(t)
-                console.print("  [dim]Schema hints validate: id→string (SKU prefix preserved), price→double, quantity→integer, listed_at→date[/dim]")
+                console.print(
+                    "  [dim]Schema hints validate: id→string (SKU prefix preserved), price→double, quantity→integer, listed_at→date[/dim]"
+                )
         finally:
             con.close()
     else:

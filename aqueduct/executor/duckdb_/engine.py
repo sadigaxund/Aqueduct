@@ -75,8 +75,6 @@ _DUCKDB_EXECUTE_KWARGS: frozenset[str] = frozenset(
 )
 
 
-
-
 def _execute(*args: Any, **kwargs: Any) -> ExecutionResult:
     """``ExecutorProtocol.execute`` for DuckDB — filters Spark-only run options.
 

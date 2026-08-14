@@ -142,7 +142,10 @@ def check(manifest: Any, spark: Any) -> list[str]:
     if fmts.get("jdbc"):
         drivers = _jdbc_driver_classes(manifest)
         any_jdbc_jar = any(
-            any(token in j.lower() for token in ("jdbc", "mysql", "postgresql", "oracle", "sqlserver", "snowflake"))
+            any(
+                token in j.lower()
+                for token in ("jdbc", "mysql", "postgresql", "oracle", "sqlserver", "snowflake")
+            )
             for j in jars
         )
         if drivers and not any_jdbc_jar:

@@ -40,7 +40,9 @@ def _resolve_inputs(
     if not input_ids:
         raise FunnelError(f"[{module_id}] 'inputs' must list at least two upstream module IDs")
     if len(input_ids) < 2:
-        raise FunnelError(f"[{module_id}] 'inputs' must contain at least 2 entries; got {len(input_ids)}")
+        raise FunnelError(
+            f"[{module_id}] 'inputs' must contain at least 2 entries; got {len(input_ids)}"
+        )
     for iid in input_ids:
         if iid not in upstream_rels:
             raise FunnelError(
@@ -74,7 +76,9 @@ def execute_funnel(
     input_ids = _resolve_inputs(module.id, cfg, upstream_rels)
 
     if schema_check not in ("strict", "permissive"):
-        raise FunnelError(f"[{module.id}] unknown schema_check {schema_check!r}; use strict or permissive")
+        raise FunnelError(
+            f"[{module.id}] unknown schema_check {schema_check!r}; use strict or permissive"
+        )
 
     registered: list[str] = []
     try:

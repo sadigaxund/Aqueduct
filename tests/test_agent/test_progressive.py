@@ -36,7 +36,9 @@ def _make_patch(patch_id: str, module_id: str, confidence: float | None = 0.9) -
 
 def _agent_result(patch, tokens_in=10, tokens_out=20, stop_reason="solved"):
     return SimpleNamespace(
-        patch=patch, tokens_in_total=tokens_in, tokens_out_total=tokens_out,
+        patch=patch,
+        tokens_in_total=tokens_in,
+        tokens_out_total=tokens_out,
         stop_reason=stop_reason,
     )
 
@@ -50,6 +52,7 @@ def _exec_result(status: ExecutionStatus) -> ExecutionResult:
 
 
 # ── merge_patch_specs ──────────────────────────────────────────────────────
+
 
 class TestMergePatchSpecs:
     def test_single_patch_returned_unchanged(self):
@@ -85,6 +88,7 @@ class TestMergePatchSpecs:
 
 # ── require_sandbox_for_progressive ────────────────────────────────────────
 
+
 class TestSandboxRequirement:
     def test_progressive_with_sandbox_off_raises(self):
         with pytest.raises(ConfigError, match="sandbox"):
@@ -103,18 +107,23 @@ class TestSandboxRequirement:
 
 # ── run_progressive_chain ──────────────────────────────────────────────────
 
+
 class TestRunProgressiveChain:
     def test_chain_advances_on_different_module_failure(self):
         """Link 1 fixes module A; pipeline still fails but now at module B;
         link 2 fixes B; pipeline succeeds. Chain must solve with 2 links."""
-        diagnose = MagicMock(side_effect=[
-            _agent_result(_make_patch("p1", "A")),
-            _agent_result(_make_patch("p2", "B")),
-        ])
-        apply_and_execute = MagicMock(side_effect=[
-            (object(), _exec_result(ExecutionStatus.ERROR), _failure("B")),
-            (object(), _exec_result(ExecutionStatus.SUCCESS), None),
-        ])
+        diagnose = MagicMock(
+            side_effect=[
+                _agent_result(_make_patch("p1", "A")),
+                _agent_result(_make_patch("p2", "B")),
+            ]
+        )
+        apply_and_execute = MagicMock(
+            side_effect=[
+                (object(), _exec_result(ExecutionStatus.ERROR), _failure("B")),
+                (object(), _exec_result(ExecutionStatus.SUCCESS), None),
+            ]
+        )
         result = run_progressive_chain(
             initial_failure_ctx=_failure("A"),
             diagnose=diagnose,
@@ -152,13 +161,15 @@ class TestRunProgressiveChain:
         """Every link advances to a new module but the pipeline never fully
         succeeds — the chain must stop at max_chain, not loop forever."""
         modules = ["A", "B", "C", "D", "E"]
-        diagnose = MagicMock(side_effect=[
-            _agent_result(_make_patch(f"p{i}", m)) for i, m in enumerate(modules)
-        ])
-        apply_and_execute = MagicMock(side_effect=[
-            (object(), _exec_result(ExecutionStatus.ERROR), _failure(modules[i + 1]))
-            for i in range(len(modules) - 1)
-        ])
+        diagnose = MagicMock(
+            side_effect=[_agent_result(_make_patch(f"p{i}", m)) for i, m in enumerate(modules)]
+        )
+        apply_and_execute = MagicMock(
+            side_effect=[
+                (object(), _exec_result(ExecutionStatus.ERROR), _failure(modules[i + 1]))
+                for i in range(len(modules) - 1)
+            ]
+        )
         result = run_progressive_chain(
             initial_failure_ctx=_failure("A"),
             diagnose=diagnose,
@@ -197,14 +208,18 @@ class TestRunProgressiveChain:
         assert result.combined_patch is None
 
     def test_budget_aggregates_tokens_across_links(self):
-        diagnose = MagicMock(side_effect=[
-            _agent_result(_make_patch("p1", "A"), tokens_in=100, tokens_out=200),
-            _agent_result(_make_patch("p2", "B"), tokens_in=50, tokens_out=75),
-        ])
-        apply_and_execute = MagicMock(side_effect=[
-            (object(), _exec_result(ExecutionStatus.ERROR), _failure("B")),
-            (object(), _exec_result(ExecutionStatus.SUCCESS), None),
-        ])
+        diagnose = MagicMock(
+            side_effect=[
+                _agent_result(_make_patch("p1", "A"), tokens_in=100, tokens_out=200),
+                _agent_result(_make_patch("p2", "B"), tokens_in=50, tokens_out=75),
+            ]
+        )
+        apply_and_execute = MagicMock(
+            side_effect=[
+                (object(), _exec_result(ExecutionStatus.ERROR), _failure("B")),
+                (object(), _exec_result(ExecutionStatus.SUCCESS), None),
+            ]
+        )
         result = run_progressive_chain(
             initial_failure_ctx=_failure("A"),
             diagnose=diagnose,
@@ -234,14 +249,18 @@ class TestRunProgressiveChain:
         original_mtime = bp_file.stat().st_mtime_ns
         original_content = bp_file.read_text()
 
-        diagnose = MagicMock(side_effect=[
-            _agent_result(_make_patch("p1", "A")),
-            _agent_result(_make_patch("p2", "B")),
-        ])
-        apply_and_execute = MagicMock(side_effect=[
-            (object(), _exec_result(ExecutionStatus.ERROR), _failure("B")),
-            (object(), _exec_result(ExecutionStatus.SUCCESS), None),
-        ])
+        diagnose = MagicMock(
+            side_effect=[
+                _agent_result(_make_patch("p1", "A")),
+                _agent_result(_make_patch("p2", "B")),
+            ]
+        )
+        apply_and_execute = MagicMock(
+            side_effect=[
+                (object(), _exec_result(ExecutionStatus.ERROR), _failure("B")),
+                (object(), _exec_result(ExecutionStatus.SUCCESS), None),
+            ]
+        )
         result = run_progressive_chain(
             initial_failure_ctx=_failure("A"),
             diagnose=diagnose,

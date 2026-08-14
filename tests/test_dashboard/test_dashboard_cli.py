@@ -5,6 +5,7 @@ plotly at module top), so it isn't exercised here. These tests cover the launche
 contract: the command is registered, base CLI import never pulls streamlit, and a
 missing `dashboard` extra fails gracefully.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -29,10 +30,14 @@ def test_base_cli_import_does_not_require_streamlit():
     import sys
 
     r = subprocess.run(
-        [sys.executable, "-c",
-         "import aqueduct.cli, sys; "
-         "assert 'streamlit' not in sys.modules, 'CLI import pulled streamlit'"],
-        capture_output=True, text=True,
+        [
+            sys.executable,
+            "-c",
+            "import aqueduct.cli, sys; "
+            "assert 'streamlit' not in sys.modules, 'CLI import pulled streamlit'",
+        ],
+        capture_output=True,
+        text=True,
     )
     assert r.returncode == 0, r.stderr
 
@@ -54,7 +59,8 @@ def test_dashboard_launch_invokes_streamlit(monkeypatch):
     """When the extra is present, it shells out to `streamlit run <app.py>`."""
     real = importlib.util.find_spec
     monkeypatch.setattr(
-        importlib.util, "find_spec",
+        importlib.util,
+        "find_spec",
         lambda name, *a, **k: object() if name == "streamlit" else real(name, *a, **k),
     )
     calls = {}
@@ -65,6 +71,7 @@ def test_dashboard_launch_invokes_streamlit(monkeypatch):
         return 0
 
     import subprocess
+
     monkeypatch.setattr(subprocess, "call", fake_call)
     result = CliRunner().invoke(
         cli, ["dashboard", "--config", "aqueduct.yml", "--store-dir", "/tmp/obs", "--port", "9999"]

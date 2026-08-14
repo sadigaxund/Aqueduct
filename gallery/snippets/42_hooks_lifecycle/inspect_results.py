@@ -5,6 +5,7 @@ import os
 
 console = Console()
 
+
 def _show(path, title):
     if not os.path.exists(path):
         console.print(f"[bold red]✗[/bold red] {title} not found at {path}")
@@ -18,6 +19,7 @@ def _show(path, title):
     console.print(t)
     console.print(f"[dim]  Row count: {len(df)}[/dim]\n")
 
+
 def main():
     _show("data/output/result.parquet", "hooks_demo Output")
     # chain_target.yml's own path is relative to ITS directory (FsPath
@@ -27,9 +29,14 @@ def main():
 
     signal = "data/output/hook_signal_ok.txt"
     if os.path.exists(signal):
-        console.print("[bold green]✓[/bold green] on_success command hooks ran (hook_signal_ok.txt present)")
+        console.print(
+            "[bold green]✓[/bold green] on_success command hooks ran (hook_signal_ok.txt present)"
+        )
     else:
-        console.print("[bold red]✗[/bold red] hook_signal_ok.txt missing — did on_success hooks run?")
+        console.print(
+            "[bold red]✗[/bold red] hook_signal_ok.txt missing — did on_success hooks run?"
+        )
+
 
 if __name__ == "__main__":
     main()

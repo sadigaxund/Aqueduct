@@ -1,4 +1,5 @@
 """Phase 56 — `aqueduct lineage <bp.yml> --chain <col> --types` rendering."""
+
 from __future__ import annotations
 
 import json
@@ -51,7 +52,9 @@ def test_chain_types_renders_cast_and_passthrough(tmp_path):
 
 
 def test_chain_json_shape(tmp_path):
-    res = CliRunner().invoke(cli, ["lineage", _write_bp(tmp_path), "--chain", "amount", "--format", "json"])
+    res = CliRunner().invoke(
+        cli, ["lineage", _write_bp(tmp_path), "--chain", "amount", "--format", "json"]
+    )
     assert res.exit_code == 0, res.output
     hops = json.loads(res.output)
     assert [h["channel_id"] for h in hops] == ["clean", "final"]

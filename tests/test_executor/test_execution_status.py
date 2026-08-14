@@ -22,5 +22,7 @@ def test_patch_store_lifecycle_constants():
     from aqueduct.stores.object_store import PatchStore
 
     assert (PatchStore.PENDING, PatchStore.APPLIED, PatchStore.REJECTED) == (
-        "pending", "applied", "rejected",
+        "pending",
+        "applied",
+        "rejected",
     )

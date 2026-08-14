@@ -24,12 +24,14 @@ pytestmark = pytest.mark.unit
 
 # ── 1 & 2 & 14 & 15. Render Collapse and Verbose Tests ────────────────────────
 
+
 @pytest.mark.parametrize("verbose_flag", ["-v", "--verbose"])
 def test_doctor_render_hides_skip_and_quiet_ok(tmp_path, verbose_flag):
     """Default view omits skip/quiet_ok rows; collapses to '· more' row. --verbose/-v shows all."""
     runner = CliRunner()
     config = tmp_path / "aqueduct.yml"
-    config.write_text("""
+    config.write_text(
+        """
 aqueduct_config: '2.0'
 deployment:
   engine: spark
@@ -37,7 +39,9 @@ deployment:
 engine:
   spark:
     master_url: "local[*]"
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     # Mock run_doctor to return specific status rows
     mock_results = [
@@ -108,6 +112,7 @@ def test_doctor_all_ok_some_skip_passes(tmp_path):
 
 # ── 4 & 17. Agent connectivity tests ──────────────────────────────────────────
 
+
 def test_check_agent_anthropic_scenarios(monkeypatch):
     """check_agent with anthropic provider under various environment and config states."""
     # 1. provider=anthropic + no key + no base_url -> skip "self-healing not configured (opt-in)"
@@ -119,7 +124,9 @@ def test_check_agent_anthropic_scenarios(monkeypatch):
     # 2. provider=anthropic + no key + base_url set -> warn
     res_warn = check_agent("anthropic", base_url="http://localhost:8000", model="claude-3")
     assert res_warn.status == "warn"
-    assert "configured provider" not in res_warn.detail # Just double checking it names configured provider / openai_compat
+    assert (
+        "configured provider" not in res_warn.detail
+    )  # Just double checking it names configured provider / openai_compat
     assert "agent configured but ANTHROPIC_API_KEY not set" in res_warn.detail
     assert "switch agent.provider to openai_compat" in res_warn.detail
     assert "pipeline runs fine without it" in res_warn.detail
@@ -133,11 +140,12 @@ def test_check_agent_anthropic_scenarios(monkeypatch):
 
 # ── 6. _formatted_plan sql_ctx access removal test ───────────────────────────
 
+
 def test_explain_formatted_plan_no_sql_ctx_access():
     """_formatted_plan uses df.sparkSession directly and NEVER accesses df.sql_ctx if present."""
     mock_spark = MagicMock()
     mock_spark._jvm.org.apache.spark.sql.execution.ExplainMode.fromString.return_value = "formatted"
-    
+
     mock_jdf = MagicMock()
     mock_jdf.queryExecution.return_value.explainString.return_value = "MockFormattedPlan"
 
@@ -156,6 +164,7 @@ def test_explain_formatted_plan_no_sql_ctx_access():
 
 
 # ── 7 & 8. TCP Reachability and Parsing Tests ─────────────────────────────────
+
 
 def test_host_port_parsing():
     """_host_port parses spark://h:p, http://h:p, h:p, k8s://https://h:p; bad -> None."""
@@ -182,13 +191,17 @@ def test_spark_check_tcp_reachability(monkeypatch):
 
     # Remote master reachable (standalone target)
     with patch("aqueduct.doctor._tcp_ok", return_value=True):
-        ok_remote, _ = check_spark("spark://localhost:7077", {}, preflight=False, target="standalone")
+        ok_remote, _ = check_spark(
+            "spark://localhost:7077", {}, preflight=False, target="standalone"
+        )
         assert ok_remote.status == "ok"
         assert "reachable" in ok_remote.detail
 
     # Remote master unreachable (standalone target)
     with patch("aqueduct.doctor._tcp_ok", return_value=False):
-        fail_remote, _ = check_spark("spark://localhost:7077", {}, preflight=False, target="standalone")
+        fail_remote, _ = check_spark(
+            "spark://localhost:7077", {}, preflight=False, target="standalone"
+        )
         assert fail_remote.status == "fail"
         assert "(Not a timeout: no SparkSession was built.)" in fail_remote.detail
 
@@ -232,7 +245,9 @@ def test_k8s_reachability_ok_when_api_server_tcp_ok(monkeypatch):
     monkeypatch.delenv("YARN_CONF_DIR", raising=False)
     k8s_cfg = {"spark.kubernetes.namespace": "aqueduct", "spark.kubernetes.container.image": "img"}
     with patch("aqueduct.doctor._tcp_ok", return_value=True):
-        spark_res, _ = check_spark("k8s://https://host:443", k8s_cfg, preflight=False, target="kubernetes")
+        spark_res, _ = check_spark(
+            "k8s://https://host:443", k8s_cfg, preflight=False, target="kubernetes"
+        )
     assert spark_res.status == "ok"
     assert "reachable" in spark_res.detail
 
@@ -242,7 +257,9 @@ def test_k8s_reachability_warns_without_k8s_keys(monkeypatch):
     monkeypatch.delenv("HADOOP_CONF_DIR", raising=False)
     monkeypatch.delenv("YARN_CONF_DIR", raising=False)
     with patch("aqueduct.doctor._tcp_ok", return_value=True):
-        spark_res, _ = check_spark("k8s://https://host:443", {}, preflight=False, target="kubernetes")
+        spark_res, _ = check_spark(
+            "k8s://https://host:443", {}, preflight=False, target="kubernetes"
+        )
     assert spark_res.status == "warn"
     assert "spark.kubernetes" in spark_res.detail
 
@@ -252,12 +269,15 @@ def test_k8s_reachability_fail_when_api_server_unreachable(monkeypatch):
     monkeypatch.delenv("HADOOP_CONF_DIR", raising=False)
     monkeypatch.delenv("YARN_CONF_DIR", raising=False)
     with patch("aqueduct.doctor._tcp_ok", return_value=False):
-        spark_res, _ = check_spark("k8s://https://host:6443", {}, preflight=False, target="kubernetes")
+        spark_res, _ = check_spark(
+            "k8s://https://host:6443", {}, preflight=False, target="kubernetes"
+        )
     assert spark_res.status == "fail"
     assert "unreachable" in spark_res.detail
 
 
 # ── 9. S3A Endpoint TCP Probe and bucketless design Test ──────────────────────
+
 
 def test_s3a_endpoint_tcp_probed():
     """check_storage does no bucket I/O; creds present -> ok; no keys -> warn; unreachable -> fail; GCS/ADLS -> ok."""
@@ -291,23 +311,25 @@ def test_s3a_endpoint_tcp_probed():
         assert "failed" in res.detail
 
     # 4. GCS / ADLS ok with note
-    gcs_cfg = {
-        "spark.hadoop.google.cloud.auth.service.account.enable": "true"
-    }
+    gcs_cfg = {"spark.hadoop.google.cloud.auth.service.account.enable": "true"}
     res = check_storage(gcs_cfg, spark_ok=True)
     assert res.status == "ok"
     assert "auth not bucket-tested" in res.detail
 
     # 5. Verify _storage_probe_paths is removed from doctor.py
     import aqueduct.doctor as doc
+
     assert not hasattr(doc, "_storage_probe_paths")
 
 
 # ── 10. --preflight execution test ────────────────────────────────────────────
 
+
 def test_preflight_spark_session_failure():
     """--preflight makes a real make_spark_session call and returns custom failure on error."""
-    with patch("aqueduct.executor.spark.session.make_spark_session", side_effect=Exception("Jars missing")):
+    with patch(
+        "aqueduct.executor.spark.session.make_spark_session", side_effect=Exception("Jars missing")
+    ):
         spark_res, storage_res = check_spark("spark://localhost:7077", {}, preflight=True)
         assert spark_res.status == "fail"
         assert "preflight session failed: spark://localhost:7077: Jars missing" in spark_res.detail
@@ -316,9 +338,11 @@ def test_preflight_spark_session_failure():
 
 # ── 11. SPARK_PROBE_TIMEOUT and ThreadPoolExecutor Removal Check ──────────────
 
+
 def test_spark_probe_timeout_removed():
     """Verify SPARK_PROBE_TIMEOUT and ThreadPoolExecutor are not present/imported in doctor.py."""
     import aqueduct.doctor as doc
+
     assert not hasattr(doc, "SPARK_PROBE_TIMEOUT")
     # Read the file content to verify no ThreadPoolExecutor imports or calls exist
     content = Path(doc.__file__).read_text(encoding="utf-8")
@@ -326,6 +350,7 @@ def test_spark_probe_timeout_removed():
 
 
 # ── 12. --skip-spark short-circuit check ──────────────────────────────────────
+
 
 def test_skip_spark_short_circuits():
     """--skip-spark short circuits before any probe, spark and storage checks skipped."""
@@ -346,6 +371,7 @@ def test_skip_spark_short_circuits():
 
 # ── 13 & 16. CheckResult default fields and cloudpickle ───────────────────────
 
+
 def test_check_result_defaults():
     """CheckResult has group + quiet_when_ok fields defaulting to 'general' + False."""
     res = CheckResult("test", "ok", "details")
@@ -356,6 +382,7 @@ def test_check_result_defaults():
 def test_cloudpickle_compat_quiet_when_ok():
     """cloudpickle compat check on Python < 3.13 returns quiet_when_ok=True."""
     from aqueduct.doctor import check_cloudpickle_compat
+
     res = check_cloudpickle_compat("local[*]")
     assert res.name == "cloudpickle"
     if sys.version_info < (3, 13):
@@ -365,14 +392,18 @@ def test_cloudpickle_compat_quiet_when_ok():
 
 # ── 18. check_storage skipped scenario ────────────────────────────────────────
 
+
 def test_check_storage_skipped():
     """check_storage returns skip detail when skipped=True."""
-    res = check_storage({"spark.hadoop.fs.s3a.endpoint": "s3-host:80"}, spark_ok=False, skipped=True)
+    res = check_storage(
+        {"spark.hadoop.fs.s3a.endpoint": "s3-host:80"}, spark_ok=False, skipped=True
+    )
     assert res.status == "skip"
     assert "not probed (--skip-spark)" in res.detail
 
 
 # ── 19. cluster-stores relative duckdb paths warn test ────────────────────────
+
 
 def test_cluster_stores_relative_duckdb_warns(tmp_path):
     """Relative DuckDB store paths in cluster mode warn (not fail) with a one-line message.
@@ -387,7 +418,8 @@ def test_cluster_stores_relative_duckdb_warns(tmp_path):
     (e.g. a config written by hand and validated without path resolution).
     """
     config_file = tmp_path / "aqueduct.yml"
-    config_file.write_text("""
+    config_file.write_text(
+        """
 aqueduct_config: '2.0'
 deployment:
   engine: spark
@@ -399,7 +431,9 @@ engine:
 stores:
   observability: {backend: duckdb, path: ".aqueduct/obs"}
   depots: {default: {backend: duckdb, path: ".aqueduct/depot.db"}}
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     from aqueduct.config import (
         load_config as _real_load_config,
@@ -413,6 +447,7 @@ stores:
         cfg = _real_load_config(path)
         # StoresConfig is a frozen Pydantic model — rebuild it with unresolved paths.
         from aqueduct.config import StoresConfig
+
         new_stores = StoresConfig(
             observability=RelationalStoreConfig(backend="duckdb", path=".aqueduct/obs"),
             depots={"default": DepotMountConfig(backend="duckdb", path=".aqueduct/depot.db")},
@@ -434,6 +469,7 @@ stores:
 
     # Check that check_store_backend runs real duckdb open / usability check
     from aqueduct.doctor import check_store_backend
+
     obs_dir = tmp_path / "obs"
     obs_dir.mkdir()
     store_cfg = RelationalStoreConfig(backend="duckdb", path=str(obs_dir))
@@ -444,10 +480,12 @@ stores:
 
 # ── 20. Additive Flags scenario test ──────────────────────────────────────────
 
+
 def test_doctor_additive_scenario_and_config(tmp_path):
     """doctor positional config + --aqscenario runs config probe AND scenario pre-flight in one go."""
     config_file = tmp_path / "aqueduct.yml"
-    config_file.write_text("""
+    config_file.write_text(
+        """
 aqueduct_config: '2.0'
 deployment:
   engine: spark
@@ -455,37 +493,51 @@ deployment:
 engine:
   spark:
     master_url: "local[*]"
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     bp_file = tmp_path / "blueprint.yml"
-    bp_file.write_text("""
+    bp_file.write_text(
+        """
 aqueduct: '1.0'
 id: bp
 name: BP
 modules: [{id: m1, type: Ingress, label: M1}]
 edges: []
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     scenario_file = tmp_path / "scenario.aqscenario.yml"
-    scenario_file.write_text("""
+    scenario_file.write_text(
+        """
 aqueduct_scenario: '1.0'
 id: sc1
 blueprint: blueprint.yml
 inject_failure: {module: m1}
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     runner = CliRunner()
-    result = runner.invoke(cli, [
-        "doctor", str(config_file),
-        "--aqscenario", str(scenario_file),
-        "--skip-spark",
-    ])
+    result = runner.invoke(
+        cli,
+        [
+            "doctor",
+            str(config_file),
+            "--aqscenario",
+            str(scenario_file),
+            "--skip-spark",
+        ],
+    )
     assert result.exit_code == 0
     assert "config" in result.output
     assert "aqscenario" in result.output
 
 
 # ── 21. Warning Infrastructure & Suppression Tests ────────────────────────────
+
 
 def test_warning_suppression_and_sentinels():
     """Verify warnings.suppress: ["*"] and other blacklists/sentinels in warnings.py."""
@@ -515,7 +567,7 @@ def test_warning_suppression_and_sentinels():
         warnings.simplefilter("always")
         aqw.emit("test_rule", "msg")
         assert len(w) == 0
-        
+
         # But other rules still emit
         aqw.emit("another_rule", "msg")
         assert len(w) == 1
@@ -524,15 +576,19 @@ def test_warning_suppression_and_sentinels():
 def test_warnings_config_silence_all_removed(tmp_path):
     """WarningsConfig(silence_all=...) raises ConfigError because extra is forbidden."""
     from aqueduct.config import load_config, ConfigError
+
     config_file = tmp_path / "aqueduct.yml"
-    
+
     # Passing silence_all: true should raise ConfigError
-    config_file.write_text("""
+    config_file.write_text(
+        """
 aqueduct_config: '1.0'
 warnings:
   silence_all: true
-""", encoding="utf-8")
-    
+""",
+        encoding="utf-8",
+    )
+
     with pytest.raises(ConfigError) as exc:
         load_config(config_file)
     assert "validation error" in str(exc.value)
@@ -543,14 +599,14 @@ def test_compiler_warnings_silence_all():
     """Compiler with warnings_silence_all=True sets suppress to {"*"} and silences compile-time rules."""
     from aqueduct.compiler.compiler import compile as compile_bp
     from aqueduct.parser.models import Blueprint, ContextRegistry
-    
+
     bp = Blueprint(
         id="test_bp",
         name="Test",
         aqueduct_version="1.0",
         context=ContextRegistry(values={}),
         modules=(),
-        edges=()
+        edges=(),
     )
     # Compiler compile normally checks for retry/egress append warnings, etc.
     # Compile-time warning emit is suppressed when warnings_silence_all is True.
@@ -562,7 +618,8 @@ def test_compiler_warnings_silence_all():
 def test_run_cluster_relative_store_dir_warning(tmp_path):
     """run under env=cluster and relative store dir warns via AQ-WARN [cluster_store_path_relative]."""
     config_file = tmp_path / "aqueduct.yml"
-    config_file.write_text("""
+    config_file.write_text(
+        """
 aqueduct_config: '2.0'
 deployment:
   engine: spark
@@ -574,16 +631,21 @@ engine:
 stores:
   observability: {backend: duckdb, path: ".aqueduct/obs"}
   depots: {default: {backend: duckdb, path: ".aqueduct/depot.db"}}
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     bp_file = tmp_path / "blueprint.yml"
-    bp_file.write_text("""
+    bp_file.write_text(
+        """
 aqueduct: '1.0'
 id: bp
 name: BP
 modules: []
 edges: []
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     from aqueduct.config import (
         load_config as _real_load_config,
@@ -596,6 +658,7 @@ edges: []
         """Wrap real load_config but restore verbatim relative store paths."""
         cfg = _real_load_config(path)
         from aqueduct.config import StoresConfig
+
         new_stores = StoresConfig(
             observability=RelationalStoreConfig(backend="duckdb", path=".aqueduct/obs"),
             depots={"default": DepotMountConfig(backend="duckdb", path=".aqueduct/depot.db")},
@@ -603,14 +666,19 @@ edges: []
         return cfg.model_copy(update={"stores": new_stores})
 
     runner = CliRunner()
-    
+
     # 1. Normal run -> warns via aqueduct.warnings.emit
     with patch("aqueduct.config.load_config", side_effect=_load_with_relative_paths):
         with patch("aqueduct.warnings.emit") as mock_emit:
-            result = runner.invoke(cli, [
-                "run", str(bp_file),
-                "--config", str(config_file),
-            ])
+            result = runner.invoke(
+                cli,
+                [
+                    "run",
+                    str(bp_file),
+                    "--config",
+                    str(config_file),
+                ],
+            )
             assert result.exit_code == 0
             assert mock_emit.call_count == 1
             assert mock_emit.call_args[0][0] == "cluster_store_path_relative"
@@ -653,6 +721,7 @@ def test_doctor_package_split_public_names_resolve():
 
     # Verify no pyspark exception was raised by import alone
     import aqueduct.doctor
+
     assert hasattr(aqueduct.doctor, "check_config")
     assert hasattr(aqueduct.doctor, "check_spark")
     # _tcp_ok, check_spark, check_blueprint_sources_from_manifest,
@@ -668,9 +737,11 @@ def test_doctor_package_split_public_names_resolve():
 # (`cfg.agent.cascade`, a `list[CascadeTierSchema] | None`) instead of
 # parsing a Blueprint for one.
 
+
 class TestCheckCascadeTiers:
     def _tiers(self, *tier_dicts: dict) -> list:
         from aqueduct.parser.schema import CascadeTierSchema
+
         return [CascadeTierSchema.model_validate(t) for t in tier_dicts]
 
     def test_no_tiers_returns_empty(self):
@@ -698,10 +769,13 @@ class TestCheckCascadeTiers:
         assert all(r.status == "warn" for r in results if "base_url" in r.detail)
 
     def test_openai_compat_tier_with_tier_base_url_ok(self):
-        tiers = self._tiers({
-            "model": "gpt4", "provider": "openai_compat",
-            "base_url": "https://tier.test/v1",
-        })
+        tiers = self._tiers(
+            {
+                "model": "gpt4",
+                "provider": "openai_compat",
+                "base_url": "https://tier.test/v1",
+            }
+        )
         results = check_cascade_tiers(tiers)
         assert any(r.status == "ok" for r in results)
 
@@ -721,20 +795,29 @@ class TestCheckCascadeTiers:
 
 # ── 39. Phase 35 — doctor _check_spillway_error_types ──────────────────────────
 
+
 class TestCheckSpillwayErrorTypes:
     def _manifest(self, modules=None, edges=None):
         """Build a manifest-like object with modules and edges."""
-        return type("Manifest", (), {
-            "modules": modules or (),
-            "edges": edges or (),
-        })()
+        return type(
+            "Manifest",
+            (),
+            {
+                "modules": modules or (),
+                "edges": edges or (),
+            },
+        )()
 
     def test_no_spillway_edges_no_warnings(self):
         from aqueduct.doctor import _check_spillway_error_types
         from aqueduct.parser.models import Module
+
         m = self._manifest(
-            modules=(Module(id="a1", type="Assert", label="A1",
-                            config={"rules": [{"error_type": "DQ"}]}),),
+            modules=(
+                Module(
+                    id="a1", type="Assert", label="A1", config={"rules": [{"error_type": "DQ"}]}
+                ),
+            ),
             edges=(),
         )
         results = _check_spillway_error_types(m)
@@ -743,9 +826,16 @@ class TestCheckSpillwayErrorTypes:
     def test_spillway_edge_matching_error_type_no_warning(self):
         from aqueduct.doctor import _check_spillway_error_types
         from aqueduct.parser.models import Module, Edge
+
         m = self._manifest(
-            modules=(Module(id="a1", type="Assert", label="A1",
-                            config={"rules": [{"error_type": "MyCheck"}]}),),
+            modules=(
+                Module(
+                    id="a1",
+                    type="Assert",
+                    label="A1",
+                    config={"rules": [{"error_type": "MyCheck"}]},
+                ),
+            ),
             edges=(Edge(from_id="a1", to_id="sink", port="spillway", error_types=("MyCheck",)),),
         )
         results = _check_spillway_error_types(m)
@@ -754,6 +844,7 @@ class TestCheckSpillwayErrorTypes:
     def test_spillway_edge_unknown_error_type_warns(self):
         from aqueduct.doctor import _check_spillway_error_types
         from aqueduct.parser.models import Edge
+
         m = self._manifest(
             modules=(),
             edges=(Edge(from_id="a1", to_id="sink", port="spillway", error_types=("BogusLabel",)),),
@@ -766,6 +857,7 @@ class TestCheckSpillwayErrorTypes:
     def test_main_port_edge_ignored(self):
         from aqueduct.doctor import _check_spillway_error_types
         from aqueduct.parser.models import Edge
+
         m = self._manifest(
             edges=(Edge(from_id="a", to_id="b", port="main", error_types=("X",)),),
         )
@@ -776,6 +868,7 @@ class TestCheckSpillwayErrorTypes:
         """SpillwayCondition, freshness, sql_row, custom are always known."""
         from aqueduct.doctor import _check_spillway_error_types
         from aqueduct.parser.models import Edge
+
         for label in ("SpillwayCondition", "freshness", "sql_row", "custom"):
             m = self._manifest(
                 edges=(Edge(from_id="a1", to_id="sink", port="spillway", error_types=(label,)),),
@@ -792,7 +885,7 @@ from aqueduct.doctor import _spark_version_verdict, _parse_java_major, check_jav
 class TestSparkVersionVerdict:
     def test_exact_match_ok(self):
         assert _spark_version_verdict("3.5.0", "3.5.0")[0] == "ok"
-        assert _spark_version_verdict("3.5.1", "3.5.0")[0] == "ok"   # patch differs → still ok
+        assert _spark_version_verdict("3.5.1", "3.5.0")[0] == "ok"  # patch differs → still ok
 
     def test_minor_mismatch_warns(self):
         status, note = _spark_version_verdict("3.4.1", "3.5.0")
@@ -804,22 +897,29 @@ class TestSparkVersionVerdict:
 
 
 class TestJavaCheck:
-    @pytest.mark.parametrize("text,expected", [
-        ('openjdk version "17.0.10" 2024-01-16', 17),
-        ('java version "1.8.0_292"', 8),
-        ('openjdk version "11.0.21"', 11),
-        ('not a version line', None),
-        ("", None),
-    ])
+    @pytest.mark.parametrize(
+        "text,expected",
+        [
+            ('openjdk version "17.0.10" 2024-01-16', 17),
+            ('java version "1.8.0_292"', 8),
+            ('openjdk version "11.0.21"', 11),
+            ("not a version line", None),
+            ("", None),
+        ],
+    )
     def test_parse_java_major(self, text, expected):
         assert _parse_java_major(text) == expected
 
     def test_check_java_reports_version(self, monkeypatch):
         import subprocess
+
         monkeypatch.delenv("JAVA_HOME", raising=False)
         monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/java")
-        monkeypatch.setattr(subprocess, "run", lambda *a, **k: MagicMock(
-            stderr='openjdk version "17.0.1"', stdout=""))
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            lambda *a, **k: MagicMock(stderr='openjdk version "17.0.1"', stdout=""),
+        )
         r = check_java()
         assert r.status == "ok" and "Java 17" in r.detail
 
@@ -843,7 +943,7 @@ class _FakeManifest:
 class TestUdfImportCheck:
     def test_default_skips_import(self):
         m = _FakeManifest(({"id": "u", "module": "json", "entry": "loads"},))
-        assert _check_udf_registry(m, preflight=False) == []   # default: no import
+        assert _check_udf_registry(m, preflight=False) == []  # default: no import
 
     def test_preflight_imports_ok(self):
         m = _FakeManifest(({"id": "u", "module": "json", "entry": "loads"},))
@@ -875,6 +975,7 @@ class TestAgentPreflightPing:
     def test_anthropic_preflight_verifies_key(self, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
         import httpx
+
         monkeypatch.setattr(httpx, "get", lambda *a, **k: MagicMock(raise_for_status=lambda: None))
         r = _check_agent("anthropic", None, "claude-x", preflight=True)
         assert r.status == "ok" and "key verified" in r.detail
@@ -882,9 +983,15 @@ class TestAgentPreflightPing:
     def test_anthropic_preflight_bad_key_warns(self, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-bad")
         import httpx
+
         resp = MagicMock(status_code=401)
-        def _raise(): raise httpx.HTTPStatusError("401", request=MagicMock(), response=resp)
-        monkeypatch.setattr(httpx, "get", lambda *a, **k: MagicMock(raise_for_status=_raise, response=resp))
+
+        def _raise():
+            raise httpx.HTTPStatusError("401", request=MagicMock(), response=resp)
+
+        monkeypatch.setattr(
+            httpx, "get", lambda *a, **k: MagicMock(raise_for_status=_raise, response=resp)
+        )
         r = _check_agent("anthropic", None, "claude-x", preflight=True)
         assert r.status == "warn" and "401" in r.detail
 
@@ -922,8 +1029,15 @@ class TestJdbcPreflight:
     def test_result_preflight_postgres_attempts_auth(self):
         # Proves the auth path runs (not TCP-only). On CI with trust auth the
         # connect may succeed → "ok"; on a strict PG setup it fails → "warn".
-        r = _jdbc_result("src", "127.0.0.1", 5432, "jdbc:postgresql://127.0.0.1:5432/nope",
-                         {"user": "u", "password": "p"}, 0.0, preflight=True)
+        r = _jdbc_result(
+            "src",
+            "127.0.0.1",
+            5432,
+            "jdbc:postgresql://127.0.0.1:5432/nope",
+            {"user": "u", "password": "p"},
+            0.0,
+            preflight=True,
+        )
         assert r.status in ("ok", "warn")
         assert "preflight" in r.detail
 
@@ -949,36 +1063,46 @@ class TestCascadeTierPing:
 
     def test_preflight_pings_and_confirms_model(self, monkeypatch):
         tiers = [_tier_with("openai_compat", "deepseek", "http://h/v1")]
-        monkeypatch.setattr("aqueduct.doctor.checks_io._probe_openai_models",
-                            lambda *a, **k: (["deepseek", "other"], None))
+        monkeypatch.setattr(
+            "aqueduct.doctor.checks_io._probe_openai_models",
+            lambda *a, **k: (["deepseek", "other"], None),
+        )
         res = _check_cascade(tiers, preflight=True)
-        assert res[0].status == "ok" and "2 models" in res[0].detail and "[preflight]" in res[0].detail
+        assert (
+            res[0].status == "ok" and "2 models" in res[0].detail and "[preflight]" in res[0].detail
+        )
 
     def test_preflight_model_not_loaded_warns(self, monkeypatch):
         tiers = [_tier_with("openai_compat", "missing", "http://h/v1")]
-        monkeypatch.setattr("aqueduct.doctor.checks_io._probe_openai_models",
-                            lambda *a, **k: (["only-this"], None))
+        monkeypatch.setattr(
+            "aqueduct.doctor.checks_io._probe_openai_models", lambda *a, **k: (["only-this"], None)
+        )
         res = _check_cascade(tiers, preflight=True)
         assert res[0].status == "warn" and "not in 1 loaded models" in res[0].detail
 
     def test_preflight_unreachable_warns(self, monkeypatch):
         tiers = [_tier_with("openai_compat", "x", "http://dead/v1")]
-        monkeypatch.setattr("aqueduct.doctor.checks_io._probe_openai_models",
-                            lambda *a, **k: ([], "Connection refused"))
+        monkeypatch.setattr(
+            "aqueduct.doctor.checks_io._probe_openai_models",
+            lambda *a, **k: ([], "Connection refused"),
+        )
         res = _check_cascade(tiers, preflight=True)
         assert res[0].status == "warn" and "unreachable" in res[0].detail
 
 
 class TestAgentModelCount:
     def test_main_agent_reports_count(self, monkeypatch):
-        monkeypatch.setattr("aqueduct.doctor.checks_io._probe_openai_models",
-                            lambda *a, **k: (["a", "b", "c"], None))
+        monkeypatch.setattr(
+            "aqueduct.doctor.checks_io._probe_openai_models",
+            lambda *a, **k: (["a", "b", "c"], None),
+        )
         r = _check_agent("openai_compat", "http://h/v1", "b")
         assert r.status == "ok" and "3 models available" in r.detail
 
     def test_main_agent_selected_missing_warns(self, monkeypatch):
-        monkeypatch.setattr("aqueduct.doctor.checks_io._probe_openai_models",
-                            lambda *a, **k: (["a", "b"], None))
+        monkeypatch.setattr(
+            "aqueduct.doctor.checks_io._probe_openai_models", lambda *a, **k: (["a", "b"], None)
+        )
         r = _check_agent("openai_compat", "http://h/v1", "zzz")
         assert r.status == "warn" and "not in 2 loaded models" in r.detail
 
@@ -994,18 +1118,22 @@ class TestHostPort:
 
     def test_valid_spark_url(self):
         from aqueduct.doctor import _host_port
+
         assert _host_port("spark://myhost:7077", 7077) == ("myhost", 7077)
 
     def test_non_numeric_port_returns_none_not_raises(self):
         from aqueduct.doctor import _host_port
+
         assert _host_port("spark://host:notaport", 7077) is None
 
     def test_out_of_range_port_returns_none_not_raises(self):
         from aqueduct.doctor import _host_port
+
         assert _host_port("spark://host:999999", 7077) is None
 
     def test_k8s_scheme_with_bad_port_returns_none(self):
         from aqueduct.doctor import _host_port
+
         assert _host_port("k8s://https://host:notaport", 443) is None
 
 
@@ -1036,6 +1164,8 @@ class TestCheckBlueprintSourcesArcadeCycle:
 
         results = check_blueprint_sources(bp_a)  # must not raise RecursionError
 
-        cycle_results = [r for r in results if "cycle" in r.name.lower() or "cycle" in r.detail.lower()]
+        cycle_results = [
+            r for r in results if "cycle" in r.name.lower() or "cycle" in r.detail.lower()
+        ]
         assert cycle_results, f"expected a cycle-naming CheckResult, got: {results}"
         assert any(r.status == "fail" for r in cycle_results)

@@ -6,6 +6,7 @@ import yaml
 from pathlib import Path
 
 import pytest
+
 pytestmark = pytest.mark.unit
 
 from aqueduct.config import AqueductConfig, AgentConnectionConfig, load_config
@@ -32,14 +33,9 @@ class TestAgentConnectionConfig:
 
     def test_load_config_respects_custom_agent_values(self, tmp_path):
         cfg_path = tmp_path / "aqueduct.yml"
-        cfg_data = {
-            "agent": {
-                "timeout": 300.5,
-                "max_reprompts": 5
-            }
-        }
+        cfg_data = {"agent": {"timeout": 300.5, "max_reprompts": 5}}
         cfg_path.write_text(yaml.dump(cfg_data))
-        
+
         config = load_config(cfg_path)
         assert config.agent.timeout == 300.5
         assert config.agent.max_reprompts == 5
@@ -48,12 +44,14 @@ class TestAgentConnectionConfig:
 class TestAgentMemoryConfig:
     def test_defaults_replay_coaching_true(self):
         from aqueduct.config import AgentMemoryConfig
+
         cfg = AgentMemoryConfig()
         assert cfg.replay is True
         assert cfg.coaching is True
 
     def test_frozen_pydantic(self):
         from aqueduct.config import AgentMemoryConfig
+
         cfg = AgentMemoryConfig()
         with pytest.raises(Exception):
             cfg.replay = False
@@ -61,12 +59,14 @@ class TestAgentMemoryConfig:
     def test_extra_forbid_raises(self):
         from pydantic import ValidationError
         from aqueduct.config import AgentMemoryConfig
+
         with pytest.raises(ValidationError):
             AgentMemoryConfig(**{"replay": True, "unknown_key": 1})
 
     def test_replay_false_round_trips(self, tmp_path):
         import yaml
         from aqueduct.config import AgentMemoryConfig
+
         data = yaml.safe_load("memory:\n  replay: false\n  coaching: true\n")
         cfg = AgentMemoryConfig(**data["memory"])
         assert cfg.replay is False
@@ -74,6 +74,7 @@ class TestAgentMemoryConfig:
 
     def test_memory_in_agent_connection_config(self):
         from aqueduct.config import AgentConnectionConfig
+
         cfg = AgentConnectionConfig()
         assert cfg.memory.replay is True
         assert cfg.memory.coaching is True
@@ -86,29 +87,35 @@ class TestBlobLeakGuardrail:
         import warnings
         from aqueduct.config import StoresConfig
         from aqueduct import AqueductWarning
+
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             StoresConfig(**stores_dict)
-            return [x for x in w if issubclass(x.category, AqueductWarning)
-                    and "blob" in str(x.message)]
+            return [
+                x for x in w if issubclass(x.category, AqueductWarning) and "blob" in str(x.message)
+            ]
 
     def test_remote_obs_implicit_local_blob_warns(self):
         assert self._warns({"observability": {"backend": "postgres", "path": "postgresql://x/y"}})
 
     def test_explicit_local_blob_is_silent(self):
-        assert not self._warns({
-            "observability": {"backend": "postgres", "path": "postgresql://x/y"},
-            "blob": {"backend": "local"},
-        })
+        assert not self._warns(
+            {
+                "observability": {"backend": "postgres", "path": "postgresql://x/y"},
+                "blob": {"backend": "local"},
+            }
+        )
 
     def test_duckdb_default_is_silent(self):
         assert not self._warns({})
 
     def test_remote_obs_remote_blob_is_silent(self):
-        assert not self._warns({
-            "observability": {"backend": "postgres", "path": "postgresql://x/y"},
-            "blob": {"backend": "s3", "path": "s3://b/k"},
-        })
+        assert not self._warns(
+            {
+                "observability": {"backend": "postgres", "path": "postgresql://x/y"},
+                "blob": {"backend": "s3", "path": "s3://b/k"},
+            }
+        )
 
 
 class TestConfigAqGuard:
@@ -121,13 +128,19 @@ class TestConfigAqGuard:
 
     def test_non_secret_aq_in_config_rejected(self, tmp_path):
         from aqueduct.config import ConfigError
-        p = self._write(tmp_path,
-            'stores:\n  depots:\n    default:\n      path: ".aqueduct/@aq.blueprint.id().db"\n')
-        with pytest.raises(ConfigError, match=r"@aq\.blueprint\.id cannot be used in aqueduct\.yml"):
+
+        p = self._write(
+            tmp_path,
+            'stores:\n  depots:\n    default:\n      path: ".aqueduct/@aq.blueprint.id().db"\n',
+        )
+        with pytest.raises(
+            ConfigError, match=r"@aq\.blueprint\.id cannot be used in aqueduct\.yml"
+        ):
             load_config(p)
 
     def test_run_scope_in_config_rejected(self, tmp_path):
         from aqueduct.config import ConfigError
+
         p = self._write(tmp_path, 'engine:\n  spark:\n    master_url: "@aq.run.id()"\n')
         with pytest.raises(ConfigError, match=r"@aq\.run\.id"):
             load_config(p)
@@ -136,13 +149,14 @@ class TestConfigAqGuard:
         """flink is not a registered engine (Phase 78 Step 1 — engine portfolio is
         spark + duckdb; flink is out of scope, not a special-cased literal)."""
         from aqueduct.config import ConfigError
-        p = self._write(tmp_path, 'deployment:\n  engine: flink\n')
+
+        p = self._write(tmp_path, "deployment:\n  engine: flink\n")
         with pytest.raises(ConfigError, match=r"not a registered engine"):
             load_config(p)
 
     def test_env_and_plain_config_ok(self, tmp_path, monkeypatch):
         monkeypatch.setenv("AQ_CFG_ENV", "cluster")
-        p = self._write(tmp_path, 'deployment:\n  env: ${AQ_CFG_ENV}\n')
+        p = self._write(tmp_path, "deployment:\n  env: ${AQ_CFG_ENV}\n")
         cfg = load_config(p)
         assert cfg.deployment.env == "cluster"
 
@@ -161,20 +175,25 @@ class TestCheckpointRoot:
         cfg = AqueductConfig(checkpoint_root="my/checkpoints")
         assert cfg.checkpoint_root == "my/checkpoints"
 
-    @pytest.mark.parametrize("uri", [
-        "s3://bucket/checkpoints",
-        "s3a://bucket/checkpoints",
-        "gs://bucket/checkpoints",
-        "hdfs://namenode/checkpoints",
-        "abfss://container@acct.dfs.core.windows.net/checkpoints",
-    ])
+    @pytest.mark.parametrize(
+        "uri",
+        [
+            "s3://bucket/checkpoints",
+            "s3a://bucket/checkpoints",
+            "gs://bucket/checkpoints",
+            "hdfs://namenode/checkpoints",
+            "abfss://container@acct.dfs.core.windows.net/checkpoints",
+        ],
+    )
     def test_remote_uri_scheme_rejected(self, uri):
         from pydantic import ValidationError
+
         with pytest.raises(ValidationError, match="checkpoint_root"):
             AqueductConfig(checkpoint_root=uri)
 
     def test_remote_uri_error_points_at_roadmap(self):
         from pydantic import ValidationError
+
         with pytest.raises(ValidationError, match="roadmap"):
             AqueductConfig(checkpoint_root="s3a://bucket/checkpoints")
 
@@ -186,6 +205,7 @@ class TestCheckpointRoot:
 
     def test_load_config_yaml_remote_uri_rejected(self, tmp_path):
         from aqueduct.config import ConfigError
+
         p = tmp_path / "aqueduct.yml"
         p.write_text('checkpoint_root: "s3a://bucket/ckpts"\n', encoding="utf-8")
         with pytest.raises(ConfigError, match="checkpoint_root"):
@@ -202,6 +222,7 @@ class TestDuckDBEngineConfig:
 
     def test_defaults_are_all_none(self):
         from aqueduct.config import DuckDBEngineConfig
+
         cfg = DuckDBEngineConfig()
         assert cfg.memory_limit is None
         assert cfg.threads is None
@@ -215,23 +236,29 @@ class TestDuckDBEngineConfig:
         from pydantic import ValidationError
 
         from aqueduct.config import DuckDBEngineConfig
+
         with pytest.raises(ValidationError):
             DuckDBEngineConfig(threads=0)
 
-    @pytest.mark.parametrize("uri", [
-        "s3://bucket/db.duckdb",
-        "gs://bucket/db.duckdb",
-        "abfss://container@acct.dfs.core.windows.net/db.duckdb",
-    ])
+    @pytest.mark.parametrize(
+        "uri",
+        [
+            "s3://bucket/db.duckdb",
+            "gs://bucket/db.duckdb",
+            "abfss://container@acct.dfs.core.windows.net/db.duckdb",
+        ],
+    )
     def test_database_path_rejects_remote_uri_scheme(self, uri):
         from pydantic import ValidationError
 
         from aqueduct.config import DuckDBEngineConfig
+
         with pytest.raises(ValidationError, match="database_path"):
             DuckDBEngineConfig(database_path=uri)
 
     def test_database_path_accepts_local_path(self):
         from aqueduct.config import DuckDBEngineConfig
+
         cfg = DuckDBEngineConfig(database_path="/mnt/fast/db.duckdb")
         assert cfg.database_path == "/mnt/fast/db.duckdb"
 
@@ -239,6 +266,7 @@ class TestDuckDBEngineConfig:
         from pydantic import ValidationError
 
         from aqueduct.config import DuckDBEngineConfig
+
         with pytest.raises(ValidationError, match="TOGETHER"):
             DuckDBEngineConfig(s3_key_id_secret="AWS_ACCESS_KEY_ID")
         with pytest.raises(ValidationError, match="TOGETHER"):
@@ -246,6 +274,7 @@ class TestDuckDBEngineConfig:
 
     def test_s3_credential_pair_accepted_together(self):
         from aqueduct.config import DuckDBEngineConfig
+
         cfg = DuckDBEngineConfig(
             s3_key_id_secret="AWS_ACCESS_KEY_ID",
             s3_secret_access_key_secret="AWS_SECRET_ACCESS_KEY",

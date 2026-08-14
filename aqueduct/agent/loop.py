@@ -165,7 +165,9 @@ class AgentRunConfig:
     allow_defer: bool = False
     deep_loop: bool = False
     validate_callback: Callable[[Any], tuple[bool, str]] | None = None
-    apply_callback: Callable[[PatchSpec], tuple[bool, str | None, str | None, str | None]] | None = None
+    apply_callback: (
+        Callable[[PatchSpec], tuple[bool, str | None, str | None, str | None]] | None
+    ) = None
     on_attempt: Callable[[Any], None] | None = None
     on_token: Callable[[str, str], None] | None = None  # live SSE sink: (kind, text)
     model_cascade_position: int | None = None
@@ -219,7 +221,8 @@ def _check_budget_and_escalate(tracker, attempt_num: int) -> tuple[bool, bool]:
         logger.info(
             "stuck-detection escalation triggered on attempt %d "
             "(temperature=%.2f, escalated template)",
-            attempt_num, _ESCALATION_TEMPERATURE,
+            attempt_num,
+            _ESCALATION_TEMPERATURE,
         )
     return False, escalate_next
 
@@ -232,6 +235,7 @@ def _patch_store_for(patches_dir: Path, patch_store: PatchStore | None) -> Patch
     if patch_store is not None:
         return patch_store
     from aqueduct.stores.object_store import make_patch_store
+
     return make_patch_store("local", "", patches_dir)
 
 
@@ -252,6 +256,7 @@ def _record_patch_index(
         return
     try:
         from aqueduct.patch import index as _ix
+
         sig_exact, sig_coarse = from_failure_context(failure_ctx)
         row = _ix.PatchIndexRow(
             patch_id=patch_spec.patch_id,
@@ -329,19 +334,25 @@ def stage_patch_for_human(
     }
     object_key = ps.write_pending(filename, _redact(payload))
     _record_patch_index(
-        obs_store, patch_spec=patch_spec, failure_ctx=failure_ctx,
-        status="pending", object_key=object_key, source=source,
+        obs_store,
+        patch_spec=patch_spec,
+        failure_ctx=failure_ctx,
+        status="pending",
+        object_key=object_key,
+        source=source,
     )
     out_path = f"{ps.location_label}/{object_key}"
     logger.info(
         "LLM patch staged for human review: %s  "
         "(apply with: aqueduct patch apply %s --blueprint <path>)",
-        out_path, out_path,
+        out_path,
+        out_path,
     )
 
     if on_patch_pending_webhook is not None:
         try:
             from aqueduct.surveyor.webhook import fire_webhook
+
             # Phase 46 — the agent's structured diagnosis rides along so a
             # Slack/Teams message can say WHAT broke and WHY the fix should
             # work, not just "a patch is pending". Zero extra LLM calls —
@@ -374,7 +385,11 @@ def stage_patch_for_human(
                     "patch_id": patch_spec.patch_id,
                     "root_cause": str(_diagnosis["root_cause"]),
                     "rationale": str(_diagnosis["rationale"]),
-                    "confidence": f"{patch_spec.confidence:.2f}" if patch_spec.confidence is not None else "n/a",
+                    "confidence": (
+                        f"{patch_spec.confidence:.2f}"
+                        if patch_spec.confidence is not None
+                        else "n/a"
+                    ),
                     "category": str(_diagnosis["category"]),
                 },
                 event=webhook_event,
@@ -412,8 +427,12 @@ def archive_patch(
     }
     object_key = ps.write_applied(filename, _redact(payload))
     _record_patch_index(
-        obs_store, patch_spec=patch_spec, failure_ctx=failure_ctx,
-        status="applied", object_key=object_key, source="llm",
+        obs_store,
+        patch_spec=patch_spec,
+        failure_ctx=failure_ctx,
+        status="applied",
+        object_key=object_key,
+        source="llm",
     )
 
 
@@ -439,7 +458,9 @@ def generate_agent_patch(
     allow_defer: bool = False,
     deep_loop: bool = False,
     validate_callback: Callable[[Any], tuple[bool, str]] | None = None,
-    apply_callback: Callable[[PatchSpec], tuple[bool, str | None, str | None, str | None]] | None = None,
+    apply_callback: (
+        Callable[[PatchSpec], tuple[bool, str | None, str | None, str | None]] | None
+    ) = None,
     on_attempt: Callable[[Any], None] | None = None,
     on_token: Callable[[str, str], None] | None = None,
     model_cascade_position: int | None = None,
@@ -507,11 +528,17 @@ def generate_agent_patch(
 
     if agent_cfg is None:
         if failure_ctx is None:
-            raise TypeError("generate_agent_patch: failure_ctx is required when agent_cfg is not provided")
+            raise TypeError(
+                "generate_agent_patch: failure_ctx is required when agent_cfg is not provided"
+            )
         if model is None:
-            raise TypeError("generate_agent_patch: model is required when agent_cfg is not provided")
+            raise TypeError(
+                "generate_agent_patch: model is required when agent_cfg is not provided"
+            )
         if patches_dir is None:
-            raise TypeError("generate_agent_patch: patches_dir is required when agent_cfg is not provided")
+            raise TypeError(
+                "generate_agent_patch: patches_dir is required when agent_cfg is not provided"
+            )
 
     if budget is None:
         budget = BudgetConfig(max_reprompts=max(1, max_reprompts))
@@ -603,8 +630,11 @@ def generate_agent_patch(
             # attempt and terminate with budget_seconds_exceeded.
             rec = _record(
                 None,
-                tokens_in=0, tokens_out=0, latency_ms=0,
-                gate_that_rejected="budget", escalated=escalate_next,
+                tokens_in=0,
+                tokens_out=0,
+                latency_ms=0,
+                gate_that_rejected="budget",
+                escalated=escalate_next,
                 model_cascade_position=model_cascade_position,
             )
             _fire_turn(rec)
@@ -614,7 +644,9 @@ def generate_agent_patch(
         t_start = time.monotonic()
         try:
             raw, tokens_in, tokens_out = _call_agent(
-                messages, cfg, patches_dir,
+                messages,
+                cfg,
+                patches_dir,
                 last_apply_error=last_apply_error,
                 temperature_override=temperature_override,
                 deadline=deadline,
@@ -630,21 +662,27 @@ def generate_agent_patch(
             # budget ran out mid-call — terminate with budget_seconds_exceeded
             # instead of a generic api_error.
             import httpx
+
             if isinstance(exc, httpx.TimeoutException) and deadline < cfg.timeout:
                 # Demoted to debug — the transcript renders this on the turn line
                 # (✗ budget exhausted) + the hint below; a loose warning here would
                 # also interleave above the tree.
                 logger.debug(
-                    "LLM API call timed out on budget deadline %.1fs "
-                    "(attempt %d/%d): %s",
-                    deadline, attempt_num, budget.max_reprompts, exc,
+                    "LLM API call timed out on budget deadline %.1fs " "(attempt %d/%d): %s",
+                    deadline,
+                    attempt_num,
+                    budget.max_reprompts,
+                    exc,
                 )
                 reprompt_errors.append(f"Budget seconds exceeded: {exc}")
                 sig = from_exception(exc, where="provider", engine=failure_ctx.engine)
                 rec = _record(
                     sig,
-                    tokens_in=0, tokens_out=0, latency_ms=latency_ms,
-                    gate_that_rejected="budget", escalated=escalate_next,
+                    tokens_in=0,
+                    tokens_out=0,
+                    latency_ms=latency_ms,
+                    gate_that_rejected="budget",
+                    escalated=escalate_next,
                     model_cascade_position=model_cascade_position,
                 )
                 # The total-heal budget (agent.budget.max_seconds), NOT agent.timeout,
@@ -665,19 +703,31 @@ def generate_agent_patch(
             # full line would just duplicate it. Still available with -v / json.
             logger.debug(
                 "LLM API call failed (attempt %d/%d): %s%s",
-                attempt_num, budget.max_reprompts, exc, hint,
+                attempt_num,
+                budget.max_reprompts,
+                exc,
+                hint,
             )
             reprompt_errors.append(f"API error: {exc}")
             sig = from_exception(exc, where="provider", engine=failure_ctx.engine)
             rec = _record(
                 sig,
-                tokens_in=0, tokens_out=0, latency_ms=latency_ms,
-                gate_that_rejected="provider", escalated=escalate_next,
+                tokens_in=0,
+                tokens_out=0,
+                latency_ms=latency_ms,
+                gate_that_rejected="provider",
+                escalated=escalate_next,
                 model_cascade_position=model_cascade_position,
             )
             # Transcript display data (transient — not persisted to heal_attempts).
-            _reason = str(exc).split(" for url")[0].replace("Client error ", "").replace(
-                "Server error ", "").strip(" '\"") or type(exc).__name__
+            _reason = (
+                str(exc)
+                .split(" for url")[0]
+                .replace("Client error ", "")
+                .replace("Server error ", "")
+                .strip(" '\"")
+                or type(exc).__name__
+            )
             rec._aq_detail = _reason
             rec._aq_hint = hint.strip().removeprefix("hint:").strip() or None
             _fire_turn(rec)
@@ -687,7 +737,9 @@ def generate_agent_patch(
         latency_ms = int((time.monotonic() - t_start) * 1000)
         logger.info(
             "  ⚡ LLM: %d → %d tokens, %dms",
-            tokens_in, tokens_out, latency_ms,
+            tokens_in,
+            tokens_out,
+            latency_ms,
         )
         logger.debug("LLM raw response (attempt %d):\n%s", attempt_num, raw)
         _turn_raw["v"] = raw  # captured for the -v transcript
@@ -707,7 +759,9 @@ def generate_agent_patch(
             # (✗ invalid patch (schema) — <first line>). Full text via -v / json.
             logger.debug(
                 "LLM patch response invalid (attempt %d/%d):\n%s",
-                attempt_num, budget.max_reprompts, friendly,
+                attempt_num,
+                budget.max_reprompts,
+                friendly,
             )
             if isinstance(parse_exc, ValidationError):
                 sig = from_validation_error(parse_exc, engine=failure_ctx.engine)
@@ -718,8 +772,11 @@ def generate_agent_patch(
 
             rec = _record(
                 sig,
-                tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
-                gate_that_rejected="schema", escalated=escalate_next,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                latency_ms=latency_ms,
+                gate_that_rejected="schema",
+                escalated=escalate_next,
                 model_cascade_position=model_cascade_position,
             )
             _short = friendly.strip().splitlines()[0] if friendly.strip() else ""
@@ -733,7 +790,9 @@ def generate_agent_patch(
 
             structural_hint = _detect_structural_error(parse_exc, raw) or ""
             reprompt_msg = _format_reprompt_for_next_turn(
-                friendly=friendly, raw=raw, escalated=escalate_next,
+                friendly=friendly,
+                raw=raw,
+                escalated=escalate_next,
                 structural_hint=structural_hint,
             )
             messages.append({"role": "assistant", "content": raw})
@@ -745,9 +804,7 @@ def generate_agent_patch(
             f"{o.op}({getattr(o, 'module_id', '') or getattr(o, 'key', '') or ''})"
             for o in patch_spec.operations
         )
-        _conf_str = (
-            f"{patch_spec.confidence:.2f}" if patch_spec.confidence is not None else "n/a"
-        )
+        _conf_str = f"{patch_spec.confidence:.2f}" if patch_spec.confidence is not None else "n/a"
         logger.info(
             "  ✓ Parsed: %s (confidence %s, %d op%s: %s)",
             patch_spec.patch_id,
@@ -773,15 +830,22 @@ def generate_agent_patch(
                 reprompt_errors.append(friendly)
                 logger.warning(
                     "LLM deferred when allow_defer=False (attempt %d/%d)",
-                    attempt_num, budget.max_reprompts,
+                    attempt_num,
+                    budget.max_reprompts,
                 )
                 sig = from_apply_error(
-                    "defer_rejected", friendly, where="loop", engine=failure_ctx.engine,
+                    "defer_rejected",
+                    friendly,
+                    where="loop",
+                    engine=failure_ctx.engine,
                 )
                 rec = _record(
                     sig,
-                    tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
-                    gate_that_rejected="defer_rejected", escalated=escalate_next,
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
+                    latency_ms=latency_ms,
+                    gate_that_rejected="defer_rejected",
+                    escalated=escalate_next,
                     model_cascade_position=model_cascade_position,
                 )
                 _fire_turn(rec)
@@ -792,7 +856,9 @@ def generate_agent_patch(
                     break
 
                 reprompt_msg = _format_reprompt_for_next_turn(
-                    friendly=friendly, raw=raw, escalated=escalate_next,
+                    friendly=friendly,
+                    raw=raw,
+                    escalated=escalate_next,
                     structural_hint="",
                 )
                 messages.append({"role": "assistant", "content": raw})
@@ -803,8 +869,11 @@ def generate_agent_patch(
             # Defer is allowed — terminate the loop cleanly.
             rec = _record(
                 None,
-                tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
-                gate_that_rejected=None, escalated=escalate_next,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                latency_ms=latency_ms,
+                gate_that_rejected=None,
+                escalated=escalate_next,
                 model_cascade_position=model_cascade_position,
             )
             _fire_turn(rec)
@@ -824,24 +893,32 @@ def generate_agent_patch(
                 try:
                     validated, vfeedback = validate_callback(patch_spec)
                 except Exception as vcb_exc:
-                    logger.debug("validate_callback raised; treating as validation fail", exc_info=True)
+                    logger.debug(
+                        "validate_callback raised; treating as validation fail", exc_info=True
+                    )
                     validated, vfeedback = False, f"Validation error: {vcb_exc}"
 
             if not validated:
                 logger.info(
                     "Deep-loop validation rejected patch (attempt %d/%d): %s",
-                    attempt_num, budget.max_reprompts,
+                    attempt_num,
+                    budget.max_reprompts,
                     vfeedback[:200] if vfeedback else "(no detail)",
                 )
                 reprompt_errors.append(f"Validation rejected: {vfeedback}")
                 sig = from_apply_error(
-                    "validation_rejected", vfeedback or "(no detail)", where="validate",
+                    "validation_rejected",
+                    vfeedback or "(no detail)",
+                    where="validate",
                     engine=failure_ctx.engine,
                 )
                 rec = _record(
                     sig,
-                    tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
-                    gate_that_rejected="validate", escalated=escalate_next,
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
+                    latency_ms=latency_ms,
+                    gate_that_rejected="validate",
+                    escalated=escalate_next,
                     model_cascade_position=model_cascade_position,
                 )
                 _fire_turn(rec)
@@ -857,7 +934,8 @@ def generate_agent_patch(
 
                 reprompt_msg = _format_reprompt_for_next_turn(
                     friendly=vfeedback or "Validation rejected your patch.",
-                    raw=raw, escalated=escalate_next,
+                    raw=raw,
+                    escalated=escalate_next,
                     structural_hint="",
                 )
                 messages.append({"role": "assistant", "content": raw})
@@ -881,8 +959,11 @@ def generate_agent_patch(
             if ok:
                 rec = _record(
                     None,
-                    tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
-                    gate_that_rejected=None, escalated=escalate_next,
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
+                    latency_ms=latency_ms,
+                    gate_that_rejected=None,
+                    escalated=escalate_next,
                     model_cascade_position=model_cascade_position,
                 )
                 _fire_turn(rec)
@@ -904,12 +985,17 @@ def generate_agent_patch(
             reprompt_errors.append(friendly)
             logger.warning(
                 "Patch apply gate rejected attempt %d/%d: %s",
-                attempt_num, budget.max_reprompts, friendly,
+                attempt_num,
+                budget.max_reprompts,
+                friendly,
             )
             rec = _record(
                 sig,
-                tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
-                gate_that_rejected="apply", escalated=escalate_next,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                latency_ms=latency_ms,
+                gate_that_rejected="apply",
+                escalated=escalate_next,
                 model_cascade_position=model_cascade_position,
             )
             _fire_turn(rec)
@@ -920,7 +1006,9 @@ def generate_agent_patch(
                 break
 
             reprompt_msg = _format_reprompt_for_next_turn(
-                friendly=friendly, raw=raw, escalated=escalate_next,
+                friendly=friendly,
+                raw=raw,
+                escalated=escalate_next,
                 structural_hint="",
             )
             messages.append({"role": "assistant", "content": raw})
@@ -931,8 +1019,11 @@ def generate_agent_patch(
         # No apply_callback — legacy schema-only success exits the loop.
         rec = _record(
             None,
-            tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
-            gate_that_rejected=None, escalated=escalate_next,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            latency_ms=latency_ms,
+            gate_that_rejected=None,
+            escalated=escalate_next,
             model_cascade_position=model_cascade_position,
         )
         _fire_turn(rec)
@@ -942,15 +1033,19 @@ def generate_agent_patch(
     if patch_spec is None:
         logger.info(
             "── Heal complete: no patch (%d attempts, stop_reason=%s, %d tokens in, %d out) ──",
-            tracker.current_attempt, tracker.stop_reason,
-            tracker.tokens_in_total, tracker.tokens_out_total,
+            tracker.current_attempt,
+            tracker.stop_reason,
+            tracker.tokens_in_total,
+            tracker.tokens_out_total,
         )
         # Demoted to debug — the transcript's └─ close node already states the
         # outcome (✗ <reason> · N turn(s)); the caller prints the terminal line.
         logger.debug(
             "LLM agent failed to produce a valid PatchSpec after %d attempt(s) "
             "for blueprint %r run %r (stop_reason=%s)",
-            tracker.current_attempt, failure_ctx.blueprint_id, failure_ctx.run_id,
+            tracker.current_attempt,
+            failure_ctx.blueprint_id,
+            failure_ctx.run_id,
             tracker.stop_reason,
         )
     else:
@@ -958,8 +1053,10 @@ def generate_agent_patch(
             "── Heal complete: %s (confidence %s, %d ops, stop_reason=%s, %d tokens in, %d out) ──",
             patch_spec.patch_id,
             f"{patch_spec.confidence:.2f}" if patch_spec.confidence is not None else "n/a",
-            len(patch_spec.operations), tracker.stop_reason,
-            tracker.tokens_in_total, tracker.tokens_out_total,
+            len(patch_spec.operations),
+            tracker.stop_reason,
+            tracker.tokens_in_total,
+            tracker.tokens_out_total,
         )
     return AgentPatchResult(
         patch=patch_spec,

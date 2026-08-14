@@ -46,6 +46,7 @@ def load_resolver_fn(resolver: str, base_dir: str | None = None) -> Callable[[st
     restart.
     """
     from aqueduct.infra.module_loading import load_callable
+
     return load_callable(resolver, base_dir)
 
 
@@ -119,14 +120,11 @@ def resolve_secret(
         fetched = _fetch_custom(key, resolver, base_dir)
     else:
         raise SecretsError(
-            f"Unknown secrets provider {provider!r}. "
-            "Supported: env | aws | gcp | azure | custom"
+            f"Unknown secrets provider {provider!r}. " "Supported: env | aws | gcp | azure | custom"
         )
 
     if fetched is None:
-        raise SecretsError(
-            f"@aq.secret: {key!r} not found via provider={provider!r}."
-        )
+        raise SecretsError(f"@aq.secret: {key!r} not found via provider={provider!r}.")
 
     redaction.register(fetched, key_hint=key)
     return fetched
@@ -138,8 +136,7 @@ def _fetch_aws(key: str, region: str | None) -> str | None:
         import botocore.exceptions
     except ImportError:
         raise SecretsError(
-            "secrets.provider=aws requires boto3. "
-            "Install: pip install aqueduct-core[aws]"
+            "secrets.provider=aws requires boto3. " "Install: pip install aqueduct-core[aws]"
         )
     kwargs: dict[str, Any] = {}
     if region:
@@ -179,6 +176,7 @@ def _fetch_aws(key: str, region: str | None) -> str | None:
     # If JSON blob, try to extract key from it
     try:
         import json
+
         blob = json.loads(secret)
         if isinstance(blob, dict) and key in blob:
             return str(blob[key])
@@ -255,13 +253,9 @@ def _fetch_custom(key: str, resolver: str | None, base_dir: str | None = None) -
     try:
         fn = load_resolver_fn(resolver, base_dir)
     except (ImportError, AttributeError, ValueError) as exc:
-        raise SecretsError(
-            f"secrets.resolver {resolver!r} could not be loaded: {exc}"
-        ) from exc
+        raise SecretsError(f"secrets.resolver {resolver!r} could not be loaded: {exc}") from exc
     try:
         result = fn(key)
     except Exception as exc:
-        raise SecretsError(
-            f"secrets.resolver {resolver!r} raised for key {key!r}: {exc}"
-        ) from exc
+        raise SecretsError(f"secrets.resolver {resolver!r} raised for key {key!r}: {exc}") from exc
     return None if result is None else str(result)

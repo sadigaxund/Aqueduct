@@ -8,6 +8,7 @@ calls ``aqueduct patch import`` to apply + commit it on a checkout. The user own
 a ~10-line workflow (see ``docs/templates/ci-heal-workflow.yml``); Aqueduct owns
 only the pure helpers below.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -48,6 +49,7 @@ def validate_ci_payload(payload: Any) -> list[str]:
 
 
 # ── Structured commit message ────────────────────────────────────────────────
+
 
 def build_commit_message(blueprint_id: str, patches: list[dict]) -> str:
     """Build the structured git commit message for applied Aqueduct patches.

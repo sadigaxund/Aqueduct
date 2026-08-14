@@ -5,6 +5,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 import pytest
+
 pytestmark = pytest.mark.unit
 from unittest.mock import MagicMock, patch
 
@@ -22,23 +23,21 @@ def test_surveyor_record_fires_webhook():
     manifest.name = "Test Blueprint"
     manifest.to_dict.return_value = {"id": "test-bp"}
     manifest.provenance_map = None
-    
+
     config = WebhookEndpointConfig(url="http://test.com")
-    
+
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir)
         surveyor = Surveyor(manifest, store_dir=tmp_path, webhook_config=config, engine="spark")
         surveyor.start("run-123")
-        
+
         result = ExecutionResult(
             blueprint_id="test-bp",
             run_id="run-123",
             status="error",
-            module_results=(
-                ModuleResult(module_id="mod1", status="error", error="Boom!"),
-            )
+            module_results=(ModuleResult(module_id="mod1", status="error", error="Boom!"),),
         )
-        
+
         with patch("aqueduct.surveyor.surveyor.fire_webhook") as mock_fire:
             surveyor.record(result)
             mock_fire.assert_called_once()
@@ -57,21 +56,18 @@ def test_surveyor_record_no_webhook_on_success():
     manifest.name = "Test Blueprint"
     manifest.to_dict.return_value = {"id": "test-bp"}
     manifest.provenance_map = None
-    
+
     config = WebhookEndpointConfig(url="http://test.com")
-    
+
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir)
         surveyor = Surveyor(manifest, store_dir=tmp_path, webhook_config=config, engine="spark")
         surveyor.start("run-123")
-        
+
         result = ExecutionResult(
-            blueprint_id="test-bp",
-            run_id="run-123",
-            status="success",
-            module_results=()
+            blueprint_id="test-bp", run_id="run-123", status="success", module_results=()
         )
-        
+
         with patch("aqueduct.surveyor.surveyor.fire_webhook") as mock_fire:
             surveyor.record(result)
             mock_fire.assert_not_called()
@@ -83,6 +79,7 @@ class TestEvaluateRegulatorSignalOverride:
     def _make_manifest(self, probe_id="probe1", regulator_id="reg1"):
         from unittest.mock import MagicMock
         from aqueduct.compiler.models import Manifest
+
         edge = MagicMock()
         edge.from_id = probe_id
         edge.to_id = regulator_id
@@ -96,6 +93,7 @@ class TestEvaluateRegulatorSignalOverride:
         import duckdb
         from datetime import datetime, timezone
         from aqueduct.surveyor.surveyor import Surveyor, _SIGNAL_OVERRIDES_DDL
+
         manifest = self._make_manifest()
         store = tmp_path / "signals"
         store.mkdir()
@@ -114,6 +112,7 @@ class TestEvaluateRegulatorSignalOverride:
 
     def test_no_override_returns_true_when_no_probe_signals(self, tmp_path):
         from aqueduct.surveyor.surveyor import Surveyor
+
         manifest = self._make_manifest()
         store = tmp_path / "signals"
         store.mkdir()
@@ -132,7 +131,16 @@ class TestSurveyorBlueprintSourceYaml:
         bp_path = tmp_path / "blueprint.yml"
         bp_path.write_text("id: my_blueprint\nname: Test", encoding="utf-8")
 
-        manifest = Manifest(blueprint_id="b1", name="test", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), engine_config={})
+        manifest = Manifest(
+            blueprint_id="b1",
+            name="test",
+            description="",
+            aqueduct_version="1.0",
+            context={},
+            modules=(),
+            edges=(),
+            engine_config={},
+        )
         surveyor = Surveyor(manifest, store_dir=tmp_path, blueprint_path=bp_path, engine="spark")
         surveyor.start("r1")
 
@@ -153,7 +161,16 @@ class TestSurveyorBlueprintSourceYaml:
         from aqueduct.compiler.models import Manifest
         from aqueduct.executor.models import ExecutionResult, ModuleResult
 
-        manifest = Manifest(blueprint_id="b1", name="test", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), engine_config={})
+        manifest = Manifest(
+            blueprint_id="b1",
+            name="test",
+            description="",
+            aqueduct_version="1.0",
+            context={},
+            modules=(),
+            edges=(),
+            engine_config={},
+        )
         surveyor = Surveyor(manifest, store_dir=tmp_path, blueprint_path=None, engine="spark")
         surveyor.start("r1")
 
@@ -167,19 +184,29 @@ class TestSurveyorBlueprintSourceYaml:
         assert ctx is not None
         assert ctx.blueprint_source_yaml is None
 
+
 class TestSurveyorStores:
     def test_surveyor_uses_injected_stores(self, tmp_path):
         from aqueduct.surveyor.surveyor import Surveyor
         from aqueduct.compiler.models import Manifest
         from aqueduct.stores import StoreBundle
         from aqueduct.stores.duckdb_ import DuckDBObservabilityStore, DuckDBDepotStore
-        
-        manifest = Manifest(blueprint_id="b1", name="test", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), engine_config={})
-        
+
+        manifest = Manifest(
+            blueprint_id="b1",
+            name="test",
+            description="",
+            aqueduct_version="1.0",
+            context={},
+            modules=(),
+            edges=(),
+            engine_config={},
+        )
+
         obs = DuckDBObservabilityStore(tmp_path / "observability.db")
         depot = DuckDBDepotStore(tmp_path / "depot.db")
         bundle = StoreBundle(observability=obs, depot=depot)
-        
+
         surveyor = Surveyor(manifest, store_dir=tmp_path, stores=bundle, engine="spark")
         assert surveyor._observability is obs
 
@@ -187,16 +214,27 @@ class TestSurveyorStores:
         from aqueduct.surveyor.surveyor import Surveyor
         from aqueduct.compiler.models import Manifest
         from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
-        
-        manifest = Manifest(blueprint_id="b1", name="test", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), engine_config={})
-        
+
+        manifest = Manifest(
+            blueprint_id="b1",
+            name="test",
+            description="",
+            aqueduct_version="1.0",
+            context={},
+            modules=(),
+            edges=(),
+            engine_config={},
+        )
+
         surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
         surveyor.start("r1")
         assert isinstance(surveyor._observability, DuckDBObservabilityStore)
 
+
 class TestSurveyorSpendCap:
     def test_count_recent_heal_attempts_empty(self, tmp_path):
         from aqueduct.surveyor.surveyor import Surveyor
+
         manifest = MagicMock()
         manifest.blueprint_id = "test-bp"
         s = Surveyor(manifest, store_dir=tmp_path, engine="spark")
@@ -205,46 +243,56 @@ class TestSurveyorSpendCap:
 
     def test_count_recent_heal_attempts_with_data(self, tmp_path):
         from aqueduct.surveyor.surveyor import Surveyor
+
         manifest = MagicMock()
         manifest.blueprint_id = "test-bp"
         s = Surveyor(manifest, store_dir=tmp_path, engine="spark")
         s.start("r1")
-        
+
         s.record_healing_outcome(
-            run_id="r1", failed_module="m1", failure_category="err",
-            model="gpt-4", patch_id="p1", confidence=0.9,
-            patch_applied=True, run_success_after_patch=True
+            run_id="r1",
+            failed_module="m1",
+            failure_category="err",
+            model="gpt-4",
+            patch_id="p1",
+            confidence=0.9,
+            patch_applied=True,
+            run_success_after_patch=True,
         )
         assert s.count_recent_heal_attempts(within_minutes=60) == 1
 
     def test_count_recent_heal_attempts_excludes_old(self, tmp_path):
         from aqueduct.surveyor.surveyor import Surveyor
         import datetime as _dt
+
         manifest = MagicMock()
         manifest.blueprint_id = "test-bp"
         s = Surveyor(manifest, store_dir=tmp_path, engine="spark")
         s.start("r1")
-        
+
         # Manually insert an old row
         old_ts = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(minutes=120)).isoformat()
         with s._observability.connect() as cur:
             cur.execute(
                 "INSERT INTO healing_outcomes (id, run_id, applied_at) VALUES (?, ?, ?)",
-                ["old-id", "r1", old_ts]
+                ["old-id", "r1", old_ts],
             )
-            
+
         assert s.count_recent_heal_attempts(within_minutes=60) == 0
         assert s.count_recent_heal_attempts(within_minutes=180) == 1
 
     def test_count_recent_heal_attempts_swallows_db_errors(self, tmp_path):
         from aqueduct.surveyor.surveyor import Surveyor
+
         manifest = MagicMock()
         manifest.blueprint_id = "test-bp"
         s = Surveyor(manifest, store_dir=tmp_path, engine="spark")
         # Not calling start() so connection will fail/not exist
         assert s.count_recent_heal_attempts() == 0
 
+
 # ── record_heal_attempt ───────────────────────────────────────────────────────
+
 
 class TestRecordHealAttempt:
     def test_record_heal_attempt_writes_row(self, tmp_path):
@@ -254,21 +302,33 @@ class TestRecordHealAttempt:
         from aqueduct.agent.signature import make_signature
 
         s = Surveyor(
-            Manifest(blueprint_id="bp1", name="name", context={}, modules=(), edges=(), engine_config={}),
+            Manifest(
+                blueprint_id="bp1", name="name", context={}, modules=(), edges=(), engine_config={}
+            ),
             tmp_path,
-         engine="spark",)
+            engine="spark",
+        )
         s.start("run1")
-        
+
         sig = make_signature("e", "w", "msg", engine="spark")
         rec = AttemptRecord(
-            attempt_num=1, signature=sig, tokens_in=10, tokens_out=20,
-            latency_ms=100, gate_that_rejected="schema", escalated=True,
+            attempt_num=1,
+            signature=sig,
+            tokens_in=10,
+            tokens_out=20,
+            latency_ms=100,
+            gate_that_rejected="schema",
+            escalated=True,
         )
-        s.record_heal_attempt(run_id="run1", attempt_record=rec, stop_reason=StopReason.STUCK_SIGNATURE)
-        
+        s.record_heal_attempt(
+            run_id="run1", attempt_record=rec, stop_reason=StopReason.STUCK_SIGNATURE
+        )
+
         with s._observability.connect() as cur:
-            row = cur.execute("SELECT attempt_num, signature_hash, tokens_in, gate_that_rejected, escalated, stop_reason FROM heal_attempts").fetchone()
-            
+            row = cur.execute(
+                "SELECT attempt_num, signature_hash, tokens_in, gate_that_rejected, escalated, stop_reason FROM heal_attempts"
+            ).fetchone()
+
         assert row[0] == 1
         assert row[1] == sig.hash
         assert row[2] == 10
@@ -282,17 +342,22 @@ class TestRecordHealAttempt:
         from aqueduct.agent.budget import AttemptRecord, StopReason
 
         s = Surveyor(
-            Manifest(blueprint_id="bp1", name="name", context={}, modules=(), edges=(), engine_config={}),
+            Manifest(
+                blueprint_id="bp1", name="name", context={}, modules=(), edges=(), engine_config={}
+            ),
             tmp_path,
-         engine="spark",)
+            engine="spark",
+        )
         s.start("run1")
 
         rec = AttemptRecord(attempt_num=2, signature=None)
         s.record_heal_attempt(run_id="run1", attempt_record=rec, stop_reason=StopReason.SOLVED)
-        
+
         with s._observability.connect() as cur:
-            row = cur.execute("SELECT error_class, where_field, normalized_message, signature_hash FROM heal_attempts").fetchone()
-            
+            row = cur.execute(
+                "SELECT error_class, where_field, normalized_message, signature_hash FROM heal_attempts"
+            ).fetchone()
+
         assert row == (None, None, None, None)
 
     def test_record_heal_attempt_db_exception_swallowed(self, tmp_path):
@@ -302,13 +367,16 @@ class TestRecordHealAttempt:
         from unittest.mock import patch
 
         s = Surveyor(
-            Manifest(blueprint_id="bp1", name="name", context={}, modules=(), edges=(), engine_config={}),
+            Manifest(
+                blueprint_id="bp1", name="name", context={}, modules=(), edges=(), engine_config={}
+            ),
             tmp_path,
-         engine="spark",)
+            engine="spark",
+        )
         s.start("run1")
-        
+
         rec = AttemptRecord(attempt_num=1, signature=None)
-        
+
         with patch.object(s._observability, "connect", side_effect=Exception("db error")):
             # DB error during persistence is swallowed — returns None, never raises
             assert s.record_heal_attempt(run_id="run1", attempt_record=rec) is None
@@ -320,20 +388,29 @@ class TestRecordHealAttempt:
         from aqueduct.agent import PROMPT_VERSION
 
         s = Surveyor(
-            Manifest(blueprint_id="bp1", name="name", context={}, modules=(), edges=(), engine_config={}),
+            Manifest(
+                blueprint_id="bp1", name="name", context={}, modules=(), edges=(), engine_config={}
+            ),
             tmp_path,
-         engine="spark",)
+            engine="spark",
+        )
         s.start("run1")
-        
+
         rec = AttemptRecord(attempt_num=1, signature=None)
         s.record_heal_attempt(run_id="run1", attempt_record=rec)
-        
+
         with s._observability.connect() as cur:
             row = cur.execute("SELECT prompt_version FROM heal_attempts").fetchone()
-            
+
         assert row[0] == PROMPT_VERSION
 
-from aqueduct.surveyor.surveyor import _extract_structured_error, _parse_suggested_columns, _PY4J_CAUSE_HOP_LIMIT
+
+from aqueduct.surveyor.surveyor import (
+    _extract_structured_error,
+    _parse_suggested_columns,
+    _PY4J_CAUSE_HOP_LIMIT,
+)
+
 
 class TestPhase35ExtractStructuredError:
     def test_returns_none_for_exc_none(self):
@@ -346,13 +423,19 @@ class TestPhase35ExtractStructuredError:
 
     def test_mocked_pyspark_exception(self):
         class MockPySparkException(Exception):
-            def getCondition(self): return "UNRESOLVED_COLUMN.WITH_SUGGESTION"
-            def getMessageParameters(self): return {"objectName": "event_ts", "proposal": "`event_id`, `event_time`"}
-            def getSqlState(self): return "42703"
+            def getCondition(self):
+                return "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+
+            def getMessageParameters(self):
+                return {"objectName": "event_ts", "proposal": "`event_id`, `event_time`"}
+
+            def getSqlState(self):
+                return "42703"
 
         # Mock pyspark.errors.PySparkException
         import sys
         from unittest.mock import MagicMock
+
         mock_pyspark = MagicMock()
         mock_pyspark.errors.PySparkException = MockPySparkException
         sys.modules["pyspark"] = mock_pyspark
@@ -372,12 +455,18 @@ class TestPhase35ExtractStructuredError:
 
     def test_falls_back_to_get_error_class(self):
         class MockPySparkException(Exception):
-            def getErrorClass(self): return "UNRESOLVED_COLUMN"
-            def getMessageParameters(self): return {}
-            def getSqlState(self): return "42000"
+            def getErrorClass(self):
+                return "UNRESOLVED_COLUMN"
+
+            def getMessageParameters(self):
+                return {}
+
+            def getSqlState(self):
+                return "42000"
 
         import sys
         from unittest.mock import MagicMock
+
         mock_pyspark = MagicMock()
         mock_pyspark.errors.PySparkException = MockPySparkException
         sys.modules["pyspark"] = mock_pyspark
@@ -398,22 +487,30 @@ class TestPhase35ExtractStructuredError:
                 self._name = name
                 self._msg = msg
                 self._cause = cause
+
             def getClass(self):
                 class C:
-                    def getName(inner): return self._name
+                    def getName(inner):
+                        return self._name
+
                 return C()
-            def getMessage(self): return self._msg
-            def getCause(self): return self._cause
+
+            def getMessage(self):
+                return self._msg
+
+            def getCause(self):
+                return self._cause
 
         root_cause = MockJavaCause("java.lang.NullPointerException", "NPE")
         cause1 = MockJavaCause("org.apache.spark.SparkException", "Spark error", root_cause)
-        
+
         class MockPy4JJavaError(Exception):
             def __init__(self):
                 self.java_exception = cause1
 
         import sys
         from unittest.mock import MagicMock
+
         mock_py4j = MagicMock()
         mock_py4j.protocol.Py4JJavaError = MockPy4JJavaError
         sys.modules["py4j"] = mock_py4j
@@ -424,7 +521,10 @@ class TestPhase35ExtractStructuredError:
             res = _extract_structured_error(exc)
             assert res is not None
             assert res["error_class"] == "java.lang.NullPointerException"
-            assert res["root_exception"] == {"type": "java.lang.NullPointerException", "message": "NPE"}
+            assert res["root_exception"] == {
+                "type": "java.lang.NullPointerException",
+                "message": "NPE",
+            }
         finally:
             del sys.modules["py4j"]
             del sys.modules["py4j.protocol"]
@@ -434,21 +534,29 @@ class TestPhase35ExtractStructuredError:
             def __init__(self, name):
                 self._name = name
                 self._cause = self
+
             def getClass(self):
                 class C:
-                    def getName(inner): return self._name
+                    def getName(inner):
+                        return self._name
+
                 return C()
-            def getMessage(self): return "msg"
-            def getCause(self): return self._cause
+
+            def getMessage(self):
+                return "msg"
+
+            def getCause(self):
+                return self._cause
 
         root_cause = MockJavaCause("InfiniteLoopException")
-        
+
         class MockPy4JJavaError(Exception):
             def __init__(self):
                 self.java_exception = root_cause
 
         import sys
         from unittest.mock import MagicMock
+
         mock_py4j = MagicMock()
         mock_py4j.protocol.Py4JJavaError = MockPy4JJavaError
         sys.modules["py4j"] = mock_py4j
@@ -481,15 +589,17 @@ class TestPhase35ExtractStructuredError:
             @property
             def __cause__(self):
                 raise RuntimeError("internal extraction failure")
-        
+
         assert _extract_structured_error(BadExc()) is None
 
 
 class TestPhase35SurveyorMigration:
     def _create_legacy_db(self, db_path):
         import duckdb
+
         with duckdb.connect(str(db_path)) as cur:
-            cur.execute("""
+            cur.execute(
+                """
             CREATE TABLE failure_contexts (
                 run_id         VARCHAR PRIMARY KEY,
                 blueprint_id   VARCHAR NOT NULL,
@@ -501,17 +611,37 @@ class TestPhase35SurveyorMigration:
                 started_at     TIMESTAMPTZ NOT NULL,
                 finished_at    TIMESTAMPTZ NOT NULL
             )
-            """)
+            """
+            )
 
     def test_fresh_db_includes_new_columns(self, tmp_path):
         from aqueduct.surveyor.surveyor import Surveyor
         from aqueduct.compiler.models import Manifest
-        s = Surveyor(Manifest(blueprint_id="bp1", name="name", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), engine_config={}), tmp_path, engine="spark")
+
+        s = Surveyor(
+            Manifest(
+                blueprint_id="bp1",
+                name="name",
+                description="",
+                aqueduct_version="1.0",
+                context={},
+                modules=(),
+                edges=(),
+                engine_config={},
+            ),
+            tmp_path,
+            engine="spark",
+        )
         s.start("run1")
-        
+
         with s._observability.connect() as cur:
-            cols = [row[0] for row in cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='failure_contexts'").fetchall()]
-            
+            cols = [
+                row[0]
+                for row in cur.execute(
+                    "SELECT column_name FROM information_schema.columns WHERE table_name='failure_contexts'"
+                ).fetchall()
+            ]
+
         assert "error_class" in cols
         assert "root_exception" in cols
         assert "sql_state" in cols
@@ -542,6 +672,7 @@ class TestPhase35ExtractStructuredErrorExtra:
 
         assert not hasattr(MockPySparkException, "getCondition")
         import sys
+
         mock_pyspark = MagicMock()
         mock_pyspark.errors.PySparkException = MockPySparkException
         sys.modules["pyspark"] = mock_pyspark
@@ -593,18 +724,22 @@ class TestPhase35SurveyorMigrationFresh:
         from aqueduct.compiler.models import Manifest
 
         s = Surveyor(
-            Manifest(blueprint_id="bp1", name="n", context={},
-                     modules=(), edges=(), engine_config={}),
+            Manifest(
+                blueprint_id="bp1", name="n", context={}, modules=(), edges=(), engine_config={}
+            ),
             tmp_path,
-         engine="spark",)
+            engine="spark",
+        )
         s.start("run1")
         with s._observability.connect() as cur:
-            cols = {row[0] for row in cur.execute(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name='failure_contexts'"
-            ).fetchall()}
-        for c in ("error_class", "root_exception", "sql_state",
-                  "suggested_columns", "object_name"):
+            cols = {
+                row[0]
+                for row in cur.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='failure_contexts'"
+                ).fetchall()
+            }
+        for c in ("error_class", "root_exception", "sql_state", "suggested_columns", "object_name"):
             assert c in cols, f"missing failure_contexts column {c!r}"
 
 
@@ -613,10 +748,12 @@ def _make_surveyor(tmp_path):
     from aqueduct.compiler.models import Manifest
 
     s = Surveyor(
-        Manifest(blueprint_id="bp_rec", name="n", context={},
-                 modules=(), edges=(), engine_config={}),
+        Manifest(
+            blueprint_id="bp_rec", name="n", context={}, modules=(), edges=(), engine_config={}
+        ),
         tmp_path,
-     engine="spark",)
+        engine="spark",
+    )
     return s
 
 
@@ -646,10 +783,10 @@ class TestPhase35SurveyorRecord:
             s = _make_surveyor(tmp_path)
             s.start("run_pse")
             result = ExecutionResult(
-                blueprint_id="bp_rec", run_id="run_pse", status="error",
-                module_results=(
-                    ModuleResult(module_id="m1", status="error", error="boom"),
-                ),
+                blueprint_id="bp_rec",
+                run_id="run_pse",
+                status="error",
+                module_results=(ModuleResult(module_id="m1", status="error", error="boom"),),
             )
             ctx = s.record(result, exc=MockPySparkException())
             assert ctx is not None
@@ -671,10 +808,10 @@ class TestPhase35SurveyorRecord:
         s = _make_surveyor(tmp_path)
         s.start("run_plain")
         result = ExecutionResult(
-            blueprint_id="bp_rec", run_id="run_plain", status="error",
-            module_results=(
-                ModuleResult(module_id="m1", status="error", error="boom"),
-            ),
+            blueprint_id="bp_rec",
+            run_id="run_plain",
+            status="error",
+            module_results=(ModuleResult(module_id="m1", status="error", error="boom"),),
         )
         s.record(result, exc=RuntimeError("kaboom"))
         with s._observability.connect() as cur:
@@ -720,10 +857,10 @@ class TestPhase35SurveyorRecord:
             s = _make_surveyor(tmp_path)
             s.start(run_id)
             result = ExecutionResult(
-                blueprint_id="bp_rec", run_id=run_id, status="error",
-                module_results=(
-                    ModuleResult(module_id="m1", status="error", error="x"),
-                ),
+                blueprint_id="bp_rec",
+                run_id=run_id,
+                status="error",
+                module_results=(ModuleResult(module_id="m1", status="error", error="x"),),
             )
             s.record(result, exc=A_Exc())
 
@@ -742,4 +879,3 @@ class TestPhase35SurveyorRecord:
         finally:
             del sys.modules["pyspark"]
             del sys.modules["pyspark.errors"]
-

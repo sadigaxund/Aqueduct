@@ -57,6 +57,7 @@ _MAX_BLUEPRINT_CHARS = 20_000
 # Hard row cap for sample_rows — never negotiable via the `n` argument.
 _MAX_SAMPLE_ROWS = 20
 
+
 def _unavailable_no_session_reason(engine: str) -> str:
     """The "no live session" degrade reason, per engine.
 
@@ -194,11 +195,13 @@ class ToolBox:
             tool = REGISTRY.get(name)
             if tool is None:
                 continue  # defensive — registry composition changed underneath us
-            decls.append({
-                "name": tool.name,
-                "description": tool.description,
-                "params_schema": tool.params_schema,
-            })
+            decls.append(
+                {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "params_schema": tool.params_schema,
+                }
+            )
         decls.extend(_own_tool_declarations())
         return decls
 
@@ -221,9 +224,12 @@ class ToolBox:
             if name == "get_source_schema":
                 return _redact(self._get_source_schema(arguments.get("module_id", "")))
             if name == "sample_rows":
-                return _redact(self._sample_rows(
-                    arguments.get("module_id", ""), arguments.get("n", 10),
-                ))
+                return _redact(
+                    self._sample_rows(
+                        arguments.get("module_id", ""),
+                        arguments.get("n", 10),
+                    )
+                )
             return {"error": f"unknown tool {name!r} — known: {self._known_names()}"}
         except Exception as exc:
             # A tool call failing must not crash the heal attempt — surface

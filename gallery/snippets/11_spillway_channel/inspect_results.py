@@ -6,12 +6,15 @@ import glob
 
 console = Console()
 
+
 def main():
     valid_path = "data/output/valid_scores.parquet"
     rejected_path = "data/output/rejected_scores.csv"
 
     if not os.path.exists(valid_path):
-        console.print(f"[bold red]✗[/bold red] {valid_path} not found — did you run 'aqueduct run blueprint.yml'?")
+        console.print(
+            f"[bold red]✗[/bold red] {valid_path} not found — did you run 'aqueduct run blueprint.yml'?"
+        )
         return
 
     console.print(f"[bold green]✓[/bold green] Found results. Reading both streams...\n")
@@ -29,7 +32,11 @@ def main():
     # CSV file at the configured path. Read whichever shape is there.
     if os.path.isdir(rejected_path):
         csv_files = glob.glob(os.path.join(rejected_path, "part-*.csv"))
-        df_bad = pd.concat([pd.read_csv(f) for f in csv_files], ignore_index=True) if csv_files else pd.DataFrame()
+        df_bad = (
+            pd.concat([pd.read_csv(f) for f in csv_files], ignore_index=True)
+            if csv_files
+            else pd.DataFrame()
+        )
     elif os.path.exists(rejected_path):
         df_bad = pd.read_csv(rejected_path)
     else:
@@ -43,8 +50,11 @@ def main():
     console.print(t)
     console.print(f"[dim]  Row count: {len(df_bad)}[/dim]\n")
 
-    console.print(f"[dim]Summary: {len(df_valid)} valid, {len(df_bad)} rejected. "
-                  "The spillway splits rows that fail the condition into a separate stream.[/dim]")
+    console.print(
+        f"[dim]Summary: {len(df_valid)} valid, {len(df_bad)} rejected. "
+        "The spillway splits rows that fail the condition into a separate stream.[/dim]"
+    )
+
 
 if __name__ == "__main__":
     main()

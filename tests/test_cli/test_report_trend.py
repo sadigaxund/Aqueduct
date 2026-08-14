@@ -1,4 +1,5 @@
 """Phase 56 — `aqueduct report --trend <column>` cross-run quality trend."""
+
 from __future__ import annotations
 
 import json
@@ -45,8 +46,16 @@ def _seed(store_dir, seed_ts):
 def test_trend_table_shows_history_and_type_drift(tmp_path, seed_ts):
     _seed(tmp_path, seed_ts)
     res = CliRunner().invoke(
-        cli, ["report", "--trend", "amount", "--store-dir", str(tmp_path),
-              "--since", seed_ts(days=-365)],
+        cli,
+        [
+            "report",
+            "--trend",
+            "amount",
+            "--store-dir",
+            str(tmp_path),
+            "--since",
+            seed_ts(days=-365),
+        ],
     )
     assert res.exit_code == 0, res.output
     assert "null-rate:" in res.output
@@ -57,8 +66,18 @@ def test_trend_table_shows_history_and_type_drift(tmp_path, seed_ts):
 def test_trend_json_shape(tmp_path, seed_ts):
     _seed(tmp_path, seed_ts)
     res = CliRunner().invoke(
-        cli, ["report", "--trend", "amount", "--store-dir", str(tmp_path),
-              "--since", seed_ts(days=-365), "--format", "json"],
+        cli,
+        [
+            "report",
+            "--trend",
+            "amount",
+            "--store-dir",
+            str(tmp_path),
+            "--since",
+            seed_ts(days=-365),
+            "--format",
+            "json",
+        ],
     )
     assert res.exit_code == 0, res.output
     payload = json.loads(res.output)
@@ -70,8 +89,8 @@ def test_trend_json_shape(tmp_path, seed_ts):
 def test_trend_empty_when_column_absent(tmp_path, seed_ts):
     _seed(tmp_path, seed_ts)
     res = CliRunner().invoke(
-        cli, ["report", "--trend", "ghost", "--store-dir", str(tmp_path),
-              "--since", seed_ts(days=-365)],
+        cli,
+        ["report", "--trend", "ghost", "--store-dir", str(tmp_path), "--since", seed_ts(days=-365)],
     )
     assert res.exit_code == 0, res.output
     assert "No probe signals for column 'ghost'" in res.output

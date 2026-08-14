@@ -43,7 +43,9 @@ def build_report(xml_path: str, job_name: str = "") -> str:
 
     # Overview badge row
     emoji = ":white_check_mark:" if failures == 0 and errors == 0 else ":x:"
-    lines.append(f"**{emoji} {passed} passed**, {failures} failed, {errors} errors, {skipped} skipped — {time_s:.1f}s")
+    lines.append(
+        f"**{emoji} {passed} passed**, {failures} failed, {errors} errors, {skipped} skipped — {time_s:.1f}s"
+    )
     lines.append("")
 
     if failures > 0 or errors > 0:
@@ -57,9 +59,7 @@ def build_report(xml_path: str, job_name: str = "") -> str:
                     msg = (child.get("message", "") or "").strip()
                     short_msg = msg.split("\n")[0][:120] if msg else "(no message)"
                     lines.append(
-                        f"| `{case.get('name', '?')}` "
-                        f"| {child.tag} "
-                        f"| {short_msg} |"
+                        f"| `{case.get('name', '?')}` " f"| {child.tag} " f"| {short_msg} |"
                     )
         lines.append("")
 

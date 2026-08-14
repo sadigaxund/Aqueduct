@@ -18,11 +18,13 @@ logger = logging.getLogger(__name__)
 
 _PY4J_CAUSE_HOP_LIMIT = 10
 # Spark 4.0 error-class names we recognise as carrying column-suggestion data.
-_COLUMN_SUGGEST_CLASSES = frozenset({
-    "UNRESOLVED_COLUMN.WITH_SUGGESTION",
-    "UNRESOLVED_FIELD.WITH_SUGGESTION",
-    "UNRESOLVED_MAP_KEY.WITH_SUGGESTION",
-})
+_COLUMN_SUGGEST_CLASSES = frozenset(
+    {
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+        "UNRESOLVED_FIELD.WITH_SUGGESTION",
+        "UNRESOLVED_MAP_KEY.WITH_SUGGESTION",
+    }
+)
 
 
 def _parse_suggested_columns(blob: str) -> tuple[str, ...]:
@@ -34,6 +36,7 @@ def _parse_suggested_columns(blob: str) -> tuple[str, ...]:
     LLM to parse the trace.
     """
     import re as _re
+
     if not blob:
         return ()
     out: list[str] = []
@@ -165,8 +168,15 @@ def _extract_structured_error(exc: BaseException | None) -> dict[str, Any] | Non
             if out["error_class"] is None:
                 out["error_class"] = type(root).__name__
 
-        if not any((out["error_class"], out["root_exception"], out["sql_state"],
-                    out["suggested_columns"], out["object_name"])):
+        if not any(
+            (
+                out["error_class"],
+                out["root_exception"],
+                out["sql_state"],
+                out["suggested_columns"],
+                out["object_name"],
+            )
+        ):
             return None
         return out
     except Exception:

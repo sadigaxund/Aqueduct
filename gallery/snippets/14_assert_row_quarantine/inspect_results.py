@@ -6,12 +6,15 @@ import glob
 
 console = Console()
 
+
 def main():
     clean_path = "data/output/clean_orders.parquet"
     quarantine_path = "data/output/quarantined_orders.csv"
 
     if not os.path.exists(clean_path):
-        console.print("[bold red]✗[/bold red] Clean output not found — did you run 'aqueduct run blueprint.yml'?")
+        console.print(
+            "[bold red]✗[/bold red] Clean output not found — did you run 'aqueduct run blueprint.yml'?"
+        )
         return
 
     df_clean = pd.read_parquet(clean_path)
@@ -27,7 +30,11 @@ def main():
     # CSV file at the configured path. Read whichever shape is there.
     if os.path.isdir(quarantine_path):
         csv_files = glob.glob(os.path.join(quarantine_path, "part-*.csv"))
-        df_bad = pd.concat([pd.read_csv(f) for f in csv_files], ignore_index=True) if csv_files else pd.DataFrame()
+        df_bad = (
+            pd.concat([pd.read_csv(f) for f in csv_files], ignore_index=True)
+            if csv_files
+            else pd.DataFrame()
+        )
     elif os.path.exists(quarantine_path):
         df_bad = pd.read_csv(quarantine_path)
     else:
@@ -41,8 +48,11 @@ def main():
     console.print(t)
     console.print(f"[dim]  Row count: {len(df_bad)}[/dim]\n")
 
-    console.print(f"[dim]Summary: {len(df_clean)} clean, {len(df_bad)} quarantined. "
-                  "on_fail=quarantine routes bad rows to the spillway instead of aborting.[/dim]")
+    console.print(
+        f"[dim]Summary: {len(df_clean)} clean, {len(df_bad)} quarantined. "
+        "on_fail=quarantine routes bad rows to the spillway instead of aborting.[/dim]"
+    )
+
 
 if __name__ == "__main__":
     main()

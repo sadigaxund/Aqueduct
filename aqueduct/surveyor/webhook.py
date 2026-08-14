@@ -36,11 +36,13 @@ def _render_value(value: Any, vars: dict[str, str]) -> Any:
     """Substitute ${VAR} tokens in a string value.  Non-strings pass through."""
     if not isinstance(value, str):
         return value
+
     def _replace(m: re.Match) -> str:
         key = m.group(1)
         if key in vars:
             return str(vars[key])
         return os.environ.get(key, m.group(0))
+
     return _TOKEN_RE.sub(_replace, value)
 
 
@@ -49,6 +51,7 @@ def _render_dict(template: dict[str, Any], vars: dict[str, str]) -> dict[str, An
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
 
 def fire_webhook(
     config: WebhookEndpointConfig,  # type: ignore[name-defined]  # noqa: F821
@@ -97,6 +100,7 @@ def fire_webhook(
         body = _render_dict(config.payload, vars)
     elif event is not None:
         from datetime import datetime
+
         body = {
             "event": event,
             "timestamp": datetime.now(tz=UTC).isoformat(),

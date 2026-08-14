@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 from pyspark.sql import SparkSession
@@ -157,6 +158,7 @@ def test_make_spark_session_blueprint_config_precedence():
 
 # ── outputTimestampType default (cross-engine timestamp_tz fidelity) ─────────
 
+
 class TestOutputTimestampTypeDefault:
     def test_defaults_to_timestamp_micros(self):
         """No user override -> Aqueduct's own default (TIMESTAMP_MICROS)
@@ -176,6 +178,7 @@ class TestOutputTimestampTypeDefault:
 
 
 # ── timezone: universal key (Phase 81/82) ────────────────────────────────────
+
 
 class TestSessionTimezone:
     def test_universal_timezone_applied_when_no_native_override(self):
@@ -266,6 +269,7 @@ class TestSessionQuietMode:
 
 
 # ── ISSUE-026: stop_spark_session AQ_TESTING guard ────────────────────────────
+
 
 class TestStopSparkSessionGuard:
     def test_aq_testing_set_skips_stop(self, monkeypatch):

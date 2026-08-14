@@ -5,6 +5,7 @@ deltas) and Anthropic (`thinking_delta` + `text_delta`). Verifies the live
 ``on_token(kind, text)`` callback fires per delta, the answer accumulates to the
 returned text, and usage tokens are picked up.
 """
+
 from __future__ import annotations
 
 import contextlib

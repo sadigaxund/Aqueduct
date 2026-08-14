@@ -114,6 +114,7 @@ def _ensure_schema(dsn: str, schema: str) -> None:
 
 # ── Connection context manager ────────────────────────────────────────────────
 
+
 @contextlib.contextmanager
 def _pg_relational(dsn: str, schema: str) -> Iterator[RelationalCursor]:
     """Yield a `RelationalCursor` bound to *schema* via `search_path`.
@@ -132,6 +133,7 @@ def _pg_relational(dsn: str, schema: str) -> Iterator[RelationalCursor]:
 
 # ── Concrete store classes ────────────────────────────────────────────────────
 
+
 class _PostgresRelational:
     """Mixin parameterising the schema name a store writes into."""
 
@@ -148,6 +150,7 @@ class _PostgresRelational:
     def location_label(self) -> str:
         # Redact password components for logs / doctor output
         from urllib.parse import urlsplit, urlunsplit
+
         try:
             parts = urlsplit(self._dsn)
             netloc = parts.hostname or ""
@@ -177,9 +180,7 @@ class PostgresDepotStore(_PostgresRelational, _RelationalDepotMixin, DepotStore)
         try:
             with self.connect() as cur:
                 cur.execute(self._DDL)
-                row = cur.execute(
-                    "SELECT value FROM depot_kv WHERE key = ?", [key]
-                ).fetchone()
+                row = cur.execute("SELECT value FROM depot_kv WHERE key = ?", [key]).fetchone()
                 return row[0] if row else default
         except Exception as exc:
             logger.warning("PostgresDepotStore.kv_get(%r): %s — returning default", key, exc)

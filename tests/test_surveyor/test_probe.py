@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
+
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 try:
@@ -21,7 +22,7 @@ def test_execute_probe_no_signals(spark: SparkSession, tmp_path: Path):
     df = spark.range(5)
     module = Module(id="p1", type="Probe", label="P1", config={})
     store_dir = tmp_path / "store"
-    
+
     # Should return immediately without writing anything
     execute_probe(module, df, spark, "run-1", store_dir)
     assert not (store_dir / "observability.db").exists()
@@ -30,18 +31,20 @@ def test_execute_probe_no_signals(spark: SparkSession, tmp_path: Path):
 def test_execute_probe_unknown_signal(spark: SparkSession, tmp_path: Path, caplog):
     df = spark.range(5)
     module = Module(
-        id="p1", type="Probe", label="P1", 
-        config={"signals": [{"type": "unknown_signal"}, {"type": "sample_rows", "n": 2}]}
+        id="p1",
+        type="Probe",
+        label="P1",
+        config={"signals": [{"type": "unknown_signal"}, {"type": "sample_rows", "n": 2}]},
     )
     store_dir = tmp_path / "store"
-    
+
     execute_probe(module, df, spark, "run-1", store_dir)
     db_path = store_dir / "observability.db"
     assert db_path.exists()
-    
+
     # Warning logged for unknown signal
     assert "unknown signal type 'unknown_signal'" in caplog.text
-    
+
     # Other signal captured
     conn = duckdb.connect(str(db_path))
     rows = conn.execute("SELECT signal_type FROM probe_signals").fetchall()
@@ -52,18 +55,19 @@ def test_execute_probe_unknown_signal(spark: SparkSession, tmp_path: Path, caplo
 def test_execute_probe_schema_snapshot(spark: SparkSession, tmp_path: Path):
     df = spark.range(5)
     module = Module(
-        id="p1", type="Probe", label="P1", 
-        config={"signals": [{"type": "schema_snapshot"}]}
+        id="p1", type="Probe", label="P1", config={"signals": [{"type": "schema_snapshot"}]}
     )
     store_dir = tmp_path / "store"
-    
+
     execute_probe(module, df, spark, "run-1", store_dir)
-    
+
     # Phase 53 — probe data persisted only to probe_signals table (no sidecar files)
     conn = duckdb.connect(str(store_dir / "observability.db"))
-    rows = conn.execute("SELECT payload FROM probe_signals WHERE signal_type='schema_snapshot'").fetchall()
+    rows = conn.execute(
+        "SELECT payload FROM probe_signals WHERE signal_type='schema_snapshot'"
+    ).fetchall()
     conn.close()
-    
+
     assert len(rows) == 1
     db_payload = json.loads(rows[0][0])
     assert "fields" in db_payload
@@ -73,17 +77,21 @@ def test_execute_probe_schema_snapshot(spark: SparkSession, tmp_path: Path):
 def test_execute_probe_row_count_estimate_sample(spark: SparkSession, tmp_path: Path):
     df = spark.range(100)
     module = Module(
-        id="p1", type="Probe", label="P1", 
-        config={"signals": [{"type": "row_count_estimate", "method": "sample", "fraction": 0.5}]}
+        id="p1",
+        type="Probe",
+        label="P1",
+        config={"signals": [{"type": "row_count_estimate", "method": "sample", "fraction": 0.5}]},
     )
     store_dir = tmp_path / "store"
-    
+
     execute_probe(module, df, spark, "run-1", store_dir)
-    
+
     conn = duckdb.connect(str(store_dir / "observability.db"))
-    payload_str = conn.execute("SELECT payload FROM probe_signals WHERE signal_type='row_count_estimate'").fetchone()[0]
+    payload_str = conn.execute(
+        "SELECT payload FROM probe_signals WHERE signal_type='row_count_estimate'"
+    ).fetchone()[0]
     conn.close()
-    
+
     payload = json.loads(payload_str)
     assert payload["method"] == "sample"
     assert payload["estimate"] > 0
@@ -93,17 +101,21 @@ def test_execute_probe_row_count_estimate_sample(spark: SparkSession, tmp_path: 
 def test_execute_probe_row_count_estimate_spark_listener(spark: SparkSession, tmp_path: Path):
     df = spark.range(100)
     module = Module(
-        id="p1", type="Probe", label="P1", 
-        config={"signals": [{"type": "row_count_estimate", "method": "spark_listener"}]}
+        id="p1",
+        type="Probe",
+        label="P1",
+        config={"signals": [{"type": "row_count_estimate", "method": "spark_listener"}]},
     )
     store_dir = tmp_path / "store"
-    
+
     execute_probe(module, df, spark, "run-1", store_dir)
-    
+
     conn = duckdb.connect(str(store_dir / "observability.db"))
-    payload_str = conn.execute("SELECT payload FROM probe_signals WHERE signal_type='row_count_estimate'").fetchone()[0]
+    payload_str = conn.execute(
+        "SELECT payload FROM probe_signals WHERE signal_type='row_count_estimate'"
+    ).fetchone()[0]
     conn.close()
-    
+
     payload = json.loads(payload_str)
     assert payload["method"] == "spark_listener"
     assert payload["estimate"] is None
@@ -112,17 +124,21 @@ def test_execute_probe_row_count_estimate_spark_listener(spark: SparkSession, tm
 def test_execute_probe_null_rates(spark: SparkSession, tmp_path: Path):
     df = spark.range(100).selectExpr("id", "CASE WHEN id % 2 = 0 THEN NULL ELSE id END as val")
     module = Module(
-        id="p1", type="Probe", label="P1", 
-        config={"signals": [{"type": "null_rates", "columns": ["val"], "fraction": 1.0}]}
+        id="p1",
+        type="Probe",
+        label="P1",
+        config={"signals": [{"type": "null_rates", "columns": ["val"], "fraction": 1.0}]},
     )
     store_dir = tmp_path / "store"
-    
+
     execute_probe(module, df, spark, "run-1", store_dir)
-    
+
     conn = duckdb.connect(str(store_dir / "observability.db"))
-    payload_str = conn.execute("SELECT payload FROM probe_signals WHERE signal_type='null_rates'").fetchone()[0]
+    payload_str = conn.execute(
+        "SELECT payload FROM probe_signals WHERE signal_type='null_rates'"
+    ).fetchone()[0]
     conn.close()
-    
+
     payload = json.loads(payload_str)
     assert "val" in payload["null_rates"]
     assert payload["null_rates"]["val"] == 0.5
@@ -131,17 +147,19 @@ def test_execute_probe_null_rates(spark: SparkSession, tmp_path: Path):
 def test_execute_probe_null_rates_no_columns(spark: SparkSession, tmp_path: Path):
     df = spark.range(100).selectExpr("id", "CASE WHEN id % 2 = 0 THEN NULL ELSE id END as val")
     module = Module(
-        id="p1", type="Probe", label="P1", 
-        config={"signals": [{"type": "null_rates", "fraction": 1.0}]}
+        id="p1",
+        type="Probe",
+        label="P1",
+        config={"signals": [{"type": "null_rates", "fraction": 1.0}]},
     )
     store_dir = tmp_path / "store"
-    
+
     execute_probe(module, df, spark, "run-1", store_dir)
-    
+
     conn = duckdb.connect(str(store_dir / "observability.db"))
     payload_str = conn.execute("SELECT payload FROM probe_signals").fetchone()[0]
     conn.close()
-    
+
     payload = json.loads(payload_str)
     assert "val" in payload["null_rates"]
     assert "id" in payload["null_rates"]
@@ -150,17 +168,18 @@ def test_execute_probe_null_rates_no_columns(spark: SparkSession, tmp_path: Path
 def test_execute_probe_sample_rows(spark: SparkSession, tmp_path: Path):
     df = spark.range(100)
     module = Module(
-        id="p1", type="Probe", label="P1", 
-        config={"signals": [{"type": "sample_rows", "n": 10}]}
+        id="p1", type="Probe", label="P1", config={"signals": [{"type": "sample_rows", "n": 10}]}
     )
     store_dir = tmp_path / "store"
-    
+
     execute_probe(module, df, spark, "run-1", store_dir)
-    
+
     conn = duckdb.connect(str(store_dir / "observability.db"))
-    payload_str = conn.execute("SELECT payload FROM probe_signals WHERE signal_type='sample_rows'").fetchone()[0]
+    payload_str = conn.execute(
+        "SELECT payload FROM probe_signals WHERE signal_type='sample_rows'"
+    ).fetchone()[0]
     conn.close()
-    
+
     payload = json.loads(payload_str)
     assert payload["n"] == 10
     assert len(payload["rows"]) == 10
@@ -171,31 +190,31 @@ def test_execute_probe_exception_isolation(spark: SparkSession, tmp_path: Path):
     # The null_rates uses df.sample(fraction) and expect 0 <= fraction <= 1.
     # Setting an invalid fraction should raise ValueError but we trap it
     module = Module(
-        id="p1", type="Probe", label="P1", 
-        config={"signals": [
-            {"type": "null_rates", "fraction": -1.0}, 
-            {"type": "sample_rows", "n": 2}
-        ]}
+        id="p1",
+        type="Probe",
+        label="P1",
+        config={
+            "signals": [{"type": "null_rates", "fraction": -1.0}, {"type": "sample_rows", "n": 2}]
+        },
     )
     store_dir = tmp_path / "store"
-    
+
     execute_probe(module, df, spark, "run-1", store_dir)
-    
+
     # sample_rows should still be captured
     conn = duckdb.connect(str(store_dir / "observability.db"))
     types = [r[0] for r in conn.execute("SELECT signal_type FROM probe_signals").fetchall()]
     conn.close()
-    
+
     assert types == ["sample_rows"]
 
 
 def test_execute_probe_global_exception(spark: SparkSession, tmp_path: Path):
     df = spark.range(5)
     module = Module(
-        id="p1", type="Probe", label="P1", 
-        config={"signals": [{"type": "schema_snapshot"}]}
+        id="p1", type="Probe", label="P1", config={"signals": [{"type": "schema_snapshot"}]}
     )
-    
+
     store_dir = tmp_path / "store"
     (tmp_path / "store").touch()  # a file obstructs store-dir creation → inner failure
 
@@ -207,17 +226,23 @@ def test_execute_probe_global_exception(spark: SparkSession, tmp_path: Path):
 def test_execute_probe_value_distribution(spark: SparkSession, tmp_path: Path):
     df = spark.range(10).selectExpr("id", "id * 1.5 as val")
     module = Module(
-        id="p1", type="Probe", label="P1", 
-        config={"signals": [{"type": "value_distribution", "columns": ["id", "val"], "fraction": 1.0}]}
+        id="p1",
+        type="Probe",
+        label="P1",
+        config={
+            "signals": [{"type": "value_distribution", "columns": ["id", "val"], "fraction": 1.0}]
+        },
     )
     store_dir = tmp_path / "store"
-    
+
     execute_probe(module, df, spark, "run-1", store_dir)
-    
+
     conn = duckdb.connect(str(store_dir / "observability.db"))
-    payload_str = conn.execute("SELECT payload FROM probe_signals WHERE signal_type='value_distribution'").fetchone()[0]
+    payload_str = conn.execute(
+        "SELECT payload FROM probe_signals WHERE signal_type='value_distribution'"
+    ).fetchone()[0]
     conn.close()
-    
+
     payload = json.loads(payload_str)
     stats = payload["stats"]
     assert "id" in stats
@@ -233,37 +258,45 @@ def test_execute_probe_distinct_count(spark: SparkSession, tmp_path: Path):
     # 10 rows, 5 distinct values for 'grp'
     df = spark.range(10).selectExpr("id % 5 as grp")
     module = Module(
-        id="p1", type="Probe", label="P1", 
-        config={"signals": [{"type": "distinct_count", "columns": ["grp"], "fraction": 1.0}]}
+        id="p1",
+        type="Probe",
+        label="P1",
+        config={"signals": [{"type": "distinct_count", "columns": ["grp"], "fraction": 1.0}]},
     )
     store_dir = tmp_path / "store"
-    
+
     execute_probe(module, df, spark, "run-1", store_dir)
-    
+
     conn = duckdb.connect(str(store_dir / "observability.db"))
-    payload_str = conn.execute("SELECT payload FROM probe_signals WHERE signal_type='distinct_count'").fetchone()[0]
+    payload_str = conn.execute(
+        "SELECT payload FROM probe_signals WHERE signal_type='distinct_count'"
+    ).fetchone()[0]
     conn.close()
-    
+
     payload = json.loads(payload_str)
     # approx_count_distinct might be slightly off but for small N it should be exact or close
-    assert payload["distinct_counts"]["grp"] >= 4 
+    assert payload["distinct_counts"]["grp"] >= 4
 
 
 def test_execute_probe_data_freshness(spark: SparkSession, tmp_path: Path):
     df = spark.sql("SELECT CAST('2026-01-01 12:00:00' AS TIMESTAMP) as ts")
-    
+
     module = Module(
-        id="p1", type="Probe", label="P1", 
-        config={"signals": [{"type": "data_freshness", "column": "ts", "allow_sample": False}]}
+        id="p1",
+        type="Probe",
+        label="P1",
+        config={"signals": [{"type": "data_freshness", "column": "ts", "allow_sample": False}]},
     )
     store_dir = tmp_path / "store"
-    
+
     execute_probe(module, df, spark, "run-1", store_dir)
-    
+
     conn = duckdb.connect(str(store_dir / "observability.db"))
-    payload_str = conn.execute("SELECT payload FROM probe_signals WHERE signal_type='data_freshness'").fetchone()[0]
+    payload_str = conn.execute(
+        "SELECT payload FROM probe_signals WHERE signal_type='data_freshness'"
+    ).fetchone()[0]
     conn.close()
-    
+
     payload = json.loads(payload_str)
     assert payload["column"] == "ts"
     # DuckDB/Spark JSON serialization might return ISO string
@@ -273,17 +306,18 @@ def test_execute_probe_data_freshness(spark: SparkSession, tmp_path: Path):
 def test_execute_probe_partition_stats(spark: SparkSession, tmp_path: Path):
     df = spark.range(10).repartition(3)
     module = Module(
-        id="p1", type="Probe", label="P1", 
-        config={"signals": [{"type": "partition_stats"}]}
+        id="p1", type="Probe", label="P1", config={"signals": [{"type": "partition_stats"}]}
     )
     store_dir = tmp_path / "store"
-    
+
     execute_probe(module, df, spark, "run-1", store_dir)
-    
+
     conn = duckdb.connect(str(store_dir / "observability.db"))
-    payload_str = conn.execute("SELECT payload FROM probe_signals WHERE signal_type='partition_stats'").fetchone()[0]
+    payload_str = conn.execute(
+        "SELECT payload FROM probe_signals WHERE signal_type='partition_stats'"
+    ).fetchone()[0]
     conn.close()
-    
+
     payload = json.loads(payload_str)
     assert payload["num_partitions"] == 3
 
@@ -297,8 +331,10 @@ class TestProbeBlockFullActions:
 
         fake_df = MagicMock()
         result = _row_count_estimate(
-            fake_df, {"method": "sample", "fraction": 0.1},
-            probe_id="p1", run_id="r1",
+            fake_df,
+            {"method": "sample", "fraction": 0.1},
+            probe_id="p1",
+            run_id="r1",
             block_full_actions=True,
         )
         assert result.get("blocked") is True
@@ -313,8 +349,10 @@ class TestProbeBlockFullActions:
 
         fake_df = MagicMock()
         result = _row_count_estimate(
-            fake_df, {"method": "spark_listener"},
-            probe_id="p1", run_id="r1",
+            fake_df,
+            {"method": "spark_listener"},
+            probe_id="p1",
+            run_id="r1",
             block_full_actions=True,
         )
         # Should return spark_listener result (estimate=None since no DB)
@@ -347,7 +385,9 @@ class TestProbeBlockFullActions:
         fake_sample.select.return_value = fake_select
         fake_select.count.return_value = 0
 
-        result = _null_rates(fake_df, {"columns": ["col_a"], "fraction": 0.5}, block_full_actions=False)
+        result = _null_rates(
+            fake_df, {"columns": ["col_a"], "fraction": 0.5}, block_full_actions=False
+        )
         # sample() should have been called
         fake_df.sample.assert_called_once()
         # When total==0, null_rates values should be None

@@ -37,8 +37,8 @@ from aqueduct.surveyor.benchmark_store import (
     persist_results,
 )
 
-
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
 
 def _fake_result(
     *,
@@ -92,6 +92,7 @@ def _cfg(backend: str = "duckdb", path: str | None = None) -> types.SimpleNamesp
 
 # ── BenchmarkStore dataclass ───────────────────────────────────────────────────
 
+
 class TestBenchmarkStoreDataclass:
     def test_default_backend_is_duckdb(self):
         bs = BenchmarkStore()
@@ -118,6 +119,7 @@ class TestBenchmarkStoreDataclass:
 
 
 # ── BenchmarkStore.from_config ─────────────────────────────────────────────────
+
 
 class TestFromConfig:
     def test_duckdb_no_path_uses_default_store_path(self, tmp_path):
@@ -153,6 +155,7 @@ class TestFromConfig:
 
 # ── persist_results back-compat (Path / str / BenchmarkStore) ─────────────────
 
+
 class TestPersistResultsBackcompat:
     def _results_one_pair(self) -> dict:
         return {"sc1": {"model-a": _fake_result(passed=True)}}
@@ -179,6 +182,7 @@ class TestPersistResultsBackcompat:
 
 # ── diff_latest back-compat ────────────────────────────────────────────────────
 
+
 class TestDiffLatestBackcompat:
     def test_diff_latest_with_path(self, tmp_path):
         p = tmp_path / "bench.duckdb"
@@ -197,6 +201,7 @@ class TestDiffLatestBackcompat:
 
 
 # ── compute_stats ──────────────────────────────────────────────────────────────
+
 
 class TestComputeStats:
     def _seed(self, tmp_path, rows: list[tuple]) -> Path:
@@ -275,7 +280,15 @@ class TestComputeStats:
         persist_results({"sc1": {"m": _fake_result()}}, p)
         stats = compute_stats(p)
         m = stats["models"][0]
-        for key in ("model", "n", "pass_rate", "parse_rate", "apply_rate", "avg_diag", "avg_duration"):
+        for key in (
+            "model",
+            "n",
+            "pass_rate",
+            "parse_rate",
+            "apply_rate",
+            "avg_diag",
+            "avg_duration",
+        ):
             assert key in m
 
     def test_scenarios_stat_keys_present(self, tmp_path):
@@ -302,6 +315,7 @@ class TestComputeStats:
 
 
 # ── format_stats ───────────────────────────────────────────────────────────────
+
 
 class TestFormatStats:
     def test_empty_stats_returns_benchmark_store_empty_message(self):
@@ -346,6 +360,7 @@ class TestFormatStats:
 
 
 # ── Postgres integration (skipped when AQ_PG_DSN unset) ───────────────────────
+
 
 @pytest.mark.integration
 class TestPostgresBackendRoundTrip:

@@ -26,11 +26,13 @@ def _reset_warnings_globals():
 
 # ── AqueductWarning category ──────────────────────────────────────────────────
 
+
 def test_aqueduct_warning_subclasses_user_warning():
     assert issubclass(aqw.AqueductWarning, UserWarning)
 
 
 # ── emit() basic ──────────────────────────────────────────────────────────────
+
 
 def test_emit_warns_with_category_and_prefix():
     with warnings.catch_warnings(record=True) as rec:
@@ -42,6 +44,7 @@ def test_emit_warns_with_category_and_prefix():
 
 
 # ── emit() explicit suppress ──────────────────────────────────────────────────
+
 
 def test_emit_explicit_suppress_match_is_noop():
     with warnings.catch_warnings(record=True) as rec:
@@ -58,6 +61,7 @@ def test_emit_explicit_suppress_no_match_still_warns():
 
 
 # ── set_default_suppress() ────────────────────────────────────────────────────
+
 
 def test_default_suppress_makes_emit_noop_without_explicit_arg():
     aqw.set_default_suppress(["kafka_checkpoint_stale"])
@@ -88,6 +92,7 @@ def test_explicit_suppress_arg_takes_priority_over_default():
 
 # ── emit() never raises ───────────────────────────────────────────────────────
 
+
 def test_emit_never_raises_on_internal_error(monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("internal failure")
@@ -98,6 +103,7 @@ def test_emit_never_raises_on_internal_error(monkeypatch):
 
 
 # ── install_cli_formatter() ───────────────────────────────────────────────────
+
 
 def test_install_cli_formatter_idempotent():
     aqw._INSTALLED = False
@@ -111,9 +117,7 @@ def test_install_cli_formatter_idempotent():
 def test_cli_formatter_renders_aq_warn_for_aqueduct_warning():
     aqw._INSTALLED = False
     aqw.install_cli_formatter()
-    out = warnings.formatwarning(
-        "[aqueduct:perf_8c] slow query", aqw.AqueductWarning, "f.py", 10
-    )
+    out = warnings.formatwarning("[aqueduct:perf_8c] slow query", aqw.AqueductWarning, "f.py", 10)
     assert out == "AQ-WARN [perf_8c] slow query\n"
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
 import os
 import duckdb
@@ -8,13 +9,15 @@ from pathlib import Path
 from aqueduct.executor.spark.metrics import observe_df, get_observation, dir_bytes, null_metrics
 from aqueduct.executor.spark.executor import _write_stage_metrics
 
+
 def test_observe_df_fallback():
     """observe_df() on Spark < 3.3 or mock returns (original_df, None)"""
-    # We can't easily force Spark < 3.3 if it's already 3.5+, 
+    # We can't easily force Spark < 3.3 if it's already 3.5+,
     # but we can pass something that isn't a DataFrame to trigger the catch.
     df, obs = observe_df("not a dataframe", "my_obs")
     assert df == "not a dataframe"
     assert obs is None
+
 
 def test_observe_df_integration(spark):
     """observe_df() on Spark 3.3+ returns (observed_df, Observation)"""
@@ -26,21 +29,23 @@ def test_observe_df_integration(spark):
 
     df = spark.createDataFrame([(1, "a"), (2, "b")], ["id", "name"])
     obs_name = "test_obs_integration"
-    
+
     observed_df, obs = observe_df(df, obs_name)
-    
+
     assert obs is not None
     assert isinstance(obs, Observation)
-    
+
     # Trigger action to fire observation
     observed_df.collect()
-    
+
     count = get_observation(obs, "records_written")
     assert count == 2
+
 
 def test_get_observation_none():
     """get_observation(None, alias) returns None"""
     assert get_observation(None, "records_written") is None
+
 
 def test_get_observation_timeout():
     """get_observation returns None if action never fires (timeout)"""
@@ -48,10 +53,11 @@ def test_get_observation_timeout():
         from pyspark.sql import Observation
     except ImportError:
         pytest.skip("Observation not available")
-        
+
     obs = Observation("timeout_obs")
     # We don't trigger any action on the observed DF
     assert get_observation(obs, "records_written", timeout=0.1) is None
+
 
 def test_dir_bytes_file(tmp_path):
     """dir_bytes() on existing local file returns correct size"""
@@ -59,19 +65,21 @@ def test_dir_bytes_file(tmp_path):
     p.write_text("1234567890")
     assert dir_bytes(str(p)) == 10
 
+
 def test_dir_bytes_dir(tmp_path):
     """dir_bytes() on directory returns sum of file sizes"""
     d = tmp_path / "data"
     d.mkdir()
-    (d / "a.txt").write_text("abc")    # 3 bytes
-    (d / "b.txt").write_text("defg")   # 4 bytes
-    
+    (d / "a.txt").write_text("abc")  # 3 bytes
+    (d / "b.txt").write_text("defg")  # 4 bytes
+
     # Nested file
     sub = d / "sub"
     sub.mkdir()
-    (sub / "c.txt").write_text("hi")   # 2 bytes
-    
+    (sub / "c.txt").write_text("hi")  # 2 bytes
+
     assert dir_bytes(str(d)) == 9
+
 
 def test_dir_bytes_glob(tmp_path):
     """dir_bytes() supports glob patterns"""
@@ -80,14 +88,16 @@ def test_dir_bytes_glob(tmp_path):
     (d / "f1.parquet").write_text("data")  # 4 bytes
     (d / "f2.parquet").write_text("more")  # 4 bytes
     (d / "f3.txt").write_text("ignore")
-    
+
     pattern = str(d / "*.parquet")
     assert dir_bytes(pattern) == 8
+
 
 def test_dir_bytes_cloud():
     """dir_bytes() on cloud paths returns None (unknown)"""
     assert dir_bytes("s3://my-bucket/data") is None
     assert dir_bytes("hdfs:///user/spark/warehouse") is None
+
 
 def test_dir_bytes_nonexistent():
     """dir_bytes() on nonexistent path returns None"""
@@ -98,22 +108,24 @@ def test_dir_bytes_nonexistent():
 class TestMetricsHelpers:
     def _make_listener(self):
         from unittest.mock import MagicMock
+
         listener = MagicMock()
         listener._metrics = {"duration_ms": 0}
         listener.collect_metrics.side_effect = lambda: listener._metrics
-        
+
         def on_stage_completed(stage):
             info = stage.stageInfo()
             if not info.completionTime().isDefined():
                 listener._metrics["duration_ms"] = 0
             else:
                 listener._metrics["duration_ms"] = 100
-        
+
         listener.onStageCompleted.side_effect = on_stage_completed
         return listener
 
     def _make_stage_completed(self):
         from unittest.mock import MagicMock
+
         stage = MagicMock()
         info = MagicMock()
         stage.stageInfo.return_value = info
@@ -128,7 +140,13 @@ class TestMetricsHelpers:
         assert m["bytes_read"] is None
         assert m["records_written"] is None
         assert m["bytes_written"] is None
-        assert set(m) == {"records_read", "bytes_read", "records_written", "bytes_written", "duration_ms"}
+        assert set(m) == {
+            "records_read",
+            "bytes_read",
+            "records_written",
+            "bytes_written",
+            "duration_ms",
+        }
 
     def test_on_stage_completed_time_undefined(self):
         listener = self._make_listener()
@@ -187,8 +205,12 @@ def test_egress_writes_module_metrics_on_success(spark, tmp_path: Path):
     manifest = Manifest(
         blueprint_id="test.metrics_egress",
         modules=(
-            Module(id="ing", type="Ingress", label="Ing", config={"format": "parquet", "path": in_path}),
-            Module(id="egr", type="Egress",  label="Egr", config={"format": "parquet", "path": out_path}),
+            Module(
+                id="ing", type="Ingress", label="Ing", config={"format": "parquet", "path": in_path}
+            ),
+            Module(
+                id="egr", type="Egress", label="Egr", config={"format": "parquet", "path": out_path}
+            ),
         ),
         edges=(Edge(from_id="ing", to_id="egr", port="main"),),
         context={},
@@ -216,9 +238,7 @@ def test_egress_writes_module_metrics_on_success(spark, tmp_path: Path):
     assert egr_row[2] > 0, "duration_ms should be non-zero"
 
 
-def test_row_count_estimate_spark_listener_reads_module_metrics(
-    spark, tmp_path: Path
-):
+def test_row_count_estimate_spark_listener_reads_module_metrics(spark, tmp_path: Path):
     """row_count_estimate method=spark_listener: when module_metrics row exists,
     estimate equals records_written value."""
     from datetime import datetime, timezone
@@ -230,7 +250,8 @@ def test_row_count_estimate_spark_listener_reads_module_metrics(
 
     conn = duckdb.connect(str(db_path))
     try:
-        conn.execute("""
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS module_metrics (
                 run_id        VARCHAR     NOT NULL,
                 module_id     VARCHAR     NOT NULL,
@@ -241,11 +262,20 @@ def test_row_count_estimate_spark_listener_reads_module_metrics(
                 duration_ms   BIGINT,
                 captured_at   TIMESTAMPTZ NOT NULL
             )
-        """)
+        """
+        )
         conn.execute(
             "INSERT INTO module_metrics VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            ["run-sl", "upstream_ingress", 0, 0, 77, 1024, 100,
-             datetime.now(tz=timezone.utc).isoformat()],
+            [
+                "run-sl",
+                "upstream_ingress",
+                0,
+                0,
+                77,
+                1024,
+                100,
+                datetime.now(tz=timezone.utc).isoformat(),
+            ],
         )
     finally:
         conn.close()
@@ -267,20 +297,22 @@ def test_row_count_estimate_spark_listener_reads_module_metrics(
     assert result["method"] == "spark_listener"
     assert result["estimate"] == 77
 
+
 def test_observe_df_disabled(spark):
     """observe_df(df, name, alias, enabled=False) returns (df, None) without inserting an Observation node"""
     df = spark.createDataFrame([(1, "a")], ["id", "name"])
     obs_name = "test_obs_disabled"
-    
+
     observed_df, obs = observe_df(df, obs_name, enabled=False)
-    
+
     assert observed_df is df
     assert obs is None
-    
+
     # Verifiable via df.explain() not containing CollectMetrics
     # CollectMetrics is the node added by observe()
     explain_str = observed_df._jdf.queryExecution().executedPlan().toString()
     assert "CollectMetrics" not in explain_str
+
 
 def test_observe_df_enabled(spark):
     """observe_df(df, name, alias, enabled=True) returns a wrapped df with a usable Observation (Spark 3.3+)"""
@@ -288,19 +320,20 @@ def test_observe_df_enabled(spark):
         from pyspark.sql import Observation
     except ImportError:
         pytest.skip("Observation not available")
-        
+
     df = spark.createDataFrame([(1, "a")], ["id", "name"])
     obs_name = "test_obs_enabled"
-    
+
     observed_df, obs = observe_df(df, obs_name, enabled=True)
-    
+
     assert obs is not None
     assert isinstance(obs, Observation)
-    assert observed_df is not df # It's a new DataFrame wrapping the old one
-    
+    assert observed_df is not df  # It's a new DataFrame wrapping the old one
+
     # Verifiable via df.explain() containing CollectMetrics
     explain_str = observed_df._jdf.queryExecution().executedPlan().toString()
     assert "CollectMetrics" in explain_str
+
 
 def test_execute_use_observe_false(spark, tmp_path):
     """
@@ -319,15 +352,21 @@ def test_execute_use_observe_false(spark, tmp_path):
     manifest = Manifest(
         blueprint_id="test.metrics_use_observe_false",
         modules=(
-            Module(id="ing", type="Ingress", label="Ing", config={"format": "parquet", "path": in_path}),
-            Module(id="egr", type="Egress",  label="Egr", config={"format": "parquet", "path": out_path}),
+            Module(
+                id="ing", type="Ingress", label="Ing", config={"format": "parquet", "path": in_path}
+            ),
+            Module(
+                id="egr", type="Egress", label="Egr", config={"format": "parquet", "path": out_path}
+            ),
         ),
         edges=(Edge(from_id="ing", to_id="egr", port="main"),),
         context={},
         engine_config={},
     )
 
-    result = execute(manifest, spark, run_id="run-obs-false", store_dir=store_dir, use_observe=False)
+    result = execute(
+        manifest, spark, run_id="run-obs-false", store_dir=store_dir, use_observe=False
+    )
     assert result.status == "success"
 
     db_path = store_dir / "observability.db"

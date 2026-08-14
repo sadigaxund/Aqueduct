@@ -320,7 +320,7 @@ def load_allowlist(path: Path | str, engine: str) -> EngineConfigAllowlist:
             f"engine {engine!r} ships no {DECLARATION_FILENAME} at {p}. Every "
             "registered engine must ship this file, even when it heals no "
             "engine config — write an explicit empty one "
-            f"(\"engine: {engine}\\nentries: []\\n\") so that is a decision "
+            f'("engine: {engine}\\nentries: []\\n") so that is a decision '
             "someone made, not a gap nobody noticed. An absent file already "
             "fails closed (nothing allowed); this only makes that fact visible.",
             engine=engine,
@@ -398,8 +398,7 @@ def load_allowlist(path: Path | str, engine: str) -> EngineConfigAllowlist:
             )
         if pattern in seen:
             _fail(
-                f"engine config allowlist {p}: duplicate entry for pattern "
-                f"{pattern!r}.",
+                f"engine config allowlist {p}: duplicate entry for pattern " f"{pattern!r}.",
                 engine=engine,
                 path=p,
                 keys=[pattern],
@@ -439,10 +438,7 @@ def load_allowlist(path: Path | str, engine: str) -> EngineConfigAllowlist:
                     path=p,
                     keys=[pattern],
                 )
-            if (
-                not isinstance(range_raw, list)
-                or len(range_raw) != 2
-            ):
+            if not isinstance(range_raw, list) or len(range_raw) != 2:
                 _fail(
                     f"engine config allowlist {p}: entry {pattern!r}'s 'range' "
                     f"must be a 2-element [min, max] list; got {range_raw!r}.",
@@ -553,7 +549,9 @@ def load_allowlist(path: Path | str, engine: str) -> EngineConfigAllowlist:
                     keys=[pattern],
                 )
 
-        entries.append(AllowlistEntry(pattern=pattern, value_type=value_type, constraint=constraint))
+        entries.append(
+            AllowlistEntry(pattern=pattern, value_type=value_type, constraint=constraint)
+        )
 
     # ── deny layer — core-only; see module docstring "Deny layer" section ──
     deny_raw = raw.get("deny", [])
@@ -691,10 +689,7 @@ def evaluate_set_engine_config(
 
     entry = next((e for e in allowlist.entries if e.matches(key)), None)
     if entry is None:
-        return (
-            f"{key!r} is not on engine {allowlist.engine!r}'s set_engine_config "
-            "allowlist"
-        )
+        return f"{key!r} is not on engine {allowlist.engine!r}'s set_engine_config " "allowlist"
 
     if entry.value_type == "size":
         if not isinstance(value, str):
@@ -818,7 +813,7 @@ def check_presence() -> None:
         raise EngineConfigAllowlistError(
             f"engine(s) {missing} ship no {DECLARATION_FILENAME}. Every "
             "registered engine must have one, even if empty "
-            "(\"engine: <name>\\nentries: []\\n\") to state explicitly that "
+            '("engine: <name>\\nentries: []\\n") to state explicitly that '
             "it heals no engine config — an absent file already fails "
             "closed, but only an explicit empty one makes that a decision "
             "someone made rather than a gap nobody noticed.",

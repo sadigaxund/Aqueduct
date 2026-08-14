@@ -5,6 +5,7 @@ import os
 
 console = Console()
 
+
 def main():
     paths = {
         "Union All (7 rows)": "data/output/spend_all.parquet",
@@ -14,7 +15,9 @@ def main():
 
     for _, path in paths.items():
         if not os.path.exists(path):
-            console.print(f"[bold red]✗[/bold red] {path} not found — did you run 'aqueduct run blueprint.yml'?")
+            console.print(
+                f"[bold red]✗[/bold red] {path} not found — did you run 'aqueduct run blueprint.yml'?"
+            )
             return
 
     for title, path in paths.items():
@@ -31,6 +34,7 @@ def main():
     console.print("  • Union All: all 7 rows, duplicates included")
     console.print("  • Union: 6 rows, duplicate order_id 1003 removed")
     console.print("  • Zip: 3 rows, interleaved by position (not by key)")
+
 
 if __name__ == "__main__":
     main()

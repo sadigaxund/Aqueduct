@@ -97,7 +97,9 @@ PAIR_IDS = ["spark_to_duckdb", "duckdb_to_spark"]
 
 def _bp(modules, edges):
     d = {
-        "aqueduct": "1.0", "id": "fan_shape_test_bp", "name": "t",
+        "aqueduct": "1.0",
+        "id": "fan_shape_test_bp",
+        "name": "t",
         "modules": modules,
         "edges": edges,
     }
@@ -134,8 +136,12 @@ def _run(manifest, run_id: str, handoff_root: Path, store_dir: Path, master_url:
     surveyor = Surveyor(manifest, store_dir, engine="spark")
     surveyor.start(run_id)
     result = run_polyglot(
-        manifest, run_id=run_id, handoff_root=str(handoff_root), store_dir=store_dir,
-        surveyor=surveyor, master_url=master_url,
+        manifest,
+        run_id=run_id,
+        handoff_root=str(handoff_root),
+        store_dir=store_dir,
+        surveyor=surveyor,
+        master_url=master_url,
     )
     return result
 
@@ -158,17 +164,40 @@ def test_junction_fans_across_a_boundary(spark, tmp_path, engine_a, engine_b):
 
     bp = _bp(
         [
-            {"id": "in", "label": "in", "type": "Ingress", "engine": engine_a,
-             "config": {"format": "parquet", "path": str(in_path)}},
-            {"id": "route", "label": "route", "type": "Junction", "engine": engine_a,
-             "config": {"mode": "conditional", "branches": [
-                 {"id": "low", "condition": "n < 3"},
-                 {"id": "high", "condition": "_else_"},
-             ]}},
-            {"id": "out_low", "label": "out_low", "type": "Egress", "engine": engine_a,
-             "config": {"format": "parquet", "path": str(out_low_path), "mode": "overwrite"}},
-            {"id": "out_high", "label": "out_high", "type": "Egress", "engine": engine_b,
-             "config": {"format": "parquet", "path": str(out_high_path), "mode": "overwrite"}},
+            {
+                "id": "in",
+                "label": "in",
+                "type": "Ingress",
+                "engine": engine_a,
+                "config": {"format": "parquet", "path": str(in_path)},
+            },
+            {
+                "id": "route",
+                "label": "route",
+                "type": "Junction",
+                "engine": engine_a,
+                "config": {
+                    "mode": "conditional",
+                    "branches": [
+                        {"id": "low", "condition": "n < 3"},
+                        {"id": "high", "condition": "_else_"},
+                    ],
+                },
+            },
+            {
+                "id": "out_low",
+                "label": "out_low",
+                "type": "Egress",
+                "engine": engine_a,
+                "config": {"format": "parquet", "path": str(out_low_path), "mode": "overwrite"},
+            },
+            {
+                "id": "out_high",
+                "label": "out_high",
+                "type": "Egress",
+                "engine": engine_b,
+                "config": {"format": "parquet", "path": str(out_high_path), "mode": "overwrite"},
+            },
         ],
         edges=[
             {"from": "in", "to": "route"},
@@ -221,16 +250,36 @@ def test_funnel_merges_across_a_boundary(spark, tmp_path, engine_a, engine_b):
 
     bp = _bp(
         [
-            {"id": "in_a", "label": "in_a", "type": "Ingress", "engine": engine_a,
-             "config": {"format": "parquet", "path": str(in_a_path)}},
-            {"id": "in_b", "label": "in_b", "type": "Ingress", "engine": engine_b,
-             "config": {"format": "parquet", "path": str(in_b_path)}},
+            {
+                "id": "in_a",
+                "label": "in_a",
+                "type": "Ingress",
+                "engine": engine_a,
+                "config": {"format": "parquet", "path": str(in_a_path)},
+            },
+            {
+                "id": "in_b",
+                "label": "in_b",
+                "type": "Ingress",
+                "engine": engine_b,
+                "config": {"format": "parquet", "path": str(in_b_path)},
+            },
             # Ambiguous multi-engine parents (rule 3) force an explicit pin;
             # pin to engine_a so exactly ONE of the two inputs crosses.
-            {"id": "merge", "label": "merge", "type": "Funnel", "engine": engine_a,
-             "config": {"mode": "union_all", "inputs": ["in_a", "in_b"]}},
-            {"id": "out", "label": "out", "type": "Egress", "engine": engine_a,
-             "config": {"format": "parquet", "path": str(out_path), "mode": "overwrite"}},
+            {
+                "id": "merge",
+                "label": "merge",
+                "type": "Funnel",
+                "engine": engine_a,
+                "config": {"mode": "union_all", "inputs": ["in_a", "in_b"]},
+            },
+            {
+                "id": "out",
+                "label": "out",
+                "type": "Egress",
+                "engine": engine_a,
+                "config": {"format": "parquet", "path": str(out_path), "mode": "overwrite"},
+            },
         ],
         edges=[
             {"from": "in_a", "to": "merge"},
@@ -274,18 +323,43 @@ def test_diamond_crosses_the_boundary_twice(spark, tmp_path, engine_a, engine_b)
         [
             # "src", not "in" — "in" is a SQL keyword (the IN operator) and
             # t1/t2's SQL text below references this module by literal name.
-            {"id": "src", "label": "src", "type": "Ingress", "engine": engine_a,
-             "config": {"format": "parquet", "path": str(in_path)}},
-            {"id": "t1", "label": "t1", "type": "Channel", "engine": engine_a,
-             "config": {"op": "sql", "query": "SELECT n, 'path1' AS tag FROM src"}},
-            {"id": "t2", "label": "t2", "type": "Channel", "engine": engine_a,
-             "config": {"op": "sql", "query": "SELECT n, 'path2' AS tag FROM src"}},
+            {
+                "id": "src",
+                "label": "src",
+                "type": "Ingress",
+                "engine": engine_a,
+                "config": {"format": "parquet", "path": str(in_path)},
+            },
+            {
+                "id": "t1",
+                "label": "t1",
+                "type": "Channel",
+                "engine": engine_a,
+                "config": {"op": "sql", "query": "SELECT n, 'path1' AS tag FROM src"},
+            },
+            {
+                "id": "t2",
+                "label": "t2",
+                "type": "Channel",
+                "engine": engine_a,
+                "config": {"op": "sql", "query": "SELECT n, 'path2' AS tag FROM src"},
+            },
             # Both t1 and t2 cross independently — TWO handoffs feeding this
             # ONE Funnel.
-            {"id": "merge", "label": "merge", "type": "Funnel", "engine": engine_b,
-             "config": {"mode": "union_all", "inputs": ["t1", "t2"]}},
-            {"id": "out", "label": "out", "type": "Egress", "engine": engine_b,
-             "config": {"format": "parquet", "path": str(out_path), "mode": "overwrite"}},
+            {
+                "id": "merge",
+                "label": "merge",
+                "type": "Funnel",
+                "engine": engine_b,
+                "config": {"mode": "union_all", "inputs": ["t1", "t2"]},
+            },
+            {
+                "id": "out",
+                "label": "out",
+                "type": "Egress",
+                "engine": engine_b,
+                "config": {"format": "parquet", "path": str(out_path), "mode": "overwrite"},
+            },
         ],
         edges=[
             {"from": "src", "to": "t1"},
@@ -353,16 +427,38 @@ def test_probe_near_a_boundary_colocates_and_reports(spark, tmp_path, engine_a, 
         [
             # "src", not "in" — "in" is a SQL keyword and `relay`'s query
             # below references this module by literal name.
-            {"id": "src", "label": "src", "type": "Ingress", "engine": engine_a,
-             "config": {"format": "parquet", "path": str(in_path)}},
-            {"id": "relay", "label": "relay", "type": "Channel", "engine": engine_b,
-             "config": {"op": "sql", "query": "SELECT * FROM src"}},
-            {"id": "out", "label": "out", "type": "Egress", "engine": engine_b,
-             "config": {"format": "parquet", "path": str(out_path), "mode": "overwrite"}},
-            {"id": "probe", "label": "probe", "type": "Probe", "attach_to": probe_target,
-             "config": {"signals": [
-                 {"type": "row_count_estimate", "method": "sample", "fraction": 1.0},
-             ]}},
+            {
+                "id": "src",
+                "label": "src",
+                "type": "Ingress",
+                "engine": engine_a,
+                "config": {"format": "parquet", "path": str(in_path)},
+            },
+            {
+                "id": "relay",
+                "label": "relay",
+                "type": "Channel",
+                "engine": engine_b,
+                "config": {"op": "sql", "query": "SELECT * FROM src"},
+            },
+            {
+                "id": "out",
+                "label": "out",
+                "type": "Egress",
+                "engine": engine_b,
+                "config": {"format": "parquet", "path": str(out_path), "mode": "overwrite"},
+            },
+            {
+                "id": "probe",
+                "label": "probe",
+                "type": "Probe",
+                "attach_to": probe_target,
+                "config": {
+                    "signals": [
+                        {"type": "row_count_estimate", "method": "sample", "fraction": 1.0},
+                    ]
+                },
+            },
         ],
         edges=[{"from": "src", "to": "relay"}, {"from": "relay", "to": "out"}],
     )
@@ -390,6 +486,7 @@ def test_probe_near_a_boundary_colocates_and_reports(spark, tmp_path, engine_a, 
         con.close()
     assert row is not None, "probe near the boundary recorded no signal"
     import json
+
     payload = json.loads(row[0])
     assert payload["estimate"] == 5
 
@@ -397,7 +494,9 @@ def test_probe_near_a_boundary_colocates_and_reports(spark, tmp_path, engine_a, 
 
 
 @pytest.mark.parametrize("engine_a,engine_b", ENGINE_PAIRS, ids=PAIR_IDS)
-def test_probe_engine_mismatch_near_boundary_raises_compile_error(spark, tmp_path, engine_a, engine_b):
+def test_probe_engine_mismatch_near_boundary_raises_compile_error(
+    spark, tmp_path, engine_a, engine_b
+):
     """The colocation rule holds even right at a boundary: a Probe pinned to
     the WRONG side of the very edge it taps is a CompileError, not a
     silently-inserted extra handoff."""
@@ -409,13 +508,28 @@ def test_probe_engine_mismatch_near_boundary_raises_compile_error(spark, tmp_pat
     # the downstream engine — a mismatch regardless of which pair is active.
     bp = _bp(
         [
-            {"id": "in", "label": "in", "type": "Ingress", "engine": engine_a,
-             "config": {"format": "parquet", "path": str(in_path)}},
-            {"id": "out", "label": "out", "type": "Egress", "engine": engine_b,
-             "config": {"format": "parquet", "path": str(out_path), "mode": "overwrite"}},
-            {"id": "probe", "label": "probe", "type": "Probe", "attach_to": "in",
-             "engine": engine_b,
-             "config": {"signals": [{"type": "schema_snapshot"}]}},
+            {
+                "id": "in",
+                "label": "in",
+                "type": "Ingress",
+                "engine": engine_a,
+                "config": {"format": "parquet", "path": str(in_path)},
+            },
+            {
+                "id": "out",
+                "label": "out",
+                "type": "Egress",
+                "engine": engine_b,
+                "config": {"format": "parquet", "path": str(out_path), "mode": "overwrite"},
+            },
+            {
+                "id": "probe",
+                "label": "probe",
+                "type": "Probe",
+                "attach_to": "in",
+                "engine": engine_b,
+                "config": {"signals": [{"type": "schema_snapshot"}]},
+            },
         ],
         edges=[{"from": "in", "to": "out"}],
     )

@@ -4,6 +4,7 @@ Extracted verbatim from aqueduct/cli/__init__.py — no behaviour change. The
 click group + shared helpers come from the package; commands register onto
 `cli` when this module is imported at the bottom of __init__.
 """
+
 from __future__ import annotations
 
 import json
@@ -81,6 +82,7 @@ def validate(
     any_fail = False
     file_results: list[dict] = []
     from aqueduct.cli import _resolve_project_root
+
     if targets:
         _root = _resolve_project_root(blueprint_path=targets[0])
         _resolve_and_load_env(env_file, _root / targets[0].name, cli_env=cli_env)
@@ -94,7 +96,9 @@ def validate(
             except ConfigError as exc:
                 if text:
                     click.echo(f"✗ {path}: {exc}", err=True)
-                file_results.append({"path": str(path), "kind": "config", "valid": False, "error": str(exc)})
+                file_results.append(
+                    {"path": str(path), "kind": "config", "valid": False, "error": str(exc)}
+                )
                 any_fail = True
                 continue
             wh = {}
@@ -102,38 +106,67 @@ def validate(
                 wh["on_failure"] = f"{cfg.webhooks.on_failure.method} {cfg.webhooks.on_failure.url}"
             if cfg.webhooks.on_success:
                 wh["on_success"] = f"{cfg.webhooks.on_success.method} {cfg.webhooks.on_success.url}"
-            file_results.append({
-                "path": str(path), "kind": "config", "valid": True,
-                "engine": cfg.deployment.engine, "target": cfg.deployment.target,
-                "master_url": cfg.engine.spark.master_url,
-                "stores": {
-                    "observability": cfg.stores.observability.path or "(default)",
-                    "depot": cfg.stores.default_depot().path,
-                },
-                "secrets_provider": cfg.secrets.provider,
-                "webhooks": wh,
-                "spark_config": cfg.engine.spark.conf or {},
-            })
+            file_results.append(
+                {
+                    "path": str(path),
+                    "kind": "config",
+                    "valid": True,
+                    "engine": cfg.deployment.engine,
+                    "target": cfg.deployment.target,
+                    "master_url": cfg.engine.spark.master_url,
+                    "stores": {
+                        "observability": cfg.stores.observability.path or "(default)",
+                        "depot": cfg.stores.default_depot().path,
+                    },
+                    "secrets_provider": cfg.secrets.provider,
+                    "webhooks": wh,
+                    "spark_config": cfg.engine.spark.conf or {},
+                }
+            )
             if text:
                 emit(f"✓ {path}  [engine config]", fmt="text", redact=True)
-                emit(f"  engine:  {cfg.deployment.engine}  target={cfg.deployment.target}  master={cfg.engine.spark.master_url}", fmt="text", redact=True)
-                emit(f"  stores:  observability={cfg.stores.observability.path or '(default)'}  depot={cfg.stores.default_depot().path}", fmt="text", redact=True)
+                emit(
+                    f"  engine:  {cfg.deployment.engine}  target={cfg.deployment.target}  master={cfg.engine.spark.master_url}",
+                    fmt="text",
+                    redact=True,
+                )
+                emit(
+                    f"  stores:  observability={cfg.stores.observability.path or '(default)'}  depot={cfg.stores.default_depot().path}",
+                    fmt="text",
+                    redact=True,
+                )
                 emit(f"  secrets: provider={cfg.secrets.provider}", fmt="text", redact=True)
-                emit(f"  webhooks: {', '.join(f'{k}={v}' for k, v in wh.items()) if wh else '(not configured)'}", fmt="text", redact=True)
+                emit(
+                    f"  webhooks: {', '.join(f'{k}={v}' for k, v in wh.items()) if wh else '(not configured)'}",
+                    fmt="text",
+                    redact=True,
+                )
                 if cfg.engine.spark.conf:
-                    emit(f"  spark_config: {json.dumps(cfg.engine.spark.conf)}", fmt="text", redact=True)
+                    emit(
+                        f"  spark_config: {json.dumps(cfg.engine.spark.conf)}",
+                        fmt="text",
+                        redact=True,
+                    )
 
         elif kind == "blueprint" or kind is None:
             # Unknown header → attempt blueprint parse (most common case);
             # the parser emits a precise error if it is not a blueprint.
             try:
                 bp = parse(str(path))
-                file_results.append({
-                    "path": str(path), "kind": "blueprint", "valid": True,
-                    "id": bp.id, "modules": len(bp.modules), "edges": len(bp.edges),
-                })
+                file_results.append(
+                    {
+                        "path": str(path),
+                        "kind": "blueprint",
+                        "valid": True,
+                        "id": bp.id,
+                        "modules": len(bp.modules),
+                        "edges": len(bp.edges),
+                    }
+                )
                 if text:
-                    click.echo(f"✓ {path}  [blueprint: {bp.id}  {len(bp.modules)} modules, {len(bp.edges)} edges]")
+                    click.echo(
+                        f"✓ {path}  [blueprint: {bp.id}  {len(bp.modules)} modules, {len(bp.edges)} edges]"
+                    )
 
                 # Hook-cycle / depth / missing-target static check — same graph
                 # walk `aqueduct doctor` uses (`aqueduct/cli/hooks.py::static_hook_check`).
@@ -145,6 +178,7 @@ def validate(
                 from aqueduct.cli.hooks import static_hook_check
                 from aqueduct.warnings import _DEFAULT_SUPPRESS
                 from aqueduct.warnings import emit as _aq_emit
+
                 # Mirrors compiler.py's suppress merge (engine-level `_DEFAULT_SUPPRESS`,
                 # populated from `--suppress-warning` / `aqueduct.yml` at CLI startup,
                 # unioned with the Blueprint's own `warnings.suppress` block —
@@ -160,18 +194,25 @@ def validate(
                     file_results[-1]["hook_warnings"] = hook_problems
                 if text and hook_problems:
                     from aqueduct.cli.style import emit_warnings
+
                     emit_warnings(_hook_caught, label="hooks:")
             except ParseError as exc:
-                file_results.append({"path": str(path), "kind": "blueprint", "valid": False, "error": str(exc)})
+                file_results.append(
+                    {"path": str(path), "kind": "blueprint", "valid": False, "error": str(exc)}
+                )
                 any_fail = True
                 if text:
                     click.echo(f"✗ {path}: {exc}", err=True)
 
         else:  # aqtest / aqscenario — schema pre-flight lives in `doctor`
-            file_results.append({
-                "path": str(path), "kind": kind, "valid": None,
-                "note": f"use `aqueduct doctor --{kind} {path}` for schema pre-flight",
-            })
+            file_results.append(
+                {
+                    "path": str(path),
+                    "kind": kind,
+                    "valid": None,
+                    "note": f"use `aqueduct doctor --{kind} {path}` for schema pre-flight",
+                }
+            )
             if text:
                 click.echo(
                     f"- {path}: {kind} file — use `aqueduct doctor --{kind} {path}` "
@@ -246,7 +287,12 @@ def lint_cmd(
     from aqueduct.cli import _resolve_project_root
     from aqueduct.lint import LINT_SCHEMA_VERSION, run_lint
     from aqueduct.parser.parser import ParseError, parse
-    _resolve_and_load_env(env_file, _resolve_project_root(blueprint_path=Path(blueprint)) / Path(blueprint).name, cli_env=cli_env)
+
+    _resolve_and_load_env(
+        env_file,
+        _resolve_project_root(blueprint_path=Path(blueprint)) / Path(blueprint).name,
+        cli_env=cli_env,
+    )
     try:
         bp = parse(blueprint, profile=profile)
     except ParseError as exc:
@@ -314,10 +360,12 @@ def lint_cmd(
     else:
         if not findings:
             from aqueduct.cli.style import success as _style_success
+
             _style_success(f"{blueprint}: no lint findings")
         else:
             from aqueduct.cli.style import error as _style_error
             from aqueduct.cli.style import warn as _style_warn
+
             for f in findings:
                 sev = _sev(f)
                 loc = f" [{f.module_id}]" if f.module_id else ""
@@ -341,7 +389,8 @@ def lint_cmd(
     help="Which Pydantic model to emit the JSON Schema for.",
 )
 @click.option(
-    "-o", "--output",
+    "-o",
+    "--output",
     type=click.Path(dir_okay=False, writable=True),
     default="-",
     show_default=True,
@@ -360,12 +409,15 @@ def schema(target: str, output: str) -> None:
     target = target.lower()
     if target == "blueprint":
         from aqueduct.parser.schema import BlueprintSchema
+
         model = BlueprintSchema
     elif target == "config":
         from aqueduct.config import AqueductConfig
+
         model = AqueductConfig
     elif target == "patch":
         from aqueduct.patch.grammar import PatchSpec
+
         model = PatchSpec
     else:  # pragma: no cover — Click already validates
         click.echo(f"✗ unknown target: {target}", err=True)
@@ -385,7 +437,6 @@ def schema(target: str, output: str) -> None:
         click.echo(f"✓ wrote {target} schema → {output}", err=True)
 
 
-
 @cli.command()
 @click.argument("target", required=False, type=click.Path(exists=True, dir_okay=False))
 @click.option(
@@ -400,8 +451,8 @@ def schema(target: str, output: str) -> None:
     is_flag=True,
     default=False,
     help="Full Spark session test with real engine.spark.conf (builds a session, runs a task). "
-         "Unbounded — waits out cluster cold-start / jar shipping (Ctrl-C to abort). "
-         "Default is a fast bounded TCP reachability probe, no session.",
+    "Unbounded — waits out cluster cold-start / jar shipping (Ctrl-C to abort). "
+    "Default is a fast bounded TCP reachability probe, no session.",
 )
 @click.option(
     "--aqtest",
@@ -418,7 +469,8 @@ def schema(target: str, output: str) -> None:
     help="Schema pre-flight on a .aqscenario.yml file (verifies blueprint ref + inject_failure.module).",
 )
 @click.option(
-    "-v", "--verbose",
+    "-v",
+    "--verbose",
     "verbose",
     is_flag=True,
     default=False,
@@ -503,27 +555,56 @@ def doctor(
     # not the blueprint's immediate directory.  Matches run.py behaviour so
     # `${HOST_IP}` / `${DRIVER_HOST}` resolve for --preflight.
     from aqueduct.cli import _resolve_project_root
+
     _anchor = _resolve_project_root(blueprint_path=blueprint_path, config_path=config_path)
-    _resolve_and_load_env(env_file, _anchor / (blueprint_path or config_path or Path(_DEFAULT_CONFIG_FILENAME)).name, cli_env=cli_env)
+    _resolve_and_load_env(
+        env_file,
+        _anchor / (blueprint_path or config_path or Path(_DEFAULT_CONFIG_FILENAME)).name,
+        cli_env=cli_env,
+    )
 
     # Group assignment for sectioned display + JSON. Most checks already carry
     # a `group`; leaf checks default to "general" — stamp those by name here so
     # the renderer can section them without per-call-site churn in doctor/.
     _GROUP_FOR_NAME = {
         "config": "config",
-        "observability": "stores", "lineage": "stores", "depot": "stores",
-        "store-backend": "stores", "cluster-stores": "stores",
+        "observability": "stores",
+        "lineage": "stores",
+        "depot": "stores",
+        "store-backend": "stores",
+        "cluster-stores": "stores",
         "secrets": "secrets",
         "agent": "agent",
         "webhook": "network",
-        "spark": "spark", "storage": "spark", "cloudpickle": "spark", "java": "spark",
-        "aqtest": "validation", "aqscenario": "validation", "blueprint": "validation",
+        "spark": "spark",
+        "storage": "spark",
+        "cloudpickle": "spark",
+        "java": "spark",
+        "aqtest": "validation",
+        "aqscenario": "validation",
+        "blueprint": "validation",
     }
-    _GROUP_ORDER = ["config", "stores", "spark", "io", "agent", "secrets", "network", "validation", "general"]
+    _GROUP_ORDER = [
+        "config",
+        "stores",
+        "spark",
+        "io",
+        "agent",
+        "secrets",
+        "network",
+        "validation",
+        "general",
+    ]
     _GROUP_LABEL = {
-        "config": "Config", "stores": "Stores", "spark": "Spark",
-        "io": "Blueprint sources", "agent": "Agent / LLM", "secrets": "Secrets",
-        "network": "Network", "validation": "Blueprint files", "general": "General",
+        "config": "Config",
+        "stores": "Stores",
+        "spark": "Spark",
+        "io": "Blueprint sources",
+        "agent": "Agent / LLM",
+        "secrets": "Secrets",
+        "network": "Network",
+        "validation": "Blueprint files",
+        "general": "General",
     }
 
     def _group_of(r) -> str:
@@ -537,6 +618,7 @@ def doctor(
         pass  # header rendered below — no preamble needed
 
     import warnings as _w
+
     with _w.catch_warnings(record=True) as _caught:
         _w.simplefilter("always")
         results = run_doctor(
@@ -581,7 +663,8 @@ def doctor(
     # ── Framed header (text mode only, matches aqueduct run style) ─────────────
     _file_label = (
         str(blueprint_path or config_path or _DEFAULT_CONFIG_FILENAME)
-        if target else _DEFAULT_CONFIG_FILENAME
+        if target
+        else _DEFAULT_CONFIG_FILENAME
     )
     _r = _dim(_rule())
     click.echo(_r)
@@ -619,7 +702,9 @@ def doctor(
         rows = by_group.get(grp)
         if not rows:
             continue
-        click.echo(click.style(f"  {_GROUP_LABEL.get(grp, grp.title())}", fg=_COLOR['header'], bold=True))
+        click.echo(
+            click.style(f"  {_GROUP_LABEL.get(grp, grp.title())}", fg=_COLOR["header"], bold=True)
+        )
         for r in rows:
             icon = _ICON[r.status]
             color = _COLOR[r.status]
@@ -631,7 +716,9 @@ def doctor(
     if hidden:
         names = ", ".join(r.name for r in hidden)
         # Same aligned `{glyph} {name.ljust(col_w)}{detail}` shape as the rows above.
-        _info(f"  · {'more'.ljust(col_w)}{names}  (ok / not applicable / not configured — --verbose)")
+        _info(
+            f"  · {'more'.ljust(col_w)}{names}  (ok / not applicable / not configured — --verbose)"
+        )
 
     click.echo(_dim(_rule()))
     if any_fail:
@@ -639,4 +726,3 @@ def doctor(
         sys.exit(exit_codes.CONFIG_ERROR)
     else:
         _success("all checks passed")
-

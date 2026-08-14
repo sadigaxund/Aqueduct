@@ -92,8 +92,12 @@ def generate_cascade_patch(
     """
     n = len(tiers)
     result: AgentPatchResult | None = None
-    base_budget = budget if budget is not None else BudgetConfig(
-        max_reprompts=max(1, max_reprompts),
+    base_budget = (
+        budget
+        if budget is not None
+        else BudgetConfig(
+            max_reprompts=max(1, max_reprompts),
+        )
     )
     # Phase 46 — `max_tokens_total` spans the WHOLE cascade, not each tier.
     # Each tier's budget gets the remaining allowance; when a tier exhausts
@@ -111,7 +115,10 @@ def generate_cascade_patch(
                 logger.debug(
                     "cascade stopped before tier %d/%d: cascade-wide token cap "
                     "exhausted (%d/%d tokens spent)",
-                    idx, n, tokens_spent, base_budget.max_tokens_total,
+                    idx,
+                    n,
+                    tokens_spent,
+                    base_budget.max_tokens_total,
                 )
                 if result is not None:
                     # `result` here is the PRIOR tier's result, held over
@@ -129,16 +136,24 @@ def generate_cascade_patch(
                     # token/attempt counters (the cascade DID spend that
                     # much), no patch, correct stop_reason.
                     return dataclasses.replace(
-                        result, patch=None, stop_reason=StopReason.BUDGET_TOKENS_EXCEEDED,
+                        result,
+                        patch=None,
+                        stop_reason=StopReason.BUDGET_TOKENS_EXCEEDED,
                     )
                 return AgentPatchResult(
-                    patch=None, attempts=0, stop_reason=StopReason.BUDGET_TOKENS_EXCEEDED,
+                    patch=None,
+                    attempts=0,
+                    stop_reason=StopReason.BUDGET_TOKENS_EXCEEDED,
                 )
 
         budget_cfg = dataclasses.replace(
             base_budget,
-            max_reprompts=tier.max_reprompts if tier.max_reprompts is not None else base_budget.max_reprompts,
-            max_seconds=float(tier.max_seconds) if tier.max_seconds is not None else base_budget.max_seconds,
+            max_reprompts=(
+                tier.max_reprompts if tier.max_reprompts is not None else base_budget.max_reprompts
+            ),
+            max_seconds=(
+                float(tier.max_seconds) if tier.max_seconds is not None else base_budget.max_seconds
+            ),
             max_tokens_total=remaining_tokens,
         )
 
@@ -162,7 +177,9 @@ def generate_cascade_patch(
                 provider=tier.provider if tier.provider is not None else provider,
                 base_url=tier.base_url if tier.base_url is not None else base_url,
                 api_key=tier.api_key if tier.api_key is not None else api_key,
-                provider_options=tier.provider_options if tier.provider_options is not None else provider_options,
+                provider_options=(
+                    tier.provider_options if tier.provider_options is not None else provider_options
+                ),
                 timeout=tier.timeout if tier.timeout is not None else timeout,
                 max_tokens=tier.max_tokens if tier.max_tokens is not None else max_tokens,
                 max_reprompts=budget_cfg.max_reprompts,
@@ -205,8 +222,13 @@ def generate_cascade_patch(
             continue
 
         if result.patch is not None:
-            logger.debug("cascade complete: %s (tier %d/%d, stop_reason=%s)",
-                         result.patch.patch_id, idx, n, result.stop_reason)
+            logger.debug(
+                "cascade complete: %s (tier %d/%d, stop_reason=%s)",
+                result.patch.patch_id,
+                idx,
+                n,
+                result.stop_reason,
+            )
             return result
 
         if result.stop_reason in _ESCALATION_REASONS:
@@ -215,8 +237,9 @@ def generate_cascade_patch(
         # Provider unreachable on this tier → try the next endpoint (its own
         # base_url/api_key may be fine). Only the final tier aborts.
         if result.stop_reason in _TIER_RETRY_REASONS and idx < n:
-            logger.debug("tier %d/%d unreachable (%s) — trying tier %d",
-                         idx, n, result.stop_reason, idx + 1)
+            logger.debug(
+                "tier %d/%d unreachable (%s) — trying tier %d", idx, n, result.stop_reason, idx + 1
+            )
             continue
 
         # Hard failure (budget_seconds_exceeded, or api_error on the last tier) —
@@ -225,6 +248,9 @@ def generate_cascade_patch(
         return result
 
     # All tiers exhausted without success.
-    logger.debug("cascade exhausted: %d tier(s), stop_reason=%s",
-                 n, result.stop_reason if result else "(no result)")
+    logger.debug(
+        "cascade exhausted: %d tier(s), stop_reason=%s",
+        n,
+        result.stop_reason if result else "(no result)",
+    )
     return result  # type: ignore[return-value]

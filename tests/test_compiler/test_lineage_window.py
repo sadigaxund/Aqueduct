@@ -4,6 +4,7 @@ Regression for ISSUE-035 — `row_number() OVER (ORDER BY id)` must NOT report `
 as a source of the output, and `lag(price) OVER (ORDER BY dt)` reports `price`
 only (the function argument), never `dt` (the ordering).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -14,8 +15,10 @@ pytestmark = pytest.mark.unit
 
 
 def _edges(sql, upstreams):
-    return {(r["output_column"], r["source_table"], r["source_column"])
-            for r in _extract_sql_lineage("ch", sql, upstreams)}
+    return {
+        (r["output_column"], r["source_table"], r["source_column"])
+        for r in _extract_sql_lineage("ch", sql, upstreams)
+    }
 
 
 def test_row_number_has_no_value_source():
@@ -29,7 +32,7 @@ def test_row_number_has_no_value_source():
 def test_lag_reports_argument_not_ordering():
     e = _edges("SELECT lag(price) OVER (ORDER BY dt) AS prev FROM t", ["t"])
     assert ("prev", "t", "price") in e
-    assert ("prev", "t", "dt") not in e          # dt is the ORDER BY → framing
+    assert ("prev", "t", "dt") not in e  # dt is the ORDER BY → framing
 
 
 def test_window_partition_and_order_excluded():

@@ -12,20 +12,24 @@ pytestmark = pytest.mark.unit
 
 def test_execute_resolves_lazily():
     import aqueduct.executor.spark as spark_pkg
+
     assert callable(spark_pkg.execute)
 
 
 def test_execute_error_resolves_lazily():
     import aqueduct.executor.spark as spark_pkg
+
     assert issubclass(spark_pkg.ExecuteError, Exception)
 
 
 def test_assert_error_resolves_lazily():
     import aqueduct.executor.spark as spark_pkg
+
     assert issubclass(spark_pkg.AssertError, Exception)
 
 
 def test_unknown_attribute_raises_attribute_error():
     import aqueduct.executor.spark as spark_pkg
+
     with pytest.raises(AttributeError, match="bogus_name"):
         spark_pkg.bogus_name

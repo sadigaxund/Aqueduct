@@ -101,6 +101,7 @@ class TestParserGraph:
             Module(id="m1", type="Channel", label="M1", config={}, spillway="nonexistent_egress"),
         )
         from aqueduct.errors import ParseError
+
         with pytest.raises(ParseError, match="nonexistent_egress"):
             validate_spillway_targets(list(modules))
 
@@ -176,6 +177,7 @@ class TestDependsOn:
         )
         bp = parse(valid)
         from aqueduct.parser.graph import topological_order
+
         order = topological_order(list(bp.modules), list(bp.edges))
         assert order.index("m1") < order.index("m2")
 
@@ -204,6 +206,7 @@ class TestDependsOn:
         )
         bp = parse(valid)
         from aqueduct.parser.graph import topological_order
+
         order = topological_order(list(bp.modules), list(bp.edges))
         assert order.index("m1") < order.index("m2")
         # edges list shouldn't have duplicate objects for the same connection

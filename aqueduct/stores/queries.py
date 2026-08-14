@@ -36,15 +36,17 @@ _DEFAULT_OBS_ROOT = DEFAULT_OBS_ROUTING_ROOT
 
 # ── Single-store row shapes ─────────────────────────────────────────────────
 
+
 @dataclass
 class StoreHandle:
     """One selectable observability store."""
-    label: str               # blueprint id, "(postgres)", or a path stem
-    store: Any               # ObservabilityStore (anything with .connect())
+
+    label: str  # blueprint id, "(postgres)", or a path stem
+    store: Any  # ObservabilityStore (anything with .connect())
     duckdb_path: Path | None  # set for duckdb (enables read-only SQL pane); None for pg
     blob_root: Path | None = None  # local blob dir (duckdb parent or obs store dir)
-    blob_backend: str = "local"    # blob store backend (local, s3, gcs, adls)
-    blob_location: str = ""        # blob store path/location
+    blob_backend: str = "local"  # blob store backend (local, s3, gcs, adls)
+    blob_location: str = ""  # blob store path/location
 
 
 @dataclass(frozen=True)
@@ -90,14 +92,15 @@ class LineageRow:
 
 # ── Fleet (cross-blueprint) row shapes ──────────────────────────────────────
 
+
 @dataclass(frozen=True)
 class BlueprintSummary:
     blueprint_id: str
     runs: int
     successes: int
     errors: int
-    last_run: str | None        # most recent started_at
-    heal_attempts: int          # best-effort (0 if healing_outcomes absent)
+    last_run: str | None  # most recent started_at
+    heal_attempts: int  # best-effort (0 if healing_outcomes absent)
 
     @property
     def success_rate(self) -> float:
@@ -125,15 +128,17 @@ class DayCount:
 @dataclass(frozen=True)
 class PlanMetricRow:
     """Per-module plan complexity from explain_snapshot (zero-Spark-action, every run)."""
+
     run_id: str
     started_at: str
     module_id: str
-    exchange_count: int       # Exchange nodes ≈ shuffles
-    python_udf_count: int     # row-at-a-time python UDFs (non-vectorized)
+    exchange_count: int  # Exchange nodes ≈ shuffles
+    python_udf_count: int  # row-at-a-time python UDFs (non-vectorized)
     broadcast_count: int
 
 
 # ── Store discovery ─────────────────────────────────────────────────────────
+
 
 def _duckdb_files(obs_path: str | None, store_dir: str | None, root: str) -> list[tuple[str, Path]]:
     """All DuckDB observability files → (blueprint_id, path).
@@ -191,8 +196,11 @@ def discover_stores(
         _blob_cfg = getattr(getattr(cfg, "stores", None), "blob", None)
         _blob_be = getattr(_blob_cfg, "backend", None) or "local"
         _blob_loc = getattr(_blob_cfg, "path", None) or ""
-        return [StoreHandle("(postgres)", get_stores(cfg).observability, None, _blob_root,
-                           _blob_be, _blob_loc)]
+        return [
+            StoreHandle(
+                "(postgres)", get_stores(cfg).observability, None, _blob_root, _blob_be, _blob_loc
+            )
+        ]
 
     from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
 
@@ -201,12 +209,21 @@ def discover_stores(
     _blob_loc = getattr(_blob_cfg, "path", None) or ""
     handles: list[StoreHandle] = []
     for bp, path in _duckdb_files(getattr(obs, "path", None), store_dir, root):
-        handles.append(StoreHandle(bp or path.parent.name, DuckDBObservabilityStore(path), path,
-                                   path.parent, _blob_be, _blob_loc))
+        handles.append(
+            StoreHandle(
+                bp or path.parent.name,
+                DuckDBObservabilityStore(path),
+                path,
+                path.parent,
+                _blob_be,
+                _blob_loc,
+            )
+        )
     return handles
 
 
 # ── Single-store queries ────────────────────────────────────────────────────
+
 
 def list_runs(store: Any, limit: int = 50, blueprint_id: str | None = None) -> list[RunRow]:
     """Most-recent runs first (any backend). Optional blueprint filter (pg)."""
@@ -254,10 +271,7 @@ def run_detail(store: Any, run_id: str) -> RunDetail | None:
                 """,
                 [run_id],
             )
-            prof_rows = [
-                {d[0]: v for d, v in zip(cur.description, row)}
-                for row in cur.fetchall()
-            ]
+            prof_rows = [{d[0]: v for d, v in zip(cur.description, row)} for row in cur.fetchall()]
         except Exception:
             try:
                 cur.execute(
@@ -268,8 +282,7 @@ def run_detail(store: Any, run_id: str) -> RunDetail | None:
                     [run_id],
                 )
                 prof_rows = [
-                    {d[0]: v for d, v in zip(cur.description, row)}
-                    for row in cur.fetchall()
+                    {d[0]: v for d, v in zip(cur.description, row)} for row in cur.fetchall()
                 ]
             except Exception:
                 prof_rows = []  # module_metrics may not exist yet
@@ -278,8 +291,7 @@ def run_detail(store: Any, run_id: str) -> RunDetail | None:
     raw = row[5]
     mr = json.loads(raw) if isinstance(raw, str) else (raw or [])
     modules = [
-        ModuleResult(m.get("module_id", ""), m.get("status", ""), m.get("error") or "")
-        for m in mr
+        ModuleResult(m.get("module_id", ""), m.get("status", ""), m.get("error") or "") for m in mr
     ]
     # Order the profile to match execution order (the module_results order).
     #
@@ -308,10 +320,22 @@ def run_detail(store: Any, run_id: str) -> RunDetail | None:
             continue
         by_id[mid] = ProfileRow(
             module_id=mid,
-            records_written=existing.records_written if p.get("records_written") is None else p.get("records_written"),
-            bytes_written=existing.bytes_written if p.get("bytes_written") is None else p.get("bytes_written"),
-            duration_ms=(existing.duration_ms or 0) + (p.get("duration_ms") or 0) if p.get("duration_ms") is not None or existing.duration_ms is not None else None,
-            records_read=existing.records_read if p.get("records_read") is None else p.get("records_read"),
+            records_written=(
+                existing.records_written
+                if p.get("records_written") is None
+                else p.get("records_written")
+            ),
+            bytes_written=(
+                existing.bytes_written if p.get("bytes_written") is None else p.get("bytes_written")
+            ),
+            duration_ms=(
+                (existing.duration_ms or 0) + (p.get("duration_ms") or 0)
+                if p.get("duration_ms") is not None or existing.duration_ms is not None
+                else None
+            ),
+            records_read=(
+                existing.records_read if p.get("records_read") is None else p.get("records_read")
+            ),
             bytes_read=existing.bytes_read if p.get("bytes_read") is None else p.get("bytes_read"),
         )
     order = {m.module_id: i for i, m in enumerate(modules)}
@@ -388,12 +412,14 @@ def failure_context(store: Any, run_id: str) -> FailureContext | None:
             sc = []
     mj = row[6] if len(row) > 6 else None
     pj = row[7] if len(row) > 7 else None
-    return FailureContext(row[0] or "", row[1] or "", row[2], row[3],
-                          list(sc or []), row[5], mj, pj)
+    return FailureContext(
+        row[0] or "", row[1] or "", row[2], row[3], list(sc or []), row[5], mj, pj
+    )
 
 
-def lineage(store: Any, blueprint_id: str | None = None,
-            run_id: str | None = None, limit: int = 500) -> list[LineageRow]:
+def lineage(
+    store: Any, blueprint_id: str | None = None, run_id: str | None = None, limit: int = 500
+) -> list[LineageRow]:
     """Column-level lineage rows (empty if the table is absent)."""
     q = "SELECT channel_id, output_column, source_table, source_column FROM column_lineage"
     params: list[Any] = []
@@ -438,8 +464,9 @@ METRIC_LABELS: dict[str, str] = {
 }
 
 
-def module_trends(store: Any, blueprint_id: str,
-                   module_id: str, limit: int = 20) -> list[ModuleTrendRow]:
+def module_trends(
+    store: Any, blueprint_id: str, module_id: str, limit: int = 20
+) -> list[ModuleTrendRow]:
     """Module metrics across the *limit* most recent runs of *blueprint_id*."""
     try:
         with store.connect() as cur:
@@ -484,9 +511,9 @@ PROBE_METRIC_LABELS: dict[str, str] = {
 }
 
 
-def probe_signals(store: Any, blueprint_id: str,
-                   signal_type: str, limit: int = 20,
-                   run_id: str | None = None) -> list[ProbeSignalRow]:
+def probe_signals(
+    store: Any, blueprint_id: str, signal_type: str, limit: int = 20, run_id: str | None = None
+) -> list[ProbeSignalRow]:
     """Probe signal payloads across recent runs of *blueprint_id*.
     Pass *run_id* to filter to a specific run only."""
     try:
@@ -511,8 +538,9 @@ def probe_signals(store: Any, blueprint_id: str,
         # payload is a JSON column: DuckDB returns a str, psycopg2 returns a
         # parsed dict — handle both.
         return [
-            ProbeSignalRow(r[0], r[1], r[2],
-                           json.loads(r[3]) if isinstance(r[3], str) else (r[3] or {}))
+            ProbeSignalRow(
+                r[0], r[1], r[2], json.loads(r[3]) if isinstance(r[3], str) else (r[3] or {})
+            )
             for r in rows
         ]
     except Exception:
@@ -584,7 +612,9 @@ def plan_metrics(store: Any, blueprint_id: str, limit: int = 200) -> list[PlanMe
         return []
 
 
-def run_sql_readonly(duckdb_path: str | Path, query: str) -> tuple[list[str], list[tuple[Any, ...]]]:
+def run_sql_readonly(
+    duckdb_path: str | Path, query: str
+) -> tuple[list[str], list[tuple[Any, ...]]]:
     """Ad-hoc query over a **read-only** DuckDB connection → (columns, rows)."""
     conn = duckdb.connect(str(duckdb_path), read_only=True)
     try:
@@ -597,6 +627,7 @@ def run_sql_readonly(duckdb_path: str | Path, query: str) -> tuple[list[str], li
 
 
 # ── Fleet (cross-run + cross-blueprint) aggregates — read-time, no duplication ─
+
 
 def _heal_attempts(cur: Any) -> dict[str, int]:
     """Best-effort heal-outcome counts per blueprint (0 / {} if table absent).
@@ -651,9 +682,9 @@ def fleet_summary(cfg: Any, store_dir: str | None = None) -> list[BlueprintSumma
             if last and (a["last"] is None or last > a["last"]):
                 a["last"] = last
         for bp, n in heals.items():
-            agg.setdefault(
-                bp, {"runs": 0, "successes": 0, "errors": 0, "last": None, "heals": 0}
-            )["heals"] += n
+            agg.setdefault(bp, {"runs": 0, "successes": 0, "errors": 0, "last": None, "heals": 0})[
+                "heals"
+            ] += n
 
     return sorted(
         (
@@ -730,8 +761,7 @@ def heal_coverage(cfg: Any, store_dir: str | None = None) -> dict[str, int]:
     return agg
 
 
-def heal_stop_vs_success(cfg: Any, store_dir: str | None = None
-                         ) -> list[dict[str, Any]]:
+def heal_stop_vs_success(cfg: Any, store_dir: str | None = None) -> list[dict[str, Any]]:
     """Cross-reference heal_attempts.stop_reason with run success after patch."""
     rows: list[dict[str, Any]] = []
     for h in discover_stores(cfg, store_dir=store_dir):
@@ -747,18 +777,21 @@ def heal_stop_vs_success(cfg: Any, store_dir: str | None = None
                     """
                 )
                 for stop_reason, success, cnt in cur.fetchall():
-                    rows.append({
-                        "stop_reason": stop_reason,
-                        "run_success_after_patch": "success" if success else "failed",
-                        "count": cnt,
-                    })
+                    rows.append(
+                        {
+                            "stop_reason": stop_reason,
+                            "run_success_after_patch": "success" if success else "failed",
+                            "count": cnt,
+                        }
+                    )
         except Exception:
             continue
     return rows
 
 
-def heal_attempt_details(cfg: Any, store_dir: str | None = None,
-                          limit: int = 100) -> list[dict[str, Any]]:
+def heal_attempt_details(
+    cfg: Any, store_dir: str | None = None, limit: int = 100
+) -> list[dict[str, Any]]:
     """Cross-store heal attempts with outcome enrichment (latest *limit* rows)."""
     out: list[dict[str, Any]] = []
     for h in discover_stores(cfg, store_dir=store_dir):
@@ -806,9 +839,15 @@ def drift_events(store: Any, blueprint_id: str) -> list[dict[str, Any]]:
             for row in cur.fetchall():
                 d = dict(zip(cols, row))
                 d["checked_at"] = str(d["checked_at"]) if d.get("checked_at") else ""
-                d["breaking_changes"] = json.loads(d["breaking_changes"]) if d.get("breaking_changes") else []
-                d["benign_changes"] = json.loads(d["benign_changes"]) if d.get("benign_changes") else []
-                d["baseline_schema"] = json.loads(d["baseline_schema"]) if d.get("baseline_schema") else {}
+                d["breaking_changes"] = (
+                    json.loads(d["breaking_changes"]) if d.get("breaking_changes") else []
+                )
+                d["benign_changes"] = (
+                    json.loads(d["benign_changes"]) if d.get("benign_changes") else []
+                )
+                d["baseline_schema"] = (
+                    json.loads(d["baseline_schema"]) if d.get("baseline_schema") else {}
+                )
                 d["live_schema"] = json.loads(d["live_schema"]) if d.get("live_schema") else {}
                 rows.append(d)
     except Exception:
@@ -826,11 +865,20 @@ class AssertFailureRow:
     error_message: str
 
 
-_ASSERT_FAIL_PREFIXES = ("failed:", "null_rate[", "min_rows:", "max_rows:",
-                         "freshness:", "sql assertion failed:", "spillway_rate:")
+_ASSERT_FAIL_PREFIXES = (
+    "failed:",
+    "null_rate[",
+    "min_rows:",
+    "max_rows:",
+    "freshness:",
+    "sql assertion failed:",
+    "spillway_rate:",
+)
 
-def assert_failures(cfg: Any, store_dir: str | None = None,
-                    limit: int = 100) -> list[AssertFailureRow]:
+
+def assert_failures(
+    cfg: Any, store_dir: str | None = None, limit: int = 100
+) -> list[AssertFailureRow]:
     """Assert rule failures across recent runs (joined across stores).
 
     Parses the ``module_results`` JSON column from ``run_records`` and
@@ -858,23 +906,32 @@ def assert_failures(cfg: Any, store_dir: str | None = None,
                         et = m.get("error_type")
                         err = m.get("error") or ""
                         if et:
-                            rows.append(AssertFailureRow(
-                                blueprint_id=bp_id, run_id=run_id,
-                                started_at=started, module_id=m.get("module_id", ""),
-                                error_type=et, error_message=err,
-                            ))
+                            rows.append(
+                                AssertFailureRow(
+                                    blueprint_id=bp_id,
+                                    run_id=run_id,
+                                    started_at=started,
+                                    module_id=m.get("module_id", ""),
+                                    error_type=et,
+                                    error_message=err,
+                                )
+                            )
                         elif m.get("status") == "error" and err:
                             match = next(
                                 (p for p in _ASSERT_FAIL_PREFIXES if err.startswith(p)),
                                 None,
                             )
                             if match:
-                                rows.append(AssertFailureRow(
-                                    blueprint_id=bp_id, run_id=run_id,
-                                    started_at=started, module_id=m.get("module_id", ""),
-                                    error_type=match.rstrip(":"),
-                                    error_message=err,
-                                ))
+                                rows.append(
+                                    AssertFailureRow(
+                                        blueprint_id=bp_id,
+                                        run_id=run_id,
+                                        started_at=started,
+                                        module_id=m.get("module_id", ""),
+                                        error_type=match.rstrip(":"),
+                                        error_message=err,
+                                    )
+                                )
         except Exception:
             continue
     rows.sort(key=lambda r: r.started_at, reverse=True)
@@ -890,8 +947,9 @@ class QuarantineVolumeRow:
     records_written: int
 
 
-def quarantine_volumes(cfg: Any, store_dir: str | None = None,
-                       limit: int = 100) -> list[QuarantineVolumeRow]:
+def quarantine_volumes(
+    cfg: Any, store_dir: str | None = None, limit: int = 100
+) -> list[QuarantineVolumeRow]:
     """Per-run quarantine/spillway write volume across the fleet.
 
     Returns rows from ``module_metrics`` for modules whose ``module_id``
@@ -917,18 +975,21 @@ def quarantine_volumes(cfg: Any, store_dir: str | None = None,
                     [limit],
                 )
                 for rec in cur.fetchall():
-                    rows.append(QuarantineVolumeRow(
-                        blueprint_id=rec[1], run_id=rec[0],
-                        started_at=rec[2], module_id=rec[3],
-                        records_written=rec[4] or 0,
-                    ))
+                    rows.append(
+                        QuarantineVolumeRow(
+                            blueprint_id=rec[1],
+                            run_id=rec[0],
+                            started_at=rec[2],
+                            module_id=rec[3],
+                            records_written=rec[4] or 0,
+                        )
+                    )
         except Exception:
             continue
     return rows
 
 
-def maintenance_metrics(cfg: Any, store_dir: str | None = None,
-                        limit: int = 50) -> list[dict]:
+def maintenance_metrics(cfg: Any, store_dir: str | None = None, limit: int = 50) -> list[dict]:
     """Post-write maintenance (optimize/vacuum) durations.
 
     Returns empty list when no maintenance ops have run yet —
@@ -948,11 +1009,15 @@ def maintenance_metrics(cfg: Any, store_dir: str | None = None,
                     [limit],
                 )
                 for rec in cur.fetchall():
-                    rows.append({
-                        "run_id": rec[0], "module_id": rec[1],
-                        "optimize_ms": rec[2], "vacuum_ms": rec[3],
-                        "captured_at": rec[4],
-                    })
+                    rows.append(
+                        {
+                            "run_id": rec[0],
+                            "module_id": rec[1],
+                            "optimize_ms": rec[2],
+                            "vacuum_ms": rec[3],
+                            "captured_at": rec[4],
+                        }
+                    )
         except Exception:
             continue
     return rows
@@ -961,14 +1026,14 @@ def maintenance_metrics(cfg: Any, store_dir: str | None = None,
 def patch_lifecycle_counts(cfg: Any, store_dir: str | None = None) -> dict[str, int]:
     """Aggregate patch_index status counts (pending, applied, rejected) across fleet."""
     counts: dict[str, int] = {
-        PatchStore.PENDING: 0, PatchStore.APPLIED: 0, PatchStore.REJECTED: 0,
+        PatchStore.PENDING: 0,
+        PatchStore.APPLIED: 0,
+        PatchStore.REJECTED: 0,
     }
     for h in discover_stores(cfg, store_dir=store_dir):
         try:
             with h.store.connect() as cur:
-                cur.execute(
-                    "SELECT status, COUNT(*) FROM patch_index GROUP BY status"
-                )
+                cur.execute("SELECT status, COUNT(*) FROM patch_index GROUP BY status")
                 for status, cnt in cur.fetchall():
                     counts[status] = counts.get(status, 0) + cnt
         except Exception:
@@ -1022,27 +1087,30 @@ def patch_list(cfg: Any, store_dir: str | None = None) -> list[PatchRow]:
                             ops_raw = json.loads(ops_raw)
                         except Exception:
                             ops_raw = []
-                    out.append(PatchRow(
-                        patch_id=d["patch_id"],
-                        blueprint_id=d["blueprint_id"],
-                        run_id=d["run_id"],
-                        status=d["status"],
-                        error_class=d["error_class"],
-                        where_field=d["where_field"],
-                        rationale=d["rationale"],
-                        ops=list(ops_raw or []),
-                        source=d["source"],
-                        prompt_version=d["prompt_version"],
-                        created_at=d["created_at"],
-                    ))
+                    out.append(
+                        PatchRow(
+                            patch_id=d["patch_id"],
+                            blueprint_id=d["blueprint_id"],
+                            run_id=d["run_id"],
+                            status=d["status"],
+                            error_class=d["error_class"],
+                            where_field=d["where_field"],
+                            rationale=d["rationale"],
+                            ops=list(ops_raw or []),
+                            source=d["source"],
+                            prompt_version=d["prompt_version"],
+                            created_at=d["created_at"],
+                        )
+                    )
         except Exception:
             continue
     out.sort(key=lambda r: r.created_at, reverse=True)
     return out
 
 
-def patch_simulation_for_patch(cfg: Any, patch_id: str,
-                                store_dir: str | None = None) -> list[PatchSimulationRow]:
+def patch_simulation_for_patch(
+    cfg: Any, patch_id: str, store_dir: str | None = None
+) -> list[PatchSimulationRow]:
     """Gate validation results for a specific patch (from patch_simulation table)."""
     out: list[PatchSimulationRow] = []
     for h in discover_stores(cfg, store_dir=store_dir):
@@ -1057,13 +1125,15 @@ def patch_simulation_for_patch(cfg: Any, patch_id: str,
                 cols = [d[0] for d in cur.description]
                 for row in cur.fetchall():
                     d = dict(zip(cols, row))
-                    out.append(PatchSimulationRow(
-                        patch_id=d["patch_id"],
-                        gate=d["gate"],
-                        status=d["status"],
-                        detail=d.get("detail"),
-                        duration_ms=d.get("duration_ms"),
-                    ))
+                    out.append(
+                        PatchSimulationRow(
+                            patch_id=d["patch_id"],
+                            gate=d["gate"],
+                            status=d["status"],
+                            detail=d.get("detail"),
+                            duration_ms=d.get("duration_ms"),
+                        )
+                    )
         except Exception:
             continue
     return out
@@ -1141,6 +1211,7 @@ class BlueprintHistoryEvent:
     ``event_type`` is one of: ``heal_run_started``, ``patch_apply``,
     ``patch_reject``, ``outcome``, ``manual_edit``.
     """
+
     timestamp: str
     event_type: str
     description: str
@@ -1150,8 +1221,9 @@ class BlueprintHistoryEvent:
     git_sha: str | None = None
 
 
-def blueprint_history(cfg: Any, blueprint_id: str,
-                       store_dir: str | None = None) -> list[BlueprintHistoryEvent]:
+def blueprint_history(
+    cfg: Any, blueprint_id: str, store_dir: str | None = None
+) -> list[BlueprintHistoryEvent]:
     """Store-side remediation timeline for one blueprint (no git).
 
     Joins ``patch_index`` (status transitions: pending → applied/rejected)
@@ -1193,34 +1265,52 @@ def blueprint_history(cfg: Any, blueprint_id: str,
             continue
 
         for run_id, started_at in heal_starts:
-            events.append(BlueprintHistoryEvent(
-                timestamp=started_at or "", event_type="heal_run_started",
-                description=f"heal run started (run_id={run_id})", run_id=run_id,
-            ))
+            events.append(
+                BlueprintHistoryEvent(
+                    timestamp=started_at or "",
+                    event_type="heal_run_started",
+                    description=f"heal run started (run_id={run_id})",
+                    run_id=run_id,
+                )
+            )
 
         for patch_id, status, rationale, created_at, updated_at, run_id in patch_rows:
             outcome = outcome_by_patch.get(patch_id)
             confidence = outcome[1] if outcome else None
             if status == PatchStore.APPLIED:
-                events.append(BlueprintHistoryEvent(
-                    timestamp=updated_at or created_at or "", event_type="patch_apply",
-                    description=f"patch applied: {rationale or patch_id}",
-                    patch_id=patch_id, confidence=confidence, run_id=run_id,
-                ))
+                events.append(
+                    BlueprintHistoryEvent(
+                        timestamp=updated_at or created_at or "",
+                        event_type="patch_apply",
+                        description=f"patch applied: {rationale or patch_id}",
+                        patch_id=patch_id,
+                        confidence=confidence,
+                        run_id=run_id,
+                    )
+                )
                 if outcome is not None and outcome[2] is not None:
                     ok = bool(outcome[2])
-                    events.append(BlueprintHistoryEvent(
-                        timestamp=outcome[3] or updated_at or created_at or "",
-                        event_type="outcome",
-                        description="run succeeded after patch" if ok else "run failed after patch",
-                        patch_id=patch_id, run_id=run_id,
-                    ))
+                    events.append(
+                        BlueprintHistoryEvent(
+                            timestamp=outcome[3] or updated_at or created_at or "",
+                            event_type="outcome",
+                            description=(
+                                "run succeeded after patch" if ok else "run failed after patch"
+                            ),
+                            patch_id=patch_id,
+                            run_id=run_id,
+                        )
+                    )
             elif status == PatchStore.REJECTED:
-                events.append(BlueprintHistoryEvent(
-                    timestamp=updated_at or created_at or "", event_type="patch_reject",
-                    description=f"patch rejected: {rationale or patch_id}",
-                    patch_id=patch_id, run_id=run_id,
-                ))
+                events.append(
+                    BlueprintHistoryEvent(
+                        timestamp=updated_at or created_at or "",
+                        event_type="patch_reject",
+                        description=f"patch rejected: {rationale or patch_id}",
+                        patch_id=patch_id,
+                        run_id=run_id,
+                    )
+                )
 
     events.sort(key=lambda e: e.timestamp or "")
     return events
@@ -1244,9 +1334,11 @@ def git_blueprint_commits(blueprint_path: str | Path) -> list[dict[str, Any]]:
     p = Path(blueprint_path)
     try:
         result = subprocess.run(
-            ["git", "log", "--follow", "--format=%h\x1f%cI\x1f%s\x1f%B\x1eENDCOMMIT",
-             "--", p.name],
-            capture_output=True, text=True, cwd=p.parent or Path.cwd(), timeout=15,
+            ["git", "log", "--follow", "--format=%h\x1f%cI\x1f%s\x1f%B\x1eENDCOMMIT", "--", p.name],
+            capture_output=True,
+            text=True,
+            cwd=p.parent or Path.cwd(),
+            timeout=15,
         )
     except (OSError, subprocess.SubprocessError):
         return []
@@ -1267,15 +1359,18 @@ def git_blueprint_commits(blueprint_path: str | Path) -> list[dict[str, Any]]:
         body_match = aq_block_re.search(full_body)
         patch_ids = (
             [m.group(1) for m in aq_patch_line_re.finditer(body_match.group(1))]
-            if body_match else []
+            if body_match
+            else []
         )
-        commits.append({
-            "git_sha": sha,
-            "timestamp": date,
-            "subject": subject,
-            "patch_ids": patch_ids,
-            "manual_edit": not patch_ids,
-        })
+        commits.append(
+            {
+                "git_sha": sha,
+                "timestamp": date,
+                "subject": subject,
+                "patch_ids": patch_ids,
+                "manual_edit": not patch_ids,
+            }
+        )
     return commits
 
 
@@ -1331,8 +1426,7 @@ def gate_rejection_rates(cfg: Any, store_dir: str | None = None) -> dict[str, in
     agg: dict[str, int] = {}
     for h in discover_stores(cfg, store_dir=store_dir):
         for sql in (
-            "SELECT gate, COUNT(*) FROM patch_simulation "
-            "WHERE status = 'fail' GROUP BY gate",
+            "SELECT gate, COUNT(*) FROM patch_simulation " "WHERE status = 'fail' GROUP BY gate",
             "SELECT gate_that_rejected, COUNT(*) FROM heal_attempts "
             "WHERE gate_that_rejected IS NOT NULL GROUP BY gate_that_rejected",
         ):

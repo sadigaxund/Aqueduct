@@ -25,9 +25,7 @@ class MyDataSource(DataSource):
         return "aq_inmemory"
 
     def schema(self):
-        return StructType(
-            [StructField("id", IntegerType()), StructField("name", StringType())]
-        )
+        return StructType([StructField("id", IntegerType()), StructField("name", StringType())])
 
     def reader(self, schema):
         return _InMemoryReader(schema)

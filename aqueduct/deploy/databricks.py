@@ -87,13 +87,9 @@ class DatabricksSubmitter(Submitter):
     def _api_url(self, cfg: AqueductConfig, endpoint: str) -> str:
         databricks = cfg.deployment.databricks
         if databricks is None:
-            raise ConfigError(
-                "deployment.databricks block is required for target=databricks"
-            )
+            raise ConfigError("deployment.databricks block is required for target=databricks")
         if not databricks.workspace_url:
-            raise ConfigError(
-                "deployment.databricks.workspace_url is required"
-            )
+            raise ConfigError("deployment.databricks.workspace_url is required")
         return f"{_normalize_url(databricks.workspace_url)}{endpoint}"
 
     def _auth_header(self) -> dict[str, str]:
@@ -123,8 +119,7 @@ class DatabricksSubmitter(Submitter):
             ) from exc
         except httpx.RequestError as exc:
             raise DeployError(
-                f"DBFS create for {dbfs_path!r} could not reach the Databricks "
-                f"workspace: {exc}"
+                f"DBFS create for {dbfs_path!r} could not reach the Databricks " f"workspace: {exc}"
             ) from exc
 
         if handle is None:
@@ -176,8 +171,7 @@ class DatabricksSubmitter(Submitter):
             ) from exc
         except httpx.RequestError as exc:
             raise DeployError(
-                f"DBFS close for {dbfs_path!r} could not reach the Databricks "
-                f"workspace: {exc}"
+                f"DBFS close for {dbfs_path!r} could not reach the Databricks " f"workspace: {exc}"
             ) from exc
 
     def _best_effort_close(self, handle: Any, cfg: AqueductConfig) -> None:
@@ -312,8 +306,7 @@ class DatabricksSubmitter(Submitter):
             task["new_cluster"] = databricks.new_cluster
         else:
             raise ConfigError(
-                "deployment.databricks: one of cluster_id or new_cluster "
-                "is required"
+                "deployment.databricks: one of cluster_id or new_cluster " "is required"
             )
 
         if databricks.libraries:
@@ -342,8 +335,7 @@ class DatabricksSubmitter(Submitter):
             except Exception:
                 pass  # response-body read is diagnostic best-effort; the error is surfaced regardless
             raise DeployError(
-                f"Job submit failed "
-                f"(status {exc.response.status_code}){detail}"
+                f"Job submit failed " f"(status {exc.response.status_code}){detail}"
             ) from exc
         except httpx.RequestError as exc:
             raise DeployError(
@@ -363,11 +355,13 @@ class DatabricksSubmitter(Submitter):
         deadline = time.monotonic() + timeout_seconds
         interval = _DEFAULT_POLL_INTERVAL
 
-        terminal_states = frozenset({
-            "TERMINATED",
-            "INTERNAL_ERROR",
-            "SKIPPED",
-        })
+        terminal_states = frozenset(
+            {
+                "TERMINATED",
+                "INTERNAL_ERROR",
+                "SKIPPED",
+            }
+        )
 
         while True:
             elapsed = timeout_seconds - (deadline - time.monotonic())
@@ -469,6 +463,7 @@ class DatabricksSubmitter(Submitter):
             raw = self._db_read(outcome_path, cfg)
             if raw:
                 import json
+
                 outcome = json.loads(raw)
                 parts = []
                 if outcome.get("stdout"):

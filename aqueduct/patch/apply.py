@@ -57,7 +57,9 @@ _ryaml = YAML()
 _ryaml.preserve_quotes = True
 _ryaml.default_flow_style = False
 _ryaml.width = 4096  # prevent unwanted line wrapping
-_ryaml.indent(mapping=2, sequence=4, offset=2)  # ensures `  - item` style (dash at col+2, content at col+4)
+_ryaml.indent(
+    mapping=2, sequence=4, offset=2
+)  # ensures `  - item` style (dash at col+2, content at col+4)
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +86,7 @@ class PatchError(AqueductError):
 
 # ── Result model ──────────────────────────────────────────────────────────────
 
+
 @dataclass(frozen=True)
 class ApplyResult:
     patch_id: str
@@ -94,6 +97,7 @@ class ApplyResult:
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
 
 def load_patch_spec(patch_path: Path) -> PatchSpec:
     """Load and validate a PatchSpec from a JSON file.
@@ -120,18 +124,14 @@ def load_patch_spec(patch_path: Path) -> PatchSpec:
     try:
         return PatchSpec.model_validate(data)
     except ValidationError as exc:
-        raise PatchError(
-            f"PatchSpec validation failed for {patch_path}:\n{exc}"
-        ) from exc
+        raise PatchError(f"PatchSpec validation failed for {patch_path}:\n{exc}") from exc
     except RetiredPatchOpError as exc:
         # A RetiredPatchOpError is not a ValueError/TypeError/AssertionError,
         # so Pydantic does not wrap it into ValidationError (see the class
         # docstring) — caught separately here so every existing `except
         # PatchError` caller (aqueduct/cli/patch.py) keeps working unchanged
         # instead of seeing an uncaught exception type.
-        raise PatchError(
-            f"PatchSpec at {patch_path} cannot be loaded: {exc}"
-        ) from exc
+        raise PatchError(f"PatchSpec at {patch_path} cannot be loaded: {exc}") from exc
 
 
 def _ruamel_copy(data: Any) -> Any:
@@ -217,7 +217,9 @@ def stamp_validated_engine(blueprint_path: Path, engine: str) -> bool:
         logger.warning(
             "stamp_validated_engine failed for %s (engine=%s) — provenance "
             "validated_on not updated; run success is unaffected",
-            blueprint_path, engine, exc_info=True,
+            blueprint_path,
+            engine,
+            exc_info=True,
         )
         return False
 
@@ -273,11 +275,7 @@ def stamp_perf_observation(
             if rec.get("reverted_at"):
                 continue
             existing = rec.get("perf_observations")
-            already = {
-                o.get("engine")
-                for o in (existing or [])
-                if hasattr(o, "get")
-            }
+            already = {o.get("engine") for o in (existing or []) if hasattr(o, "get")}
             if engine in already:
                 continue
             baseline = rec.get("perf_baseline")
@@ -287,13 +285,17 @@ def stamp_perf_observation(
             # the records themselves (every applied patch is one), never
             # from a counter someone has to remember to bump.
             applied_at = str(rec.get("applied_at") or "")
-            co_applied = sum(
-                1 for other in healed_by
-                if str(other.get("applied_at") or "") >= applied_at
-                # A reverted patch's change is not in the Blueprint this run
-                # executed, so it shares none of this run's duration.
-                and not other.get("reverted_at")
-            ) or 1
+            co_applied = (
+                sum(
+                    1
+                    for other in healed_by
+                    if str(other.get("applied_at") or "") >= applied_at
+                    # A reverted patch's change is not in the Blueprint this run
+                    # executed, so it shares none of this run's duration.
+                    and not other.get("reverted_at")
+                )
+                or 1
+            )
             observation = compare_perf(
                 baseline=baseline_dict,
                 current=current,
@@ -314,7 +316,9 @@ def stamp_perf_observation(
         logger.warning(
             "stamp_perf_observation failed for %s (engine=%s) — no perf note "
             "recorded; run success is unaffected",
-            blueprint_path, engine, exc_info=True,
+            blueprint_path,
+            engine,
+            exc_info=True,
         )
         return []
 
@@ -333,8 +337,7 @@ def apply_patch_to_dict(bp: dict, patch_spec: PatchSpec) -> dict:
             working = apply_operation(working, op)
         except PatchOperationError as exc:
             raise PatchError(
-                f"Operation {i + 1}/{len(patch_spec.operations)} "
-                f"({op.op!r}) failed: {exc}"
+                f"Operation {i + 1}/{len(patch_spec.operations)} " f"({op.op!r}) failed: {exc}"
             ) from exc
     return working
 
@@ -391,7 +394,12 @@ def _check_config_dict_paths(
     for key in ("path", "output_path"):
         if key in config:
             _check_path_against_allowlist(
-                config[key], allowed_paths, op_name, module_id, provenance_map, key_hint=key,
+                config[key],
+                allowed_paths,
+                op_name,
+                module_id,
+                provenance_map,
+                key_hint=key,
             )
 
 
@@ -442,8 +450,7 @@ def _check_engine_config_allowlist(op: Any) -> None:
         # pointer in sync with the command name (guarded by
         # tests/test_cli/test_cli.py::test_gate1_rejection_names_policy_command).
         raise PatchError(
-            f"set_engine_config: {reason} — see "
-            f"`aqueduct patch policy --engine {op.engine}`"
+            f"set_engine_config: {reason} — see " f"`aqueduct patch policy --engine {op.engine}`"
         )
 
 
@@ -520,8 +527,12 @@ def _check_guardrails(
             key = getattr(op, "key", None)
             if key in ("path", "output_path"):
                 _check_path_against_allowlist(
-                    getattr(op, "value", None), allowed_paths,
-                    op_name, module_id, provenance_map, key_hint=str(key),
+                    getattr(op, "value", None),
+                    allowed_paths,
+                    op_name,
+                    module_id,
+                    provenance_map,
+                    key_hint=str(key),
                 )
 
         # replace_module_config — full config dict replacement on an existing module
@@ -530,8 +541,11 @@ def _check_guardrails(
             if is_arcade_expanded_id(module_id):
                 continue
             _check_config_dict_paths(
-                getattr(op, "config", None), allowed_paths,
-                op_name, module_id, provenance_map,
+                getattr(op, "config", None),
+                allowed_paths,
+                op_name,
+                module_id,
+                provenance_map,
             )
 
         # insert_module / add_probe / add_arcade_ref — new module definitions carry full config
@@ -542,8 +556,11 @@ def _check_guardrails(
                 continue
             module_cfg = module_dict.get("config") if isinstance(module_dict, dict) else None
             _check_config_dict_paths(
-                module_cfg, allowed_paths,
-                op_name, module_id, provenance_map,
+                module_cfg,
+                allowed_paths,
+                op_name,
+                module_id,
+                provenance_map,
             )
 
     # ── Effective engine/session config delta ────────────────────────────────
@@ -554,13 +571,14 @@ def _check_guardrails(
     # pipeline-only patch costs one dict re-apply and reports
     # `not_applicable` — never `pass`, which would claim a check that had
     # nothing to look at.
-    return run_engine_config_delta_gate(
-        cfg=cfg, blueprint_before=bp_raw, patch_spec=patch_spec
-    )
+    return run_engine_config_delta_gate(cfg=cfg, blueprint_before=bp_raw, patch_spec=patch_spec)
 
 
 def _set_index_status(
-    obs_store: Any | None, patch_id: str, status: str, object_key: str | None = None,
+    obs_store: Any | None,
+    patch_id: str,
+    status: str,
+    object_key: str | None = None,
 ) -> None:
     """Best-effort ``patch_index`` status update (Phase 53). Never raises.
 
@@ -571,6 +589,7 @@ def _set_index_status(
         return
     try:
         from aqueduct.patch import index as _ix
+
         with obs_store.connect() as cur:
             _ix.ensure_schema(cur)
             _ix.set_status(cur, patch_id, status, object_key=object_key)
@@ -642,8 +661,7 @@ def apply_patch_file(
     except Exception:
         _raw_patch_json = {}
     _patch_meta_raw = (
-        _raw_patch_json.get(PATCH_META_KEY, {})
-        if isinstance(_raw_patch_json, dict) else {}
+        _raw_patch_json.get(PATCH_META_KEY, {}) if isinstance(_raw_patch_json, dict) else {}
     )
     _patch_meta: dict[str, Any] = _patch_meta_raw if isinstance(_patch_meta_raw, dict) else {}
 
@@ -656,8 +674,11 @@ def apply_patch_file(
     # ── 2.5 Guardrail enforcement (deterministic — blueprint config, not prompt) ─
     if cfg is None:
         from aqueduct.config import load_config
+
         cfg = load_config(None)
-    _config_delta_res = _check_guardrails(patch_spec, bp_raw, provenance_map=provenance_map, cfg=cfg)
+    _config_delta_res = _check_guardrails(
+        patch_spec, bp_raw, provenance_map=provenance_map, cfg=cfg
+    )
 
     # ── 3 & 4. Apply operations on deep copy ──────────────────────────────────
     patched = apply_patch_to_dict(bp_raw, patch_spec)
@@ -714,10 +735,14 @@ def apply_patch_file(
 
     # ── 7. Archive PatchSpec to applied/ (in the PatchStore when given) ───────
     filename = Path(pending_key).name if pending_key else patch_path.name
-    archive_path = (patches_dir / "applied" / filename)
+    archive_path = patches_dir / "applied" / filename
     applied_key: str | None = None
     try:
-        raw_spec = _raw_patch_json if isinstance(_raw_patch_json, dict) else json.loads(patch_path.read_text(encoding="utf-8"))
+        raw_spec = (
+            _raw_patch_json
+            if isinstance(_raw_patch_json, dict)
+            else json.loads(patch_path.read_text(encoding="utf-8"))
+        )
         raw_spec["applied_at"] = applied_at
         raw_spec["blueprint_path"] = str(blueprint_path)
         if patch_store is not None:
@@ -729,7 +754,11 @@ def apply_patch_file(
                     patch_store.delete(pending_key)
                 except Exception:
                     logger.debug("could not delete pending body %s", pending_key, exc_info=True)
-            archive_path = Path(getattr(patch_store, "location_label", str(patches_dir))) / "applied" / filename
+            archive_path = (
+                Path(getattr(patch_store, "location_label", str(patches_dir)))
+                / "applied"
+                / filename
+            )
             # Drop the local materialised copy (the store now owns the body).
             if patch_path.exists():
                 try:
@@ -799,7 +828,9 @@ def reject_patch(
         except Exception:
             logger.debug("could not delete pending body %s", pending_key, exc_info=True)
         _set_index_status(obs_store, patch_id, PatchStore.REJECTED, object_key=rejected_key)
-        return Path(getattr(patch_store, "location_label", str(patches_dir))) / "rejected" / filename
+        return (
+            Path(getattr(patch_store, "location_label", str(patches_dir))) / "rejected" / filename
+        )
 
     pending_dir = patches_dir / "pending"
     # Try exact filename first, then glob for new-style {seq}_{ts}_{slug}.json naming

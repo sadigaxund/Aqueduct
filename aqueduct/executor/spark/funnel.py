@@ -74,9 +74,7 @@ def _resolve_inputs(
     """Validate 'inputs' list and return ordered DataFrames."""
     input_ids: list[str] = cfg.get("inputs", [])
     if not input_ids:
-        raise FunnelError(
-            f"[{module_id}] 'inputs' must list at least two upstream module IDs"
-        )
+        raise FunnelError(f"[{module_id}] 'inputs' must list at least two upstream module IDs")
     if len(input_ids) < 2:
         raise FunnelError(
             f"[{module_id}] 'inputs' must contain at least 2 entries; got {len(input_ids)}"
@@ -96,6 +94,7 @@ def _resolve_inputs(
 
 # ── Mode implementations ──────────────────────────────────────────────────────
 
+
 def _union_all(
     module_id: str,
     dfs: list[DataFrame],
@@ -105,9 +104,7 @@ def _union_all(
     try:
         return reduce(lambda a, b: a.unionByName(b, allowMissingColumns=allow_missing), dfs)
     except Exception as exc:
-        raise FunnelError(
-            f"[{module_id}] union_all failed: {exc}"
-        ) from exc
+        raise FunnelError(f"[{module_id}] union_all failed: {exc}") from exc
 
 
 def _union(
@@ -159,16 +156,12 @@ def _coalesce(
             continue
         # Collect all aliases for this column across the joined df
         candidates = [col_name] + [
-            f"{col_name}_df{i}"
-            for i in range(1, len(dfs))
-            if f"{col_name}_df{i}" in base.columns
+            f"{col_name}_df{i}" for i in range(1, len(dfs)) if f"{col_name}_df{i}" in base.columns
         ]
         if len(candidates) == 1:
             select_exprs.append(F.col(candidates[0]).alias(col_name))
         else:
-            select_exprs.append(
-                F.coalesce(*[F.col(c) for c in candidates]).alias(col_name)
-            )
+            select_exprs.append(F.coalesce(*[F.col(c) for c in candidates]).alias(col_name))
         coalesced.add(col_name)
 
     try:
@@ -210,6 +203,7 @@ def _zip(
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
 
 def execute_funnel(
     module: Module,

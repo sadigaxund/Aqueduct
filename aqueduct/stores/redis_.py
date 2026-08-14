@@ -70,6 +70,7 @@ class RedisDepotStore(DepotStore):
     @property
     def location_label(self) -> str:
         from urllib.parse import urlsplit, urlunsplit
+
         try:
             parts = urlsplit(self._url)
             netloc = parts.hostname or ""

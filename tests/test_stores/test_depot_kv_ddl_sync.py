@@ -35,7 +35,7 @@ def _parse_columns(ddl: str) -> set[str]:
         if re.match(r"^(PRIMARY\s+KEY|UNIQUE|CHECK|CONSTRAINT|FOREIGN\s+KEY)", part, re.IGNORECASE):
             continue
         # first token = column name (lowercase for comparison)
-        col_name = part.split()[0].strip('"\'').lower()
+        col_name = part.split()[0].strip("\"'").lower()
         if col_name:
             cols.add(col_name)
     return cols

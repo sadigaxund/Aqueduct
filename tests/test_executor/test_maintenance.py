@@ -31,8 +31,7 @@ class TestRunMaintenance:
         """zorder_by: [col] → ZORDER BY (col) appended."""
         mock_spark = MagicMock()
         result = run_maintenance(
-            mock_spark, "m1", "/tmp/tbl",
-            {"optimize": True, "zorder_by": ["event_date"]}
+            mock_spark, "m1", "/tmp/tbl", {"optimize": True, "zorder_by": ["event_date"]}
         )
         calls = [str(c) for c in mock_spark.sql.call_args_list]
         assert any("ZORDER BY" in c and "event_date" in c for c in calls)
@@ -76,6 +75,7 @@ class TestRunMaintenance:
 
 # ── Executor integration: maintenance block ───────────────────────────────────
 
+
 def test_egress_with_maintenance_block_calls_run_maintenance(spark, tmp_path):
     """Egress with maintenance: block → run_maintenance called after successful write."""
     from aqueduct.executor.spark.executor import execute
@@ -88,19 +88,36 @@ def test_egress_with_maintenance_block_calls_run_maintenance(spark, tmp_path):
     spark.range(3).write.parquet(in_path)
 
     manifest = Manifest(
-        blueprint_id="bp1", name="Test", description="", aqueduct_version="1.0",
-        context={}, engine_config={}, retry_policy=RetryPolicy(), agent=None,
-        udf_registry={}, macros={}, checkpoint=False,
+        blueprint_id="bp1",
+        name="Test",
+        description="",
+        aqueduct_version="1.0",
+        context={},
+        engine_config={},
+        retry_policy=RetryPolicy(),
+        agent=None,
+        udf_registry={},
+        macros={},
+        checkpoint=False,
         provenance_map=ProvenanceMap(blueprint_id="bp1", blueprint_path="", modules={}, context={}),
         inputs_fingerprint={},
         modules=(
-            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
-            Module(id="out", type="Egress", label="Out", config={
-                "format": "parquet",
-                "path": out_path,
-                "mode": "overwrite",
-                "maintenance": {"optimize": False},  # no-op maintenance, just verify it's called
-            }),
+            Module(
+                id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}
+            ),
+            Module(
+                id="out",
+                type="Egress",
+                label="Out",
+                config={
+                    "format": "parquet",
+                    "path": out_path,
+                    "mode": "overwrite",
+                    "maintenance": {
+                        "optimize": False
+                    },  # no-op maintenance, just verify it's called
+                },
+            ),
         ),
         edges=(Edge(from_id="in", to_id="out", port="main"),),
     )
@@ -125,18 +142,33 @@ def test_egress_without_maintenance_block_no_call(spark, tmp_path):
     spark.range(3).write.parquet(in_path)
 
     manifest = Manifest(
-        blueprint_id="bp2", name="Test", description="", aqueduct_version="1.0",
-        context={}, engine_config={}, retry_policy=RetryPolicy(), agent=None,
-        udf_registry={}, macros={}, checkpoint=False,
+        blueprint_id="bp2",
+        name="Test",
+        description="",
+        aqueduct_version="1.0",
+        context={},
+        engine_config={},
+        retry_policy=RetryPolicy(),
+        agent=None,
+        udf_registry={},
+        macros={},
+        checkpoint=False,
         provenance_map=ProvenanceMap(blueprint_id="bp2", blueprint_path="", modules={}, context={}),
         inputs_fingerprint={},
         modules=(
-            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
-            Module(id="out", type="Egress", label="Out", config={
-                "format": "parquet",
-                "path": out_path,
-                "mode": "overwrite",
-            }),
+            Module(
+                id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}
+            ),
+            Module(
+                id="out",
+                type="Egress",
+                label="Out",
+                config={
+                    "format": "parquet",
+                    "path": out_path,
+                    "mode": "overwrite",
+                },
+            ),
         ),
         edges=(Edge(from_id="in", to_id="out", port="main"),),
     )
@@ -149,6 +181,7 @@ def test_egress_without_maintenance_block_no_call(spark, tmp_path):
 
 
 # ── obs.db maintenance_metrics ────────────────────────────────────────────────
+
 
 def test_maintenance_timing_written_to_obs_db(spark, tmp_path):
     """Egress with maintenance block → timing rows written to maintenance_metrics in obs.db."""
@@ -164,19 +197,36 @@ def test_maintenance_timing_written_to_obs_db(spark, tmp_path):
     spark.range(3).write.parquet(in_path)
 
     manifest = Manifest(
-        blueprint_id="bp_obs", name="Test", description="", aqueduct_version="1.0",
-        context={}, engine_config={}, retry_policy=RetryPolicy(), agent=None,
-        udf_registry={}, macros={}, checkpoint=False,
-        provenance_map=ProvenanceMap(blueprint_id="bp_obs", blueprint_path="", modules={}, context={}),
+        blueprint_id="bp_obs",
+        name="Test",
+        description="",
+        aqueduct_version="1.0",
+        context={},
+        engine_config={},
+        retry_policy=RetryPolicy(),
+        agent=None,
+        udf_registry={},
+        macros={},
+        checkpoint=False,
+        provenance_map=ProvenanceMap(
+            blueprint_id="bp_obs", blueprint_path="", modules={}, context={}
+        ),
         inputs_fingerprint={},
         modules=(
-            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
-            Module(id="out", type="Egress", label="Out", config={
-                "format": "parquet",
-                "path": out_path,
-                "mode": "overwrite",
-                "maintenance": {"optimize": False},
-            }),
+            Module(
+                id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}
+            ),
+            Module(
+                id="out",
+                type="Egress",
+                label="Out",
+                config={
+                    "format": "parquet",
+                    "path": out_path,
+                    "mode": "overwrite",
+                    "maintenance": {"optimize": False},
+                },
+            ),
         ),
         edges=(Edge(from_id="in", to_id="out", port="main"),),
     )
@@ -198,8 +248,12 @@ def test_maintenance_timing_written_to_obs_db(spark, tmp_path):
 def test_write_maintenance_metrics_store_dir_none_no_crash():
     """_write_maintenance_metrics with store_dir=None → no-op, no crash."""
     from aqueduct.executor.spark.executor import _write_maintenance_metrics
+
     # store_dir=None → silent no-op: returns None, persists nothing
-    assert _write_maintenance_metrics("m1", "run-1", {"optimize_ms": 10, "vacuum_ms": None}, None) is None
+    assert (
+        _write_maintenance_metrics("m1", "run-1", {"optimize_ms": 10, "vacuum_ms": None}, None)
+        is None
+    )
 
 
 def test_write_maintenance_metrics_db_error_debug_only(tmp_path, caplog):

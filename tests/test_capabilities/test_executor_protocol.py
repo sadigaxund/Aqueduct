@@ -249,7 +249,8 @@ def test_protocol_module_importable_without_pyspark():
     """``aqueduct.executor.protocol`` must import cleanly with pyspark made
     unimportable — a fresh subprocess proves it, not just "pyspark happens to
     already be imported by the time this test runs" in-process."""
-    proc = _run("""
+    proc = _run(
+        """
         import sys
 
         class _BlockPyspark:
@@ -263,7 +264,8 @@ def test_protocol_module_importable_without_pyspark():
         import aqueduct.executor.protocol as protocol
         assert "pyspark" not in sys.modules
         print("OK", protocol.ExecutorProtocol)
-    """)
+    """
+    )
     assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
     assert "OK" in proc.stdout
 
@@ -302,7 +304,8 @@ def test_spark_engine_module_importable_without_pyspark():
     """Importing ``aqueduct.executor.spark.engine`` (the entry-point target)
     — and therefore constructing Spark's ``ExecutorProtocol`` — must not
     require pyspark. Only calling ``.execute(...)`` should need it."""
-    proc = _run("""
+    proc = _run(
+        """
         import sys
 
         class _BlockPyspark:
@@ -320,7 +323,8 @@ def test_spark_engine_module_importable_without_pyspark():
         assert callable(engine_mod.SPARK.extract_error)
         assert engine_mod.SPARK.prompt_rules.persona
         print("OK")
-    """)
+    """
+    )
     assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
 
 
@@ -411,7 +415,9 @@ def test_render_native_type_missing_mapper_is_a_defensive_error_not_silence():
         with pytest.raises(EnginePluginError, match="no type mapper registered"):
             render_native_type("fake_no_type_mapper", "bigint")
         # Own-namespace native escape hatch still works with no mapper.
-        assert render_native_type("fake_no_type_mapper", "fake_no_type_mapper:whatever") == "whatever"
+        assert (
+            render_native_type("fake_no_type_mapper", "fake_no_type_mapper:whatever") == "whatever"
+        )
     finally:
         del PROTOCOL_REGISTRY[fake.engine]
 

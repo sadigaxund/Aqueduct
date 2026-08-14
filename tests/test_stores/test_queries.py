@@ -3,6 +3,7 @@
 Backend-agnostic, no textual/pyspark. Seeds per-blueprint DuckDB files under a
 routing root and checks the read-time merge in Python (no materialised copies).
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -40,7 +41,7 @@ def _seed(path, blueprint_id, rows, heals=None):
             "INSERT INTO run_records VALUES (?,?,?,?::timestamptz, now(), '[]')",
             [run_id, blueprint_id, status, started],
         )
-    for run_id, cat in (heals or []):
+    for run_id, cat in heals or []:
         c.execute("INSERT INTO healing_outcomes VALUES (?,?,?)", [blueprint_id, run_id, cat])
     c.close()
 
@@ -51,11 +52,13 @@ def _routed_cfg(tmp_path, monkeypatch):
     root = tmp_path / ".aqueduct" / "observability"
     (root / "alpha").mkdir(parents=True)
     (root / "beta").mkdir(parents=True)
-    _seed(root / "alpha" / "observability.db", "alpha",
-          [("a1", "success", "2026-06-18"), ("a2", "error", "2026-06-19")],
-          heals=[("a2", "SchemaError")])
-    _seed(root / "beta" / "observability.db", "beta",
-          [("b1", "success", "2026-06-19")])
+    _seed(
+        root / "alpha" / "observability.db",
+        "alpha",
+        [("a1", "success", "2026-06-18"), ("a2", "error", "2026-06-19")],
+        heals=[("a2", "SchemaError")],
+    )
+    _seed(root / "beta" / "observability.db", "beta", [("b1", "success", "2026-06-19")])
     return _cfg()
 
 
@@ -83,8 +86,8 @@ def test_runs_over_time_merges_days(tmp_path, monkeypatch):
     by_day = {}
     for dc in counts:
         by_day[dc.day] = by_day.get(dc.day, 0) + dc.count
-    assert by_day["2026-06-18"] == 1   # alpha a1
-    assert by_day["2026-06-19"] == 2   # alpha a2 + beta b1
+    assert by_day["2026-06-18"] == 1  # alpha a1
+    assert by_day["2026-06-19"] == 2  # alpha a2 + beta b1
 
 
 def test_failure_categories(tmp_path, monkeypatch):
@@ -152,15 +155,18 @@ def _seed_module_metrics_store(path):
     c.execute(MODULE_METRICS_DDL)
     c.execute(
         "INSERT INTO run_records VALUES (?,?,?,?::timestamptz, now(), ?)",
-        ["r1", "bp", "success", "2026-06-18",
-         '[{"module_id": "a", "status": "success"}, '
-         '{"module_id": "a__handoff__b", "status": "success"}, '
-         '{"module_id": "b", "status": "success"}]'],
+        [
+            "r1",
+            "bp",
+            "success",
+            "2026-06-18",
+            '[{"module_id": "a", "status": "success"}, '
+            '{"module_id": "a__handoff__b", "status": "success"}, '
+            '{"module_id": "b", "status": "success"}]',
+        ],
     )
     # Ordinary module — one row, as always.
-    c.execute(
-        "INSERT INTO module_metrics VALUES ('r1', 'a', NULL, NULL, 5, 100, 50, now())"
-    )
+    c.execute("INSERT INTO module_metrics VALUES ('r1', 'a', NULL, NULL, 5, 100, 50, now())")
     # Handoff module — write-side row (bytes_written, duration 30) then
     # read-side row (bytes_read, duration 5) for the SAME module_id.
     c.execute(
@@ -218,16 +224,19 @@ def test_gate_rejection_rates_counts_only_fail(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     root = tmp_path / ".aqueduct" / "observability" / "bp"
     root.mkdir(parents=True)
-    _seed_patch_simulation(root / "observability.db", [
-        ("lineage", "pass"),
-        ("lineage", "warn"),
-        ("lineage", "fail"),
-        ("lineage", "not_applicable"),
-        ("sandbox", "pass"),
-        ("sandbox", "skip"),
-        ("sandbox", "fail"),
-        ("sandbox", "fail"),
-    ])
+    _seed_patch_simulation(
+        root / "observability.db",
+        [
+            ("lineage", "pass"),
+            ("lineage", "warn"),
+            ("lineage", "fail"),
+            ("lineage", "not_applicable"),
+            ("sandbox", "pass"),
+            ("sandbox", "skip"),
+            ("sandbox", "fail"),
+            ("sandbox", "fail"),
+        ],
+    )
     rates = q.gate_rejection_rates(_cfg())
     assert rates == {"lineage": 1, "sandbox": 2}
 

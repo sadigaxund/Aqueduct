@@ -18,6 +18,7 @@ Config lives in the top-level ``lineage:`` block (``openlineage_url`` /
 ``openlineage_url`` is unset, the Surveyor builds no emitter and nothing is
 emitted (zero cost).
 """
+
 from __future__ import annotations
 
 import logging
@@ -32,9 +33,7 @@ from aqueduct.models import ModuleType
 logger = logging.getLogger(__name__)
 
 _PRODUCER = "https://github.com/sadigaxund/aqueduct"
-_RUN_EVENT_SCHEMA = (
-    "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent"
-)
+_RUN_EVENT_SCHEMA = "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent"
 _COLUMN_LINEAGE_FACET_SCHEMA = (
     "https://openlineage.io/spec/facets/1-2-0/"
     "ColumnLineageDatasetFacet.json#/$defs/ColumnLineageDatasetFacet"
@@ -153,7 +152,11 @@ class OpenLineageEmitter:
     """
 
     def __init__(self, url: str, namespace: str, manifest: Any, timeout: float = 10.0) -> None:
-        self._url = url.rstrip("/") + "/api/v1/lineage" if not url.rstrip("/").endswith("/api/v1/lineage") else url
+        self._url = (
+            url.rstrip("/") + "/api/v1/lineage"
+            if not url.rstrip("/").endswith("/api/v1/lineage")
+            else url
+        )
         self._namespace = namespace
         self._manifest = manifest
         self._timeout = timeout
@@ -161,6 +164,7 @@ class OpenLineageEmitter:
 
     def _outputs_with_facet(self) -> tuple[list[dict], list[dict]]:
         from aqueduct.compiler.lineage import compute_lineage_rows
+
         inputs, outputs = extract_datasets(self._manifest, self._namespace)
         rows = compute_lineage_rows(self._manifest.modules, self._manifest.edges)
         facet = build_column_lineage_facet(rows, self._namespace)
@@ -169,8 +173,14 @@ class OpenLineageEmitter:
                 ds["facets"] = {"columnLineage": facet}
         return inputs, outputs
 
-    def emit(self, event_type: str, *, run_id: str, error_message: str | None = None,
-             event_time: str | None = None) -> threading.Thread | None:
+    def emit(
+        self,
+        event_type: str,
+        *,
+        run_id: str,
+        error_message: str | None = None,
+        event_time: str | None = None,
+    ) -> threading.Thread | None:
         # Lazy START: a terminal event for a run_id we never START-ed (e.g. a
         # heal re-run, which mints a fresh run_id that bypassed surveyor.start())
         # gets a synthetic START first, so a strict consumer never sees a
@@ -181,8 +191,14 @@ class OpenLineageEmitter:
             event_type, run_id=run_id, error_message=error_message, event_time=event_time
         )
 
-    def _emit_one(self, event_type: str, *, run_id: str, error_message: str | None = None,
-                  event_time: str | None = None) -> threading.Thread | None:
+    def _emit_one(
+        self,
+        event_type: str,
+        *,
+        run_id: str,
+        error_message: str | None = None,
+        event_time: str | None = None,
+    ) -> threading.Thread | None:
         try:
             inputs, outputs = self._outputs_with_facet()
             event = build_run_event(
@@ -205,9 +221,12 @@ class OpenLineageEmitter:
     def _post(self, event: dict) -> threading.Thread:
         return fire_and_forget(
             lambda: deliver_with_retry(
-                "POST", self._url, json=event,
+                "POST",
+                self._url,
+                json=event,
                 headers={"Content-Type": "application/json"},
-                timeout=self._timeout, label="openlineage",
+                timeout=self._timeout,
+                label="openlineage",
             ),
             name="surveyor-openlineage",
         )

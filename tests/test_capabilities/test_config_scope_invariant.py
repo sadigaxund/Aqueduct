@@ -111,8 +111,10 @@ def test_invariant_is_falsifiable(monkeypatch):
     import aqueduct.executor.config_leaves as cfgl
 
     offenders = _non_supported_leaves_across_all_engines()
-    assert offenders, "fixture precondition: at least one engine must declare " \
+    assert offenders, (
+        "fixture precondition: at least one engine must declare "
         "some config leaf non-supported today (duckdb does, e.g. probes.*)"
+    )
     victim = sorted(offenders)[0]
 
     real_core = cfgl.core_config_leaves()

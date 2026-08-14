@@ -55,6 +55,7 @@ logger = logging.getLogger(__name__)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 def _utcnow() -> datetime:
     return datetime.now(tz=UTC)
 
@@ -89,6 +90,7 @@ def _first_error_type(result: ExecutionResult) -> str | None:
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
 
 class Surveyor:
     """Observability recorder for a single blueprint instance.
@@ -129,6 +131,7 @@ class Surveyor:
                 in a Postgres-backed bundle.
         """
         from aqueduct.config import WebhookEndpointConfig
+
         self._manifest = manifest
         self._store_dir = store_dir
         self._engine = engine
@@ -150,8 +153,10 @@ class Surveyor:
         if lineage_config is not None and lineage_config[0]:
             try:
                 from aqueduct.surveyor.openlineage import OpenLineageEmitter
+
                 self._openlineage = OpenLineageEmitter(
-                    url=lineage_config[0], namespace=lineage_config[1] or "aqueduct",
+                    url=lineage_config[0],
+                    namespace=lineage_config[1] or "aqueduct",
                     manifest=manifest,
                 )
             except Exception:  # noqa: BLE001 — never let lineage setup break a run
@@ -159,7 +164,9 @@ class Surveyor:
         self._run_id: str | None = None
         self._started_at: datetime | None = None
         self._stores: StoreBundle | None = stores
-        self._observability: ObservabilityStore | None = stores.observability if stores is not None else None
+        self._observability: ObservabilityStore | None = (
+            stores.observability if stores is not None else None
+        )
         self._started: bool = False  # DDL/migrations applied once per Surveyor.start()
         self._iteration_parents: dict[str, str] = {}  # run_id → parent_run_id (multi-patch)
 
@@ -170,6 +177,7 @@ class Surveyor:
             return None
         if self._blob_store_cached is None:
             from aqueduct.stores.object_store import make_blob_store
+
             backend, location = self._blob_config or ("local", "")
             self._blob_store_cached = make_blob_store(backend, location, self._store_dir)
         return self._blob_store_cached
@@ -185,6 +193,7 @@ class Surveyor:
         Local default reproduces the historical ``patches/`` directory; an
         object backend (s3/gcs/adls) persists where a cluster pod survives."""
         from aqueduct.stores.object_store import make_patch_store
+
         backend, location = self._blob_config or ("local", "")
         return make_patch_store(backend, location, self._patches_dir)
 
@@ -208,6 +217,7 @@ class Surveyor:
         # this fallback keeps direct programmatic callers (tests, scripts) working.
         if self._observability is None:
             from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+
             self._observability = DuckDBObservabilityStore(self._store_dir / "observability.db")
 
         with self._observability.connect() as cur:
@@ -228,6 +238,7 @@ class Surveyor:
             # lifecycle). Created here so the heal cache can query it instead of
             # scanning the patches/ directory.
             from aqueduct.patch.index import ensure_schema as _ensure_patch_index
+
             _ensure_patch_index(cur)
 
             cur.execute(
@@ -309,18 +320,29 @@ class Surveyor:
         # polyglot alike) so `report --json` always carries it — a
         # single-engine run's every module simply shows the same one value.
         _module_engine = {
-            m.id: m.engine for m in getattr(self._manifest, "modules", ()) if getattr(m, "engine", None)
+            m.id: m.engine
+            for m in getattr(self._manifest, "modules", ())
+            if getattr(m, "engine", None)
         }
-        module_results_json = _redact(json.dumps(
-            [{
-                "module_id": r.module_id,
-                "status": r.status,
-                "error": r.error,
-                "engine": _module_engine.get(r.module_id),
-            } for r in result.module_results]
-        ))
+        module_results_json = _redact(
+            json.dumps(
+                [
+                    {
+                        "module_id": r.module_id,
+                        "status": r.status,
+                        "error": r.error,
+                        "engine": _module_engine.get(r.module_id),
+                    }
+                    for r in result.module_results
+                ]
+            )
+        )
 
-        effective_status = ExecutionStatus.PATCHED if (patched and result.status == ExecutionStatus.SUCCESS) else result.status
+        effective_status = (
+            ExecutionStatus.PATCHED
+            if (patched and result.status == ExecutionStatus.SUCCESS)
+            else result.status
+        )
         # 1.1.0 fix — multi-patch heal mints a new run_id per iteration. The
         # outer run_id is INSERTed by start(); iteration 1+ never had a row
         # to UPDATE. Use INSERT-or-UPDATE so each iteration owns its row,
@@ -354,7 +376,9 @@ class Surveyor:
         if result.status == ExecutionStatus.SUCCESS:
             # Phase 55 — terminal OpenLineage COMPLETE (daemon thread, best-effort).
             if self._openlineage is not None:
-                self._openlineage.emit("COMPLETE", run_id=result.run_id, event_time=_iso(finished_at))
+                self._openlineage.emit(
+                    "COMPLETE", run_id=result.run_id, event_time=_iso(finished_at)
+                )
             return None
 
         # ── Build FailureContext ───────────────────────────────────────────────
@@ -367,7 +391,10 @@ class Surveyor:
         live_exc: BaseException | None = exc
         if live_exc is None:
             for _mr in result.module_results:
-                if _mr.status == ExecutionStatus.ERROR and getattr(_mr, "exception", None) is not None:
+                if (
+                    _mr.status == ExecutionStatus.ERROR
+                    and getattr(_mr, "exception", None) is not None
+                ):
                     live_exc = _mr.exception
                     break
         stack_trace: str | None = None
@@ -377,9 +404,12 @@ class Surveyor:
         # <-> executor.capabilities); see AGENTS.md's documented lazy-import
         # exceptions for the precedent (surveyor's own pyspark import above).
         from aqueduct.executor.protocol import get_protocol as _get_protocol
+
         structured = _get_protocol(_engine).extract_error(live_exc)
         if live_exc is not None:
-            stack_trace = "".join(traceback.format_exception(type(live_exc), live_exc, live_exc.__traceback__))
+            stack_trace = "".join(
+                traceback.format_exception(type(live_exc), live_exc, live_exc.__traceback__)
+            )
 
         # Build provenance slice: failed module + full context block
         provenance_json: str | None = None
@@ -511,7 +541,9 @@ class Surveyor:
                 "blueprint_name": self._manifest.name,
                 "failed_module": ctx.failed_module,
                 "error_message": ctx.error_message,
-                "error_type": (ctx.stack_trace or "").splitlines()[0] if ctx.stack_trace else "ExecuteError",
+                "error_type": (
+                    (ctx.stack_trace or "").splitlines()[0] if ctx.stack_trace else "ExecuteError"
+                ),
                 "started_at": ctx.started_at,
                 "attempt": str(attempt),
             }
@@ -520,7 +552,9 @@ class Surveyor:
         # Phase 55 — terminal OpenLineage FAIL with the error message facet.
         if self._openlineage is not None:
             self._openlineage.emit(
-                "FAIL", run_id=result.run_id, event_time=_iso(finished_at),
+                "FAIL",
+                run_id=result.run_id,
+                event_time=_iso(finished_at),
                 error_message=ctx.error_message,
             )
 
@@ -570,8 +604,10 @@ class Surveyor:
             return
         import datetime as _dt
         import uuid as _uuid
+
         if prompt_version is None:
             from aqueduct.agent import PROMPT_VERSION as _PROMPT_VERSION
+
             prompt_version = _PROMPT_VERSION
         with self._observability.connect() as cur:
             cur.execute(
@@ -585,11 +621,21 @@ class Surveyor:
                 """,
                 [
                     str(_uuid.uuid4()),
-                    run_id, parent_run_id, failed_module, failure_category, model, patch_id,
-                    confidence, patch_applied, run_success_after_patch,
+                    run_id,
+                    parent_run_id,
+                    failed_module,
+                    failure_category,
+                    model,
+                    patch_id,
+                    confidence,
+                    patch_applied,
+                    run_success_after_patch,
                     _dt.datetime.now(_dt.UTC).isoformat(),
                     prompt_version,
-                    failure_signature, failure_signature_coarse, resolution, model_cascade_position,
+                    failure_signature,
+                    failure_signature_coarse,
+                    resolution,
+                    model_cascade_position,
                     self._engine,
                 ],
             )
@@ -620,7 +666,7 @@ class Surveyor:
         self,
         *,
         run_id: str,
-        attempt_record: Any,                # agent.budget.AttemptRecord
+        attempt_record: Any,  # agent.budget.AttemptRecord
         stop_reason: str | None = None,
         prompt_version: str | None = None,
     ) -> None:
@@ -647,8 +693,10 @@ class Surveyor:
         import datetime as _dt
         import json as _json
         import uuid as _uuid
+
         if prompt_version is None:
             from aqueduct.agent import PROMPT_VERSION as _PROMPT_VERSION
+
             prompt_version = _PROMPT_VERSION
         sig = getattr(attempt_record, "signature", None)
         # Phase 75 — per-call tool telemetry, if any (transient _aq_tool_calls
@@ -783,6 +831,7 @@ class Surveyor:
             return
         import datetime as _dt
         import uuid as _uuid
+
         with self._observability.connect() as cur:
             cur.execute(
                 """
@@ -837,6 +886,7 @@ class Surveyor:
         if self._observability is None:
             return
         import datetime as _dt
+
         bp_id = blueprint_id or getattr(self._manifest, "blueprint_id", None)
         if not bp_id:
             return
@@ -855,9 +905,14 @@ class Surveyor:
                     plan_text        = EXCLUDED.plan_text
                 """,
                 [
-                    bp_id, run_id, module_id,
+                    bp_id,
+                    run_id,
+                    module_id,
                     _dt.datetime.now(_dt.UTC).isoformat(),
-                    exchange_count, python_udf_count, broadcast_count, plan_text,
+                    exchange_count,
+                    python_udf_count,
+                    broadcast_count,
+                    plan_text,
                 ],
             )
             # Rolling prune — keep last N run_ids per (blueprint_id, module_id)
@@ -940,6 +995,7 @@ class Surveyor:
         if self._observability is None:
             return 0
         import datetime as _dt
+
         threshold = (_dt.datetime.now(_dt.UTC) - _dt.timedelta(minutes=within_minutes)).isoformat()
         try:
             with self._observability.connect() as cur:
@@ -1045,6 +1101,7 @@ class Surveyor:
 
         if self._observability is None:
             from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+
             observability_path = self._store_dir / "observability.db"
             if not observability_path.exists():
                 return []

@@ -39,7 +39,9 @@ def _conditional(
             raise JunctionError(f"[{module_id}] every branch must have an 'id'")
         cond = branch.get("condition")
         if not cond:
-            raise JunctionError(f"[{module_id}] branch {bid!r} is missing 'condition' for conditional mode")
+            raise JunctionError(
+                f"[{module_id}] branch {bid!r} is missing 'condition' for conditional mode"
+            )
         if cond != "_else_":
             explicit_conditions.append(cond)
 
@@ -68,7 +70,9 @@ def _broadcast(
         bid = branch.get("id")
         if not bid:
             raise JunctionError(f"[{module_id}] every branch must have an 'id'")
-        result[bid] = rel  # same lazy relation, no copy — DuckDB is single-process, nothing to broadcast
+        result[bid] = (
+            rel  # same lazy relation, no copy — DuckDB is single-process, nothing to broadcast
+        )
     return result
 
 
@@ -91,7 +95,9 @@ def _partition(
     return result
 
 
-def execute_junction(module: Module, rel: duckdb.DuckDBPyRelation) -> dict[str, duckdb.DuckDBPyRelation]:
+def execute_junction(
+    module: Module, rel: duckdb.DuckDBPyRelation
+) -> dict[str, duckdb.DuckDBPyRelation]:
     """Split rel into branch relations according to module.config.
 
     Raises:
@@ -107,7 +113,9 @@ def execute_junction(module: Module, rel: duckdb.DuckDBPyRelation) -> dict[str, 
         return _broadcast(module.id, rel, branches)
     if mode == "partition":
         return _partition(module.id, rel, cfg, branches)
-    raise JunctionError(f"[{module.id}] unsupported mode {mode!r}. Supported: conditional, broadcast, partition")
+    raise JunctionError(
+        f"[{module.id}] unsupported mode {mode!r}. Supported: conditional, broadcast, partition"
+    )
 
 
 __all__ = ["JunctionError", "execute_junction", "VALID_MODES"]

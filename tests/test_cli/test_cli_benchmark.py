@@ -12,6 +12,7 @@ pytestmark = pytest.mark.integration
 
 def test_benchmark_no_target_exits_5():
     from aqueduct.exit_codes import USAGE_ERROR
+
     runner = CliRunner()
     result = runner.invoke(cli, ["benchmark"])
     assert result.exit_code == USAGE_ERROR
@@ -21,8 +22,10 @@ def test_benchmark_no_target_exits_5():
 @patch("aqueduct.surveyor.scenario.run_benchmark")
 def test_benchmark_positional_file(mock_run_benchmark, tmp_path):
     scenario_path = tmp_path / "test.aqscenario.yml"
-    scenario_path.write_text("aqueduct_scenario: '1.0'\nid: test_sc\ninject_failure:\n  module: m\n  error_message: 'Simulated'")
-    
+    scenario_path.write_text(
+        "aqueduct_scenario: '1.0'\nid: test_sc\ninject_failure:\n  module: m\n  error_message: 'Simulated'"
+    )
+
     mock_run_benchmark.return_value = {
         "test_sc": {
             "claude-sonnet-4-6": ScenarioResult(
@@ -42,13 +45,13 @@ def test_benchmark_positional_file(mock_run_benchmark, tmp_path):
             )
         }
     }
-    
+
     config_path = tmp_path / "aqueduct.yml"
     config_path.write_text("agent:\n  provider: openai_compat\n  model: claude-sonnet-4-6\n")
 
     runner = CliRunner()
     result = runner.invoke(cli, ["benchmark", str(scenario_path), "--config", str(config_path)])
-    
+
     assert result.exit_code == 0, f"Failed with: {result.output}"
     # Verify mock was called with the single scenario file path
     mock_run_benchmark.assert_called_once()
@@ -60,7 +63,7 @@ def test_benchmark_positional_file(mock_run_benchmark, tmp_path):
 def test_benchmark_positional_dir(mock_run_benchmark, tmp_path):
     scenarios_dir = tmp_path / "scenarios"
     scenarios_dir.mkdir()
-    
+
     mock_run_benchmark.return_value = {}
 
     config_path = tmp_path / "aqueduct.yml"
@@ -68,7 +71,7 @@ def test_benchmark_positional_dir(mock_run_benchmark, tmp_path):
 
     runner = CliRunner()
     result = runner.invoke(cli, ["benchmark", str(scenarios_dir), "--config", str(config_path)])
-    
+
     assert result.exit_code == 0
     called_path = mock_run_benchmark.call_args[1]["scenarios_dir"]
     assert called_path == Path(scenarios_dir)
@@ -80,7 +83,7 @@ def test_benchmark_positional_precedence(mock_run_benchmark, tmp_path):
     scenarios_dir_1.mkdir()
     scenarios_dir_2 = tmp_path / "scenarios2"
     scenarios_dir_2.mkdir()
-    
+
     mock_run_benchmark.return_value = {}
 
     config_path = tmp_path / "aqueduct.yml"
@@ -88,8 +91,18 @@ def test_benchmark_positional_precedence(mock_run_benchmark, tmp_path):
 
     runner = CliRunner()
     # scenarios_dir_1 is positional, scenarios_dir_2 is --scenarios
-    result = runner.invoke(cli, ["benchmark", str(scenarios_dir_1), "--scenarios", str(scenarios_dir_2), "--config", str(config_path)])
-    
+    result = runner.invoke(
+        cli,
+        [
+            "benchmark",
+            str(scenarios_dir_1),
+            "--scenarios",
+            str(scenarios_dir_2),
+            "--config",
+            str(config_path),
+        ],
+    )
+
     assert result.exit_code == 0
     # positional scenarios_dir_1 must take precedence over --scenarios scenarios_dir_2
     called_path = mock_run_benchmark.call_args[1]["scenarios_dir"]
@@ -99,16 +112,20 @@ def test_benchmark_positional_precedence(mock_run_benchmark, tmp_path):
 @patch("aqueduct.surveyor.scenario.run_benchmark")
 def test_benchmark_scenarios_option_accepts_file(mock_run_benchmark, tmp_path):
     scenario_path = tmp_path / "test.aqscenario.yml"
-    scenario_path.write_text("aqueduct_scenario: '1.0'\nid: test_sc\ninject_failure:\n  module: m\n  error_message: 'Simulated'")
-    
+    scenario_path.write_text(
+        "aqueduct_scenario: '1.0'\nid: test_sc\ninject_failure:\n  module: m\n  error_message: 'Simulated'"
+    )
+
     mock_run_benchmark.return_value = {}
 
     config_path = tmp_path / "aqueduct.yml"
     config_path.write_text("agent:\n  provider: openai_compat\n  model: claude-sonnet-4-6\n")
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["benchmark", "--scenarios", str(scenario_path), "--config", str(config_path)])
-    
+    result = runner.invoke(
+        cli, ["benchmark", "--scenarios", str(scenario_path), "--config", str(config_path)]
+    )
+
     assert result.exit_code == 0
     called_path = mock_run_benchmark.call_args[1]["scenarios_dir"]
     assert called_path == Path(scenario_path)
@@ -118,22 +135,32 @@ def test_benchmark_scenarios_option_accepts_file(mock_run_benchmark, tmp_path):
 def test_benchmark_overrides_precedence(mock_run_benchmark, tmp_path):
     scenarios_dir = tmp_path / "scenarios"
     scenarios_dir.mkdir()
-    
+
     mock_run_benchmark.return_value = {}
 
     config_path = tmp_path / "aqueduct.yml"
-    config_path.write_text("agent:\n  provider: anthropic\n  model: my-sonnet\n  base_url: http://default-url\n  provider_options:\n    ollama_num_thread: 4\n")
+    config_path.write_text(
+        "agent:\n  provider: anthropic\n  model: my-sonnet\n  base_url: http://default-url\n  provider_options:\n    ollama_num_thread: 4\n"
+    )
 
     runner = CliRunner()
     # Override agent connection via --set (the deprecated --provider/--base-url flags were removed in 2.0)
-    result = runner.invoke(cli, [
-        "benchmark", str(scenarios_dir),
-        "--config", str(config_path),
-        "--set", "agent.provider=openai_compat",
-        "--set", "agent.base_url=http://my-override-url",
-        "--model", "my-override-model",
-    ])
-    
+    result = runner.invoke(
+        cli,
+        [
+            "benchmark",
+            str(scenarios_dir),
+            "--config",
+            str(config_path),
+            "--set",
+            "agent.provider=openai_compat",
+            "--set",
+            "agent.base_url=http://my-override-url",
+            "--model",
+            "my-override-model",
+        ],
+    )
+
     assert result.exit_code == 0
     # Assert run_benchmark arguments
     called_kwargs = mock_run_benchmark.call_args[1]
@@ -148,18 +175,25 @@ def test_benchmark_overrides_precedence(mock_run_benchmark, tmp_path):
 def test_benchmark_no_overrides_uses_cfg_agent(mock_run_benchmark, tmp_path):
     scenarios_dir = tmp_path / "scenarios"
     scenarios_dir.mkdir()
-    
+
     mock_run_benchmark.return_value = {}
 
     config_path = tmp_path / "aqueduct.yml"
-    config_path.write_text("agent:\n  provider: openai_compat\n  model: cfg-model\n  base_url: http://cfg-url\n  provider_options:\n    ollama_num_thread: 8\n")
+    config_path.write_text(
+        "agent:\n  provider: openai_compat\n  model: cfg-model\n  base_url: http://cfg-url\n  provider_options:\n    ollama_num_thread: 8\n"
+    )
 
     runner = CliRunner()
-    result = runner.invoke(cli, [
-        "benchmark", str(scenarios_dir),
-        "--config", str(config_path),
-    ])
-    
+    result = runner.invoke(
+        cli,
+        [
+            "benchmark",
+            str(scenarios_dir),
+            "--config",
+            str(config_path),
+        ],
+    )
+
     assert result.exit_code == 0
     called_kwargs = mock_run_benchmark.call_args[1]
     assert called_kwargs["provider"] == "openai_compat"
@@ -172,29 +206,42 @@ def test_benchmark_no_overrides_uses_cfg_agent(mock_run_benchmark, tmp_path):
 def test_benchmark_timeout_override_precedence(mock_run_benchmark, tmp_path):
     scenarios_dir = tmp_path / "scenarios"
     scenarios_dir.mkdir()
-    
+
     mock_run_benchmark.return_value = {}
 
     config_path = tmp_path / "aqueduct.yml"
-    config_path.write_text("agent:\n  provider: openai_compat\n  model: cfg-model\n  timeout: 300\n")
+    config_path.write_text(
+        "agent:\n  provider: openai_compat\n  model: cfg-model\n  timeout: 300\n"
+    )
 
     runner = CliRunner()
-    
+
     # 1. Override timeout via --set (the --timeout flag was removed in 2.0)
-    result = runner.invoke(cli, [
-        "benchmark", str(scenarios_dir),
-        "--config", str(config_path),
-        "--set", "agent.timeout=600",
-    ])
+    result = runner.invoke(
+        cli,
+        [
+            "benchmark",
+            str(scenarios_dir),
+            "--config",
+            str(config_path),
+            "--set",
+            "agent.timeout=600",
+        ],
+    )
     assert result.exit_code == 0
     called_kwargs = mock_run_benchmark.call_args[1]
     assert called_kwargs["timeout"] == 600.0
 
     # 2. Omitted flag (should use config value of 300)
-    result = runner.invoke(cli, [
-        "benchmark", str(scenarios_dir),
-        "--config", str(config_path),
-    ])
+    result = runner.invoke(
+        cli,
+        [
+            "benchmark",
+            str(scenarios_dir),
+            "--config",
+            str(config_path),
+        ],
+    )
     assert result.exit_code == 0
     called_kwargs = mock_run_benchmark.call_args[1]
     assert called_kwargs["timeout"] == 300.0
@@ -203,15 +250,20 @@ def test_benchmark_timeout_override_precedence(mock_run_benchmark, tmp_path):
 @patch("aqueduct.surveyor.scenario.run_benchmark")
 def test_benchmark_output_json_includes_patch(mock_run_benchmark, tmp_path):
     scenario_path = tmp_path / "test.aqscenario.yml"
-    scenario_path.write_text("aqueduct_scenario: '1.0'\nid: test_sc\ninject_failure:\n  module: m\n  error_message: 'Simulated'")
-    
+    scenario_path.write_text(
+        "aqueduct_scenario: '1.0'\nid: test_sc\ninject_failure:\n  module: m\n  error_message: 'Simulated'"
+    )
+
     from aqueduct.patch.grammar import PatchSpec
-    dummy_patch = PatchSpec.model_validate({
-        "patch_id": "dummy-fix",
-        "rationale": "Mock rationale",
-        "operations": [{"op": "replace_module_label", "module_id": "in", "label": "New Label"}],
-    })
-    
+
+    dummy_patch = PatchSpec.model_validate(
+        {
+            "patch_id": "dummy-fix",
+            "rationale": "Mock rationale",
+            "operations": [{"op": "replace_module_label", "module_id": "in", "label": "New Label"}],
+        }
+    )
+
     mock_run_benchmark.return_value = {
         "test_sc": {
             "claude-sonnet-4-6": ScenarioResult(
@@ -232,13 +284,15 @@ def test_benchmark_output_json_includes_patch(mock_run_benchmark, tmp_path):
             )
         }
     }
-    
+
     config_path = tmp_path / "aqueduct.yml"
     config_path.write_text("agent:\n  provider: openai_compat\n  model: claude-sonnet-4-6\n")
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["benchmark", str(scenario_path), "--config", str(config_path), "--format", "json"])
-    
+    result = runner.invoke(
+        cli, ["benchmark", str(scenario_path), "--config", str(config_path), "--format", "json"]
+    )
+
     assert result.exit_code == 0
     # Benchmark UX overhaul added multiple banner lines on stderr/stdout
     # (``↻ benchmark scenarios=...``, ``[benchmark] N scenarios × M models``,
@@ -258,8 +312,10 @@ def test_benchmark_output_json_includes_patch(mock_run_benchmark, tmp_path):
 @patch("aqueduct.surveyor.scenario.run_benchmark")
 def test_benchmark_table_failure_stderr(mock_run_benchmark, tmp_path):
     scenario_path = tmp_path / "test.aqscenario.yml"
-    scenario_path.write_text("aqueduct_scenario: '1.0'\nid: test_sc\ninject_failure:\n  module: m\n  error_message: 'Simulated'")
-    
+    scenario_path.write_text(
+        "aqueduct_scenario: '1.0'\nid: test_sc\ninject_failure:\n  module: m\n  error_message: 'Simulated'"
+    )
+
     # 1. With failure in table mode -> prints rerun warning to stderr and exits 1
     mock_run_benchmark.return_value = {
         "test_sc": {
@@ -280,14 +336,15 @@ def test_benchmark_table_failure_stderr(mock_run_benchmark, tmp_path):
             )
         }
     }
-    
+
     config_path = tmp_path / "aqueduct.yml"
     config_path.write_text("agent:\n  provider: openai_compat\n  model: claude-sonnet-4-6\n")
 
     runner = CliRunner()
     result = runner.invoke(cli, ["benchmark", str(scenario_path), "--config", str(config_path)])
-    
+
     from aqueduct.exit_codes import DATA_OR_RUNTIME
+
     assert result.exit_code == DATA_OR_RUNTIME
     assert "(1 failed — rerun with --format json" in result.stderr
 
@@ -335,14 +392,17 @@ def test_benchmark_table_failure_stderr(mock_run_benchmark, tmp_path):
             )
         }
     }
-    result = runner.invoke(cli, ["benchmark", str(scenario_path), "--config", str(config_path), "--format", "json"])
+    result = runner.invoke(
+        cli, ["benchmark", str(scenario_path), "--config", str(config_path), "--format", "json"]
+    )
     from aqueduct.exit_codes import DATA_OR_RUNTIME
+
     assert result.exit_code == DATA_OR_RUNTIME
     assert "rerun with --format json" not in result.stderr
 
 
-
 # ── Phase 33 Part A — persist / regression gate / benchmark-diff ──────────────
+
 
 def _passing_result(scenario_id="s1", model="m1"):
     """A minimal passing ScenarioResult with Phase 33 fields."""
@@ -395,10 +455,17 @@ def test_benchmark_no_persist_skips_db(mock_run, tmp_path):
     cfg.write_text("agent:\n  provider: anthropic\n  model: m1\n")
 
     runner = CliRunner()
-    result = runner.invoke(cli, [
-        "benchmark", str(scenarios_dir), "--config", str(cfg),
-        "--set", "stores.benchmark.persist=false",
-    ])
+    result = runner.invoke(
+        cli,
+        [
+            "benchmark",
+            str(scenarios_dir),
+            "--config",
+            str(cfg),
+            "--set",
+            "stores.benchmark.persist=false",
+        ],
+    )
 
     assert result.exit_code == 0
     store = scenarios_dir / ".aqueduct" / "benchmark.duckdb"
@@ -416,10 +483,17 @@ def test_benchmark_set_persist_false_no_deprecation(mock_run, tmp_path):
     cfg.write_text("agent:\n  provider: anthropic\n  model: m1\n")
 
     runner = CliRunner()
-    result = runner.invoke(cli, [
-        "benchmark", str(scenarios_dir), "--config", str(cfg),
-        "--set", "stores.benchmark.persist=false",
-    ])
+    result = runner.invoke(
+        cli,
+        [
+            "benchmark",
+            str(scenarios_dir),
+            "--config",
+            str(cfg),
+            "--set",
+            "stores.benchmark.persist=false",
+        ],
+    )
 
     assert result.exit_code == 0
     assert "[deprecated]" not in result.stderr + result.output
@@ -437,10 +511,17 @@ def test_benchmark_store_path_override(mock_run, tmp_path):
     override = tmp_path / "custom.duckdb"
 
     runner = CliRunner()
-    result = runner.invoke(cli, [
-        "benchmark", str(scenarios_dir), "--config", str(cfg),
-        "--set", f"stores.benchmark.path={override}",
-    ])
+    result = runner.invoke(
+        cli,
+        [
+            "benchmark",
+            str(scenarios_dir),
+            "--config",
+            str(cfg),
+            "--set",
+            f"stores.benchmark.path={override}",
+        ],
+    )
 
     assert result.exit_code == 0, result.output
     assert override.exists()
@@ -463,20 +544,40 @@ def test_benchmark_gate_on_regression_with_regression_exits_1(mock_run, tmp_path
 
     # Second run — failing result → regression vs baseline
     mock_run.return_value = {
-        "s1": {"m1": ScenarioResult(
-            scenario_id="s1", model="m1",
-            passed=False, patch_valid=True, patch_applies=False,
-            patch=None, confidence=0.9, duration_seconds=1.0,
-            attempts_to_parse=1, reprompt_errors=[], failures=["regression"],
-            soft_failures=[], prompt_version="1.0", provider="anthropic", base_url=None,
-        )}
+        "s1": {
+            "m1": ScenarioResult(
+                scenario_id="s1",
+                model="m1",
+                passed=False,
+                patch_valid=True,
+                patch_applies=False,
+                patch=None,
+                confidence=0.9,
+                duration_seconds=1.0,
+                attempts_to_parse=1,
+                reprompt_errors=[],
+                failures=["regression"],
+                soft_failures=[],
+                prompt_version="1.0",
+                provider="anthropic",
+                base_url=None,
+            )
+        }
     }
-    result = runner.invoke(cli, [
-        "benchmark", str(scenarios_dir), "--config", str(cfg),
-        "--set", "stores.benchmark.gate_on_regression=true",
-    ])
+    result = runner.invoke(
+        cli,
+        [
+            "benchmark",
+            str(scenarios_dir),
+            "--config",
+            str(cfg),
+            "--set",
+            "stores.benchmark.gate_on_regression=true",
+        ],
+    )
 
     from aqueduct.exit_codes import DATA_OR_RUNTIME
+
     assert result.exit_code == DATA_OR_RUNTIME
     assert "regression(s) detected" in result.stderr
 
@@ -495,10 +596,17 @@ def test_benchmark_gate_on_regression_no_regression_exits_0(mock_run, tmp_path):
     # Baseline run
     runner.invoke(cli, ["benchmark", str(scenarios_dir), "--config", str(cfg)])
     # Second run — same outcome, no regression
-    result = runner.invoke(cli, [
-        "benchmark", str(scenarios_dir), "--config", str(cfg),
-        "--set", "stores.benchmark.gate_on_regression=true",
-    ])
+    result = runner.invoke(
+        cli,
+        [
+            "benchmark",
+            str(scenarios_dir),
+            "--config",
+            str(cfg),
+            "--set",
+            "stores.benchmark.gate_on_regression=true",
+        ],
+    )
     assert result.exit_code == 0
 
 
@@ -512,11 +620,19 @@ def test_benchmark_gate_on_regression_with_no_persist_is_ignored(mock_run, tmp_p
 
     mock_run.return_value = {"s1": {"m1": _passing_result()}}
     runner = CliRunner()
-    result = runner.invoke(cli, [
-        "benchmark", str(scenarios_dir), "--config", str(cfg),
-        "--set", "stores.benchmark.gate_on_regression=true",
-        "--set", "stores.benchmark.persist=false",
-    ])
+    result = runner.invoke(
+        cli,
+        [
+            "benchmark",
+            str(scenarios_dir),
+            "--config",
+            str(cfg),
+            "--set",
+            "stores.benchmark.gate_on_regression=true",
+            "--set",
+            "stores.benchmark.persist=false",
+        ],
+    )
 
     assert result.exit_code == 0
     assert "(regression gate ignored: persistence is off)" in result.stderr
@@ -525,6 +641,7 @@ def test_benchmark_gate_on_regression_with_no_persist_is_ignored(mock_run, tmp_p
 def test_benchmark_diff_missing_store_exits_2(tmp_path, monkeypatch):
     """aqueduct benchmark-diff with missing store → exit 2 + 'benchmark store not found'."""
     from aqueduct.exit_codes import DATA_OR_RUNTIME
+
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
     result = runner.invoke(cli, ["benchmark-diff"])
@@ -545,24 +662,55 @@ def test_benchmark_diff_reads_store_exits_1_on_regression(mock_run, tmp_path):
 
     # First run — baseline (passing)
     mock_run.return_value = {"s1": {"m1": _passing_result()}}
-    runner.invoke(cli, ["benchmark", str(scenarios_dir), "--config", str(cfg),
-                        "--set", f"stores.benchmark.path={store}"])
+    runner.invoke(
+        cli,
+        [
+            "benchmark",
+            str(scenarios_dir),
+            "--config",
+            str(cfg),
+            "--set",
+            f"stores.benchmark.path={store}",
+        ],
+    )
 
     # Second run — regression
     mock_run.return_value = {
-        "s1": {"m1": ScenarioResult(
-            scenario_id="s1", model="m1",
-            passed=False, patch_valid=True, patch_applies=False,
-            patch=None, confidence=0.9, duration_seconds=1.0,
-            attempts_to_parse=1, reprompt_errors=[], failures=["err"],
-            soft_failures=[], prompt_version="1.0", provider="anthropic", base_url=None,
-        )}
+        "s1": {
+            "m1": ScenarioResult(
+                scenario_id="s1",
+                model="m1",
+                passed=False,
+                patch_valid=True,
+                patch_applies=False,
+                patch=None,
+                confidence=0.9,
+                duration_seconds=1.0,
+                attempts_to_parse=1,
+                reprompt_errors=[],
+                failures=["err"],
+                soft_failures=[],
+                prompt_version="1.0",
+                provider="anthropic",
+                base_url=None,
+            )
+        }
     }
-    runner.invoke(cli, ["benchmark", str(scenarios_dir), "--config", str(cfg),
-                        "--set", f"stores.benchmark.path={store}"])
+    runner.invoke(
+        cli,
+        [
+            "benchmark",
+            str(scenarios_dir),
+            "--config",
+            str(cfg),
+            "--set",
+            f"stores.benchmark.path={store}",
+        ],
+    )
 
     result = runner.invoke(cli, ["benchmark-diff", "--store-path", str(store)])
     from aqueduct.exit_codes import DATA_OR_RUNTIME
+
     assert result.exit_code == DATA_OR_RUNTIME
     assert "regression(s) detected" in result.stderr
 
@@ -581,13 +729,30 @@ def test_benchmark_diff_scenario_model_filter(mock_run, tmp_path):
         "s2": {"m1": _passing_result("s2", "m1")},
     }
     runner = CliRunner()
-    runner.invoke(cli, ["benchmark", str(scenarios_dir), "--config", str(cfg),
-                        "--set", f"stores.benchmark.path={store}"])
+    runner.invoke(
+        cli,
+        [
+            "benchmark",
+            str(scenarios_dir),
+            "--config",
+            str(cfg),
+            "--set",
+            f"stores.benchmark.path={store}",
+        ],
+    )
 
-    result = runner.invoke(cli, [
-        "benchmark-diff", "--store-path", str(store),
-        "--scenario", "s1", "--model", "m1",
-    ])
+    result = runner.invoke(
+        cli,
+        [
+            "benchmark-diff",
+            "--store-path",
+            str(store),
+            "--scenario",
+            "s1",
+            "--model",
+            "m1",
+        ],
+    )
     assert result.exit_code == 0
     assert "s1" in result.output
     assert "s2" not in result.output

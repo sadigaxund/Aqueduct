@@ -143,10 +143,12 @@ class TestUncommittedAppliedPatches:
         # No top-level applied_at, but has _aq_meta.applied_at
         p = applied_dir / "p001.json"
         p.write_text(
-            json.dumps({
-                "patch_id": "p001",
-                "_aq_meta": {"applied_at": "2026-05-10T14:00:00+00:00"},
-            }),
+            json.dumps(
+                {
+                    "patch_id": "p001",
+                    "_aq_meta": {"applied_at": "2026-05-10T14:00:00+00:00"},
+                }
+            ),
             encoding="utf-8",
         )
 
@@ -163,22 +165,31 @@ class TestUncommittedAppliedPatches:
         """Patches from other blueprints are excluded when blueprint_id is given
         (the patches/applied dir is shared across a project)."""
         from aqueduct.patch.grammar import PATCH_META_KEY
+
         bp = tmp_path / "bp.yml"
         bp.write_text("")
         applied_dir = tmp_path / "patches" / "applied"
         applied_dir.mkdir(parents=True)
 
         def _meta_patch(name, blueprint_id):
-            (applied_dir / name).write_text(json.dumps({
-                PATCH_META_KEY: {"blueprint_id": blueprint_id,
-                                 "applied_at": "2099-01-01T00:00:00+00:00"}}))
+            (applied_dir / name).write_text(
+                json.dumps(
+                    {
+                        PATCH_META_KEY: {
+                            "blueprint_id": blueprint_id,
+                            "applied_at": "2099-01-01T00:00:00+00:00",
+                        }
+                    }
+                )
+            )
 
         _meta_patch("a1.json", "bp_A")
         _meta_patch("a2.json", "bp_A")
         _meta_patch("b1.json", "bp_B")
         # not a git repo → "all" path, but the blueprint_id filter still applies
-        monkeypatch.setattr(subprocess, "run",
-                            lambda *a, **k: MagicMock(returncode=1, stdout="", stderr=""))
+        monkeypatch.setattr(
+            subprocess, "run", lambda *a, **k: MagicMock(returncode=1, stdout="", stderr="")
+        )
 
         got_b = _uncommitted_applied_patches(bp, tmp_path / "patches", blueprint_id="bp_B")
         assert [p.name for p in got_b] == ["b1.json"]
@@ -195,8 +206,8 @@ class TestUncommittedAppliedPatches:
         applied_dir = tmp_path / "patches" / "applied"
         applied_dir.mkdir(parents=True)
         _write_patch(applied_dir, "old.json", "2099-01-01T00:00:00+00:00")
-        monkeypatch.setattr(subprocess, "run",
-                            lambda *a, **k: MagicMock(returncode=1, stdout="", stderr=""))
+        monkeypatch.setattr(
+            subprocess, "run", lambda *a, **k: MagicMock(returncode=1, stdout="", stderr="")
+        )
         got = _uncommitted_applied_patches(bp, tmp_path / "patches", blueprint_id="bp_X")
         assert [p.name for p in got] == ["old.json"]
-

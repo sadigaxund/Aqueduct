@@ -5,6 +5,7 @@ import os
 
 console = Console()
 
+
 def main():
     out_path = "data/output/enriched.parquet"
 
@@ -37,6 +38,7 @@ def main():
         "back in — its rows use a 5% tax rate and a '-gold' segment suffix "
         "instead of the disabled default (8% tax, 'standard' segment).[/dim]"
     )
+
 
 if __name__ == "__main__":
     main()

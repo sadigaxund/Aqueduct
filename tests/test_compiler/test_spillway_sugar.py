@@ -130,9 +130,7 @@ class TestSpillwaySugarEquivalence:
         # executor (grep confirms zero `.injected` reads outside
         # serialization/docstrings), so it does not affect RUN behavior.
         def _shape(edges):
-            return sorted(
-                (e.from_id, e.to_id, e.port, tuple(e.error_types)) for e in edges
-            )
+            return sorted((e.from_id, e.to_id, e.port, tuple(e.error_types)) for e in edges)
 
         assert _shape(sugar_manifest.edges) == _shape(explicit_manifest.edges)
 
@@ -168,7 +166,8 @@ class TestSpillwaySugarAntiSilenceGuard:
         manifest = compiler_compile(parse(str(bp_path)), blueprint_path=bp_path)
 
         matching = [
-            e for e in manifest.edges
+            e
+            for e in manifest.edges
             if e.from_id == "ch" and e.to_id == "rejects" and e.port == "spillway"
         ]
         assert matching, (
@@ -183,7 +182,9 @@ class TestSpillwaySugarAntiSilenceGuard:
         way `on_fail: quarantine` + an explicit spillway edge already does
         (see `test_compiler.py`'s sibling tests for the negative case — no
         edge/sugar at all raises `CompileError`)."""
-        bp_path = _write_bp(tmp_path, """\
+        bp_path = _write_bp(
+            tmp_path,
+            """\
 aqueduct: "1.0"
 id: spillway_sugar_assert_quarantine
 name: Spillway Sugar Assert Quarantine
@@ -214,10 +215,12 @@ edges:
     to: chk
   - from: chk
     to: main_out
-""")
+""",
+        )
         manifest = compiler_compile(parse(str(bp_path)), blueprint_path=bp_path)
         matching = [
-            e for e in manifest.edges
+            e
+            for e in manifest.edges
             if e.from_id == "chk" and e.to_id == "bad_rows" and e.port == "spillway"
         ]
         assert matching
@@ -227,7 +230,9 @@ class TestSpillwaySugarConflicts:
     """A module carrying BOTH the sugar field and an explicit spillway edge."""
 
     def test_same_target_is_idempotent_no_duplicate_edge(self, tmp_path):
-        bp_path = _write_bp(tmp_path, """\
+        bp_path = _write_bp(
+            tmp_path,
+            """\
 aqueduct: "1.0"
 id: spillway_sugar_same_target
 name: Spillway Sugar Same Target
@@ -260,7 +265,8 @@ edges:
   - from: ch
     to: rejects
     port: spillway
-""")
+""",
+        )
         manifest = compiler_compile(parse(str(bp_path)), blueprint_path=bp_path)
         spillway_edges = [e for e in manifest.edges if e.port == "spillway"]
         assert len(spillway_edges) == 1
@@ -268,7 +274,9 @@ edges:
         assert ch.spillway is None
 
     def test_different_target_raises_compile_error(self, tmp_path):
-        bp_path = _write_bp(tmp_path, """\
+        bp_path = _write_bp(
+            tmp_path,
+            """\
 aqueduct: "1.0"
 id: spillway_sugar_conflict
 name: Spillway Sugar Conflict
@@ -305,7 +313,8 @@ edges:
   - from: ch
     to: rejects_b
     port: spillway
-""")
+""",
+        )
         with pytest.raises(CompileError, match="different target|DIFFERENT target"):
             compiler_compile(parse(str(bp_path)), blueprint_path=bp_path)
 
@@ -323,7 +332,8 @@ class TestSpillwaySugarArcadeExpansion:
     def test_spillway_sugar_inside_an_arcade_gets_namespaced_and_desugared(self, tmp_path):
         (tmp_path / "arcades").mkdir()
         sub_bp = tmp_path / "arcades" / "sub.yml"
-        sub_bp.write_text("""\
+        sub_bp.write_text(
+            """\
 aqueduct: "1.0"
 id: sub_with_spillway
 name: Sub With Spillway
@@ -341,8 +351,12 @@ modules:
     label: Rejects
     config: {format: parquet, path: /tmp/sub_rejects.parquet, mode: overwrite}
 edges: []
-""", encoding="utf-8")
-        parent_bp = _write_bp(tmp_path, """\
+""",
+            encoding="utf-8",
+        )
+        parent_bp = _write_bp(
+            tmp_path,
+            """\
 aqueduct: "1.0"
 id: parent_with_arcade_spillway
 name: Parent With Arcade Spillway
@@ -364,7 +378,8 @@ edges:
     to: enricher
   - from: enricher
     to: sink
-""")
+""",
+        )
         manifest = compiler_compile(parse(str(parent_bp)), blueprint_path=parent_bp)
 
         module_ids = {m.id for m in manifest.modules}

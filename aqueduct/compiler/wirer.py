@@ -146,9 +146,7 @@ def desugar_module_spillway(
                 "the edge, or delete the conflicting edge."
             )
         if m.spillway not in targets:
-            new_edges.append(
-                Edge(from_id=m.id, to_id=m.spillway, port="spillway", injected=True)
-            )
+            new_edges.append(Edge(from_id=m.id, to_id=m.spillway, port="spillway", injected=True))
         # else: an identical explicit edge already exists — idempotent no-op.
         new_modules.append(dataclasses.replace(m, spillway=None))
     return new_modules, new_edges
@@ -199,9 +197,7 @@ def compile_away_regulators(
     active_regulator_ids = {e.to_id for e in edges if e.port == "signal"}
 
     passive_regulator_ids = {
-        m.id
-        for m in modules
-        if m.type == ModuleType.Regulator and m.id not in active_regulator_ids
+        m.id for m in modules if m.type == ModuleType.Regulator and m.id not in active_regulator_ids
     }
 
     if not passive_regulator_ids:
@@ -222,16 +218,14 @@ def compile_away_regulators(
     for reg_id in passive_regulator_ids:
         for upstream in upstream_of.get(reg_id, []):
             for downstream in downstream_of.get(reg_id, []):
-                bypass_edges.append(
-                    Edge(from_id=upstream, to_id=downstream, port="main")
-                )
+                bypass_edges.append(Edge(from_id=upstream, to_id=downstream, port="main"))
 
     # Remove passive regulators and their edges
     filtered_modules = [m for m in modules if m.id not in passive_regulator_ids]
     filtered_edges = [
-        e for e in edges
-        if e.from_id not in passive_regulator_ids
-        and e.to_id not in passive_regulator_ids
+        e
+        for e in edges
+        if e.from_id not in passive_regulator_ids and e.to_id not in passive_regulator_ids
     ] + bypass_edges
 
     return filtered_modules, filtered_edges

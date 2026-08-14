@@ -18,7 +18,9 @@ class TestStdoutReportLines:
         assert lines == ["row_count_estimate: method=sample  ·  estimate=1234"]
 
     def test_nested_dict_expands_one_line_per_entry(self):
-        lines = _stdout_report_lines("null_rates", {"sampled": True, "rates": {"email": 0.12, "name": 0.0}})
+        lines = _stdout_report_lines(
+            "null_rates", {"sampled": True, "rates": {"email": 0.12, "name": 0.0}}
+        )
         assert lines[0] == "null_rates: sampled=True"
         assert "  rates.email: 0.12" in lines
         assert "  rates.name: 0.0" in lines
@@ -37,9 +39,14 @@ class TestModuleResultNotes:
     def test_notes_default_empty_and_serialized(self):
         mr = ModuleResult(module_id="p", status="success")
         assert mr.notes == ()
-        er = ExecutionResult(blueprint_id="b", run_id="r", status="success",
-                             module_results=(ModuleResult(module_id="p", status="success",
-                                                          notes=("row_count: 5",)),))
+        er = ExecutionResult(
+            blueprint_id="b",
+            run_id="r",
+            status="success",
+            module_results=(
+                ModuleResult(module_id="p", status="success", notes=("row_count: 5",)),
+            ),
+        )
         assert er.to_dict()["module_results"][0]["notes"] == ["row_count: 5"]
 
     def test_notes_are_not_warnings(self):

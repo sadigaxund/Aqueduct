@@ -64,6 +64,7 @@ class BackendUnsupportedError(AqueductError):
 
 # ── Cursor abstraction ────────────────────────────────────────────────────────
 
+
 class RelationalCursor:
     """Thin wrapper around a DB-API cursor with `?` → driver-native placeholder rewriting.
 
@@ -107,6 +108,7 @@ class RelationalCursor:
 
 
 # ── Store ABCs ────────────────────────────────────────────────────────────────
+
 
 class _RelationalStore(ABC):
     """Common interface for relational-flavoured stores (observability + lineage + depot-PG)."""
@@ -178,6 +180,7 @@ class _RelationalDepotMixin:
     ``_path`` attribute — Postgres backends that lack it skip the guard
     and delegate to ``connect()`` directly.
     """
+
     _DDL: str = ""
 
     def kv_get(self, key: str, default: str = "") -> str:
@@ -187,9 +190,7 @@ class _RelationalDepotMixin:
         try:
             with self.connect() as cur:
                 cur.execute(self._DDL)
-                row = cur.execute(
-                    "SELECT value FROM depot_kv WHERE key = ?", [key]
-                ).fetchone()
+                row = cur.execute("SELECT value FROM depot_kv WHERE key = ?", [key]).fetchone()
                 return row[0] if row else default
         except Exception as exc:
             logger.warning("%s.kv_get(%r): %s — returning default", type(self).__name__, key, exc)
@@ -221,6 +222,7 @@ class _RelationalDepotMixin:
 
 
 # ── Factory ───────────────────────────────────────────────────────────────────
+
 
 class _NamespacedDepot:
     """Transparently prefixes every depot key with ``<blueprint_id>:`` so two
@@ -257,8 +259,8 @@ class StoreBundle:
     """
 
     observability: ObservabilityStore
-    depot: DepotStore                          # the default mount (key-isolated per blueprint)
-    depots: dict[str, DepotStore] = field(default_factory=dict)   # name → mount (incl. "default")
+    depot: DepotStore  # the default mount (key-isolated per blueprint)
+    depots: dict[str, DepotStore] = field(default_factory=dict)  # name → mount (incl. "default")
 
 
 def get_stores(
@@ -302,6 +304,7 @@ def get_stores(
         # — their `path` IS the db file — see `_resolve_depot_duckdb_path`.
         from aqueduct.config import DEFAULT_OBS_DB_FILENAME
         from aqueduct.stores.read import _OBS_ROUTING_ROOT
+
         if store_dir_override:
             _base = Path(store_dir_override)
         elif store_cfg.path is not None:
@@ -315,6 +318,7 @@ def get_stores(
         if mount.path is None:
             from aqueduct.config import DEFAULT_OBS_DB_FILENAME
             from aqueduct.stores.read import _OBS_ROUTING_ROOT
+
             _base = Path(store_dir_override) if store_dir_override else Path(_OBS_ROUTING_ROOT)
             return _base / (blueprint_id or "default") / DEFAULT_OBS_DB_FILENAME
         p = Path(mount.path)
@@ -330,6 +334,7 @@ def get_stores(
         obs = DuckDBObservabilityStore(_resolve_obs_duckdb_path(cfg.stores.observability))
     elif cfg.stores.observability.backend == "postgres":
         from aqueduct.stores.postgres import PostgresObservabilityStore
+
         obs = PostgresObservabilityStore(cfg.stores.observability.path or "")
     else:  # pragma: no cover — guarded at config layer
         raise BackendUnsupportedError(
@@ -345,12 +350,15 @@ def get_stores(
             return DuckDBDepotStore(_resolve_depot_duckdb_path(mount))
         if mount.backend == "postgres":
             from aqueduct.stores.postgres import PostgresDepotStore
+
             return PostgresDepotStore(mount.path)
         if mount.backend == "redis":
             from aqueduct.stores.redis_ import RedisDepotStore
+
             return RedisDepotStore(mount.path)
         raise BackendUnsupportedError(  # pragma: no cover — guarded at config layer
-            f"depot.backend={mount.backend!r} is not a supported KV backend")
+            f"depot.backend={mount.backend!r} is not a supported KV backend"
+        )
 
     depots: dict[str, DepotStore] = {}
     for name, mount in cfg.stores.effective_depots().items():

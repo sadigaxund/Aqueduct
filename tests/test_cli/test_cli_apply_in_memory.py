@@ -17,7 +17,8 @@ def test_apply_patch_in_memory_uses_blueprint_parent_dir(tmp_path):
     """_apply_patch_in_memory uses blueprint_path.parent as base_dir, not /tmp/."""
     bp = tmp_path / "blueprints" / "test.yml"
     bp.parent.mkdir(parents=True)
-    bp.write_text("""\
+    bp.write_text(
+        """\
 aqueduct: '1.0'
 id: test.bp
 name: Test
@@ -26,15 +27,18 @@ modules:
     type: Ingress
     config: {format: parquet, path: data/input.parquet}
 edges: []
-""")
+"""
+    )
     patch_spec = MagicMock()
     patch_spec.operations = []
 
     from aqueduct.cli import _apply_patch_in_memory
 
-    with patch("aqueduct.patch.apply.apply_patch_to_dict", return_value={}), \
-         patch("aqueduct.parser.parser.parse_dict") as mock_parse, \
-         patch("aqueduct.compiler.compiler.compile") as mock_compile:
+    with (
+        patch("aqueduct.patch.apply.apply_patch_to_dict", return_value={}),
+        patch("aqueduct.parser.parser.parse_dict") as mock_parse,
+        patch("aqueduct.compiler.compiler.compile") as mock_compile,
+    ):
         mock_compile.return_value = MagicMock()
         _apply_patch_in_memory(patch_spec, bp, depot=None, profile=None, cli_overrides={})
 
@@ -45,20 +49,24 @@ edges: []
 def test_apply_patch_in_memory_parse_error_returns_none(tmp_path):
     """Parse/compilation errors in apply_patch_in_memory return None."""
     bp = tmp_path / "blueprint.yml"
-    bp.write_text("""\
+    bp.write_text(
+        """\
 aqueduct: '1.0'
 id: test.bp
 name: Test
 modules: []
 edges: []
-""")
+"""
+    )
     patch_spec = MagicMock()
     patch_spec.operations = []
 
     from aqueduct.cli import _apply_patch_in_memory
 
-    with patch("aqueduct.patch.apply.apply_patch_to_dict", return_value={}), \
-         patch("aqueduct.parser.parser.parse_dict", side_effect=Exception("parse failed")):
+    with (
+        patch("aqueduct.patch.apply.apply_patch_to_dict", return_value={}),
+        patch("aqueduct.parser.parser.parse_dict", side_effect=Exception("parse failed")),
+    ):
         result = _apply_patch_in_memory(patch_spec, bp, depot=None, profile=None, cli_overrides={})
     assert result is None
 
@@ -75,15 +83,21 @@ def test_stage_failed_patch_shows_actual_filename(tmp_path):
     pending = patches_dir / "pending"
     pending.mkdir(parents=True)
     patch = PatchSpec(
-        patch_id="p-test", rationale="fix",
-        operations=[{"op": "set_module_config_key",
-                     "module_id": "m1", "key": "k", "value": "v"}],
+        patch_id="p-test",
+        rationale="fix",
+        operations=[{"op": "set_module_config_key", "module_id": "m1", "key": "k", "value": "v"}],
     )
     failure_ctx = FailureContext(
-        run_id="run1", blueprint_id="bp1", failed_module=None,
-        error_message="msg", stack_trace="", manifest_json="{}",
-        started_at="2020-01-01T00:00:00Z", finished_at="2020-01-01T00:00:00Z",
-     engine="spark",)
+        run_id="run1",
+        blueprint_id="bp1",
+        failed_module=None,
+        error_message="msg",
+        stack_trace="",
+        manifest_json="{}",
+        started_at="2020-01-01T00:00:00Z",
+        finished_at="2020-01-01T00:00:00Z",
+        engine="spark",
+    )
 
     class FakeClick:
         echo = MagicMock()

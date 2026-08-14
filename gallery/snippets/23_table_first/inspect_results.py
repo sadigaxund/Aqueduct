@@ -27,7 +27,9 @@ def main():
         if output_dir.is_dir():
             parquet_files = list(output_dir.glob("*.parquet")) + list(output_dir.glob("part-*"))
             if not parquet_files:
-                console.print(f"[bold yellow]⚠[/bold yellow] No Parquet files found in {output_dir}.")
+                console.print(
+                    f"[bold yellow]⚠[/bold yellow] No Parquet files found in {output_dir}."
+                )
                 return
         con = duckdb.connect()
         try:
@@ -61,7 +63,9 @@ def main():
         t.add_row(*[str(v) for v in row])
 
     console.print(t)
-    console.print(f"\n[dim]Row count: {len(rows)} — read via table: demo_table, written via table: demo_output[/dim]")
+    console.print(
+        f"\n[dim]Row count: {len(rows)} — read via table: demo_table, written via table: demo_output[/dim]"
+    )
 
 
 if __name__ == "__main__":

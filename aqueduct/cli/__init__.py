@@ -637,9 +637,7 @@ def _run_patch_gates_inline(  # noqa: F811
             # WHY, instead of a bare `not_applicable` with a null detail
             # that looks identical to an unset field).
             detail=(
-                "; ".join(w.detail for w in lineage_res.warnings)
-                or lineage_res.detail
-                or None
+                "; ".join(w.detail for w in lineage_res.warnings) or lineage_res.detail or None
             ),
             duration_ms=lineage_res.duration_ms,
             run_id=iteration_run_id,
@@ -1110,7 +1108,7 @@ class _AqueductJsonLogFormatter:
 _MISSING_EXTRA_BY_MODULE: dict[str, str] = {
     "pyspark": "spark",
     "delta": "spark",  # delta-spark's import name
-    "py4j": "spark",   # pyspark's own JVM-bridge dependency
+    "py4j": "spark",  # pyspark's own JVM-bridge dependency
 }
 
 

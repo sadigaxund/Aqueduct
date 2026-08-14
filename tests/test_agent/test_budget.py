@@ -21,8 +21,8 @@ from aqueduct.agent.budget import (
 from aqueduct.errors import ConfigError
 from aqueduct.agent.signature import make_signature
 
-
 # ── BudgetConfig ──────────────────────────────────────────────────────────────
+
 
 class TestBudgetConfig:
     def test_defaults(self):
@@ -60,7 +60,9 @@ class TestBudgetConfig:
             BudgetConfig(max_seconds=-1)
 
     def test_same_error_consecutive_one_rejected(self):
-        with pytest.raises(ConfigError, match="single occurrence is not yet evidence of being stuck"):
+        with pytest.raises(
+            ConfigError, match="single occurrence is not yet evidence of being stuck"
+        ):
             BudgetConfig(same_error_consecutive=1)
 
     def test_same_signature_overall_lt_consecutive_rejected(self):
@@ -75,8 +77,12 @@ class TestBudgetConfig:
         b = BudgetConfig()
         d = b.to_dict()
         assert set(d.keys()) == {
-            "max_reprompts", "max_seconds", "max_tokens_total",
-            "same_error_consecutive", "same_signature_overall", "progress_stalled_window",
+            "max_reprompts",
+            "max_seconds",
+            "max_tokens_total",
+            "same_error_consecutive",
+            "same_signature_overall",
+            "progress_stalled_window",
         }
 
     def test_to_dict_none_round_trips(self):
@@ -93,8 +99,13 @@ class TestDefaultBudget:
 
     def test_stop_reasons_contains_all_documented(self):
         expected = {
-            StopReason.SOLVED, StopReason.EXHAUSTED_ATTEMPTS, StopReason.BUDGET_SECONDS_EXCEEDED,
-            StopReason.BUDGET_TOKENS_EXCEEDED, StopReason.STUCK_SIGNATURE, StopReason.PROGRESS_STALLED, StopReason.API_ERROR,
+            StopReason.SOLVED,
+            StopReason.EXHAUSTED_ATTEMPTS,
+            StopReason.BUDGET_SECONDS_EXCEEDED,
+            StopReason.BUDGET_TOKENS_EXCEEDED,
+            StopReason.STUCK_SIGNATURE,
+            StopReason.PROGRESS_STALLED,
+            StopReason.API_ERROR,
             StopReason.DEFERRED,
         }
         assert set(STOP_REASONS) == expected
@@ -109,8 +120,10 @@ class TestDefaultBudget:
 
 # ── BudgetTracker ─────────────────────────────────────────────────────────────
 
+
 def _sig(tag: str = "default") -> "ErrorSignature":
     from aqueduct.agent.signature import make_signature
+
     return make_signature("err", "root", f"message {tag}", engine="spark")
 
 
@@ -240,7 +253,9 @@ class TestBudgetTracker:
 
     # progress_stalled
     def test_check_stop_progress_stalled(self):
-        t = self._tracker(progress_stalled_window=3, same_error_consecutive=2, same_signature_overall=10)
+        t = self._tracker(
+            progress_stalled_window=3, same_error_consecutive=2, same_signature_overall=10
+        )
         sig = _sig("same")
         for _ in range(3):
             t.begin_attempt()
@@ -251,7 +266,9 @@ class TestBudgetTracker:
 
     def test_check_stop_progress_stalled_distinct_window(self):
         """Window of 3 with all same → progress_stalled (when overall is high enough)."""
-        t = self._tracker(progress_stalled_window=3, same_error_consecutive=5, same_signature_overall=20)
+        t = self._tracker(
+            progress_stalled_window=3, same_error_consecutive=5, same_signature_overall=20
+        )
         sig = _sig("same")
         for _ in range(3):
             t.begin_attempt()
@@ -263,15 +280,19 @@ class TestBudgetTracker:
     def test_should_escalate_when_consecutive_trips_and_not_escalated(self):
         t = self._tracker(same_error_consecutive=2, same_signature_overall=10)
         sig = _sig("stuck")
-        t.begin_attempt(); t.record(sig)
-        t.begin_attempt(); t.record(sig)
+        t.begin_attempt()
+        t.record(sig)
+        t.begin_attempt()
+        t.record(sig)
         assert t.should_escalate() is True
 
     def test_should_escalate_false_after_mark_escalated(self):
         t = self._tracker(same_error_consecutive=2, same_signature_overall=10)
         sig = _sig("stuck")
-        t.begin_attempt(); t.record(sig)
-        t.begin_attempt(); t.record(sig)
+        t.begin_attempt()
+        t.record(sig)
+        t.begin_attempt()
+        t.record(sig)
         t.mark_escalated()
         assert t.should_escalate() is False
 
@@ -293,7 +314,7 @@ class TestBudgetTracker:
         assert t.check_stop() == StopReason.DEFERRED
 
     # summary
-        # mark_budget_seconds_exceeded (Phase 40)
+    # mark_budget_seconds_exceeded (Phase 40)
     def test_mark_budget_seconds_exceeded_sets_stop_reason(self):
         t = self._tracker()
         assert t.stop_reason is None
@@ -318,8 +339,13 @@ class TestBudgetTracker:
         t.record(_sig(), tokens_in=5, tokens_out=3)
         s = t.summary()
         expected_keys = {
-            "attempts", "stop_reason", "tokens_in_total", "tokens_out_total",
-            "elapsed_seconds", "excluded_gate_seconds", "escalated_once",
+            "attempts",
+            "stop_reason",
+            "tokens_in_total",
+            "tokens_out_total",
+            "elapsed_seconds",
+            "excluded_gate_seconds",
+            "escalated_once",
             "signatures",
         }
         assert set(s.keys()) == expected_keys
@@ -339,6 +365,7 @@ class TestBudgetTracker:
 
 
 # ── Phase 46 — pause_clock ────────────────────────────────────────────────────
+
 
 class TestPauseClock:
     def test_pause_clock_adds_excluded_seconds(self):

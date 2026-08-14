@@ -141,6 +141,7 @@ class AqFunctions:
 
     def secret(self, key: str) -> str:
         from aqueduct.secrets import SecretsError, resolve_secret
+
         try:
             return resolve_secret(
                 key,
@@ -167,10 +168,12 @@ class AqFunctions:
         if self._depot is not None:
             return str(self._depot.get(key, default))
         import logging as _logging
+
         _logging.getLogger(__name__).warning(
             "@aq.depot.get('%s') called but no depot backend is configured — "
             "returning default '%s'. Incremental pipelines will re-read all data.",
-            key, default,
+            key,
+            default,
         )
         return default
 
@@ -206,11 +209,13 @@ class AqFunctions:
 
     def blueprint_path(self) -> str:
         return self._require(
-            "blueprint.path", str(self._blueprint_path) if self._blueprint_path else None)
+            "blueprint.path", str(self._blueprint_path) if self._blueprint_path else None
+        )
 
     def blueprint_dir(self) -> str:
         return self._require(
-            "blueprint.dir", str(self._blueprint_path.parent) if self._blueprint_path else None)
+            "blueprint.dir", str(self._blueprint_path.parent) if self._blueprint_path else None
+        )
 
     def deployment_env(self) -> str:
         return self._require("deployment.env", self._deployment_env)
@@ -223,6 +228,7 @@ class AqFunctions:
 
     def engine_version(self) -> str:
         from aqueduct import __version__
+
         return __version__
 
 
@@ -283,9 +289,7 @@ def _call(registry: AqFunctions, func_path: str, args_str: str) -> str:
         args = [ast.literal_eval(a) for a in call_node.args]
         kwargs = {kw.arg: ast.literal_eval(kw.value) for kw in call_node.keywords}
     except (SyntaxError, ValueError) as exc:
-        raise CompileError(
-            f"Cannot parse arguments for {func_path}({args_str!r}): {exc}"
-        ) from exc
+        raise CompileError(f"Cannot parse arguments for {func_path}({args_str!r}): {exc}") from exc
 
     # A user-supplied arg count/type mismatch against the registered method's
     # signature (e.g. @aq.date.offset() with no args, or the wrong number of

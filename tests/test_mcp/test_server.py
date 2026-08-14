@@ -86,11 +86,15 @@ def test_import_aqueduct_mcp_leaves_sdk_out_of_sys_modules():
     import sys
 
     r = subprocess.run(
-        [sys.executable, "-c",
-         "import aqueduct.mcp, sys; "
-         "assert 'mcp' not in sys.modules, 'import aqueduct.mcp pulled the mcp SDK'; "
-         "assert 'anyio' not in sys.modules, 'import aqueduct.mcp pulled anyio'"],
-        capture_output=True, text=True,
+        [
+            sys.executable,
+            "-c",
+            "import aqueduct.mcp, sys; "
+            "assert 'mcp' not in sys.modules, 'import aqueduct.mcp pulled the mcp SDK'; "
+            "assert 'anyio' not in sys.modules, 'import aqueduct.mcp pulled anyio'",
+        ],
+        capture_output=True,
+        text=True,
     )
     assert r.returncode == 0, r.stderr
 

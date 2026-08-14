@@ -22,16 +22,23 @@ pytestmark = pytest.mark.unit
 
 def _failure_ctx() -> FailureContext:
     return FailureContext(
-        run_id="r1", blueprint_id="bp1", failed_module="ingress1",
-        error_message="path not found", stack_trace=None,
-        manifest_json=json.dumps({
-            "blueprint_id": "bp1",
-            "modules": [{"id": "ingress1", "type": "Ingress", "config": {}}],
-            "edges": [],
-        }),
-        started_at="2026-01-01T00:00:00Z", finished_at="2026-01-01T00:00:01Z",
+        run_id="r1",
+        blueprint_id="bp1",
+        failed_module="ingress1",
+        error_message="path not found",
+        stack_trace=None,
+        manifest_json=json.dumps(
+            {
+                "blueprint_id": "bp1",
+                "modules": [{"id": "ingress1", "type": "Ingress", "config": {}}],
+                "edges": [],
+            }
+        ),
+        started_at="2026-01-01T00:00:00Z",
+        finished_at="2026-01-01T00:00:01Z",
         blueprint_source_yaml="id: bp1\nmodules: []\n",
-     engine="spark",)
+        engine="spark",
+    )
 
 
 def _toolbox(fc: FailureContext) -> ToolBox:
@@ -70,21 +77,29 @@ class TestAgenticModeAnthropic:
     def test_tool_call_then_patch(self, mock_client_cls, monkeypatch, tmp_path):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
         fc = _failure_ctx()
-        mock_client_cls.return_value = _mock_client_sequence([
-            {
-                "content": [{"type": "tool_use", "id": "tu1", "name": "read_blueprint", "input": {}}],
-                "usage": {"input_tokens": 100, "output_tokens": 20},
-            },
-            {
-                "content": [{"type": "text", "text": json.dumps(_VALID_PATCH)}],
-                "usage": {"input_tokens": 50, "output_tokens": 30},
-            },
-        ])
+        mock_client_cls.return_value = _mock_client_sequence(
+            [
+                {
+                    "content": [
+                        {"type": "tool_use", "id": "tu1", "name": "read_blueprint", "input": {}}
+                    ],
+                    "usage": {"input_tokens": 100, "output_tokens": 20},
+                },
+                {
+                    "content": [{"type": "text", "text": json.dumps(_VALID_PATCH)}],
+                    "usage": {"input_tokens": 50, "output_tokens": 30},
+                },
+            ]
+        )
 
         result = generate_agent_patch(
             agent_cfg=AgentRunConfig(
-                failure_ctx=fc, model="claude-x", patches_dir=tmp_path / "patches",
-                provider="anthropic", toolbox=_toolbox(fc), mode="agentic",
+                failure_ctx=fc,
+                model="claude-x",
+                patches_dir=tmp_path / "patches",
+                provider="anthropic",
+                toolbox=_toolbox(fc),
+                mode="agentic",
             ),
         )
 
@@ -101,14 +116,23 @@ class TestAgenticModeAnthropic:
         (e.g. cascade tier override) must fall back safely."""
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
         fc = _failure_ctx()
-        mock_client_cls.return_value = _mock_client_sequence([
-            {"content": [{"text": json.dumps(_VALID_PATCH)}], "usage": {"input_tokens": 10, "output_tokens": 10}},
-        ])
+        mock_client_cls.return_value = _mock_client_sequence(
+            [
+                {
+                    "content": [{"text": json.dumps(_VALID_PATCH)}],
+                    "usage": {"input_tokens": 10, "output_tokens": 10},
+                },
+            ]
+        )
 
         result = generate_agent_patch(
             agent_cfg=AgentRunConfig(
-                failure_ctx=fc, model="claude-x", patches_dir=tmp_path / "patches",
-                provider="anthropic", toolbox=_toolbox(fc), mode="oneshot",
+                failure_ctx=fc,
+                model="claude-x",
+                patches_dir=tmp_path / "patches",
+                provider="anthropic",
+                toolbox=_toolbox(fc),
+                mode="oneshot",
             ),
         )
         assert result.patch is not None
@@ -118,36 +142,48 @@ class TestAgenticModeAnthropic:
         assert "tools" not in call_kwargs["json"]
 
     @patch("httpx.Client")
-    def test_reprompt_turn_resets_per_attempt_tool_cap(self, mock_client_cls, monkeypatch, tmp_path):
+    def test_reprompt_turn_resets_per_attempt_tool_cap(
+        self, mock_client_cls, monkeypatch, tmp_path
+    ):
         """A reprompt after an invalid first patch gets its OWN fresh
         max_tool_calls budget (design item 4 — caps compose per-attempt)."""
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
         fc = _failure_ctx()
-        mock_client_cls.return_value = _mock_client_sequence([
-            # Attempt 1: one tool call, then an INVALID patch (missing operations).
-            {
-                "content": [{"type": "tool_use", "id": "tu1", "name": "read_blueprint", "input": {}}],
-                "usage": {"input_tokens": 10, "output_tokens": 5},
-            },
-            {
-                "content": [{"type": "text", "text": '{"patch_id": "bad"}'}],
-                "usage": {"input_tokens": 10, "output_tokens": 5},
-            },
-            # Attempt 2 (reprompt): one tool call again, then a valid patch.
-            {
-                "content": [{"type": "tool_use", "id": "tu2", "name": "read_blueprint", "input": {}}],
-                "usage": {"input_tokens": 10, "output_tokens": 5},
-            },
-            {
-                "content": [{"type": "text", "text": json.dumps(_VALID_PATCH)}],
-                "usage": {"input_tokens": 10, "output_tokens": 5},
-            },
-        ])
+        mock_client_cls.return_value = _mock_client_sequence(
+            [
+                # Attempt 1: one tool call, then an INVALID patch (missing operations).
+                {
+                    "content": [
+                        {"type": "tool_use", "id": "tu1", "name": "read_blueprint", "input": {}}
+                    ],
+                    "usage": {"input_tokens": 10, "output_tokens": 5},
+                },
+                {
+                    "content": [{"type": "text", "text": '{"patch_id": "bad"}'}],
+                    "usage": {"input_tokens": 10, "output_tokens": 5},
+                },
+                # Attempt 2 (reprompt): one tool call again, then a valid patch.
+                {
+                    "content": [
+                        {"type": "tool_use", "id": "tu2", "name": "read_blueprint", "input": {}}
+                    ],
+                    "usage": {"input_tokens": 10, "output_tokens": 5},
+                },
+                {
+                    "content": [{"type": "text", "text": json.dumps(_VALID_PATCH)}],
+                    "usage": {"input_tokens": 10, "output_tokens": 5},
+                },
+            ]
+        )
 
         result = generate_agent_patch(
             agent_cfg=AgentRunConfig(
-                failure_ctx=fc, model="claude-x", patches_dir=tmp_path / "patches",
-                provider="anthropic", toolbox=_toolbox(fc), mode="agentic",
+                failure_ctx=fc,
+                model="claude-x",
+                patches_dir=tmp_path / "patches",
+                provider="anthropic",
+                toolbox=_toolbox(fc),
+                mode="agentic",
                 max_reprompts=3,
             ),
         )

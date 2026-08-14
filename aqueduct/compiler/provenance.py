@@ -31,27 +31,31 @@ class ValueProvenance:
     # For context_ref and arcade_inherited (when the arcade injects a ctx key)
     context_key: str | None = None
     # For arcade_inherited
-    arcade_module_id: str | None = None       # e.g. "yellow_process" (parent arcade)
-    arcade_sub_module_id: str | None = None   # original sub-module id, e.g. "ingress"
-    sub_blueprint_path: str | None = None     # relative path, e.g. "arcades/taxi_processor.yml"
+    arcade_module_id: str | None = None  # e.g. "yellow_process" (parent arcade)
+    arcade_sub_module_id: str | None = None  # original sub-module id, e.g. "ingress"
+    sub_blueprint_path: str | None = None  # relative path, e.g. "arcades/taxi_processor.yml"
     # For env_ref
     env_var: str | None = None
     # Original unresolved expression from YAML source
-    original_expression: str | None = None    # e.g. "${ctx.paths.yellow_path}"
+    original_expression: str | None = None  # e.g. "${ctx.paths.yellow_path}"
     # Resolved (compiled) value for quick reference
     resolved_value: Any = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {k: v for k, v in {
-            "source_type": self.source_type,
-            "context_key": self.context_key,
-            "arcade_module_id": self.arcade_module_id,
-            "arcade_sub_module_id": self.arcade_sub_module_id,
-            "sub_blueprint_path": self.sub_blueprint_path,
-            "env_var": self.env_var,
-            "original_expression": self.original_expression,
-            "resolved_value": self.resolved_value,
-        }.items() if v is not None}
+        return {
+            k: v
+            for k, v in {
+                "source_type": self.source_type,
+                "context_key": self.context_key,
+                "arcade_module_id": self.arcade_module_id,
+                "arcade_sub_module_id": self.arcade_sub_module_id,
+                "sub_blueprint_path": self.sub_blueprint_path,
+                "env_var": self.env_var,
+                "original_expression": self.original_expression,
+                "resolved_value": self.resolved_value,
+            }.items()
+            if v is not None
+        }
 
 
 @dataclass(frozen=True)
@@ -61,9 +65,9 @@ class ModuleProvenance:
     module_id: str
     module_type: str
     # Set for arcade-expanded modules (ID contains __)
-    arcade_module_id: str | None = None       # parent arcade module id in Blueprint
-    sub_blueprint_path: str | None = None     # relative path to the arcade sub-blueprint
-    original_module_id: str | None = None     # module id inside sub-blueprint pre-namespacing
+    arcade_module_id: str | None = None  # parent arcade module id in Blueprint
+    sub_blueprint_path: str | None = None  # relative path to the arcade sub-blueprint
+    original_module_id: str | None = None  # module id inside sub-blueprint pre-namespacing
     # Dot-notation config key → ValueProvenance for each leaf value
     config: dict[str, ValueProvenance] = field(default_factory=dict)
 
@@ -86,8 +90,8 @@ class ProvenanceMap:
 
     blueprint_id: str
     blueprint_path: str  # absolute path to the Blueprint file
-    modules: dict[str, ModuleProvenance]       # Manifest module_id → ModuleProvenance
-    context: dict[str, ValueProvenance]        # context key → provenance for each context value
+    modules: dict[str, ModuleProvenance]  # Manifest module_id → ModuleProvenance
+    context: dict[str, ValueProvenance]  # context key → provenance for each context value
 
     def for_module(self, module_id: str) -> ModuleProvenance | None:
         return self.modules.get(module_id)
@@ -102,6 +106,7 @@ class ProvenanceMap:
 
 
 # ── Provenance inference ──────────────────────────────────────────────────────
+
 
 def infer_value_provenance(
     original_expr: Any,
@@ -184,16 +189,20 @@ def build_config_provenance(
         full_key = f"{prefix}.{key}" if prefix else key
         resolved_val = (resolved_config or {}).get(key) if resolved_config else raw_val
         if isinstance(raw_val, dict) and isinstance(resolved_val, dict):
-            result.update(build_config_provenance(
-                raw_val, resolved_val,
-                arcade_module_id=arcade_module_id,
-                arcade_sub_module_id=arcade_sub_module_id,
-                sub_blueprint_path=sub_blueprint_path,
-                prefix=full_key,
-            ))
+            result.update(
+                build_config_provenance(
+                    raw_val,
+                    resolved_val,
+                    arcade_module_id=arcade_module_id,
+                    arcade_sub_module_id=arcade_sub_module_id,
+                    sub_blueprint_path=sub_blueprint_path,
+                    prefix=full_key,
+                )
+            )
         else:
             result[full_key] = infer_value_provenance(
-                raw_val, resolved_val,
+                raw_val,
+                resolved_val,
                 arcade_module_id=arcade_module_id,
                 arcade_sub_module_id=arcade_sub_module_id,
                 sub_blueprint_path=sub_blueprint_path,

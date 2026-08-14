@@ -14,10 +14,13 @@ OUTPUTS = [
     ("Partition — Output B", "data/output/partition_B.parquet", "bold magenta"),
 ]
 
+
 def main():
     for _, path, _ in OUTPUTS:
         if not os.path.exists(path):
-            console.print(f"[bold red]✗[/bold red] {path} not found — did you run 'aqueduct run blueprint.yml'?")
+            console.print(
+                f"[bold red]✗[/bold red] {path} not found — did you run 'aqueduct run blueprint.yml'?"
+            )
             return
 
     for title, path, style in OUTPUTS:
@@ -34,6 +37,7 @@ def main():
     console.print("  • Conditional: rows split by status (active ≠ other)")
     console.print("  • Broadcast: A and B are identical (all rows go to both)")
     console.print("  • Partition: A has NEW rows, B has PENDING rows (value-based on status)")
+
 
 if __name__ == "__main__":
     main()

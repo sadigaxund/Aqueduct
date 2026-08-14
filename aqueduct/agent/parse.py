@@ -99,12 +99,10 @@ def _detect_structural_error(exc: BaseException, raw: str) -> str | None:
     except TypeError:
         errors = exc.errors()
     operations_missing = any(
-        e.get("type") == "missing" and tuple(e.get("loc") or ()) == ("operations",)
-        for e in errors
+        e.get("type") == "missing" and tuple(e.get("loc") or ()) == ("operations",) for e in errors
     )
     rationale_missing = any(
-        e.get("type") == "missing" and tuple(e.get("loc") or ()) == ("rationale",)
-        for e in errors
+        e.get("type") == "missing" and tuple(e.get("loc") or ()) == ("rationale",) for e in errors
     )
 
     misplaced = [k for k in _OP_LEVEL_FIELDS_AT_ROOT if k in parsed]
@@ -167,6 +165,7 @@ def _format_reprompt_error(exc: Exception, raw: str) -> str:
 
         # Human-readable location: operations[0] not operations.0
         from aqueduct.utils import format_error_loc
+
         loc_str = format_error_loc(loc)
 
         if etype == "missing":
@@ -185,17 +184,19 @@ def _format_reprompt_error(exc: Exception, raw: str) -> str:
                         emitted_keys = ", ".join(repr(k) for k in cursor.keys())
                         emitted_hint = (
                             f"\n  You emitted {emitted_keys} — add the missing "
-                            f"\"{field_name}\" field to this same op block."
+                            f'"{field_name}" field to this same op block.'
                         )
                 except (KeyError, IndexError, TypeError):
                     pass
-            lines.append(f'• {loc_str}: required field missing{hint}.{emitted_hint}')
+            lines.append(f"• {loc_str}: required field missing{hint}.{emitted_hint}")
 
         elif etype == "extra_forbidden":
             wrong_field = str(loc[-1]) if loc else loc_str
             correct = _FIELD_ALIASES.get(wrong_field)
             if correct:
-                lines.append(f'• {loc_str}: "{wrong_field}" is not valid — use "{correct}" instead.')
+                lines.append(
+                    f'• {loc_str}: "{wrong_field}" is not valid — use "{correct}" instead.'
+                )
             else:
                 lines.append(f'• {loc_str}: "{wrong_field}" is not a recognized field — remove it.')
 
@@ -209,8 +210,7 @@ def _format_reprompt_error(exc: Exception, raw: str) -> str:
                 elif "op" not in input_val:
                     hint = ' The "op" field is missing entirely.'
             lines.append(
-                f'• {loc_str}: invalid operation.{hint}\n'
-                f'  Valid ops: {", ".join(_VALID_OPS)}'
+                f"• {loc_str}: invalid operation.{hint}\n" f'  Valid ops: {", ".join(_VALID_OPS)}'
             )
 
         elif etype == "literal_error":
@@ -218,17 +218,19 @@ def _format_reprompt_error(exc: Exception, raw: str) -> str:
             alias_hint = ""
             if isinstance(input_val, str) and input_val in ("replace_module_config_key",):
                 alias_hint = (
-                    ' `replace_module_config_key` does NOT exist. '
-                    'Use `set_module_config_key` (one field) or `replace_module_config` (entire config block).'
+                    " `replace_module_config_key` does NOT exist. "
+                    "Use `set_module_config_key` (one field) or `replace_module_config` (entire config block)."
                 )
             lines.append(
-                f'• {loc_str}: invalid value {input_val!r}.{alias_hint}'
-                + (f' Expected one of: {expected}.' if expected and not alias_hint else "")
+                f"• {loc_str}: invalid value {input_val!r}.{alias_hint}"
+                + (f" Expected one of: {expected}." if expected and not alias_hint else "")
             )
 
         elif etype in ("string_type", "int_type", "float_type", "bool_type"):
             expected_type = etype.replace("_type", "")
-            lines.append(f'• {loc_str}: expected {expected_type}, got {type(input_val).__name__} {input_val!r}.')
+            lines.append(
+                f"• {loc_str}: expected {expected_type}, got {type(input_val).__name__} {input_val!r}."
+            )
 
         else:
             lines.append(f'• {loc_str}: {e["msg"]}')
@@ -270,7 +272,7 @@ def _parse_patch_spec(text: str) -> tuple[PatchSpec, list[str]]:
     #     inside the reasoning text.
     _orphan_close = text.lower().rfind("</think>")
     if _orphan_close != -1:
-        _remainder = text[_orphan_close + len("</think>"):].strip()
+        _remainder = text[_orphan_close + len("</think>") :].strip()
         if "{" in _remainder:  # never strip when no JSON would survive
             text = _remainder
             recovery_applied.append("stripped_orphan_think_close")
@@ -330,10 +332,7 @@ def _parse_patch_spec(text: str) -> tuple[PatchSpec, list[str]]:
     #    one nested dict carries `operations` — ambiguity falls through to
     #    normal validation (which reports the real shape problem).
     if isinstance(obj, dict) and "operations" not in obj:
-        _nested = [
-            (k, v) for k, v in obj.items()
-            if isinstance(v, dict) and "operations" in v
-        ]
+        _nested = [(k, v) for k, v in obj.items() if isinstance(v, dict) and "operations" in v]
         if len(_nested) == 1:
             wrapper_key, obj = _nested[0]
             recovery_applied.append(f"unwrapped_{wrapper_key}")
@@ -342,7 +341,11 @@ def _parse_patch_spec(text: str) -> tuple[PatchSpec, list[str]]:
 
 
 def _format_reprompt_for_next_turn(
-    *, friendly: str, raw: str, escalated: bool, structural_hint: str,
+    *,
+    friendly: str,
+    raw: str,
+    escalated: bool,
+    structural_hint: str,
 ) -> str:
     """Render the user-role message for the next turn of the reprompt loop.
 

@@ -7,17 +7,19 @@ from pathlib import Path
 
 pytestmark = pytest.mark.unit
 
+
 def test_explain_regression_config_accepts_values():
     # Schema
     s = AgentSchema(block_on_explain_regression=True)
     assert s.block_on_explain_regression is True
-    
+
     s = AgentSchema(block_on_explain_regression=False)
     assert s.block_on_explain_regression is False
-    
+
     # Engine Config
     c = AgentConnectionConfig(block_on_explain_regression=True)
     assert c.block_on_explain_regression is True
+
 
 def test_blueprint_explain_regression_round_trips(tmp_path):
     bp_file = tmp_path / "bp.yml"
@@ -29,6 +31,7 @@ def test_blueprint_explain_regression_round_trips(tmp_path):
     )
     bp = parse(bp_file)
     assert bp.agent.block_on_explain_regression is True
+
 
 def test_blueprint_explain_regression_null_is_preserved(tmp_path):
     bp_file = tmp_path / "bp.yml"

@@ -19,6 +19,7 @@ unconditionally was Phase 74's original shape and is the exact bug this
 docstring update fixes — see ``aqueduct/cli/patch.py::patch_list``'s own
 comment ("``--patches-dir`` forces the legacy local scan").
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -138,7 +139,9 @@ class AqueductPatchTrigger(BaseTrigger):
         if result.returncode != 0:
             logger.warning(
                 "aqueduct patch list failed (rc=%s) for run_id=%r: %s",
-                result.returncode, self.run_id, (result.stderr or "").strip()[:2000],
+                result.returncode,
+                self.run_id,
+                (result.stderr or "").strip()[:2000],
             )
             return "pending", None, None
         try:
@@ -147,7 +150,9 @@ class AqueductPatchTrigger(BaseTrigger):
             logger.warning(
                 "aqueduct patch list returned unparseable JSON for run_id=%r: %s "
                 "(stdout head: %r)",
-                self.run_id, exc, (result.stdout or "")[:200],
+                self.run_id,
+                exc,
+                (result.stdout or "")[:200],
             )
             return "pending", None, None
 

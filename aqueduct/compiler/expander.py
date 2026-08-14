@@ -25,6 +25,7 @@ from aqueduct.parser.models import Blueprint, Edge, Module, ModuleType
 
 logger = logging.getLogger(__name__)
 
+
 class ExpandError(AqueductError):
     """Raised when an Arcade cannot be expanded."""
 
@@ -51,7 +52,8 @@ def _exit_modules(sub_bp: Blueprint) -> list[str]:
     """
     sources = {e.from_id for e in sub_bp.edges}
     return [
-        m.id for m in sub_bp.modules
+        m.id
+        for m in sub_bp.modules
         if m.id not in sources and m.type not in (ModuleType.Egress, ModuleType.Probe)
     ]
 
@@ -64,6 +66,7 @@ def _load_raw_module_configs(sub_path: Path) -> dict[str, dict]:
     Uses plain yaml.safe_load — no Pydantic, no resolution, no side effects.
     """
     import yaml
+
     try:
         raw = yaml.safe_load(sub_path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
@@ -111,8 +114,7 @@ def _expand_single(
                 # own `enabled: false` (from the sub-Blueprint) is preserved.
                 enabled=m.enabled and arcade.enabled,
                 disabled_reason=(
-                    f"arcade '{arcade.id}' disabled"
-                    if not arcade.enabled else m.disabled_reason
+                    f"arcade '{arcade.id}' disabled" if not arcade.enabled else m.disabled_reason
                 ),
             )
         )
@@ -132,18 +134,14 @@ def _expand_single(
     exit_ids = _exit_modules(sub_bp)
 
     if not entry_ids:
-        raise ExpandError(
-            f"Arcade {arcade.id!r}: sub-Blueprint has no entry modules (cycle?)"
-        )
+        raise ExpandError(f"Arcade {arcade.id!r}: sub-Blueprint has no entry modules (cycle?)")
     # Exit modules are only required when the parent actually consumes data
     # FROM the arcade. A self-contained arcade (e.g. Junction -> 2x Egress,
     # writing internally with nothing returned to the parent) is valid even
     # though `_exit_modules()` excludes Egress/Probe from the exit set.
     needs_exit = any(e.from_id == arcade.id for e in parent_edges)
     if needs_exit and not exit_ids:
-        raise ExpandError(
-            f"Arcade {arcade.id!r}: sub-Blueprint has no exit modules (cycle?)"
-        )
+        raise ExpandError(f"Arcade {arcade.id!r}: sub-Blueprint has no exit modules (cycle?)")
 
     # Rewire parent edges
     rewired: list[Edge] = []
@@ -151,15 +149,11 @@ def _expand_single(
         if e.to_id == arcade.id:
             # Fan-out: connect parent upstream → each entry module
             for entry in entry_ids:
-                rewired.append(
-                    dataclasses.replace(e, to_id=id_map[entry])
-                )
+                rewired.append(dataclasses.replace(e, to_id=id_map[entry]))
         elif e.from_id == arcade.id:
             # Fan-in: connect each exit module → parent downstream
             for exit_id in exit_ids:
-                rewired.append(
-                    dataclasses.replace(e, from_id=id_map[exit_id])
-                )
+                rewired.append(dataclasses.replace(e, from_id=id_map[exit_id]))
 
     # Build provenance for each expanded module
     # raw_module_configs has the pre-resolution config (original ${ctx.*} expressions)
@@ -239,9 +233,7 @@ def _expand_recursive(
 
         sub_path = base_dir / m.ref
         if not sub_path.exists():
-            raise ExpandError(
-                f"Arcade {m.id!r}: sub-Blueprint not found at {sub_path}"
-            )
+            raise ExpandError(f"Arcade {m.id!r}: sub-Blueprint not found at {sub_path}")
 
         # Load raw YAML first (for provenance original expressions)
         raw_module_configs = _load_raw_module_configs(sub_path)
@@ -282,8 +274,7 @@ def _expand_recursive(
 
         # Validate required_context — ensure parent provides all keys the sub-Blueprint needs
         missing = [
-            key for key in (sub_bp.required_context or [])
-            if key not in (m.context_override or {})
+            key for key in (sub_bp.required_context or []) if key not in (m.context_override or {})
         ]
         if missing:
             raise ExpandError(
@@ -294,7 +285,11 @@ def _expand_recursive(
 
         sub_blueprint_path = str(Path(m.ref))  # relative path as declared in Blueprint
         expanded_mods, new_edges, arcade_prov = _expand_single(
-            m, sub_bp, edges, sub_blueprint_path, raw_module_configs,
+            m,
+            sub_bp,
+            edges,
+            sub_blueprint_path,
+            raw_module_configs,
         )
         result_modules.extend(expanded_mods)
         merged_provenance.update(arcade_prov)
@@ -331,17 +326,18 @@ def _expand_recursive(
         # still see the rewritten value when its turn comes.
         for lst in (result_modules, modules):
             for i, other_m in enumerate(lst):
-                if other_m.config and "inputs" in other_m.config and m.id in other_m.config["inputs"]:
+                if (
+                    other_m.config
+                    and "inputs" in other_m.config
+                    and m.id in other_m.config["inputs"]
+                ):
                     lst[i] = dataclasses.replace(
                         other_m,
                         config={**other_m.config, "inputs": _replace_ids(other_m.config["inputs"])},
                     )
 
         # Replace edges touching this Arcade with rewired ones
-        edges = [
-            e for e in edges
-            if e.from_id != m.id and e.to_id != m.id
-        ] + new_edges
+        edges = [e for e in edges if e.from_id != m.id and e.to_id != m.id] + new_edges
 
     # Detect ID collisions produced by expansion before recursing
     seen: dict[str, str] = {}

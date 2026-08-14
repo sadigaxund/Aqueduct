@@ -200,14 +200,16 @@ def find_coaching_examples(
     out: list[CoachingExample] = []
     for d in rows:
         ops = d.get("ops")
-        out.append(CoachingExample(
-            patch_id=str(d.get("patch_id") or "?"),
-            error_class=str(d.get("error_class") or "?"),
-            where=str(d.get("where_field") or "?"),
-            normalized_message=str(d.get("normalized_message") or ""),
-            rationale=str(d.get("rationale") or ""),
-            ops=list(ops) if isinstance(ops, list) else [],
-            tier=int(d.get("_tier") or 4),
-            engine=str(d.get("engine") or ""),
-        ))
+        out.append(
+            CoachingExample(
+                patch_id=str(d.get("patch_id") or "?"),
+                error_class=str(d.get("error_class") or "?"),
+                where=str(d.get("where_field") or "?"),
+                normalized_message=str(d.get("normalized_message") or ""),
+                rationale=str(d.get("rationale") or ""),
+                ops=list(ops) if isinstance(ops, list) else [],
+                tier=int(d.get("_tier") or 4),
+                engine=str(d.get("engine") or ""),
+            )
+        )
     return out

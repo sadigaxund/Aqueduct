@@ -57,7 +57,7 @@ class RetiredPatchOpError(AqueductError):
 # to the generic Pydantic error for one release).
 RETIRED_PATCH_OPS: dict[str, str] = {
     "set_spark_config": (
-        "replaced by set_engine_config (engine=\"spark\") — the same op, "
+        'replaced by set_engine_config (engine="spark") — the same op, '
         "generalized to every registered engine. Regenerate this patch; "
         "there is no automatic translation."
     ),
@@ -66,11 +66,13 @@ RETIRED_PATCH_OPS: dict[str, str] = {
 
 # ── Individual operation models ───────────────────────────────────────────────
 
+
 class ReplaceModuleConfigOp(BaseModel, extra="forbid"):
     """Replace the entire config block of a named Module.
 
     Most common operation.  Used to fix bad SQL, wrong paths, incorrect params.
     """
+
     op: Literal["replace_module_config"]
     module_id: str = Field(..., description="ID of the module to patch")
     config: dict[str, Any] = Field(..., description="New config block (full replacement)")
@@ -78,6 +80,7 @@ class ReplaceModuleConfigOp(BaseModel, extra="forbid"):
 
 class ReplaceModuleLabelOp(BaseModel, extra="forbid"):
     """Update the human-readable label of a Module."""
+
     op: Literal["replace_module_label"]
     module_id: str
     label: str
@@ -91,6 +94,7 @@ class InsertModuleOp(BaseModel, extra="forbid"):
     must be deleted to make room (e.g. a direct A→C edge when inserting B
     between A and C).
     """
+
     op: Literal["insert_module"]
     module: dict[str, Any] = Field(..., description="Full module definition dict")
     edges_to_add: list[dict[str, Any]] = Field(
@@ -109,6 +113,7 @@ class RemoveModuleOp(BaseModel, extra="forbid"):
     edges_to_add contains replacement edges that reconnect the graph after
     the module is removed (e.g. bypass edges).
     """
+
     op: Literal["remove_module"]
     module_id: str
     edges_to_add: list[dict[str, Any]] = Field(
@@ -122,6 +127,7 @@ class ReplaceContextValueOp(BaseModel, extra="forbid"):
 
     key uses dot-notation for nested values (e.g. 'paths.input').
     """
+
     op: Literal["replace_context_value"]
     key: str = Field(..., description="Dot-notation context key, e.g. 'paths.input'")
     value: Any = Field(..., description="New value (string, number, or nested dict)")
@@ -134,6 +140,7 @@ class AddProbeOp(BaseModel, extra="forbid"):
     an existing Module.  edges_to_add wires the Probe into downstream signal
     consumers (e.g. Regulator signal ports).
     """
+
     op: Literal["add_probe"]
     module: dict[str, Any] = Field(
         ...,
@@ -149,6 +156,7 @@ class ReplaceEdgeOp(BaseModel, extra="forbid"):
     and/or new_to_id to change endpoints; supply new_port to change the port.
     At least one of new_from_id, new_to_id, new_port must be provided.
     """
+
     op: Literal["replace_edge"]
     from_id: str = Field(..., description="Current source module ID")
     to_id: str = Field(..., description="Current target module ID")
@@ -166,14 +174,18 @@ class SetModuleConfigKeyOp(BaseModel, extra="forbid"):
 
     key uses dot-notation for nested values (e.g. 'options.mergeSchema').
     """
+
     op: Literal["set_module_config_key"]
     module_id: str = Field(..., description="ID of the module to patch")
-    key: str = Field(..., description="Dot-notation config key, e.g. 'path' or 'options.mergeSchema'")
+    key: str = Field(
+        ..., description="Dot-notation config key, e.g. 'path' or 'options.mergeSchema'"
+    )
     value: Any = Field(..., description="New value for the key")
 
 
 class SetModuleOnFailureOp(BaseModel, extra="forbid"):
     """Change the on_failure policy for a specific Module."""
+
     op: Literal["set_module_on_failure"]
     module_id: str
     on_failure: dict[str, Any]
@@ -181,6 +193,7 @@ class SetModuleOnFailureOp(BaseModel, extra="forbid"):
 
 class ReplaceRetryPolicyOp(BaseModel, extra="forbid"):
     """Replace the blueprint-level retry_policy block entirely."""
+
     op: Literal["replace_retry_policy"]
     retry_policy: dict[str, Any]
 
@@ -191,6 +204,7 @@ class AddArcadeRefOp(BaseModel, extra="forbid"):
     The module dict must include type='Arcade' and ref pointing to the
     sub-Blueprint path (relative to the parent Blueprint file).
     """
+
     op: Literal["add_arcade_ref"]
     module: dict[str, Any] = Field(
         ...,
@@ -211,6 +225,7 @@ class DeferToHumanOp(BaseModel, extra="forbid"):
     ``stop_reason='deferred'`` and the full diagnosis is staged for
     human review.
     """
+
     op: Literal["defer_to_human"]
     diagnosis: str = Field(
         ...,
@@ -244,9 +259,12 @@ class ReplaceMacroOp(BaseModel, extra="forbid"):
     Guardrail: recommended for ``guardrails.forbidden_ops`` (template
     default) so multi-module macro changes get human review.
     """
+
     op: Literal["replace_macro"]
     name: str = Field(..., description="Name of an EXISTING macro in the Blueprint macros: block")
-    value: str = Field(..., description="New SQL body. Keep {{ param }} placeholders the macro's callers supply.")
+    value: str = Field(
+        ..., description="New SQL body. Keep {{ param }} placeholders the macro's callers supply."
+    )
 
 
 class SetEngineConfigOp(BaseModel, extra="forbid"):
@@ -301,6 +319,7 @@ class SetEngineConfigOp(BaseModel, extra="forbid"):
     patch containing this op is never replayed from the heal cache for the
     same reason (see ``aqueduct/agent/memory.py``).
     """
+
     op: Literal["set_engine_config"]
     engine: str = Field(
         ...,
@@ -324,7 +343,20 @@ class SetEngineConfigOp(BaseModel, extra="forbid"):
 # ── Discriminated union ───────────────────────────────────────────────────────
 
 PatchOperation = Annotated[
-    ReplaceModuleConfigOp | SetModuleConfigKeyOp | ReplaceModuleLabelOp | InsertModuleOp | RemoveModuleOp | ReplaceContextValueOp | AddProbeOp | ReplaceEdgeOp | SetModuleOnFailureOp | ReplaceRetryPolicyOp | AddArcadeRefOp | DeferToHumanOp | SetEngineConfigOp | ReplaceMacroOp,
+    ReplaceModuleConfigOp
+    | SetModuleConfigKeyOp
+    | ReplaceModuleLabelOp
+    | InsertModuleOp
+    | RemoveModuleOp
+    | ReplaceContextValueOp
+    | AddProbeOp
+    | ReplaceEdgeOp
+    | SetModuleOnFailureOp
+    | ReplaceRetryPolicyOp
+    | AddArcadeRefOp
+    | DeferToHumanOp
+    | SetEngineConfigOp
+    | ReplaceMacroOp,
     Field(discriminator="op"),
 ]
 
@@ -404,10 +436,18 @@ _METADATA_ALIASES: dict[str, str] = {
 
 # Top-level fields the PatchSpec recognises. Anything else gets bucketed
 # into `misc` instead of bouncing the patch.
-_PATCHSPEC_FIELDS: frozenset[str] = frozenset({
-    "patch_id", "run_id", "rationale", "operations",
-    "confidence", "category", "root_cause", "misc",
-})
+_PATCHSPEC_FIELDS: frozenset[str] = frozenset(
+    {
+        "patch_id",
+        "run_id",
+        "rationale",
+        "operations",
+        "confidence",
+        "category",
+        "root_cause",
+        "misc",
+    }
+)
 
 
 class PatchSpec(BaseModel, extra="allow"):
@@ -463,9 +503,22 @@ class PatchSpec(BaseModel, extra="allow"):
                 data.pop(alias)
 
         # All known aliases for "operations"
-        _OPS_ALIASES = ("ops", "op_list", "patches", "steps", "fix", "changes",
-                        "actions", "modifications", "updates", "patch_operations",
-                        "module_updates", "module_changes", "edits", "diff")
+        _OPS_ALIASES = (
+            "ops",
+            "op_list",
+            "patches",
+            "steps",
+            "fix",
+            "changes",
+            "actions",
+            "modifications",
+            "updates",
+            "patch_operations",
+            "module_updates",
+            "module_changes",
+            "edits",
+            "diff",
+        )
         if "operations" not in data:
             for alias in _OPS_ALIASES:
                 if alias in data:
@@ -494,6 +547,7 @@ class PatchSpec(BaseModel, extra="allow"):
         if not data.get("patch_id"):
             import re as _re
             import uuid as _uuid
+
             _rat = (data.get("rationale") or "").strip()
             if _rat:
                 _slug = _re.sub(r"[^a-z0-9]+", "-", _rat.lower())[:48].strip("-")
@@ -505,8 +559,17 @@ class PatchSpec(BaseModel, extra="allow"):
         # ── Strip well-known LLM-hallucinated meta fields ─────────────────────
         # Models sometimes add `id`, `name`, `applied_by`, `datetime_applied`,
         # etc. They're noise; drop them so they don't end up in `misc`.
-        for _bad in ("id", "name", "applied_by", "datetime_applied", "timestamp",
-                     "author", "version", "created_at", "updated_at"):
+        for _bad in (
+            "id",
+            "name",
+            "applied_by",
+            "datetime_applied",
+            "timestamp",
+            "author",
+            "version",
+            "created_at",
+            "updated_at",
+        ):
             data.pop(_bad, None)
 
         # ── Bucket unknown top-level fields into `misc` ───────────────────────
@@ -549,8 +612,7 @@ class PatchSpec(BaseModel, extra="allow"):
             # RetiredPatchOpError's docstring).
             if raw_op in RETIRED_PATCH_OPS:
                 raise RetiredPatchOpError(
-                    f"PatchSpec operation {raw_op!r} was retired: "
-                    f"{RETIRED_PATCH_OPS[raw_op]}"
+                    f"PatchSpec operation {raw_op!r} was retired: " f"{RETIRED_PATCH_OPS[raw_op]}"
                 )
         return data
 

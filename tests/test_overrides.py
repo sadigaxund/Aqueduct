@@ -195,7 +195,9 @@ class TestModelAcceptsPath:
         assert not model_accepts_path(AqueductConfig, ("deployment", "master_url"))
 
     def test_engine_spark_conf_open_dict(self):
-        assert model_accepts_path(AqueductConfig, ("engine", "spark", "conf", "spark.sql.shuffle.partitions"))
+        assert model_accepts_path(
+            AqueductConfig, ("engine", "spark", "conf", "spark.sql.shuffle.partitions")
+        )
 
     def test_unknown_path_rejected(self):
         assert not model_accepts_path(AqueductConfig, ("agent", "approval_mode"))
@@ -213,6 +215,7 @@ class TestModelAcceptsPath:
 class TestSuggestForPath:
     def test_suggests_approval_mode_for_typo(self):
         from aqueduct.parser.schema import BlueprintSchema
+
         hint = suggest_for_path([AqueductConfig, BlueprintSchema], ("agent", "aproval_mode"))
         assert hint is not None
         assert "approval_mode" in hint
@@ -248,6 +251,7 @@ class TestRouteOverrides:
 
     def test_unknown_path_with_suggestion(self):
         from aqueduct.parser.schema import BlueprintSchema as BS
+
         try:
             route_overrides(["agent.aproval_mode=auto"], allow_blueprint=True)
         except OverrideError as exc:

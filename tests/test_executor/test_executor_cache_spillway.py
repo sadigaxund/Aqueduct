@@ -1,6 +1,7 @@
 """Tests for _cache_if_multi_spillway behavior."""
 
 import pytest
+
 pytestmark = pytest.mark.spark
 from aqueduct.executor.spark.executor import _cache_if_multi_spillway
 from aqueduct.parser.models import Edge
@@ -8,8 +9,10 @@ from aqueduct.parser.models import Edge
 
 class DummyDF:
     """Simple dummy DataFrame with a cache() method that records being called."""
+
     def __init__(self):
         self.cached = False
+
     def cache(self):
         self.cached = True
         return self

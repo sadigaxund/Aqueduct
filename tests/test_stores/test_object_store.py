@@ -204,6 +204,7 @@ def test_blob_config_rejects_unknown_backend():
     with pytest.raises(ValidationError):
         ObjectStoreConfig(backend="ftp", path="")
 
+
 # ── FsspecBackend (exercised over fsspec's in-memory filesystem) ──────────────
 # fsspec's ``memory://`` driver runs the exact same FsspecBackend code path as
 # s3/gcs/adls without needing moto or network — process-local, deterministic.

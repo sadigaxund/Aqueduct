@@ -67,6 +67,7 @@ def test_set_status_moves_out_of_pending(store):
 
 def _row_bp(patch_id, status, blueprint_id, **kw):
     import dataclasses
+
     return dataclasses.replace(_row(patch_id, status, **kw), blueprint_id=blueprint_id)
 
 
@@ -99,8 +100,8 @@ def test_find_replay_only_confirmed_successful(store):
     with store.connect() as cur:
         ix.upsert(cur, _row("p1", "applied"))
     with store.connect() as cur:
-        assert ix.find_replay(cur, "sigA", set()) is None          # no success set
-        assert ix.find_replay(cur, "sigA", {"other"}) is None      # id not successful
+        assert ix.find_replay(cur, "sigA", set()) is None  # no success set
+        assert ix.find_replay(cur, "sigA", {"other"}) is None  # id not successful
         hit = ix.find_replay(cur, "sigA", {"p1"})
     assert hit["patch_id"] == "p1"
 
@@ -109,8 +110,16 @@ def test_find_coaching_tiers_and_dedupe(store):
     with store.connect() as cur:
         ix.upsert(cur, _row("exact", "applied", signature="sigA"))
         ix.upsert(cur, _row("coarse", "applied", signature="other", signature_coarse="coarseA"))
-        ix.upsert(cur, _row("klass", "applied", signature="z", signature_coarse="z",
-                            error_class="AnalysisException"))
+        ix.upsert(
+            cur,
+            _row(
+                "klass",
+                "applied",
+                signature="z",
+                signature_coarse="z",
+                error_class="AnalysisException",
+            ),
+        )
     with store.connect() as cur:
         out = ix.find_coaching(cur, "sigA", "coarseA", "AnalysisException", limit=3)
     by_id = {d["patch_id"]: d["_tier"] for d in out}

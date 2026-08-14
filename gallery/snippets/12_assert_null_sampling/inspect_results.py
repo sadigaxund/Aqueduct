@@ -5,10 +5,13 @@ import os
 
 console = Console()
 
+
 def main():
     path = "data/output/output.parquet"
     if not os.path.exists(path):
-        console.print("[bold red]✗[/bold red] Output not found — the pipeline may have failed its assertion!")
+        console.print(
+            "[bold red]✗[/bold red] Output not found — the pipeline may have failed its assertion!"
+        )
         return
 
     console.print(f"[bold green]✓[/bold green] Assertion passed! Data saved to output.\n")
@@ -21,11 +24,16 @@ def main():
     console.print(t)
     console.print(f"[dim]  Row count: {len(df)}[/dim]")
 
-    null_count = df['email'].isna().sum()
+    null_count = df["email"].isna().sum()
     null_rate = null_count / len(df)
-    console.print(f"[dim]  Actual null rate for 'email': {null_rate:.2%} (max allowed 6%, sampled at 50%)[/dim]")
-    console.print("\n[dim]Assert type=null_rate checks that column nulls stay below a threshold. "
-                  "on_fail=abort stops the run if violated.[/dim]")
+    console.print(
+        f"[dim]  Actual null rate for 'email': {null_rate:.2%} (max allowed 6%, sampled at 50%)[/dim]"
+    )
+    console.print(
+        "\n[dim]Assert type=null_rate checks that column nulls stay below a threshold. "
+        "on_fail=abort stops the run if violated.[/dim]"
+    )
+
 
 if __name__ == "__main__":
     main()

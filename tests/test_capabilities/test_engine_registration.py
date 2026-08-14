@@ -45,7 +45,8 @@ def test_registry_populated_on_real_compile_path_no_explicit_import():
     engine="spark". This is the exact reproduction from the bug report and
     fails against the pre-fix code (empty registry -> KeyError -> swallowed
     -> `skip`)."""
-    proc = _run(f"""
+    proc = _run(
+        f"""
         from pathlib import Path
         from aqueduct.doctor.checks_io import check_capabilities
         bp = Path({str(_PLAIN_SNIPPET)!r})
@@ -56,7 +57,8 @@ def test_registry_populated_on_real_compile_path_no_explicit_import():
             for r in results
         ), f"capability gate is a no-op: {{results}}"
         print("OK", [r.status for r in results])
-    """)
+    """
+    )
     assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
     assert "OK" in proc.stdout
 
@@ -65,7 +67,8 @@ def test_registry_populated_via_compiler_only_no_explicit_import():
     """Same regression proof through the compiler entry point: compiling any
     blueprint against engine="spark" must resolve a real (non-empty)
     capability table with zero explicit capability-module imports."""
-    proc = _run(f"""
+    proc = _run(
+        f"""
         from pathlib import Path
         from aqueduct.compiler.compiler import compile as compile_bp
         from aqueduct.parser.parser import parse
@@ -75,7 +78,8 @@ def test_registry_populated_via_compiler_only_no_explicit_import():
         manifest = compile_bp(parse(str(bp_path)), blueprint_path=bp_path, engine="spark")
         assert "spark" in CAPABILITY_REGISTRY, CAPABILITY_REGISTRY
         print("OK")
-    """)
+    """
+    )
     assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
     assert "OK" in proc.stdout
 
@@ -127,6 +131,7 @@ def test_unknown_engine_fails_compile_not_silently_passes():
 
 # ── Broken engine plugin (entry point fails to import) ───────────────────────
 
+
 class _BoomEntryPoint:
     """Stand-in for an importlib.metadata EntryPoint whose target is broken."""
 
@@ -163,9 +168,7 @@ def test_broken_engine_plugin_raises_aqueduct_error_naming_it(
     from aqueduct.errors import AqueductError, EnginePluginError
 
     caps = _reset_engine_load_cache
-    monkeypatch.setattr(
-        importlib.metadata, "entry_points", lambda **kw: [_BoomEntryPoint()]
-    )
+    monkeypatch.setattr(importlib.metadata, "entry_points", lambda **kw: [_BoomEntryPoint()])
 
     with pytest.raises(EnginePluginError) as excinfo:
         caps.load_engines()
@@ -187,9 +190,7 @@ def test_broken_engine_plugin_surfaces_through_config_load(
     from aqueduct.config import load_config
     from aqueduct.errors import AqueductError
 
-    monkeypatch.setattr(
-        importlib.metadata, "entry_points", lambda **kw: [_BoomEntryPoint()]
-    )
+    monkeypatch.setattr(importlib.metadata, "entry_points", lambda **kw: [_BoomEntryPoint()])
     p = tmp_path / "aqueduct.yml"
     p.write_text("deployment:\n  engine: spark\n", encoding="utf-8")
 
@@ -199,9 +200,8 @@ def test_broken_engine_plugin_surfaces_through_config_load(
 
 # ── Empty registry (stale install) gets its own actionable message ───────────
 
-def test_empty_registry_get_capabilities_says_reinstall(
-    monkeypatch, _reset_engine_load_cache
-):
+
+def test_empty_registry_get_capabilities_says_reinstall(monkeypatch, _reset_engine_load_cache):
     """Fail-closed validation must not report a stale install as
     'Registered engines: []' — that is alarming and misleading. The
     empty-registry state names the real problem (entry points invisible ->
@@ -224,9 +224,7 @@ def test_empty_registry_get_capabilities_says_reinstall(
     assert "Registered engines: []" not in msg
 
 
-def test_empty_registry_config_load_says_reinstall(
-    monkeypatch, tmp_path, _reset_engine_load_cache
-):
+def test_empty_registry_config_load_says_reinstall(monkeypatch, tmp_path, _reset_engine_load_cache):
     """Same for aqueduct.yml loading — the stale-install state must not read
     as 'your engine name is wrong'."""
     import importlib.metadata
@@ -249,9 +247,7 @@ def test_empty_registry_config_load_says_reinstall(
     assert "is not a registered engine" not in msg
 
 
-def test_empty_registry_doctor_reports_reinstall_fail(
-    monkeypatch, _reset_engine_load_cache
-):
+def test_empty_registry_doctor_reports_reinstall_fail(monkeypatch, _reset_engine_load_cache):
     """Doctor's capability check reports the stale-install diagnosis, told
     apart from a bad engine name by TYPE (UnknownEngineError.engines), never
     by matching message text."""

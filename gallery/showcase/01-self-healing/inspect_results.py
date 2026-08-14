@@ -13,6 +13,7 @@ already-applied patch after the fact, so this reconstructs it from the
 patches/backups/ snapshot apply_patch_file() writes before overwriting the
 blueprint.
 """
+
 from __future__ import annotations
 
 import difflib
@@ -39,7 +40,9 @@ def _latest(paths: list[Path]) -> Path | None:
 
 def show_run_summary() -> str | None:
     if not OBS_DB.exists():
-        console.print(f"[bold red]✗[/bold red] No observability store at {OBS_DB} — run the blueprint first.")
+        console.print(
+            f"[bold red]✗[/bold red] No observability store at {OBS_DB} — run the blueprint first."
+        )
         return None
 
     con = duckdb.connect(str(OBS_DB), read_only=True)
@@ -82,16 +85,28 @@ def show_run_summary() -> str | None:
 
     if outcomes:
         t2 = Table(title="Healing Attempts", header_style="bold magenta")
-        for col in ["failed_module", "model", "patch_id", "confidence", "applied", "run_ok", "resolution", "tier"]:
+        for col in [
+            "failed_module",
+            "model",
+            "patch_id",
+            "confidence",
+            "applied",
+            "run_ok",
+            "resolution",
+            "tier",
+        ]:
             t2.add_column(col)
         for o in outcomes:
             failed_module, model, patch_id, confidence, applied, run_ok, resolution, tier = o
             t2.add_row(
-                failed_module or "", model or "", patch_id or "",
+                failed_module or "",
+                model or "",
+                patch_id or "",
                 f"{confidence:.2f}" if confidence is not None else "",
                 "✓" if applied else "✗",
                 "✓" if run_ok else "✗",
-                resolution or "", str(tier) if tier is not None else "",
+                resolution or "",
+                str(tier) if tier is not None else "",
             )
         console.print(t2)
     return run_id
@@ -100,8 +115,10 @@ def show_run_summary() -> str | None:
 def show_patch_spec() -> str | None:
     applied = _latest(list(Path("patches/applied").glob("*.json")))
     if applied is None:
-        console.print("[dim]No applied patch found under patches/applied/ — "
-                       "either healing hasn't run yet, or no agent was reachable.[/dim]")
+        console.print(
+            "[dim]No applied patch found under patches/applied/ — "
+            "either healing hasn't run yet, or no agent was reachable.[/dim]"
+        )
         return None
 
     spec = json.loads(applied.read_text())
@@ -125,7 +142,9 @@ def show_patch_spec() -> str | None:
     ops_t.add_column("value", overflow="fold")
     for op in spec.get("operations", []):
         ops_t.add_row(
-            op.get("op", ""), op.get("module_id", ""), op.get("key", ""),
+            op.get("op", ""),
+            op.get("module_id", ""),
+            op.get("key", ""),
             str(op.get("value", ""))[:100],
         )
     console.print(ops_t)
@@ -143,20 +162,25 @@ def show_diff(patch_id: str | None) -> None:
 
     before = backup.read_text().splitlines(keepends=True)
     after = BLUEPRINT_PATH.read_text().splitlines(keepends=True)
-    diff_text = "".join(difflib.unified_diff(
-        before, after,
-        fromfile=f"blueprint.yml (before — {backup.name})",
-        tofile="blueprint.yml (after)",
-        n=2,
-    ))
+    diff_text = "".join(
+        difflib.unified_diff(
+            before,
+            after,
+            fromfile=f"blueprint.yml (before — {backup.name})",
+            tofile="blueprint.yml (after)",
+            n=2,
+        )
+    )
     if not diff_text.strip():
         console.print("[dim]No textual difference between backup and current blueprint.[/dim]")
         return
-    console.print(Panel(
-        Syntax(diff_text, "diff", theme="ansi_dark", word_wrap=True),
-        title="Before → After",
-        border_style="yellow",
-    ))
+    console.print(
+        Panel(
+            Syntax(diff_text, "diff", theme="ansi_dark", word_wrap=True),
+            title="Before → After",
+            border_style="yellow",
+        )
+    )
 
 
 def show_outputs() -> None:
@@ -165,6 +189,7 @@ def show_outputs() -> None:
         "quarantine": "data/output/quarantine.parquet",
     }
     import pandas as pd
+
     t = Table(title="Output Row Counts", header_style="bold blue")
     t.add_column("output")
     t.add_column("rows")
@@ -177,11 +202,13 @@ def show_outputs() -> None:
             t.add_row(tier, "[dim](not written)[/dim]")
     console.print(t)
     if not any_found:
-        console.print("[dim]No output yet — the run either hasn't happened or hasn't healed successfully.[/dim]")
+        console.print(
+            "[dim]No output yet — the run either hasn't happened or hasn't healed successfully.[/dim]"
+        )
 
 
 def main() -> None:
-#    show_run_summary()
+    #    show_run_summary()
     console.print()
     patch_id = show_patch_spec()
     console.print()

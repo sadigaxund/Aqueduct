@@ -72,9 +72,16 @@ class TestDoctorFormatJson:
         """JSON exit code matches overall pass/fail status."""
         cfg = tmp_path / "aqueduct.yml"
         cfg.write_text("aqueduct_config: '1.0'\ndeployment:\n  target: local\n")
-        result = RUNNER.invoke(cli, [
-            "doctor", "--skip-spark", "--format", "json", str(cfg),
-        ])
+        result = RUNNER.invoke(
+            cli,
+            [
+                "doctor",
+                "--skip-spark",
+                "--format",
+                "json",
+                str(cfg),
+            ],
+        )
         data = json.loads(result.output)
         has_fail = any(c["status"] == "fail" for c in data["checks"])
         if has_fail:

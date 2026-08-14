@@ -195,8 +195,10 @@ def _spark_config_patch(patch_id: str, value: int) -> AgentPatchResult:
         rationale="bump shuffle partitions",
         operations=[
             SetEngineConfigOp(
-                op="set_engine_config", engine="spark",
-                key="spark.sql.shuffle.partitions", value=value,
+                op="set_engine_config",
+                engine="spark",
+                key="spark.sql.shuffle.partitions",
+                value=value,
             )
         ],
     )
@@ -222,9 +224,7 @@ def _benign_patch(patch_id: str, label: str) -> AgentPatchResult:
     patch_spec = PatchSpec(
         patch_id=patch_id,
         rationale="cosmetic label fix",
-        operations=[
-            ReplaceModuleLabelOp(op="replace_module_label", module_id="m1", label=label)
-        ],
+        operations=[ReplaceModuleLabelOp(op="replace_module_label", module_id="m1", label=label)],
     )
     return AgentPatchResult(
         patch=patch_spec,

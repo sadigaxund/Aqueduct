@@ -36,13 +36,13 @@ CheckFn = Callable[[Any, str], list[str]]
 # Stable per-rule registry. The `id` field is the user-facing key for
 # `warnings.suppress` in aqueduct.yml — never rename without a deprecation note.
 RULES: list[tuple[str, CheckFn]] = [
-    (kafka_checkpoint_stale.RULE_ID,         kafka_checkpoint_stale.check),
-    (nondeterministic_fanout.RULE_ID,        nondeterministic_fanout.check),
-    (count_col_likely_count_star.RULE_ID,    count_col_likely_count_star.check),
-    (file_format_no_repartition.RULE_ID,     file_format_no_repartition.check),
-    (jdbc_missing_partition.RULE_ID,         jdbc_missing_partition.check),
-    (custom_probe_driver_code.RULE_ID,       custom_probe_driver_code.check),
-    (spillway_port_mismatch.RULE_ID,         spillway_port_mismatch.check),
+    (kafka_checkpoint_stale.RULE_ID, kafka_checkpoint_stale.check),
+    (nondeterministic_fanout.RULE_ID, nondeterministic_fanout.check),
+    (count_col_likely_count_star.RULE_ID, count_col_likely_count_star.check),
+    (file_format_no_repartition.RULE_ID, file_format_no_repartition.check),
+    (jdbc_missing_partition.RULE_ID, jdbc_missing_partition.check),
+    (custom_probe_driver_code.RULE_ID, custom_probe_driver_code.check),
+    (spillway_port_mismatch.RULE_ID, spillway_port_mismatch.check),
 ]
 
 

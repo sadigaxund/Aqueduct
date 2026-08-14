@@ -274,7 +274,9 @@ def test_generic_create_function_failure_unchanged_when_numpy_present(monkeypatc
         def create_function(self, *args, **kwargs):
             raise RuntimeError("some unrelated duckdb failure")
 
-    with pytest.raises(UDFError, match=r"con\.create_function\(\) failed: some unrelated") as excinfo:
+    with pytest.raises(
+        UDFError, match=r"con\.create_function\(\) failed: some unrelated"
+    ) as excinfo:
         register_udfs(
             (
                 {

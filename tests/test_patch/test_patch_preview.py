@@ -248,8 +248,12 @@ class TestGate2NotApplicable:
         # even needs to look at the Blueprint on this path.
         bp = {"modules": [], "edges": []}
         spec = _patch(
-            {"op": "set_engine_config", "engine": "spark",
-             "key": "spark.sql.shuffle.partitions", "value": "200"}
+            {
+                "op": "set_engine_config",
+                "engine": "spark",
+                "key": "spark.sql.shuffle.partitions",
+                "value": "200",
+            }
         )
 
         result = run_lineage_gate(bp, bp, spec)
@@ -401,13 +405,15 @@ class TestSandboxGateBaseDir:
         """run_sandbox_gate passes base_dir=blueprint_parent to parse_dict."""
         bp_file = tmp_path / "blueprints" / "pipe.yml"
         bp_file.parent.mkdir(parents=True)
-        bp_file.write_text("""\
+        bp_file.write_text(
+            """\
 aqueduct: '1.0'
 id: test.bp
 name: Test
 modules: []
 edges: []
-""")
+"""
+        )
         bp_after = {
             "aqueduct": "1.0",
             "id": "test.bp",
@@ -467,7 +473,8 @@ edges: []
         """run_sandbox_gate calls execute() without from_module — runs entire DAG."""
         bp_file = tmp_path / "blueprints" / "pipe.yml"
         bp_file.parent.mkdir(parents=True)
-        bp_file.write_text("""\
+        bp_file.write_text(
+            """\
 aqueduct: '1.0'
 id: test.bp
 name: Test
@@ -480,7 +487,8 @@ modules:
     config: {op: sql, query: SELECT * FROM src}
 edges:
   - {from: src, to: ch1}
-""")
+"""
+        )
         bp_after = {
             "aqueduct": "1.0",
             "id": "test.bp",

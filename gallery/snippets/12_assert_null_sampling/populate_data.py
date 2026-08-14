@@ -12,6 +12,7 @@ import random
 SEED = 42
 ROW_COUNT = 20_000
 
+
 def main():
     print(f"Generating {ROW_COUNT:,} records with controlled NULLs (seed={SEED})...")
     random.seed(SEED)
@@ -29,6 +30,7 @@ def main():
         f.write("\n".join(rows) + "\n")
 
     print(f"✓ Created data/input/users.csv (with ~5% NULL emails, seed={SEED}).")
+
 
 if __name__ == "__main__":
     main()

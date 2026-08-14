@@ -15,6 +15,7 @@ Audit 2026-08-01 (deploy + overrides units) found two related gaps in
 
 Both covered here with `get_submitter` mocked — no real Databricks workspace.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -91,7 +92,9 @@ def test_fetch_logs_failure_does_not_mask_the_failure_report(tmp_path):
     mock_submitter.package.return_value = MagicMock()
     mock_submitter.submit.return_value = "run-123"
     mock_submitter.poll.return_value = ExecutionResult(
-        blueprint_id="", run_id="run-123", status="error",
+        blueprint_id="",
+        run_id="run-123",
+        status="error",
         module_results=(ModuleResult(module_id="_remote_run", status="error", error="boom"),),
     )
     mock_submitter.fetch_logs.side_effect = RuntimeError("network blip")

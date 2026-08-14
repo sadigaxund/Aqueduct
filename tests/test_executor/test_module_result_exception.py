@@ -8,6 +8,7 @@ We don't spin Spark — we exercise the leaf helpers (`_on_retry_exhausted`,
 `exception=exc` via the literal `ModuleResult(...)` constructor call at
 executor.py:1214; we cover it by source-scan to catch refactor regressions.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -53,11 +54,19 @@ def test_assert_error_site_propagates_exception_in_source():
     """
     src = Path(__file__).resolve().parents[2] / "aqueduct" / "executor" / "spark" / "executor.py"
     text = src.read_text(encoding="utf-8")
-    # The Assert error site — see executor.py:1208-1217.
-    assert "except AssertError as exc:" in text
-    assert "exception=exc" in text
-    # The retry-exhausted branch — see executor.py:1570.
-    assert "module_id=module.id, status=ExecutionStatus.ERROR, error=str(exc), exception=exc" in text
+    # Whitespace-normalised: this scan guards which KEYWORDS the error site
+    # passes, not how a formatter chose to wrap them. Matching the raw text
+    # made the test fail the first time `black` ran on this repo and split
+    # the call across lines — a formatting change that altered nothing this
+    # test exists to protect.
+    flat = " ".join(text.split())
+    # The Assert error site — see the `except AssertError as exc:` handler.
+    assert "except AssertError as exc:" in flat
+    assert "exception=exc" in flat
+    # The retry-exhausted branch.
+    assert (
+        "module_id=module.id, status=ExecutionStatus.ERROR, error=str(exc), exception=exc" in flat
+    )
 
 
 def test_surveyor_record_falls_back_to_first_failed_modules_exception(tmp_path):
@@ -99,6 +108,7 @@ def test_surveyor_record_falls_back_to_first_failed_modules_exception(tmp_path):
     surveyor.record(result)
 
     import duckdb
+
     conn = duckdb.connect(str(tmp_path / "observability.db"))
     rows = conn.execute(
         "SELECT error_message FROM failure_contexts WHERE run_id = ?", ["r-exc"]
@@ -108,4 +118,9 @@ def test_surveyor_record_falls_back_to_first_failed_modules_exception(tmp_path):
 
     assert rows, "failure_contexts row missing — Surveyor.record did not persist"
     # The structured extractor uses live_exc; error_message should mention it.
-    assert "amount_usd" in rows[0][0] or "ChannelError" in rows[0][0] or "boom" in rows[0][0].lower() or rows[0][0] is not None
+    assert (
+        "amount_usd" in rows[0][0]
+        or "ChannelError" in rows[0][0]
+        or "boom" in rows[0][0].lower()
+        or rows[0][0] is not None
+    )

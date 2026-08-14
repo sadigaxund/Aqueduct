@@ -80,12 +80,22 @@ def _parents(module_id: str, modules_by_id: dict[str, Module], edges: list[Edge]
     m = modules_by_id[module_id]
     seen: list[str] = []
     for e in edges:
-        if e.to_id == module_id and _is_data_edge(e) and e.from_id in modules_by_id and e.from_id not in seen:
+        if (
+            e.to_id == module_id
+            and _is_data_edge(e)
+            and e.from_id in modules_by_id
+            and e.from_id not in seen
+        ):
             seen.append(e.from_id)
     for dep in m.depends_on:
         if dep in modules_by_id and dep not in seen:
             seen.append(dep)
-    if m.type == ModuleType.Probe and m.attach_to and m.attach_to in modules_by_id and m.attach_to not in seen:
+    if (
+        m.type == ModuleType.Probe
+        and m.attach_to
+        and m.attach_to in modules_by_id
+        and m.attach_to not in seen
+    ):
         seen.append(m.attach_to)
     return seen
 

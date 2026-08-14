@@ -52,6 +52,7 @@ _INGRESS_EGRESS = """
 
 # ── Channel op=cast ──────────────────────────────────────────────────────────
 
+
 def test_cast_valid_type_compiles(tmp_path):
     yaml_str = f"""
 aqueduct: "1.0"
@@ -128,6 +129,7 @@ edges:
 
 
 # ── Ingress schema_hint ──────────────────────────────────────────────────────
+
 
 def test_schema_hint_dict_shorthand_valid(tmp_path):
     yaml_str = """
@@ -219,6 +221,7 @@ edges:
 
 # ── UDF return_type ───────────────────────────────────────────────────────────
 
+
 def test_udf_return_type_valid(tmp_path):
     yaml_str = f"""
 aqueduct: "1.0"
@@ -262,6 +265,7 @@ edges:
 
 
 # ── Bare `timestamp` — deprecation-window warning, not an error ─────────────
+
 
 def test_bare_timestamp_in_schema_hint_is_a_hard_compile_error(tmp_path):
     """Bare `timestamp` has no deprecation window (user decision 2026-07-23):
@@ -360,6 +364,7 @@ edges:
 
 
 # ── Disabled modules are skipped (same convention as sections 7-8) ──────────
+
 
 def test_disabled_module_bad_type_does_not_block_compile(tmp_path):
     yaml_str = """

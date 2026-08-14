@@ -2,6 +2,7 @@ import csv, os
 
 DATA_DIR = "data/input"
 
+
 def write_csv(filename, rows):
     os.makedirs(DATA_DIR, exist_ok=True)
     path = os.path.join(DATA_DIR, filename)
@@ -10,15 +11,20 @@ def write_csv(filename, rows):
         writer.writerows(rows)
     print(f"Created {path} ({len(rows)-1} data rows)")
 
-def main():
-    write_csv('items.csv', [
-        ['id', 'name', 'category'],
-        ['1', 'Laptop', 'electronics'],
-        ['2', 'Phone', 'electronics'],
-        ['3', 'Banana', 'food'],
-        ['4', 'Table', 'home'],
-        ['5', 'Book', 'media'],
-    ])
 
-if __name__ == '__main__':
+def main():
+    write_csv(
+        "items.csv",
+        [
+            ["id", "name", "category"],
+            ["1", "Laptop", "electronics"],
+            ["2", "Phone", "electronics"],
+            ["3", "Banana", "food"],
+            ["4", "Table", "home"],
+            ["5", "Book", "media"],
+        ],
+    )
+
+
+if __name__ == "__main__":
     main()

@@ -29,20 +29,34 @@ def env(tmp_path):
         ensure_schema(cur)
     ps = make_patch_store("local", "", tmp_path / "patches")
     fc = FailureContext(
-        run_id="r1", blueprint_id="bp", failed_module="clean",
-        error_message="AnalysisException: col x missing", stack_trace="",
-        manifest_json="{}", started_at="2026-06-16T00:00:00+00:00",
-        finished_at="2026-06-16T00:00:01+00:00", error_class="AnalysisException",
-     engine="spark",)
+        run_id="r1",
+        blueprint_id="bp",
+        failed_module="clean",
+        error_message="AnalysisException: col x missing",
+        stack_trace="",
+        manifest_json="{}",
+        started_at="2026-06-16T00:00:00+00:00",
+        finished_at="2026-06-16T00:00:01+00:00",
+        error_class="AnalysisException",
+        engine="spark",
+    )
     return tmp_path, obs, ps, fc
 
 
 def _spec(patch_id="fix1"):
     return PatchSpec(
-        patch_id=patch_id, root_cause="rename", rationale="rename the column",
+        patch_id=patch_id,
+        root_cause="rename",
+        rationale="rename the column",
         confidence=0.9,
-        operations=[{"op": "set_module_config_key", "module_id": "clean",
-                     "key": "query", "value": "SELECT 1"}],
+        operations=[
+            {
+                "op": "set_module_config_key",
+                "module_id": "clean",
+                "key": "query",
+                "value": "SELECT 1",
+            }
+        ],
     )
 
 

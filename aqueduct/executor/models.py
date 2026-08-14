@@ -120,9 +120,7 @@ def manifest_hash(manifest: Any) -> str:
     import hashlib
     import json as _json
 
-    return hashlib.sha256(
-        _json.dumps(manifest.to_dict(), sort_keys=True).encode()
-    ).hexdigest()[:12]
+    return hashlib.sha256(_json.dumps(manifest.to_dict(), sort_keys=True).encode()).hexdigest()[:12]
 
 
 class ExecutionStatus(StrEnum):
@@ -155,7 +153,7 @@ class ModuleResult:
     """Outcome of executing a single module."""
 
     module_id: str
-    status: str          # "success" | "error" | "skipped"
+    status: str  # "success" | "error" | "skipped"
     error: str | None = None
     error_type: str | None = None  # user-defined label from Assert rule's error_type field
     exception: BaseException | None = None
@@ -180,9 +178,9 @@ class ExecutionResult:
 
     blueprint_id: str
     run_id: str
-    status: str                          # "success" | "error"
+    status: str  # "success" | "error"
     module_results: tuple[ModuleResult, ...]
-    trigger_agent: bool = False          # LLM loop should fire even if approval=disabled
+    trigger_agent: bool = False  # LLM loop should fire even if approval=disabled
     failed_engine: str | None = None
     """Set only by ``aqueduct.executor.orchestrator.run_polyglot()`` when
     ``status == "error"`` — the engine name of the ISLAND that actually

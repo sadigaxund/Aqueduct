@@ -30,6 +30,7 @@ _LOG4J_QUIET_OPTS = (
 def _suppress_stderr():
     """Redirect fd 2 (JVM writes here) and sys.stderr to /dev/null."""
     import logging
+
     logging.getLogger("py4j").setLevel(logging.ERROR)
     devnull_fd = os.open(os.devnull, os.O_WRONLY)
     saved_fd2 = os.dup(2)
@@ -209,6 +210,7 @@ def _mute_query_context_loggers() -> None:
     """
     try:
         from pyspark.logger import PySparkLogger
+
         for name in ("SQLQueryContextLogger", "DataFrameQueryContextLogger"):
             PySparkLogger.getLogger(name).setLevel(logging.CRITICAL)
     except Exception:

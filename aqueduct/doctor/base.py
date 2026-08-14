@@ -19,8 +19,10 @@ class CheckResult:
     detail: str
     elapsed_ms: int = 0
     # Data-driven render policy (renderer stays generic — no per-name branches).
-    group: str = "general"        # "spark" | "stores" | "agent" | "io" | …  (visual grouping deferred)
-    quiet_when_ok: bool = False   # low-signal env detail (cloudpickle): hide row when green, show on warn/fail
+    group: str = "general"  # "spark" | "stores" | "agent" | "io" | …  (visual grouping deferred)
+    quiet_when_ok: bool = (
+        False  # low-signal env detail (cloudpickle): hide row when green, show on warn/fail
+    )
 
 
 def _ms(t: float) -> int:

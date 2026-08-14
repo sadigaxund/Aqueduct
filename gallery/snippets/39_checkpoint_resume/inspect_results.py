@@ -9,7 +9,9 @@ console = Console()
 def main():
     output = Path("data/output/category_counts.parquet")
     if not output.exists():
-        console.print(f"[bold red]✗[/bold red] Output not found at {output}. Did you run the pipeline?")
+        console.print(
+            f"[bold red]✗[/bold red] Output not found at {output}. Did you run the pipeline?"
+        )
         return
 
     con = duckdb.connect()
@@ -23,7 +25,9 @@ def main():
         for row in rows:
             t.add_row(*[str(v) for v in row])
         console.print(t)
-        console.print(f"\n[dim]Row count: {len(rows)} — 'transform' module uses checkpoint: true, so it is never re-executed on retry[/dim]")
+        console.print(
+            f"\n[dim]Row count: {len(rows)} — 'transform' module uses checkpoint: true, so it is never re-executed on retry[/dim]"
+        )
     finally:
         con.close()
 

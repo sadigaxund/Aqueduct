@@ -54,7 +54,7 @@ _DUCKDB_DEFER = DeferRules(
         "- **Error class has no module-config knob**: the failure is in "
         "DuckDB's own query planner/optimizer, not Blueprint fields.\n"
         "- **Out-of-memory / capacity exhaustion**: an error mentioning "
-        "\"Out of Memory\", `memory_limit`, or a buffer/allocator allocation "
+        '"Out of Memory", `memory_limit`, or a buffer/allocator allocation '
         "failure means DuckDB (single-node, embedded — no cluster to scale "
         "out to) ran out of RAM for this query, not that a Blueprint field is "
         "wrong. Do NOT propose repeated config-value edits chasing this error "
@@ -65,9 +65,7 @@ _DUCKDB_DEFER = DeferRules(
 )
 
 DUCKDB_PROMPT_RULES = PromptRules(
-    persona=(
-        "You are an expert DuckDB blueprint repair agent for the Aqueduct blueprint engine."
-    ),
+    persona=("You are an expert DuckDB blueprint repair agent for the Aqueduct blueprint engine."),
     root_cause_note="DuckDB exception class + offending column/table name + suggested identifiers",
     rules=(
         "- SQL Channel queries reference upstream module IDs as DuckDB relation names registered on the connection (e.g. `FROM yellow_process__ingress`). NEVER use `${ctx.*}` inside a SQL query string.\n"
@@ -77,7 +75,7 @@ DUCKDB_PROMPT_RULES = PromptRules(
         "- `schema_hint type mismatch on 'X': expected 'A', actual 'B'` — read this literally: `expected` is the schema_hint value ALREADY declared in the Blueprint for field X (re-proposing it is a no-op, not a fix); `actual` is the type DuckDB inferred from the real data. The fix is `set_module_config_key` (or the appropriate provenance-driven op) changing the schema_hint for X to `actual` — NOT re-setting it to `expected`. If `actual` is clearly wrong for the field's domain, this is a genuine data problem outside Blueprint control — defer to a human if deferral is permitted, otherwise state that in `root_cause` and make no change.\n"
         "- A Binder Error's 'Did you mean \"col\"?' suggestion names the closest real column by edit distance, not necessarily the semantically correct one — check the Blueprint's declared schema_hint / upstream Channel `select` list before trusting the suggestion verbatim.\n"
         "- DuckDB's `COPY ... TO` Egress write has no native append mode (`egress.mode.append` is UNSUPPORTED on this engine) — never propose a patch that sets `mode: append` for a DuckDB Egress; only `overwrite`, `error`, `errorifexists`, and `ignore` are valid write modes here.\n"
-        "- An error mentioning \"Out of Memory\", `memory_limit`, or a buffer/allocator allocation failure is DuckDB (single-node, embedded) running out of RAM for this query — a capacity limit of the machine, not a Blueprint defect. No PatchSpec op changes how much memory the machine has: do NOT propose repeated config-value edits chasing this error. Defer to a human if deferral is permitted, otherwise state that in `root_cause` and make no change."
+        '- An error mentioning "Out of Memory", `memory_limit`, or a buffer/allocator allocation failure is DuckDB (single-node, embedded) running out of RAM for this query — a capacity limit of the machine, not a Blueprint defect. No PatchSpec op changes how much memory the machine has: do NOT propose repeated config-value edits chasing this error. Defer to a human if deferral is permitted, otherwise state that in `root_cause` and make no change.'
     ),
     defer=_DUCKDB_DEFER,
 )

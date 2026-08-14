@@ -56,6 +56,7 @@ class JunctionError(AqueductError):
 
 # ── Mode implementations ──────────────────────────────────────────────────────
 
+
 def _conditional(
     module_id: str,
     df: DataFrame,
@@ -124,9 +125,7 @@ def _partition(
 ) -> dict[str, DataFrame]:
     partition_key = cfg.get("partition_key")
     if not partition_key:
-        raise JunctionError(
-            f"[{module_id}] 'partition_key' is required for partition mode"
-        )
+        raise JunctionError(f"[{module_id}] 'partition_key' is required for partition mode")
     if not branches:
         raise JunctionError(f"[{module_id}] 'branches' must not be empty")
 
@@ -142,6 +141,7 @@ def _partition(
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
 
 def execute_junction(module: Module, df: DataFrame) -> dict[str, DataFrame]:
     """Split df into branch DataFrames according to module.config.

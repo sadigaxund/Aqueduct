@@ -6,6 +6,7 @@ import glob
 
 console = Console()
 
+
 def read_csv_from_dir(path):
     # Spark writes a directory of part-*.csv files; DuckDB writes a single
     # CSV file at the configured path. Read whichever shape is there.
@@ -17,6 +18,7 @@ def read_csv_from_dir(path):
     if os.path.exists(path):
         return pd.read_csv(path)
     return pd.DataFrame()
+
 
 def main():
     clean_path = "data/output/clean.parquet"
@@ -56,10 +58,15 @@ def main():
     console.print(t)
     console.print(f"[dim]  Row count: {len(df_quality)}\n[/dim]")
 
-    console.print(f"[bold]Summary:[/bold] {len(df_clean)} clean, {len(df_missing)} missing values, "
-                  f"{len(df_quality)} quality violations")
-    console.print("[dim]Typed spillway edges route failed rows to different outputs based on error_type "
-                  "(MissingValue vs DataQualityViolation).[/dim]")
+    console.print(
+        f"[bold]Summary:[/bold] {len(df_clean)} clean, {len(df_missing)} missing values, "
+        f"{len(df_quality)} quality violations"
+    )
+    console.print(
+        "[dim]Typed spillway edges route failed rows to different outputs based on error_type "
+        "(MissingValue vs DataQualityViolation).[/dim]"
+    )
+
 
 if __name__ == "__main__":
     main()

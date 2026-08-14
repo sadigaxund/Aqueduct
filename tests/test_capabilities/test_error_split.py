@@ -234,7 +234,8 @@ def test_capability_scope_error_raised_for_false_tagged_engine_block_field():
     class _FalseTaggedEngineBlock(BaseModel):
         model_config = ConfigDict(frozen=True, extra="forbid")
         memory_limit: str = Field(
-            default="2GB", json_schema_extra={"engine_scoped": False},
+            default="2GB",
+            json_schema_extra={"engine_scoped": False},
         )
 
     class _EngineRouting(BaseModel):

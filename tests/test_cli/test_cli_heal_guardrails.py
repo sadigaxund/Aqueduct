@@ -27,6 +27,7 @@ def _make_guardrails(heal_on=(), never_heal=()):
 
 # ── parse round-trip ──────────────────────────────────────────────────────────
 
+
 def test_heal_on_errors_never_heal_parse_from_yaml(tmp_path):
     """heal_on_errors + never_heal_errors parse from YAML → GuardrailsConfig fields populated."""
     import yaml
@@ -42,6 +43,7 @@ def test_heal_on_errors_never_heal_parse_from_yaml(tmp_path):
 
 
 # ── never_heal_errors takes priority ─────────────────────────────────────────
+
 
 def test_never_heal_blocks_on_error_type_match():
     ctx = _make_ctx(error_type="EmptyDataset")
@@ -68,6 +70,7 @@ def test_never_heal_priority_over_heal_on():
 
 # ── heal_on_errors whitelist ─────────────────────────────────────────────────
 
+
 def test_heal_on_non_empty_error_type_matches_proceeds():
     ctx = _make_ctx(error_type="EmptyDataset")
     g = _make_guardrails(heal_on=["EmptyDataset", "SchemaError"])
@@ -93,6 +96,7 @@ def test_heal_on_empty_no_restriction():
 
 # ── never_heal empty ─────────────────────────────────────────────────────────
 
+
 def test_never_heal_empty_no_restriction():
     ctx = _make_ctx(error_type=None)
     g = _make_guardrails(never_heal=[])
@@ -102,11 +106,9 @@ def test_never_heal_empty_no_restriction():
 
 # ── error_type None falls back to stack class ─────────────────────────────────
 
+
 def test_error_type_none_uses_stack_class():
-    ctx = _make_ctx(
-        error_type=None,
-        stack_trace="pyspark.errors.SparkException: boom"
-    )
+    ctx = _make_ctx(error_type=None, stack_trace="pyspark.errors.SparkException: boom")
     g = _make_guardrails(heal_on=["SparkException"])
     should_heal, reason = _check_heal_guardrails(ctx, g)
     assert should_heal
@@ -114,8 +116,7 @@ def test_error_type_none_uses_stack_class():
 
 def test_error_type_and_stack_class_either_match():
     ctx = _make_ctx(
-        error_type="DataQualityError",
-        stack_trace="pyspark.errors.SparkException: boom"
+        error_type="DataQualityError", stack_trace="pyspark.errors.SparkException: boom"
     )
     # heal_on only includes the stack class, not error_type
     g = _make_guardrails(heal_on=["SparkException"])

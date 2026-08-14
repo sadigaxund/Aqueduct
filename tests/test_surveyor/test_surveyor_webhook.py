@@ -85,7 +85,7 @@ def test_fire_webhook_template_vars_resolution():
         template_vars = {
             "blueprint_name": "MyBlueprint",
             "failed_module": "raw_users",
-            "AUTH_TOKEN": "secret-123"
+            "AUTH_TOKEN": "secret-123",
         }
 
         fire_webhook(config, {}, template_vars=template_vars).join(timeout=2)
@@ -101,10 +101,7 @@ def test_fire_webhook_environ_fallback(monkeypatch):
     with patch("httpx.request") as mock_req:
         mock_req.return_value = MagicMock(status_code=200)
 
-        config = WebhookEndpointConfig(
-            url="http://test.com",
-            payload={"key": "${GLOBAL_KEY}"}
-        )
+        config = WebhookEndpointConfig(url="http://test.com", payload={"key": "${GLOBAL_KEY}"})
 
         fire_webhook(config, {}).join(timeout=2)
 
@@ -112,6 +109,7 @@ def test_fire_webhook_environ_fallback(monkeypatch):
 
 
 # ── Phase 46 — envelope format + delivery retry ──────────────────────────────
+
 
 def test_fire_webhook_envelope_format():
     """payload: null + event= → standardized envelope."""
@@ -155,7 +153,9 @@ def test_fire_webhook_custom_payload_wins_over_envelope():
             url="http://custom.test",
             payload={"custom": "data", "run_id": "${run_id}"},
         )
-        fire_webhook(config, {"ignored": "payload"}, template_vars={"run_id": "r-1"}, event="on_failure").join(timeout=2)
+        fire_webhook(
+            config, {"ignored": "payload"}, template_vars={"run_id": "r-1"}, event="on_failure"
+        ).join(timeout=2)
 
         _, kwargs = mock_req.call_args
         body = kwargs["json"]
@@ -246,5 +246,7 @@ def test_fire_webhook_configurable_retries():
     with patch("httpx.request") as mock_req:
         mock_req.return_value = MagicMock(status_code=503)  # retryable
         # 0 retries → exactly 1 attempt; backoff small so the thread finishes fast
-        fire_webhook(_cfg("http://hooks.test/x", max_retries=0, backoff_seconds=0.01), {"k": 1}).join(timeout=2)
+        fire_webhook(
+            _cfg("http://hooks.test/x", max_retries=0, backoff_seconds=0.01), {"k": 1}
+        ).join(timeout=2)
         assert mock_req.call_count == 1

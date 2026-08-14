@@ -43,13 +43,22 @@ agent:
 """
 
 
-def _write_project(tmp_path, progressive, sandbox, allow_skip=True,
-                   approval="human", agent_extra="", cfg_agent_extra=""):
+def _write_project(
+    tmp_path,
+    progressive,
+    sandbox,
+    allow_skip=True,
+    approval="human",
+    agent_extra="",
+    cfg_agent_extra="",
+):
     bp = tmp_path / "bp.yml"
     bp.write_text(
         _BP_TEMPLATE.format(
-            approval=approval, progressive=str(progressive).lower(),
-            sandbox=sandbox, agent_extra=agent_extra,
+            approval=approval,
+            progressive=str(progressive).lower(),
+            sandbox=sandbox,
+            agent_extra=agent_extra,
         ),
         encoding="utf-8",
     )
@@ -68,8 +77,14 @@ def _failing_executor(mock_get_executor):
         status="error",
         trigger_agent=False,
         module_results=[
-            MagicMock(module_id="src", status="error", error="Boom",
-                      exception=ValueError("Boom"), warnings=[], notes=()),
+            MagicMock(
+                module_id="src",
+                status="error",
+                error="Boom",
+                exception=ValueError("Boom"),
+                warnings=[],
+                notes=(),
+            ),
         ],
     )
     mock_get_executor.return_value = mock_exec
@@ -79,13 +94,19 @@ def _failing_executor(mock_get_executor):
 def _no_patch_result():
     from aqueduct.agent import AgentPatchResult
     from aqueduct.agent.budget import StopReason
+
     return AgentPatchResult(
-        patch=None, attempts=1, stop_reason=StopReason.EXHAUSTED_ATTEMPTS,
-        tokens_in_total=0, tokens_out_total=0, attempt_records=[],
+        patch=None,
+        attempts=1,
+        stop_reason=StopReason.EXHAUSTED_ATTEMPTS,
+        tokens_in_total=0,
+        tokens_out_total=0,
+        attempt_records=[],
     )
 
 
 # ── Sandbox requirement (config-load refusal) ──────────────────────────────
+
 
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 @patch("aqueduct.executor.get_executor")
@@ -118,29 +139,39 @@ def test_progressive_false_with_sandbox_off_not_refused(tmp_path):
     """Non-progressive heals are unaffected — sandbox_mode: off stays legal
     on its own (guarded by danger.allow_skip_sandbox, unrelated to progressive)."""
     from aqueduct.agent.progressive import require_sandbox_for_progressive
+
     assert require_sandbox_for_progressive(False, "off") is None  # no raise
 
 
 # ── Scope warning (no silent no-op on unsupported combos) ───────────────────
 
+
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 @patch("aqueduct.agent.generate_agent_patch")
 @patch("aqueduct.executor.get_executor")
-def test_progressive_with_approval_human_warns(mock_get_executor, mock_generate_patch, mock_surveyor_cls, tmp_path):
+def test_progressive_with_approval_human_warns(
+    mock_get_executor, mock_generate_patch, mock_surveyor_cls, tmp_path
+):
     """agent.progressive: true + approval: human must NOT silently fall through
     to the standard loop — one [agent_progressive_scope] warning names the
     disabling condition."""
     bp, cfg = _write_project(
-        tmp_path, progressive=True, sandbox="sample", approval="human",
+        tmp_path,
+        progressive=True,
+        sandbox="sample",
+        approval="human",
     )
     _failing_executor(mock_get_executor)
     mock_generate_patch.return_value = _no_patch_result()
 
     runner = CliRunner()
-    with patch("aqueduct.agent.memory.find_pending", return_value=None), \
-         patch("aqueduct.agent.memory.find_replay_candidate", return_value=None):
+    with (
+        patch("aqueduct.agent.memory.find_pending", return_value=None),
+        patch("aqueduct.agent.memory.find_replay_candidate", return_value=None),
+    ):
         result = runner.invoke(
-            cli, ["run", str(bp), "--config", str(cfg), "--store-dir", str(tmp_path)],
+            cli,
+            ["run", str(bp), "--config", str(cfg), "--store-dir", str(tmp_path)],
         )
 
     assert "[agent_progressive_scope]" in result.output
@@ -153,7 +184,9 @@ def test_progressive_with_approval_human_warns(mock_get_executor, mock_generate_
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 @patch("aqueduct.agent.cascade.generate_cascade_patch")
 @patch("aqueduct.executor.get_executor")
-def test_progressive_with_cascade_warns(mock_get_executor, mock_generate_cascade, mock_surveyor_cls, tmp_path):
+def test_progressive_with_cascade_warns(
+    mock_get_executor, mock_generate_cascade, mock_surveyor_cls, tmp_path
+):
     """agent.progressive: true + cascade tiers must warn (cascade chaining is
     deferred) and fall back to the standard cascade loop — visibly.
 
@@ -161,23 +194,25 @@ def test_progressive_with_cascade_warns(mock_get_executor, mock_generate_cascade
     cannot declare its own cascade); the tier list goes in `cfg_agent_extra`
     (aqueduct.yml), not the Blueprint's `agent_extra`.
     """
-    cascade_block = (
-        "  cascade:\n"
-        "    - model: small-model\n"
-        "    - model: big-model\n"
-    )
+    cascade_block = "  cascade:\n" "    - model: small-model\n" "    - model: big-model\n"
     bp, cfg = _write_project(
-        tmp_path, progressive=True, sandbox="sample", approval="auto",
+        tmp_path,
+        progressive=True,
+        sandbox="sample",
+        approval="auto",
         cfg_agent_extra=cascade_block,
     )
     _failing_executor(mock_get_executor)
     mock_generate_cascade.return_value = _no_patch_result()
 
     runner = CliRunner()
-    with patch("aqueduct.agent.memory.find_pending", return_value=None), \
-         patch("aqueduct.agent.memory.find_replay_candidate", return_value=None):
+    with (
+        patch("aqueduct.agent.memory.find_pending", return_value=None),
+        patch("aqueduct.agent.memory.find_replay_candidate", return_value=None),
+    ):
         result = runner.invoke(
-            cli, ["run", str(bp), "--config", str(cfg), "--store-dir", str(tmp_path)],
+            cli,
+            ["run", str(bp), "--config", str(cfg), "--store-dir", str(tmp_path)],
         )
 
     assert "[agent_progressive_scope]" in result.output
@@ -189,20 +224,28 @@ def test_progressive_with_cascade_warns(mock_get_executor, mock_generate_cascade
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 @patch("aqueduct.agent.generate_agent_patch")
 @patch("aqueduct.executor.get_executor")
-def test_progressive_supported_combo_does_not_warn(mock_get_executor, mock_generate_patch, mock_surveyor_cls, tmp_path):
+def test_progressive_supported_combo_does_not_warn(
+    mock_get_executor, mock_generate_patch, mock_surveyor_cls, tmp_path
+):
     """approval: auto + no cascade + no replay = the supported combo — the
     scope warning must NOT appear (the chain itself runs instead)."""
     bp, cfg = _write_project(
-        tmp_path, progressive=True, sandbox="sample", approval="auto",
+        tmp_path,
+        progressive=True,
+        sandbox="sample",
+        approval="auto",
     )
     _failing_executor(mock_get_executor)
     mock_generate_patch.return_value = _no_patch_result()
 
     runner = CliRunner()
-    with patch("aqueduct.agent.memory.find_pending", return_value=None), \
-         patch("aqueduct.agent.memory.find_replay_candidate", return_value=None):
+    with (
+        patch("aqueduct.agent.memory.find_pending", return_value=None),
+        patch("aqueduct.agent.memory.find_replay_candidate", return_value=None),
+    ):
         result = runner.invoke(
-            cli, ["run", str(bp), "--config", str(cfg), "--store-dir", str(tmp_path)],
+            cli,
+            ["run", str(bp), "--config", str(cfg), "--store-dir", str(tmp_path)],
         )
 
     assert "[agent_progressive_scope]" not in result.output

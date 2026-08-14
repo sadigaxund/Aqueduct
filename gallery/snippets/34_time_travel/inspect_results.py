@@ -12,7 +12,9 @@ def main():
 
     if not v1_output.exists() and not current_output.exists():
         console.print(f"[bold red]✗[/bold red] No output files found. Did you run the pipeline?")
-        console.print("  [dim]This snippet requires a Delta table at data/delta_events — see populate.py.[/dim]")
+        console.print(
+            "  [dim]This snippet requires a Delta table at data/delta_events — see populate.py.[/dim]"
+        )
         return
 
     con = duckdb.connect()
@@ -29,7 +31,9 @@ def main():
             console.print(f"  [dim]Row count: {len(rows)} — Delta version 1 snapshot[/dim]\n")
 
         if current_output.exists():
-            rows = con.execute(f"SELECT * FROM read_parquet('{current_output}') ORDER BY id").fetchall()
+            rows = con.execute(
+                f"SELECT * FROM read_parquet('{current_output}') ORDER BY id"
+            ).fetchall()
             columns = [desc[0] for desc in con.description]
             t = Table(title="Current Snapshot (latest)", header_style="bold cyan")
             for col in columns:

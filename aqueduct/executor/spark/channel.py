@@ -50,9 +50,7 @@ logger = logging.getLogger(__name__)
 
 _SINGLE_INPUT_ALIAS = "__input__"
 
-_VALID_JOIN_TYPES = frozenset(
-    {"inner", "left", "right", "full", "semi", "anti", "cross"}
-)
+_VALID_JOIN_TYPES = frozenset({"inner", "left", "right", "full", "semi", "anti", "cross"})
 
 
 class ChannelError(AqueductError):
@@ -60,6 +58,7 @@ class ChannelError(AqueductError):
 
 
 # ── SQL helpers ───────────────────────────────────────────────────────────────
+
 
 def _build_join_query(module_id: str, cfg: dict) -> str:
     left: str | None = cfg.get("left")
@@ -120,6 +119,7 @@ def _run_sql(
 
 # ── DataFrame op implementations ──────────────────────────────────────────────
 
+
 def _execute_deduplicate(module_id: str, df: DataFrame, cfg: dict) -> DataFrame:
     key = cfg.get("key")
     order_by: str | None = cfg.get("order_by")
@@ -134,14 +134,12 @@ def _execute_deduplicate(module_id: str, df: DataFrame, cfg: dict) -> DataFrame:
         from pyspark.sql import functions as F
 
         if not key_cols:
-            raise ChannelError(
-                f"[{module_id}] op=deduplicate with order_by requires 'key'"
-            )
+            raise ChannelError(f"[{module_id}] op=deduplicate with order_by requires 'key'")
         w = Window.partitionBy(key_cols).orderBy(F.expr(order_by))
         return (
             df.withColumn("_aq_rank", F.row_number().over(w))
-              .filter("_aq_rank = 1")
-              .drop("_aq_rank")
+            .filter("_aq_rank = 1")
+            .drop("_aq_rank")
         )
 
     return df.dropDuplicates(key_cols) if key_cols else df.dropDuplicates()
@@ -299,12 +297,17 @@ def _execute_coalesce(module_id: str, df: DataFrame, cfg: dict) -> DataFrame:
         raise ChannelError(f"[{module_id}] op=coalesce failed: {exc}") from exc
 
 
-_VALID_STORAGE_LEVELS = frozenset({
-    "MEMORY_AND_DISK", "MEMORY_AND_DISK_SER",
-    "MEMORY_ONLY", "MEMORY_ONLY_SER",
-    "DISK_ONLY", "DISK_ONLY_2",
-    "OFF_HEAP",
-})
+_VALID_STORAGE_LEVELS = frozenset(
+    {
+        "MEMORY_AND_DISK",
+        "MEMORY_AND_DISK_SER",
+        "MEMORY_ONLY",
+        "MEMORY_ONLY_SER",
+        "DISK_ONLY",
+        "DISK_ONLY_2",
+        "OFF_HEAP",
+    }
+)
 
 
 def _execute_cache(module_id: str, df: DataFrame, cfg: dict) -> DataFrame:
@@ -320,13 +323,10 @@ def _execute_cache(module_id: str, df: DataFrame, cfg: dict) -> DataFrame:
     return df.persist(level)
 
 
-def _execute_union(
-    module_id: str, dfs: list[DataFrame], cfg: dict
-) -> DataFrame:
+def _execute_union(module_id: str, dfs: list[DataFrame], cfg: dict) -> DataFrame:
     if len(dfs) < 2:
         raise ChannelError(
-            f"[{module_id}] op=union requires at least 2 upstream DataFrames; "
-            f"got {len(dfs)}"
+            f"[{module_id}] op=union requires at least 2 upstream DataFrames; " f"got {len(dfs)}"
         )
     allow_missing: bool = cfg.get("allow_missing_columns", True)
     result = dfs[0]
@@ -339,6 +339,7 @@ def _execute_union(
 
 
 # ── Metrics boundary ─────────────────────────────────────────────────────────
+
 
 def _apply_metrics_boundary(df: DataFrame, cfg: dict, module_id: str = "") -> DataFrame:
     """If metrics_boundary: true, insert a repartition to force a Spark stage cut.
@@ -376,6 +377,7 @@ def _apply_metrics_boundary(df: DataFrame, cfg: dict, module_id: str = "") -> Da
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+
 def execute_channel(
     module: Module,
     upstream_dfs: dict[str, DataFrame],
@@ -406,8 +408,7 @@ def execute_channel(
 
     if op not in _ALL_OPS:
         raise ChannelError(
-            f"[{module.id}] unsupported Channel op {op!r}. "
-            f"Supported: {sorted(_ALL_OPS)}"
+            f"[{module.id}] unsupported Channel op {op!r}. " f"Supported: {sorted(_ALL_OPS)}"
         )
 
     # ── SQL ops ───────────────────────────────────────────────────────────────
@@ -417,9 +418,7 @@ def execute_channel(
         else:
             query = cfg.get("query")
             if not query or not query.strip():
-                raise ChannelError(
-                    f"[{module.id}] op=sql requires a non-empty 'query'"
-                )
+                raise ChannelError(f"[{module.id}] op=sql requires a non-empty 'query'")
         result = _run_sql(module.id, query, upstream_dfs, spark)
         return _apply_metrics_boundary(result, cfg, module.id)
 
@@ -459,5 +458,3 @@ def execute_channel(
         raise ChannelError(f"[{module.id}] unhandled op {op!r}")
 
     return _apply_metrics_boundary(result, cfg, module.id)
-
-

@@ -26,9 +26,7 @@ class MacroError(AqueductError):
 
 
 # Matches {{ macros.name }} and {{ macros.name(args) }}
-_MACRO_RE = re.compile(
-    r"\{\{\s*macros\.(\w+)(?:\(([^)]*)\))?\s*\}\}"
-)
+_MACRO_RE = re.compile(r"\{\{\s*macros\.(\w+)(?:\(([^)]*)\))?\s*\}\}")
 
 # Matches {{ param_name }} inside a macro body
 _PARAM_RE = re.compile(r"\{\{\s*(\w+)\s*\}\}")
@@ -99,10 +97,7 @@ def resolve_macros(text: str, macros: dict[str, str]) -> str:
         args_str = m.group(2) or ""
 
         if name not in macros:
-            raise MacroError(
-                f"Macro {name!r} is not defined. "
-                f"Available: {sorted(macros)}"
-            )
+            raise MacroError(f"Macro {name!r} is not defined. " f"Available: {sorted(macros)}")
 
         body = macros[name]
 

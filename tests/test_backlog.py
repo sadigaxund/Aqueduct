@@ -90,4 +90,3 @@ def test_java_to_strftime_month_day_name_and_millis_patterns():
         clear "not supported, requires a time-of-day value" CompileError
         rather than leaving them as silent literal passthrough.
     """
-

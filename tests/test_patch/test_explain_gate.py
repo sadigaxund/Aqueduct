@@ -104,8 +104,18 @@ def test_run_explain_gate_partial_unavailable_still_compares_rest():
         "m2": {"exchange_count": 1, "python_udf_count": 0, "broadcast_count": 1, "run_id": "run-1"},
     }
     after = {
-        "m1": {"exchange_count": 0, "python_udf_count": 0, "broadcast_count": 0, "plan_available": False},
-        "m2": {"exchange_count": 1, "python_udf_count": 0, "broadcast_count": 1, "plan_available": True},
+        "m1": {
+            "exchange_count": 0,
+            "python_udf_count": 0,
+            "broadcast_count": 0,
+            "plan_available": False,
+        },
+        "m2": {
+            "exchange_count": 1,
+            "python_udf_count": 0,
+            "broadcast_count": 1,
+            "plan_available": True,
+        },
     }
     result = run_explain_gate(baseline, after, touched_modules=["m1", "m2"])
     assert result.status == "pass"
@@ -131,7 +141,12 @@ def test_run_explain_gate_real_regression_still_warns():
         "m1": {"exchange_count": 1, "python_udf_count": 0, "broadcast_count": 1, "run_id": "run-1"},
     }
     after = {
-        "m1": {"exchange_count": 1, "python_udf_count": 0, "broadcast_count": 0, "plan_available": True},
+        "m1": {
+            "exchange_count": 1,
+            "python_udf_count": 0,
+            "broadcast_count": 0,
+            "plan_available": True,
+        },
     }
     result = run_explain_gate(baseline, after, touched_modules=["m1"])
     assert result.status == "warn"

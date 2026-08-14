@@ -14,6 +14,7 @@ added to only one side by oversight. This file asserts that structurally —
 by comparing field SETS, not by listing field names — so the guard survives
 a future field addition to the base without needing an update here.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -25,9 +26,17 @@ from aqueduct.parser.schema import AgentPolicySchema, AgentSchema
 pytestmark = pytest.mark.unit
 
 # CONNECTION fields — legal ONLY on AgentConnectionConfig, illegal on AgentSchema.
-_CONNECTION_FIELDS = frozenset({
-    "provider", "base_url", "api_key", "model", "provider_options", "timeout", "cascade",
-})
+_CONNECTION_FIELDS = frozenset(
+    {
+        "provider",
+        "base_url",
+        "api_key",
+        "model",
+        "provider_options",
+        "timeout",
+        "cascade",
+    }
+)
 
 
 class TestStructuralFieldSetRelationship:
@@ -192,8 +201,14 @@ class TestEngineAgentConnectionConfigAcceptsFullSet:
         # their absence here pins that design choice so a future PR can't
         # silently add a dead field to AgentConnectionConfig.
         blueprint_only = {
-            "approval_mode", "on_pending_patches", "max_patches", "guardrails",
-            "confidence_threshold", "on_heal_failure", "allow_defer", "deep_loop",
+            "approval_mode",
+            "on_pending_patches",
+            "max_patches",
+            "guardrails",
+            "confidence_threshold",
+            "on_heal_failure",
+            "allow_defer",
+            "deep_loop",
             "sandbox_mode",
         }
         assert not (blueprint_only & set(AgentConnectionConfig.model_fields))

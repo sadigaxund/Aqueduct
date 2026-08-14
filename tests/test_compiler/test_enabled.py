@@ -20,17 +20,37 @@ def _bp(ctx_value: str = "false", **over) -> dict:
         "name": "BP",
         "context": {"enable_enrich": ctx_value},
         "modules": [
-            {"id": "raw_users", "label": "R", "type": "Ingress",
-             "config": {"format": "csv", "path": "data/u.csv"}},
-            {"id": "crm_events", "label": "C", "type": "Ingress",
-             "enabled": "${ctx.enable_enrich}",
-             "config": {"format": "csv", "path": "data/c.csv"}},
-            {"id": "enriched", "label": "E", "type": "Channel",
-             "config": {"op": "sql", "query": "SELECT * FROM raw_users"}},
-            {"id": "out_main", "label": "O", "type": "Egress",
-             "config": {"format": "parquet", "path": "out/main", "coalesce": 1}},
-            {"id": "out_enriched", "label": "O2", "type": "Egress",
-             "config": {"format": "parquet", "path": "out/enr"}},
+            {
+                "id": "raw_users",
+                "label": "R",
+                "type": "Ingress",
+                "config": {"format": "csv", "path": "data/u.csv"},
+            },
+            {
+                "id": "crm_events",
+                "label": "C",
+                "type": "Ingress",
+                "enabled": "${ctx.enable_enrich}",
+                "config": {"format": "csv", "path": "data/c.csv"},
+            },
+            {
+                "id": "enriched",
+                "label": "E",
+                "type": "Channel",
+                "config": {"op": "sql", "query": "SELECT * FROM raw_users"},
+            },
+            {
+                "id": "out_main",
+                "label": "O",
+                "type": "Egress",
+                "config": {"format": "parquet", "path": "out/main", "coalesce": 1},
+            },
+            {
+                "id": "out_enriched",
+                "label": "O2",
+                "type": "Egress",
+                "config": {"format": "parquet", "path": "out/enr"},
+            },
         ],
         "edges": [
             {"from": "raw_users", "to": "enriched"},
@@ -83,6 +103,7 @@ class TestEnabledCascade:
         """out_enriched (disabled, no coalesce) must not fire
         file_format_no_repartition; out_main is quiet via coalesce."""
         import warnings as W
+
         with W.catch_warnings(record=True) as caught:
             W.simplefilter("always")
             compiler_compile(parse_dict(_bp(), BASE))
@@ -114,14 +135,30 @@ edges:
 """
         )
         d = {
-            "aqueduct": "1.0", "id": "parent", "name": "Parent",
+            "aqueduct": "1.0",
+            "id": "parent",
+            "name": "Parent",
             "modules": [
-                {"id": "raw", "label": "R", "type": "Ingress",
-                 "config": {"format": "csv", "path": "data/u.csv"}},
-                {"id": "arc", "label": "A", "type": "Arcade",
-                 "ref": "sub.yml", "enabled": False, "config": {}},
-                {"id": "out", "label": "O", "type": "Egress",
-                 "config": {"format": "parquet", "path": "out/p", "coalesce": 1}},
+                {
+                    "id": "raw",
+                    "label": "R",
+                    "type": "Ingress",
+                    "config": {"format": "csv", "path": "data/u.csv"},
+                },
+                {
+                    "id": "arc",
+                    "label": "A",
+                    "type": "Arcade",
+                    "ref": "sub.yml",
+                    "enabled": False,
+                    "config": {},
+                },
+                {
+                    "id": "out",
+                    "label": "O",
+                    "type": "Egress",
+                    "config": {"format": "parquet", "path": "out/p", "coalesce": 1},
+                },
             ],
             "edges": [
                 {"from": "raw", "to": "arc"},
@@ -130,8 +167,10 @@ edges:
         }
         bp_file = tmp_path / "parent.yml"
         import yaml
+
         bp_file.write_text(yaml.safe_dump(d))
         from aqueduct.parser.parser import parse
+
         m = compiler_compile(parse(str(bp_file)), blueprint_path=bp_file)
         states = {x.id: (x.enabled, x.disabled_reason) for x in m.modules}
         assert states["arc__stage"] == (False, "arcade 'arc' disabled")

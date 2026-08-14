@@ -26,6 +26,7 @@ pytestmark = [pytest.mark.unit]
 from aqueduct import redaction
 from aqueduct.cli import _install_secret_redaction_hooks
 from aqueduct.surveyor.webhook import fire_webhook
+
 try:
     from aqueduct.surveyor.surveyor import Surveyor
 except ImportError:
@@ -33,6 +34,7 @@ except ImportError:
 from aqueduct.agent import stage_patch_for_human
 from aqueduct.agent.providers import _call_agent
 from aqueduct.compiler.models import Manifest
+
 try:
     from aqueduct.executor.models import ExecutionResult, ModuleResult
 except ImportError:
@@ -50,6 +52,7 @@ def clean_registry_and_hooks():
 
 
 # ── 1. Registration gates (Length & Entropy) ─────────────────────────────────
+
 
 def test_redaction_register_strong():
     """register("hunter2longenough") -> returns True, is_registered returns True."""
@@ -78,6 +81,7 @@ def test_redaction_register_weak_entropy():
 
 
 # ── 2. Redaction rules ────────────────────────────────────────────────────────
+
 
 def test_redaction_scrub_string():
     """redact("connecting to db://hunter2longenough@host") -> connecting to db://[REDACTED]@host."""
@@ -151,6 +155,7 @@ def test_redaction_longest_first():
 
 # ── 3. CLI hooks ─────────────────────────────────────────────────────────────
 
+
 def test_cli_redaction_hook_click_echo(capsys):
     """click.echo("…hunter2longenough…") after a registered secret -> output contains [REDACTED]."""
     secret = "hunter2longenough"
@@ -212,7 +217,9 @@ def test_cli_redaction_hook_named_logger_via_handler(tmp_path):
 
     root = logging.getLogger()
     saved_handlers, saved_filters, saved_level = (
-        list(root.handlers), list(root.filters), root.level,
+        list(root.handlers),
+        list(root.filters),
+        root.level,
     )
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
@@ -221,9 +228,7 @@ def test_cli_redaction_hook_named_logger_via_handler(tmp_path):
     root.setLevel(logging.WARNING)
     try:
         _install_secret_redaction_hooks()
-        logging.getLogger("aqueduct.some.module").warning(
-            "failed with secret %s", secret
-        )
+        logging.getLogger("aqueduct.some.module").warning("failed with secret %s", secret)
     finally:
         root.handlers = saved_handlers
         root.filters = saved_filters
@@ -248,7 +253,9 @@ def test_cli_redaction_hook_exception_traceback(tmp_path):
 
     root = logging.getLogger()
     saved_handlers, saved_filters, saved_level = (
-        list(root.handlers), list(root.filters), root.level,
+        list(root.handlers),
+        list(root.filters),
+        root.level,
     )
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
@@ -275,6 +282,7 @@ def test_cli_redaction_hook_exception_traceback(tmp_path):
 
 # ── 4. Observability and Surveyor ────────────────────────────────────────────
 
+
 def test_observability_redaction_surveyor(tmp_path):
     """observability failure_contexts.stack_trace row containing a registered secret stores [REDACTED] after surveyor.record().
 
@@ -297,7 +305,8 @@ def test_observability_redaction_surveyor(tmp_path):
     surveyor = Surveyor(
         manifest=manifest,
         store_dir=tmp_path,
-     engine="spark",)
+        engine="spark",
+    )
 
     run_id = "run-123"
     surveyor.start(run_id)
@@ -310,7 +319,7 @@ def test_observability_redaction_surveyor(tmp_path):
         module_results=(
             ModuleResult(module_id="m1", status="success"),
             ModuleResult(module_id="m2", status="error", error=f"failed using secret {secret}"),
-        )
+        ),
     )
 
     # We patch fire_webhook because we're testing the DB recording side of surveyor
@@ -321,8 +330,11 @@ def test_observability_redaction_surveyor(tmp_path):
 
     # Query database directly to check that the stored record is redacted
     import duckdb
+
     conn = duckdb.connect(str(tmp_path / "observability.db"))
-    res = conn.execute("SELECT error_message, stack_trace, manifest_json FROM failure_contexts").fetchone()
+    res = conn.execute(
+        "SELECT error_message, stack_trace, manifest_json FROM failure_contexts"
+    ).fetchone()
     conn.close()
 
     assert res is not None
@@ -332,12 +344,14 @@ def test_observability_redaction_surveyor(tmp_path):
     assert secret not in err_msg
     # stack_trace is a blob path (Phase 39) — materialize it
     from aqueduct.stores.object_store import BlobStore, LocalBackend
+
     stack = BlobStore(LocalBackend(tmp_path)).materialize(stack_path)
     assert "[REDACTED]" in stack
     assert secret not in stack
 
 
 # ── 5. Patch staging ─────────────────────────────────────────────────────────
+
 
 def test_patch_sidecar_redaction(tmp_path):
     """patch sidecar pending file written via stage_patch_for_human containing a registered secret in the payload writes [REDACTED] to disk."""
@@ -370,7 +384,8 @@ def test_patch_sidecar_redaction(tmp_path):
         manifest_json="{}",
         started_at="2026-05-23T12:00:00Z",
         finished_at="2026-05-23T12:00:05Z",
-     engine="spark",)
+        engine="spark",
+    )
 
     stage_patch_for_human(spec, tmp_path / "patches", failure_ctx)
 
@@ -385,6 +400,7 @@ def test_patch_sidecar_redaction(tmp_path):
 
 
 # ── 6. Webhooks ──────────────────────────────────────────────────────────────
+
 
 def test_webhook_redaction(monkeypatch):
     """webhook body containing a registered secret has the secret scrubbed; webhook headers and URL are NOT scrubbed."""
@@ -403,19 +419,21 @@ def test_webhook_redaction(monkeypatch):
     mock_config.payload = {
         "data": f"sending {secret} to target",  # Body SHOULD be scrubbed
     }
-    mock_config.secret = None          # no HMAC signing for this test
+    mock_config.secret = None  # no HMAC signing for this test
     mock_config.max_retries = 1
     mock_config.backoff_seconds = 2.0
 
     captured_reqs = []
 
     def mock_request(method, url, json=None, headers=None, timeout=None):
-        captured_reqs.append({
-            "method": method,
-            "url": url,
-            "json": json,
-            "headers": headers,
-        })
+        captured_reqs.append(
+            {
+                "method": method,
+                "url": url,
+                "json": json,
+                "headers": headers,
+            }
+        )
         resp = MagicMock()
         resp.status_code = 200
         return resp
@@ -438,14 +456,13 @@ def test_webhook_redaction(monkeypatch):
 
 # ── 7. LLM Dispatch ──────────────────────────────────────────────────────────
 
+
 def test_llm_redaction(tmp_path):
     """LLM _call_agent with a registered secret in messages -> outgoing httpx.post JSON body shows [REDACTED]."""
     secret = "hunter2longenough"
     redaction.register(secret)
 
-    messages = [
-        {"role": "user", "content": f"The secret password was {secret}"}
-    ]
+    messages = [{"role": "user", "content": f"The secret password was {secret}"}]
 
     captured_post_json = None
 
@@ -457,7 +474,7 @@ def test_llm_redaction(tmp_path):
         # Return valid anthropic/openai compat response format
         resp.json.return_value = {
             "content": [{"text": "patch response"}],
-            "choices": [{"message": {"content": "patch response"}}]
+            "choices": [{"message": {"content": "patch response"}}],
         }
         return resp
 
@@ -471,10 +488,14 @@ def test_llm_redaction(tmp_path):
         mock_client.__exit__.return_value = False
         with patch("httpx.Client", return_value=mock_client):
             from aqueduct.agent.providers import _ProviderConfig
+
             _cfg = _ProviderConfig(
-                model="claude-sonnet", max_tokens=1000,
-                provider="anthropic", base_url=None,
-                timeout=5.0, patches_dir=tmp_path,
+                model="claude-sonnet",
+                max_tokens=1000,
+                provider="anthropic",
+                base_url=None,
+                timeout=5.0,
+                patches_dir=tmp_path,
             )
             _call_agent(messages, _cfg, patches_dir=tmp_path)
     finally:

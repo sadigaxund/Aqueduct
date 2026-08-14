@@ -70,6 +70,7 @@ def get_observation(obs: Any, alias: str, timeout: float = 2.0) -> int | None:
     if obs is None:
         return None
     import threading
+
     result: list[int | None] = [None]
 
     def _get() -> None:
@@ -95,6 +96,7 @@ def _hadoop_fs_bytes(path_str: str) -> int | None:
     """
     try:
         from pyspark.sql import SparkSession
+
         spark = SparkSession.getActiveSession()
         if spark is None:
             return None
@@ -127,6 +129,7 @@ def dir_bytes(path_str: str) -> int | None:
             return _hadoop_fs_bytes(path_str)
     try:
         import glob as _glob
+
         p = Path(path_str)
         if p.is_file():
             return p.stat().st_size

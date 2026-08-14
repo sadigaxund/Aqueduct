@@ -17,6 +17,7 @@ imported without Airflow installed.
 
 The deferrable resume path requires Airflow 2.7+.
 """
+
 from __future__ import annotations
 
 import os
@@ -132,9 +133,7 @@ class AqueductOperator(BaseOperator):
     def _defer_to_trigger(self) -> None:
         from .trigger import AqueductPatchTrigger
 
-        timeout = (
-            timedelta(seconds=self.patch_timeout) if self.patch_timeout is not None else None
-        )
+        timeout = timedelta(seconds=self.patch_timeout) if self.patch_timeout is not None else None
         self.defer(
             trigger=AqueductPatchTrigger(
                 run_id=self.run_id,
@@ -152,9 +151,7 @@ class AqueductOperator(BaseOperator):
             timeout=timeout,
         )
 
-    def resume_from_patch(
-        self, context: dict[str, Any], event: dict[str, Any]
-    ) -> dict[str, Any]:
+    def resume_from_patch(self, context: dict[str, Any], event: dict[str, Any]) -> dict[str, Any]:
         """Trigger fired — handle the approval outcome."""
         status = event.get("status")
         if status == "approved":
@@ -167,9 +164,7 @@ class AqueductOperator(BaseOperator):
                 f"Patch rejected for run_id={self.run_id!r}: "
                 f"{event.get('reason') or 'no reason given'}"
             )
-        raise AirflowException(
-            f"AqueductPatchTrigger fired with unexpected status: {event!r}"
-        )
+        raise AirflowException(f"AqueductPatchTrigger fired with unexpected status: {event!r}")
 
     # ------------------------------------------------------------------
     # Helpers

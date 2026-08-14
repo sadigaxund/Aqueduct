@@ -332,9 +332,7 @@ def _register_java_udf(
     # import name) and happens to already be exercised by real blueprints/
     # tests for java/scala too; dropping it would be an actual behavior
     # break for anything relying on the one path that already worked.
-    class_name: str | None = (
-        entry.get("entry") or entry.get("class") or entry.get("class_name")
-    )
+    class_name: str | None = entry.get("entry") or entry.get("class") or entry.get("class_name")
     return_type_str: str | None = entry.get("return_type", "string")
 
     if not jar_path:

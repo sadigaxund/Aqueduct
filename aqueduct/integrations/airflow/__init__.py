@@ -22,6 +22,7 @@ Usage::
 See ``aqueduct/integrations/airflow/README.md`` for the full DAG example and
 the HEAL_PENDING approval flow.
 """
+
 from __future__ import annotations
 
 __all__ = [

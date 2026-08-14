@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
+
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 from aqueduct.executor.spark.executor import _backoff_seconds, _is_retriable, _with_retry
@@ -263,7 +264,9 @@ class TestModuleRetryPolicy:
         manifest_policy = _policy(max_attempts=1)
         module_retry = _policy(max_attempts=3)
         module = _make_module(
-            "m", retry=module_retry, on_failure={"max_attempts": 7},
+            "m",
+            retry=module_retry,
+            on_failure={"max_attempts": 7},
         )
         result = _module_retry_policy(module, manifest_policy)
         assert result.max_attempts == 7
@@ -280,10 +283,12 @@ class TestOnRetryExhausted:
 
     def _make_policy(self, on_exhaustion: str):
         from aqueduct.parser.models import RetryPolicy
+
         return RetryPolicy(max_attempts=1, on_exhaustion=on_exhaustion)
 
     def _make_module(self, mid: str = "m1"):
         from aqueduct.parser.models import Module
+
         return Module(id=mid, type="Ingress", label="L", config={})
 
     def test_abort_returns_false_with_fail_result(self):
@@ -362,21 +367,25 @@ class TestOnExhaustionAlertOnlyIntegration:
             retry_policy=policy,
             modules=(
                 Module(
-                    id="bad_src", type="Ingress", label="Bad",
+                    id="bad_src",
+                    type="Ingress",
+                    label="Bad",
                     config={"format": "parquet", "path": "/nonexistent/does_not_exist.parquet"},
                 ),
                 Module(
-                    id="good_src", type="Ingress", label="Good",
+                    id="good_src",
+                    type="Ingress",
+                    label="Good",
                     config={"format": "parquet", "path": good_path},
                 ),
                 Module(
-                    id="sink", type="Egress", label="Sink",
+                    id="sink",
+                    type="Egress",
+                    label="Sink",
                     config={"format": "parquet", "path": out_path},
                 ),
             ),
-            edges=(
-                Edge(from_id="good_src", to_id="sink", port="main"),
-            ),
+            edges=(Edge(from_id="good_src", to_id="sink", port="main"),),
             context={},
             engine_config={},
         )

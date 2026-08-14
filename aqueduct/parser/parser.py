@@ -75,8 +75,11 @@ def _hook_entry(h) -> HookEntry:
         v = getattr(h, kind)
         if v is not None:
             return HookEntry(
-                kind=kind, value=v, timeout=h.timeout,
-                when_error=tuple(h.when_error), in_process=h.in_process,
+                kind=kind,
+                value=v,
+                timeout=h.timeout,
+                when_error=tuple(h.when_error),
+                in_process=h.in_process,
             )
     raise ParseError("hook entry has no action")  # unreachable — schema enforces exactly-one
 
@@ -113,20 +116,22 @@ def _build_cascade(raw: list | None, ctx_map: dict | None = None) -> tuple | Non
     _rv = (lambda v: resolve_value(v, ctx_map)) if ctx_map is not None else (lambda v: v)
     tiers: list[CascadeTierConfig] = []
     for t in raw:
-        tiers.append(CascadeTierConfig(
-            model=_rv(t.model),
-            provider=_rv(t.provider),
-            base_url=_rv(t.base_url),
-            api_key=_rv(t.api_key),
-            provider_options=_rv(t.provider_options),
-            timeout=t.timeout,
-            max_tokens=t.max_tokens,
-            max_reprompts=t.max_reprompts,
-            max_seconds=float(t.max_seconds) if t.max_seconds is not None else None,
-            deep_loop=t.deep_loop,
-            allow_defer=t.allow_defer,
-            supports_tools=t.supports_tools,
-        ))
+        tiers.append(
+            CascadeTierConfig(
+                model=_rv(t.model),
+                provider=_rv(t.provider),
+                base_url=_rv(t.base_url),
+                api_key=_rv(t.api_key),
+                provider_options=_rv(t.provider_options),
+                timeout=t.timeout,
+                max_tokens=t.max_tokens,
+                max_reprompts=t.max_reprompts,
+                max_seconds=float(t.max_seconds) if t.max_seconds is not None else None,
+                deep_loop=t.deep_loop,
+                allow_defer=t.allow_defer,
+                supports_tools=t.supports_tools,
+            )
+        )
     return tuple(tiers)
 
 
@@ -347,15 +352,47 @@ def parse_dict(
         if override is None:
             return None
         return RetryPolicy(
-            max_attempts=override.max_attempts if override.max_attempts is not None else retry_policy.max_attempts,
-            backoff_strategy=override.backoff.strategy if override.backoff is not None else retry_policy.backoff_strategy,
-            backoff_base_seconds=override.backoff.base_seconds if override.backoff is not None else retry_policy.backoff_base_seconds,
-            backoff_max_seconds=override.backoff.max_seconds if override.backoff is not None else retry_policy.backoff_max_seconds,
+            max_attempts=(
+                override.max_attempts
+                if override.max_attempts is not None
+                else retry_policy.max_attempts
+            ),
+            backoff_strategy=(
+                override.backoff.strategy
+                if override.backoff is not None
+                else retry_policy.backoff_strategy
+            ),
+            backoff_base_seconds=(
+                override.backoff.base_seconds
+                if override.backoff is not None
+                else retry_policy.backoff_base_seconds
+            ),
+            backoff_max_seconds=(
+                override.backoff.max_seconds
+                if override.backoff is not None
+                else retry_policy.backoff_max_seconds
+            ),
             jitter=override.backoff.jitter if override.backoff is not None else retry_policy.jitter,
-            on_exhaustion=override.on_exhaustion if override.on_exhaustion is not None else retry_policy.on_exhaustion,
-            transient_errors=tuple(override.transient_errors) if override.transient_errors is not None else retry_policy.transient_errors,
-            non_transient_errors=tuple(override.non_transient_errors) if override.non_transient_errors is not None else retry_policy.non_transient_errors,
-            deadline_seconds=override.deadline_seconds if override.deadline_seconds is not None else retry_policy.deadline_seconds,
+            on_exhaustion=(
+                override.on_exhaustion
+                if override.on_exhaustion is not None
+                else retry_policy.on_exhaustion
+            ),
+            transient_errors=(
+                tuple(override.transient_errors)
+                if override.transient_errors is not None
+                else retry_policy.transient_errors
+            ),
+            non_transient_errors=(
+                tuple(override.non_transient_errors)
+                if override.non_transient_errors is not None
+                else retry_policy.non_transient_errors
+            ),
+            deadline_seconds=(
+                override.deadline_seconds
+                if override.deadline_seconds is not None
+                else retry_policy.deadline_seconds
+            ),
         )
 
     def _coerce_enabled(raw: Any, module_id: str) -> bool:
@@ -429,9 +466,7 @@ def parse_dict(
     try:
         cycle_nodes = detect_cycles(list(modules), list(edges))
         if cycle_nodes:
-            raise ParseError(
-                f"Cycle detected in module graph. Involved modules: {cycle_nodes}"
-            )
+            raise ParseError(f"Cycle detected in module graph. Involved modules: {cycle_nodes}")
         validate_spillway_targets(list(modules))
         validate_edge_error_types(list(edges))
     except ValueError as exc:
@@ -515,7 +550,9 @@ def parse_dict(
         # which was false at HEAD before this fix (a blueprint run from any
         # CWD other than its own directory got "JAR not found").
         udf_registry=tuple(
-            _anchor_udf_entry(resolve_value(u.model_dump(by_alias=True, exclude_none=True), ctx_map))
+            _anchor_udf_entry(
+                resolve_value(u.model_dump(by_alias=True, exclude_none=True), ctx_map)
+            )
             for u in validated.udf_registry
         ),
         macros=resolved_macros,

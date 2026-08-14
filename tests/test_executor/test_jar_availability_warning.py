@@ -60,9 +60,11 @@ def test_check_emits_soft_note_when_inspection_unavailable():
     """check() must not claim all-clear when jars couldn't be inspected —
     it should surface a distinct 'could not verify' message, not silence."""
     spark = SimpleNamespace(sparkContext=SimpleNamespace())  # no _jsc
-    manifest = _manifest([
-        _module("m1", ModuleType.Ingress, {"format": "delta"}),
-    ])
+    manifest = _manifest(
+        [
+            _module("m1", ModuleType.Ingress, {"format": "delta"}),
+        ]
+    )
 
     messages = jar_availability.check(manifest, spark)
     assert len(messages) == 1
@@ -74,9 +76,11 @@ def test_check_silent_when_inspection_unavailable_and_no_jar_needed_formats():
     """No format requiring a JAR check is declared → no message, even if
     inspection failed (nothing to warn honestly about)."""
     spark = SimpleNamespace(sparkContext=SimpleNamespace())
-    manifest = _manifest([
-        _module("m1", ModuleType.Ingress, {"format": "parquet"}),
-    ])
+    manifest = _manifest(
+        [
+            _module("m1", ModuleType.Ingress, {"format": "parquet"}),
+        ]
+    )
     assert jar_availability.check(manifest, spark) == []
 
 
@@ -89,9 +93,11 @@ def test_check_still_warns_on_genuinely_missing_jar():
     jsc.sc.return_value.listJars.return_value = jars_seq
     spark = SimpleNamespace(sparkContext=SimpleNamespace(_jsc=jsc))
 
-    manifest = _manifest([
-        _module("m1", ModuleType.Ingress, {"format": "delta"}),
-    ])
+    manifest = _manifest(
+        [
+            _module("m1", ModuleType.Ingress, {"format": "delta"}),
+        ]
+    )
     messages = jar_availability.check(manifest, spark)
     assert len(messages) == 1
     assert "delta" in messages[0]

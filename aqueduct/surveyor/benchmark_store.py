@@ -31,7 +31,6 @@ if TYPE_CHECKING:
     from aqueduct.surveyor.scenario import ScenarioResult
 
 
-
 logger = logging.getLogger(__name__)
 
 _BENCHMARK_DDL = """
@@ -83,12 +82,14 @@ def default_store_path(scenarios_dir: Path) -> Path:
 
 # ── Connection helpers ────────────────────────────────────────────────────────
 
+
 def _connect(store_path: Path):
     """Open a DuckDB connection, creating the parent dir + DDL on first use.
 
     2.0 assumes a fresh store — the CREATE TABLE declares every column, so there
     are no additive ALTER migrations (a pre-2.0 benchmark DB must be recreated)."""
     import duckdb
+
     store_path.parent.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect(str(store_path))
     con.execute(_BENCHMARK_DDL)
@@ -113,8 +114,8 @@ class BenchmarkStore:
     ``RelationalCursor`` rewrites `?` → `%s` and the DDL is already portable.
     """
 
-    backend: str = "duckdb"       # "duckdb" | "postgres"
-    location: str = ""            # DuckDB file path OR Postgres libpq DSN
+    backend: str = "duckdb"  # "duckdb" | "postgres"
+    location: str = ""  # DuckDB file path OR Postgres libpq DSN
     schema: str = _PG_BENCHMARK_SCHEMA
 
     @classmethod
@@ -149,6 +150,7 @@ class BenchmarkStore:
         """
         if self.backend == "postgres":
             from aqueduct.stores.postgres import _pg_relational
+
             with _pg_relational(self.location, self.schema) as cur:
                 cur.execute(_BENCHMARK_DDL)  # 2.0: CREATE has all columns, no ALTER migrations
                 yield cur
@@ -179,6 +181,7 @@ def _as_store(store: Path | str | BenchmarkStore) -> BenchmarkStore:
 
 
 # ── Persist ───────────────────────────────────────────────────────────────────
+
 
 def persist_results(
     results: dict[str, dict[str, ScenarioResult]],
@@ -240,13 +243,13 @@ def persist_results(
                     )
                     written += 1
     except Exception as exc:  # noqa: BLE001
-        logger.warning("benchmark persistence skipped — cannot write to %s: %s",
-                       bs.label, exc)
+        logger.warning("benchmark persistence skipped — cannot write to %s: %s", bs.label, exc)
         return written
     return written
 
 
 # ── Diff / regression detection ───────────────────────────────────────────────
+
 
 @dataclass(frozen=True)
 class BenchmarkRow:
@@ -267,10 +270,10 @@ class BenchmarkRow:
 class DiffEntry:
     scenario_id: str
     model: str
-    baseline: BenchmarkRow | None        # None when no prior row exists
+    baseline: BenchmarkRow | None  # None when no prior row exists
     current: BenchmarkRow
-    baseline_prompt_mismatch: bool       # True when we fell back to a different prompt_version
-    regressions: tuple[str, ...]         # human-readable regression descriptions
+    baseline_prompt_mismatch: bool  # True when we fell back to a different prompt_version
+    regressions: tuple[str, ...]  # human-readable regression descriptions
     improvements: tuple[str, ...]
 
 
@@ -337,7 +340,7 @@ def _fetch_baseline(
 
 # Threshold for flagging diag_score as regressed. Tuned for low false-positive
 # rate; small noise from a single rerun should NOT trigger gating.
-_DIAG_DROP_THRESHOLD = 0.05         # diag_score must drop by > 5pp
+_DIAG_DROP_THRESHOLD = 0.05  # diag_score must drop by > 5pp
 
 
 def _compare(baseline: BenchmarkRow, current: BenchmarkRow) -> tuple[list[str], list[str]]:
@@ -371,13 +374,9 @@ def _compare(baseline: BenchmarkRow, current: BenchmarkRow) -> tuple[list[str], 
     if baseline.diag_score is not None and current.diag_score is not None:
         delta = current.diag_score - baseline.diag_score
         if delta < -_DIAG_DROP_THRESHOLD:
-            regressions.append(
-                f"diag_score: {baseline.diag_score:.2f} → {current.diag_score:.2f}"
-            )
+            regressions.append(f"diag_score: {baseline.diag_score:.2f} → {current.diag_score:.2f}")
         elif delta > _DIAG_DROP_THRESHOLD:
-            improvements.append(
-                f"diag_score: {baseline.diag_score:.2f} → {current.diag_score:.2f}"
-            )
+            improvements.append(f"diag_score: {baseline.diag_score:.2f} → {current.diag_score:.2f}")
 
     return regressions, improvements
 
@@ -424,26 +423,30 @@ def diff_latest(
                         current_recorded_at=current.recorded_at,
                     )
                     if baseline is None:
-                        entries.append(DiffEntry(
-                            scenario_id=sid,
-                            model=model,
-                            baseline=None,
-                            current=current,
-                            baseline_prompt_mismatch=False,
-                            regressions=(),
-                            improvements=(),
-                        ))
+                        entries.append(
+                            DiffEntry(
+                                scenario_id=sid,
+                                model=model,
+                                baseline=None,
+                                current=current,
+                                baseline_prompt_mismatch=False,
+                                regressions=(),
+                                improvements=(),
+                            )
+                        )
                         continue
                     regs, imps = _compare(baseline, current)
-                    entries.append(DiffEntry(
-                        scenario_id=sid,
-                        model=model,
-                        baseline=baseline,
-                        current=current,
-                        baseline_prompt_mismatch=prompt_mismatch,
-                        regressions=tuple(regs),
-                        improvements=tuple(imps),
-                    ))
+                    entries.append(
+                        DiffEntry(
+                            scenario_id=sid,
+                            model=model,
+                            baseline=baseline,
+                            current=current,
+                            baseline_prompt_mismatch=prompt_mismatch,
+                            regressions=tuple(regs),
+                            improvements=tuple(imps),
+                        )
+                    )
     except Exception as exc:  # noqa: BLE001
         logger.warning("benchmark diff skipped — cannot read %s: %s", bs.label, exc)
         return []
@@ -460,9 +463,7 @@ def format_diff_table(entries: list[DiffEntry]) -> str:
     if not entries:
         return "(no diff entries — store empty or no current results)"
     lines: list[str] = []
-    lines.append(
-        f"  {'scenario':<32} {'model':<24} {'status':<12} notes"
-    )
+    lines.append(f"  {'scenario':<32} {'model':<24} {'status':<12} notes")
     lines.append("  " + "─" * 90)
     for e in entries:
         if e.baseline is None:
@@ -517,8 +518,7 @@ def compute_stats(store: Path | str | BenchmarkStore, *, trend_limit: int = 14) 
     try:
         with bs.cursor() as con:
             for r in con.execute(
-                _RANKED_CTE +
-                " SELECT model, COUNT(*) n,"
+                _RANKED_CTE + " SELECT model, COUNT(*) n,"
                 " AVG(CASE WHEN passed THEN 1.0 ELSE 0.0 END),"
                 " AVG(CASE WHEN patch_valid THEN 1.0 ELSE 0.0 END),"
                 " AVG(CASE WHEN patch_applies THEN 1.0 ELSE 0.0 END),"
@@ -526,21 +526,30 @@ def compute_stats(store: Path | str | BenchmarkStore, *, trend_limit: int = 14) 
                 " FROM ranked WHERE rn = 1 GROUP BY model"
                 " ORDER BY 3 DESC, model"
             ).fetchall():
-                out["models"].append({
-                    "model": r[0], "n": int(r[1]), "pass_rate": _f(r[2]),
-                    "parse_rate": _f(r[3]), "apply_rate": _f(r[4]),
-                    "avg_diag": _f(r[5]), "avg_duration": _f(r[6]),
-                })
+                out["models"].append(
+                    {
+                        "model": r[0],
+                        "n": int(r[1]),
+                        "pass_rate": _f(r[2]),
+                        "parse_rate": _f(r[3]),
+                        "apply_rate": _f(r[4]),
+                        "avg_diag": _f(r[5]),
+                        "avg_duration": _f(r[6]),
+                    }
+                )
             for r in con.execute(
-                _RANKED_CTE +
-                " SELECT scenario_id, COUNT(*) n,"
+                _RANKED_CTE + " SELECT scenario_id, COUNT(*) n,"
                 " AVG(CASE WHEN passed THEN 1.0 ELSE 0.0 END)"
                 " FROM ranked WHERE rn = 1 GROUP BY scenario_id"
                 " ORDER BY 3 ASC, scenario_id"
             ).fetchall():
-                out["scenarios"].append({
-                    "scenario_id": r[0], "n": int(r[1]), "pass_rate": _f(r[2]),
-                })
+                out["scenarios"].append(
+                    {
+                        "scenario_id": r[0],
+                        "n": int(r[1]),
+                        "pass_rate": _f(r[2]),
+                    }
+                )
             trend = con.execute(
                 " SELECT substr(recorded_at, 1, 10) d, COUNT(*) n,"
                 " AVG(CASE WHEN passed THEN 1.0 ELSE 0.0 END)"
@@ -549,8 +558,7 @@ def compute_stats(store: Path | str | BenchmarkStore, *, trend_limit: int = 14) 
                 [trend_limit],
             ).fetchall()
             out["trend"] = [
-                {"date": r[0], "n": int(r[1]), "pass_rate": _f(r[2])}
-                for r in reversed(trend)
+                {"date": r[0], "n": int(r[1]), "pass_rate": _f(r[2])} for r in reversed(trend)
             ]
     except Exception as exc:  # noqa: BLE001
         logger.warning("benchmark stats unavailable — %s: %s", bs.label, exc)
@@ -574,7 +582,9 @@ def format_stats(stats: dict) -> str:
 
     out: list[str] = []
     out.append("Model leaderboard  (latest row per scenario × model)")
-    out.append(f"  {'model':<28} {'n':>3} {'pass':>6} {'parse':>6} {'apply':>6} {'diag':>6} {'dur':>7}")
+    out.append(
+        f"  {'model':<28} {'n':>3} {'pass':>6} {'parse':>6} {'apply':>6} {'diag':>6} {'dur':>7}"
+    )
     for m in models:
         out.append(
             f"  {m['model'][:28]:<28} {m['n']:>3} {pct(m['pass_rate']):>6} "

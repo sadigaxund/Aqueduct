@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 pytestmark = pytest.mark.unit
 import yaml
 
@@ -26,10 +27,8 @@ def minimal_bp_path(tmp_path):
         "aqueduct": "1.0",
         "id": "test.bp",
         "name": "Test Blueprint",
-        "modules": [
-            {"id": "in", "type": "Ingress", "config": {"format": "parquet", "path": "p1"}}
-        ],
-        "edges": []
+        "modules": [{"id": "in", "type": "Ingress", "config": {"format": "parquet", "path": "p1"}}],
+        "edges": [],
     }
     path.write_text(yaml.dump(bp), encoding="utf-8")
     return path
@@ -40,10 +39,10 @@ def test_load_patch_spec_valid(tmp_path):
     patch_data = {
         "patch_id": "p1",
         "rationale": "Test",
-        "operations": [{"op": "replace_module_label", "module_id": "in", "label": "L"}]
+        "operations": [{"op": "replace_module_label", "module_id": "in", "label": "L"}],
     }
     patch_path.write_text(json.dumps(patch_data), encoding="utf-8")
-    
+
     spec = load_patch_spec(patch_path)
     assert spec.patch_id == "p1"
 
@@ -75,17 +74,14 @@ def test_load_patch_spec_retired_op_raises_patch_error(tmp_path):
 
 
 def test_apply_patch_to_dict_atomic(tmp_path):
-    bp = {
-        "modules": [{"id": "m1", "config": {"a": 1}}],
-        "edges": []
-    }
+    bp = {"modules": [{"id": "m1", "config": {"a": 1}}], "edges": []}
     spec = PatchSpec(
         patch_id="p1",
         rationale="R",
         operations=[
             {"op": "replace_module_config", "module_id": "m1", "config": {"a": 2}},
             {"op": "replace_module_label", "module_id": "m1", "label": "L1"},
-        ]
+        ],
     )
     patched = apply_patch_to_dict(bp, spec)
     assert patched["modules"][0]["config"] == {"a": 2}
@@ -101,8 +97,8 @@ def test_apply_patch_to_dict_rollback_on_failure():
         rationale="R",
         operations=[
             {"op": "replace_module_label", "module_id": "m1", "label": "L"},
-            {"op": "replace_module_config", "module_id": "ghost", "config": {}}, # Fails
-        ]
+            {"op": "replace_module_config", "module_id": "ghost", "config": {}},  # Fails
+        ],
     )
     with pytest.raises(PatchError, match="Operation 2/2 .* failed"):
         apply_patch_to_dict(bp, spec)
@@ -113,22 +109,22 @@ def test_apply_patch_file_lifecycle(minimal_bp_path, tmp_path):
     patch_data = {
         "patch_id": "p123",
         "rationale": "Updating label",
-        "operations": [{"op": "replace_module_label", "module_id": "in", "label": "New Label"}]
+        "operations": [{"op": "replace_module_label", "module_id": "in", "label": "New Label"}],
     }
     patch_path.write_text(json.dumps(patch_data), encoding="utf-8")
-    
+
     patches_dir = tmp_path / "patches_root"
     result = apply_patch_file(minimal_bp_path, patch_path, patches_dir=patches_dir)
-    
+
     assert result.patch_id == "p123"
     assert result.operations_applied == 1
-    
+
     # 1. Verify Blueprint updated
     updated_bp = yaml.safe_load(minimal_bp_path.read_text())
     assert updated_bp["modules"][0]["label"] == "New Label"
-    
+
     # 2. Backup verification removed (handled by git rollback per apply.py)
-    
+
     # 3. Verify patch archived
     archived = patches_dir / "applied" / "patch.json"
     assert archived.exists()
@@ -143,9 +139,11 @@ def test_apply_patch_file_atomic_failure_on_invalid_blueprint(minimal_bp_path, t
     patch_data = {
         "patch_id": "p_bad",
         "rationale": "Breaking things",
-        "operations": [{"op": "replace_module_config", "module_id": "in", "config": {"type": "GhostType"}}]
+        "operations": [
+            {"op": "replace_module_config", "module_id": "in", "config": {"type": "GhostType"}}
+        ],
     }
-    # Wait, replace_module_config replaces 'config'. 
+    # Wait, replace_module_config replaces 'config'.
     # To change 'type', I need to use insert/remove or just replace the whole dict?
     # Actually, Ingress config doesn't have 'type'.
     # I'll use InsertModule with a bad type.
@@ -153,19 +151,16 @@ def test_apply_patch_file_atomic_failure_on_invalid_blueprint(minimal_bp_path, t
         "patch_id": "p_bad",
         "rationale": "Breaking things",
         "operations": [
-            {
-                "op": "insert_module", 
-                "module": {"id": "m2", "type": "InvalidType", "config": {}}
-            }
-        ]
+            {"op": "insert_module", "module": {"id": "m2", "type": "InvalidType", "config": {}}}
+        ],
     }
     patch_path.write_text(json.dumps(patch_data), encoding="utf-8")
-    
+
     original_content = minimal_bp_path.read_text()
-    
+
     with pytest.raises(PatchError, match="Patched Blueprint is invalid"):
         apply_patch_file(minimal_bp_path, patch_path, patches_dir=tmp_path / "p")
-        
+
     # Verify original Blueprint remains unchanged
     assert minimal_bp_path.read_text() == original_content
 
@@ -174,16 +169,16 @@ def test_reject_patch(tmp_path):
     patches_dir = tmp_path / "patches"
     pending_dir = patches_dir / "pending"
     pending_dir.mkdir(parents=True)
-    
+
     patch_path = pending_dir / "p1.json"
     patch_data = {"patch_id": "p1", "rationale": "R", "operations": []}
     patch_path.write_text(json.dumps(patch_data))
-    
+
     rejected_path = reject_patch("p1", "Too risky", patches_dir=patches_dir)
-    
+
     assert rejected_path.exists()
     assert not patch_path.exists()
-    
+
     rejected_data = json.loads(rejected_path.read_text())
     assert rejected_data["rejection_reason"] == "Too risky"
     assert "rejected_at" in rejected_data
@@ -193,23 +188,23 @@ def test_reject_patch_not_found(tmp_path):
     with pytest.raises(PatchError, match="Patch 'ghost' not found"):
         reject_patch("ghost", "Reason", patches_dir=tmp_path / "p")
 
+
 def test_reject_patch_resolves_glob(tmp_path):
     patches_dir = tmp_path / "patches"
     pending_dir = patches_dir / "pending"
     pending_dir.mkdir(parents=True)
-    
+
     # Create with sequence/timestamp prefix
     patch_path = pending_dir / "00001_20260101_p1.json"
     patch_data = {"patch_id": "p1", "rationale": "R", "operations": []}
     patch_path.write_text(json.dumps(patch_data))
-    
+
     # Reject using only the slug 'p1'
     rejected_path = reject_patch("p1", "Too risky", patches_dir=patches_dir)
-    
+
     assert rejected_path.exists()
     assert rejected_path.name == "p1.json"
     assert not patch_path.exists()
-
 
 
 class TestPatchIndexStatusFlip:
@@ -222,6 +217,7 @@ class TestPatchIndexStatusFlip:
     def _store(self, tmp_path):
         from aqueduct.patch import index as ix
         from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+
         store = DuckDBObservabilityStore(tmp_path / "obs.db")
         with store.connect() as cur:
             ix.ensure_schema(cur)
@@ -229,14 +225,21 @@ class TestPatchIndexStatusFlip:
 
     def _seed_pending(self, store, patch_id):
         from aqueduct.patch import index as ix
+
         with store.connect() as cur:
-            ix.upsert(cur, ix.PatchIndexRow(
-                patch_id=patch_id, status="pending",
-                object_key=f"pending/{patch_id}.json", signature="sigZ",
-            ))
+            ix.upsert(
+                cur,
+                ix.PatchIndexRow(
+                    patch_id=patch_id,
+                    status="pending",
+                    object_key=f"pending/{patch_id}.json",
+                    signature="sigZ",
+                ),
+            )
 
     def _status(self, store, patch_id):
         from aqueduct.patch import index as ix
+
         with store.connect() as cur:
             return ix.get(cur, patch_id)["status"]
 
@@ -245,14 +248,22 @@ class TestPatchIndexStatusFlip:
         self._seed_pending(store, "p_apply")
 
         patch_path = tmp_path / "p_apply.json"
-        patch_path.write_text(json.dumps({
-            "patch_id": "p_apply",
-            "rationale": "relabel",
-            "operations": [{"op": "replace_module_label", "module_id": "in", "label": "L2"}],
-        }), encoding="utf-8")
+        patch_path.write_text(
+            json.dumps(
+                {
+                    "patch_id": "p_apply",
+                    "rationale": "relabel",
+                    "operations": [
+                        {"op": "replace_module_label", "module_id": "in", "label": "L2"}
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
 
-        apply_patch_file(minimal_bp_path, patch_path,
-                         patches_dir=tmp_path / "patches", obs_store=store)
+        apply_patch_file(
+            minimal_bp_path, patch_path, patches_dir=tmp_path / "patches", obs_store=store
+        )
         assert self._status(store, "p_apply") == "applied"
 
     def test_reject_flips_index_pending_to_rejected(self, tmp_path):
@@ -266,19 +277,27 @@ class TestPatchIndexStatusFlip:
             encoding="utf-8",
         )
 
-        reject_patch("p_reject", "too risky",
-                     patches_dir=tmp_path / "patches", obs_store=store)
+        reject_patch("p_reject", "too risky", patches_dir=tmp_path / "patches", obs_store=store)
         assert self._status(store, "p_reject") == "rejected"
 
     def test_apply_with_no_obs_store_does_not_raise(self, minimal_bp_path, tmp_path):
         # obs_store=None → index update is skipped, apply still succeeds.
         patch_path = tmp_path / "p_none.json"
-        patch_path.write_text(json.dumps({
-            "patch_id": "p_none", "rationale": "r",
-            "operations": [{"op": "replace_module_label", "module_id": "in", "label": "L3"}],
-        }), encoding="utf-8")
-        res = apply_patch_file(minimal_bp_path, patch_path,
-                               patches_dir=tmp_path / "patches", obs_store=None)
+        patch_path.write_text(
+            json.dumps(
+                {
+                    "patch_id": "p_none",
+                    "rationale": "r",
+                    "operations": [
+                        {"op": "replace_module_label", "module_id": "in", "label": "L3"}
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        res = apply_patch_file(
+            minimal_bp_path, patch_path, patches_dir=tmp_path / "patches", obs_store=None
+        )
         assert res.patch_id == "p_none"
 
 
@@ -301,7 +320,7 @@ class TestPatchFormatting:
         patch_data = {
             "patch_id": "p123",
             "rationale": "Updating label",
-            "operations": [{"op": "replace_module_label", "module_id": "in", "label": "New Label"}]
+            "operations": [{"op": "replace_module_label", "module_id": "in", "label": "New Label"}],
         }
         patch_path.write_text(json.dumps(patch_data))
         apply_patch_file(bp_path, patch_path, patches_dir=tmp_path / "patches")
@@ -326,16 +345,18 @@ class TestPatchFormatting:
         patch_data = {
             "patch_id": "p123",
             "rationale": "Add module",
-            "operations": [{
-                "op": "insert_module",
-                "module": {"id": "m2", "type": "Channel", "label": "L", "config": {}}
-            }]
+            "operations": [
+                {
+                    "op": "insert_module",
+                    "module": {"id": "m2", "type": "Channel", "label": "L", "config": {}},
+                }
+            ],
         }
         patch_path.write_text(json.dumps(patch_data))
         apply_patch_file(bp_path, patch_path, patches_dir=tmp_path / "patches")
         patched_text = bp_path.read_text()
         # Verify the new list item has offset indent: '  - id: m2'
-        assert '\n  - id: "m2"\n' in patched_text or '\n  - id: m2\n' in patched_text
+        assert '\n  - id: "m2"\n' in patched_text or "\n  - id: m2\n" in patched_text
 
     def test_injected_module_preserves_string_quotes(self, tmp_path):
         bp_path = tmp_path / "bp.yml"
@@ -347,17 +368,25 @@ class TestPatchFormatting:
         patch_data = {
             "patch_id": "p123",
             "rationale": "Add module",
-            "operations": [{
-                "op": "insert_module",
-                "module": {"id": "m2", "type": "Channel", "label": "Q", "config": {"query": '"value"'}}
-            }]
+            "operations": [
+                {
+                    "op": "insert_module",
+                    "module": {
+                        "id": "m2",
+                        "type": "Channel",
+                        "label": "Q",
+                        "config": {"query": '"value"'},
+                    },
+                }
+            ],
         }
         patch_path.write_text(json.dumps(patch_data))
         apply_patch_file(bp_path, patch_path, patches_dir=tmp_path / "patches")
         patched_text = bp_path.read_text()
         # The value should have quotes explicitly represented, or parse back correctly.
-        assert 'value' in patched_text
+        assert "value" in patched_text
         from aqueduct.parser.parser import parse
+
         bp = parse(bp_path)
         assert bp.modules[1].config["query"] == '"value"'
 
@@ -371,17 +400,20 @@ class TestPatchFormatting:
         patch_data = {
             "patch_id": "p123",
             "rationale": "Update config",
-            "operations": [{
-                "op": "replace_module_config",
-                "module_id": "m1",
-                "config": {"options": {"sql": "SELECT 'x' as col"}}
-            }]
+            "operations": [
+                {
+                    "op": "replace_module_config",
+                    "module_id": "m1",
+                    "config": {"options": {"sql": "SELECT 'x' as col"}},
+                }
+            ],
         }
         patch_path.write_text(json.dumps(patch_data))
         apply_patch_file(bp_path, patch_path, patches_dir=tmp_path / "patches")
         patched_text = bp_path.read_text()
         assert "SELECT 'x' as col" in patched_text
         from aqueduct.parser.parser import parse
+
         bp = parse(bp_path)
         assert bp.modules[0].config["options"]["sql"] == "SELECT 'x' as col"
 
@@ -392,6 +424,7 @@ class TestPatchFormatting:
 def _store_and_obs(tmp_path):
     from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
     from aqueduct.stores.object_store import make_patch_store
+
     ps = make_patch_store("local", "", tmp_path / "patches")
     obs = DuckDBObservabilityStore(tmp_path / "obs.db")
     return ps, obs
@@ -417,29 +450,40 @@ def test_apply_moves_body_in_store_and_updates_index_object_key(tmp_path):
     bp_path = _valid_bp(tmp_path)
     ps, obs = _store_and_obs(tmp_path)
     body = {
-        "patch_id": "fix-in", "rationale": "r",
-        "operations": [{"op": "set_module_config_key", "module_id": "in",
-                        "key": "path", "value": "p2"}],
+        "patch_id": "fix-in",
+        "rationale": "r",
+        "operations": [
+            {"op": "set_module_config_key", "module_id": "in", "key": "path", "value": "p2"}
+        ],
     }
     pkey = ps.write_pending("0001_fix-in.json", body)
     with obs.connect() as cur:
         ix.ensure_schema(cur)
-        ix.upsert(cur, ix.PatchIndexRow(patch_id="fix-in", status="pending",
-                                        object_key=pkey, signature="sigA"))
+        ix.upsert(
+            cur,
+            ix.PatchIndexRow(
+                patch_id="fix-in", status="pending", object_key=pkey, signature="sigA"
+            ),
+        )
     ops_tmp = tmp_path / "ops.json"
     ops_tmp.write_text(json.dumps(body), encoding="utf-8")
 
-    apply_patch_file(blueprint_path=bp_path, patch_path=ops_tmp,
-                     patches_dir=tmp_path / "patches", obs_store=obs,
-                     patch_store=ps, pending_key=pkey)
+    apply_patch_file(
+        blueprint_path=bp_path,
+        patch_path=ops_tmp,
+        patches_dir=tmp_path / "patches",
+        obs_store=obs,
+        patch_store=ps,
+        pending_key=pkey,
+    )
 
-    assert ps.list_keys("pending") == []                       # moved out of pending
+    assert ps.list_keys("pending") == []  # moved out of pending
     assert ps.list_keys("applied") == ["applied/0001_fix-in.json"]
     with obs.connect() as cur:
         row = ix.get(cur, "fix-in")
         replay = ix.find_replay(cur, "sigA", {"fix-in"})
     assert row["status"] == "applied"
-    assert row["object_key"] == "applied/0001_fix-in.json"     # object_key followed the move
+    assert row["object_key"] == "applied/0001_fix-in.json"  # object_key followed the move
     assert replay["object_key"] == "applied/0001_fix-in.json"  # cache fetches the new key
 
 
@@ -453,11 +497,14 @@ def test_reject_moves_body_in_store_and_updates_index(minimal_bp_path, tmp_path)
     pkey = ps.write_pending("0002_fix-y.json", {"patch_id": "fix-y", "operations": []})
     with obs.connect() as cur:
         ix.ensure_schema(cur)
-        ix.upsert(cur, ix.PatchIndexRow(patch_id="fix-y", status="pending",
-                                        object_key=pkey, signature="sigY"))
+        ix.upsert(
+            cur,
+            ix.PatchIndexRow(patch_id="fix-y", status="pending", object_key=pkey, signature="sigY"),
+        )
 
-    reject_patch("fix-y", "too risky", tmp_path / "patches", obs_store=obs,
-                 patch_store=ps, pending_key=pkey)
+    reject_patch(
+        "fix-y", "too risky", tmp_path / "patches", obs_store=obs, patch_store=ps, pending_key=pkey
+    )
 
     assert ps.list_keys("pending") == []
     assert ps.list_keys("rejected") == ["rejected/0002_fix-y.json"]

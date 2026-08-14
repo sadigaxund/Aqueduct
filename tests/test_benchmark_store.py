@@ -31,6 +31,7 @@ from aqueduct.surveyor.scenario import ScenarioResult
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+
 def _make_result(
     scenario_id: str = "s1",
     model: str = "m1",
@@ -85,11 +86,18 @@ def _make_row(
     )
 
 
-def _insert_row(store_path: Path, scenario_id: str, model: str,
-                prompt_version: str | None, passed: bool, recorded_at: str) -> None:
+def _insert_row(
+    store_path: Path,
+    scenario_id: str,
+    model: str,
+    prompt_version: str | None,
+    passed: bool,
+    recorded_at: str,
+) -> None:
     """Directly insert a row for baseline tests."""
     con = _connect(store_path)
     import json
+
     con.execute(
         """INSERT INTO benchmark_results
            (id, recorded_at, scenario_id, model, prompt_version, provider, base_url,
@@ -97,14 +105,32 @@ def _insert_row(store_path: Path, scenario_id: str, model: str,
             attempts_to_parse, diag_score, root_cause_match, category_match,
             failures, soft_failures)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        [str(uuid.uuid4()), recorded_at, scenario_id, model, prompt_version,
-         None, None, passed, True, True, 0.9, 1.0, 1, 0.8, None, None,
-         json.dumps([]), json.dumps([])],
+        [
+            str(uuid.uuid4()),
+            recorded_at,
+            scenario_id,
+            model,
+            prompt_version,
+            None,
+            None,
+            passed,
+            True,
+            True,
+            0.9,
+            1.0,
+            1,
+            0.8,
+            None,
+            None,
+            json.dumps([]),
+            json.dumps([]),
+        ],
     )
     con.close()
 
 
 # ── default_store_path ────────────────────────────────────────────────────────
+
 
 def test_default_store_path_dir(tmp_path):
     """default_store_path(<dir>) → <dir>/.aqueduct/benchmark.duckdb"""
@@ -122,6 +148,7 @@ def test_default_store_path_file(tmp_path):
 
 # ── persist_results ───────────────────────────────────────────────────────────
 
+
 def test_persist_results_empty(tmp_path):
     """persist_results({}) → 0 rows written, no error."""
     store_path = tmp_path / "bench.duckdb"
@@ -134,8 +161,12 @@ def test_persist_results_writes_one_row_per_pair(tmp_path):
     store_path = tmp_path / "bench.duckdb"
     results = {
         "s1": {
-            "m1": _make_result("s1", "m1", prompt_version="1.0", provider="anthropic", base_url=None),
-            "m2": _make_result("s1", "m2", prompt_version="1.0", provider="openai_compat", base_url="http://x"),
+            "m1": _make_result(
+                "s1", "m1", prompt_version="1.0", provider="anthropic", base_url=None
+            ),
+            "m2": _make_result(
+                "s1", "m2", prompt_version="1.0", provider="openai_compat", base_url="http://x"
+            ),
         },
         "s2": {
             "m1": _make_result("s2", "m1", passed=False, confidence=None),
@@ -145,7 +176,9 @@ def test_persist_results_writes_one_row_per_pair(tmp_path):
     assert written == 3
 
     con = duckdb.connect(str(store_path))
-    rows = con.execute("SELECT scenario_id, model, prompt_version, provider, base_url FROM benchmark_results ORDER BY scenario_id, model").fetchall()
+    rows = con.execute(
+        "SELECT scenario_id, model, prompt_version, provider, base_url FROM benchmark_results ORDER BY scenario_id, model"
+    ).fetchall()
     con.close()
 
     assert len(rows) == 3
@@ -168,6 +201,7 @@ def test_persist_results_best_effort_on_duckdb_missing(tmp_path):
 
 
 # ── has_regressions ───────────────────────────────────────────────────────────
+
 
 def _make_entry(baseline=None, regressions=(), improvements=()):
     current = _make_row()
@@ -198,6 +232,7 @@ def test_has_regressions_with_regression():
 
 
 # ── _compare ──────────────────────────────────────────────────────────────────
+
 
 def test_compare_passed_true_to_false():
     baseline = _make_row(passed=True)
@@ -244,7 +279,7 @@ def test_compare_confidence_drop_over_threshold():
     regs, imps = _compare(baseline, current)
     assert not any("confidence" in r for r in regs)
     assert not any("confidence" in i for i in imps)
-    
+
     # Increase in confidence also does nothing
     baseline2 = _make_row(confidence=0.80)
     current2 = _make_row(confidence=0.95)
@@ -254,6 +289,7 @@ def test_compare_confidence_drop_over_threshold():
 
 
 # ── diff_latest ───────────────────────────────────────────────────────────────
+
 
 def test_diff_latest_no_prior_row(tmp_path):
     """No prior row → DiffEntry.baseline is None, status NEW, no regression."""
@@ -273,8 +309,14 @@ def test_diff_latest_baseline_exact_triple(tmp_path):
     """Baseline lookup prefers exact (scenario, model, prompt_version) triple → mismatch=False."""
     store_path = tmp_path / "bench.duckdb"
     # Insert old row with same prompt_version at an earlier time
-    _insert_row(store_path, "s1", "m1", prompt_version="1.0", passed=True,
-                recorded_at="2026-01-01T00:00:00+00:00")
+    _insert_row(
+        store_path,
+        "s1",
+        "m1",
+        prompt_version="1.0",
+        passed=True,
+        recorded_at="2026-01-01T00:00:00+00:00",
+    )
     # Now persist a new row (prompt_version="1.0") at a later time
     r = _make_result("s1", "m1", passed=True, prompt_version="1.0")
     results = {"s1": {"m1": r}}
@@ -292,8 +334,14 @@ def test_diff_latest_baseline_fallback_prompt_mismatch(tmp_path):
     """Fallback to (scenario, model) when no exact prompt_version triple → mismatch=True."""
     store_path = tmp_path / "bench.duckdb"
     # Insert old row with different prompt_version
-    _insert_row(store_path, "s1", "m1", prompt_version="0.9", passed=True,
-                recorded_at="2026-01-01T00:00:00+00:00")
+    _insert_row(
+        store_path,
+        "s1",
+        "m1",
+        prompt_version="0.9",
+        passed=True,
+        recorded_at="2026-01-01T00:00:00+00:00",
+    )
     # Persist new row with prompt_version="1.0"
     r = _make_result("s1", "m1", passed=True, prompt_version="1.0")
     results = {"s1": {"m1": r}}
@@ -309,12 +357,14 @@ def test_diff_latest_baseline_fallback_prompt_mismatch(tmp_path):
 
 # ── Surveyor healing_outcomes migration ───────────────────────────────────────
 
+
 def _create_legacy_obs_db(path: Path) -> None:
     """Create a pre-1.0.3 observability.db without prompt_version in healing_outcomes."""
     path.parent.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect(str(path))
     # Minimal legacy DDL (no prompt_version column)
-    con.execute("""
+    con.execute(
+        """
     CREATE TABLE IF NOT EXISTS healing_outcomes (
         id                      VARCHAR PRIMARY KEY,
         run_id                  VARCHAR NOT NULL,
@@ -326,18 +376,30 @@ def _create_legacy_obs_db(path: Path) -> None:
         patch_applied           BOOLEAN,
         run_success_after_patch BOOLEAN,
         applied_at              VARCHAR
-    )""")
+    )"""
+    )
     # Insert one legacy row
     con.execute(
         "INSERT INTO healing_outcomes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [str(uuid.uuid4()), "run-legacy", "mod1", "bad_path",
-         "model-x", "patch-y", 0.8, True, True, "2026-01-01T00:00:00+00:00"],
+        [
+            str(uuid.uuid4()),
+            "run-legacy",
+            "mod1",
+            "bad_path",
+            "model-x",
+            "patch-y",
+            0.8,
+            True,
+            True,
+            "2026-01-01T00:00:00+00:00",
+        ],
     )
     con.close()
 
 
 def _make_manifest():
     from aqueduct.compiler.models import Manifest
+
     return Manifest(
         blueprint_id="test-bp",
         modules=(),
@@ -463,6 +525,7 @@ def test_record_healing_outcome_explicit_prompt_version(tmp_path):
 
 # ── ScenarioResult Phase 33 defaults ─────────────────────────────────────────
 
+
 def test_scenario_result_phase33_defaults():
     """ScenarioResult defaults: prompt_version=None, provider=None, base_url=None."""
     r = ScenarioResult(
@@ -500,8 +563,10 @@ def test_run_scenario_populates_phase33_fields_normal_path(tmp_path):
     mock_agent_result.attempts = 1
     mock_agent_result.reprompt_errors = []
 
-    with patch("aqueduct.surveyor.scenario._build_failure_ctx") as mock_ctx, \
-         patch("aqueduct.agent.generate_agent_patch", return_value=mock_agent_result):
+    with (
+        patch("aqueduct.surveyor.scenario._build_failure_ctx") as mock_ctx,
+        patch("aqueduct.agent.generate_agent_patch", return_value=mock_agent_result),
+    ):
         mock_ctx.return_value = MagicMock()
         result = run_scenario(
             scenario,
@@ -531,8 +596,10 @@ def test_run_scenario_populates_phase33_fields_early_exit(tmp_path):
         source_path=Path("/fake/path.aqscenario.yml"),
     )
 
-    with patch("aqueduct.surveyor.scenario._build_failure_ctx",
-               side_effect=RuntimeError("blueprint not found")):
+    with patch(
+        "aqueduct.surveyor.scenario._build_failure_ctx",
+        side_effect=RuntimeError("blueprint not found"),
+    ):
         result = run_scenario(
             scenario,
             model="test-model",
@@ -548,6 +615,7 @@ def test_run_scenario_populates_phase33_fields_early_exit(tmp_path):
 
 
 # ── BenchmarkStore violated_guardrails migration ─────────────────────────────
+
 
 def test_benchmark_fresh_db_has_violated_guardrails(tmp_path):
     """Fresh store has violated_guardrails JSON column in benchmark_results DDL."""
@@ -598,7 +666,9 @@ def test_persist_results_writes_violated_guardrails(tmp_path):
     persist_results(results, store_path)
 
     con = duckdb.connect(str(store_path))
-    rows = con.execute("SELECT scenario_id, violated_guardrails FROM benchmark_results ORDER BY scenario_id").fetchall()
+    rows = con.execute(
+        "SELECT scenario_id, violated_guardrails FROM benchmark_results ORDER BY scenario_id"
+    ).fetchall()
     con.close()
 
     assert rows[0] == ("s1", None)
@@ -608,33 +678,38 @@ def test_persist_results_writes_violated_guardrails(tmp_path):
 
 # ── Phase 34 migrations ───────────────────────────────────────────────────────
 
+
 def test_benchmark_migration_phase34_new_store(tmp_path):
     """Fresh store DDL includes stop_reason, escalated, tokens_in_total, tokens_out_total."""
     store_path = tmp_path / "bench.duckdb"
     con = _connect(store_path)
-    cols = con.execute("SELECT column_name FROM information_schema.columns WHERE table_name='benchmark_results'").fetchall()
+    cols = con.execute(
+        "SELECT column_name FROM information_schema.columns WHERE table_name='benchmark_results'"
+    ).fetchall()
     con.close()
-    
+
     cnames = [c[0] for c in cols]
     assert "stop_reason" in cnames
     assert "escalated" in cnames
     assert "tokens_in_total" in cnames
     assert "tokens_out_total" in cnames
 
+
 def test_benchmark_migration_phase34_idempotent(tmp_path):
     """Migration is idempotent — second _connect does not re-issue the ALTERs."""
     store_path = tmp_path / "bench.duckdb"
     con1 = _connect(store_path)
     con1.close()
-    
+
     con2 = _connect(store_path)
     cols = con2.execute(
         "SELECT COUNT(*) FROM information_schema.columns "
         "WHERE table_name='benchmark_results' AND column_name='stop_reason'"
     ).fetchone()[0]
     con2.close()
-    
+
     assert cols == 1
+
 
 def test_persist_results_writes_phase34_columns(tmp_path):
     """persist_results writes new columns from ScenarioResult; falls back to safe defaults."""
@@ -644,7 +719,7 @@ def test_persist_results_writes_phase34_columns(tmp_path):
     r_full.escalated = True
     r_full.tokens_in_total = 100
     r_full.tokens_out_total = 50
-    
+
     class OldResult:
         scenario_id = "s2"
         model = "m1"
@@ -668,13 +743,13 @@ def test_persist_results_writes_phase34_columns(tmp_path):
         "s2": {"m1": OldResult()},  # type: ignore[dict-item]
     }
     persist_results(results, store_path)
-    
+
     con = duckdb.connect(str(store_path))
     rows = con.execute(
         "SELECT scenario_id, stop_reason, escalated, tokens_in_total, tokens_out_total "
         "FROM benchmark_results ORDER BY scenario_id"
     ).fetchall()
     con.close()
-    
+
     assert rows[0] == ("s1", StopReason.STUCK_SIGNATURE, True, 100, 50)
     assert rows[1] == ("s2", None, False, 0, 0)

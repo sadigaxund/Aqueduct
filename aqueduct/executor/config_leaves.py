@@ -306,8 +306,7 @@ def all_config_leaves(engine: str | None = None) -> frozenset[str]:
     if engine is None:
         return frozenset(true_leaves)
     return frozenset(
-        leaf for leaf in true_leaves
-        if (owner := _engine_owner(leaf)) is None or owner == engine
+        leaf for leaf in true_leaves if (owner := _engine_owner(leaf)) is None or owner == engine
     )
 
 

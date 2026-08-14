@@ -31,7 +31,8 @@ def test_polyglot_run_succeeds_and_renders_engines_and_handoff(spark, tmp_path):
     spark.range(5).withColumnRenamed("id", "n").write.parquet(str(in_path))
 
     bp_path = tmp_path / "bp.yml"
-    bp_path.write_text(f"""
+    bp_path.write_text(
+        f"""
 aqueduct: '1.0'
 id: polyglot_cli_test
 name: Polyglot CLI Test
@@ -48,12 +49,15 @@ modules:
 edges:
   - from: in
     to: out
-""")
+"""
+    )
     config_path = tmp_path / "aqueduct.yml"
-    config_path.write_text(f"""
+    config_path.write_text(
+        f"""
 stores:
   observability: {{path: {tmp_path / "obs"}}}
-""")
+"""
+    )
 
     runner = CliRunner()
     # Deliberately NOT passing --store-dir here: `_render_module_summary`'s
@@ -88,6 +92,7 @@ stores:
     # `COPY ... TO` writes a single file at exactly the given path (no
     # per-partition directory the way Spark's writer does).
     import duckdb
+
     written = duckdb.sql(f"SELECT COUNT(*) FROM read_parquet('{out_path}')").fetchone()[0]
     assert written == 5
 
@@ -98,7 +103,8 @@ def test_polyglot_run_report_json_has_engine_fields(spark, tmp_path):
     spark.range(3).withColumnRenamed("id", "n").write.parquet(str(in_path))
 
     bp_path = tmp_path / "bp.yml"
-    bp_path.write_text(f"""
+    bp_path.write_text(
+        f"""
 aqueduct: '1.0'
 id: polyglot_report_test
 name: Polyglot Report Test
@@ -115,26 +121,46 @@ modules:
 edges:
   - from: in
     to: out
-""")
+"""
+    )
     config_path = tmp_path / "aqueduct.yml"
     store_dir = tmp_path / "store"
-    config_path.write_text(f"""
+    config_path.write_text(
+        f"""
 stores:
   observability: {{path: {tmp_path / "obs"}}}
-""")
+"""
+    )
 
     runner = CliRunner()
     run_id = "polyglot-report-run"
     result = runner.invoke(
         cli,
-        ["run", str(bp_path), "--config", str(config_path), "--store-dir", str(store_dir), "--run-id", run_id],
+        [
+            "run",
+            str(bp_path),
+            "--config",
+            str(config_path),
+            "--store-dir",
+            str(store_dir),
+            "--run-id",
+            run_id,
+        ],
     )
     assert result.exit_code == 0, result.output
 
     report_result = runner.invoke(
         cli,
-        ["report", run_id, "--config", str(config_path),
-         "--store-dir", str(store_dir), "--format", "json"],
+        [
+            "report",
+            run_id,
+            "--config",
+            str(config_path),
+            "--store-dir",
+            str(store_dir),
+            "--format",
+            "json",
+        ],
     )
     assert report_result.exit_code == 0, report_result.output
     payload = json.loads(report_result.output)

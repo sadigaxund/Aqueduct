@@ -4,6 +4,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
+
 pytestmark = pytest.mark.unit
 
 from aqueduct.depot.depot import DepotStore
@@ -48,7 +49,9 @@ def test_depot_updated_at(tmp_path):
     store = DepotStore(db_path)
     store.put("k", "v")
     conn = duckdb.connect(str(db_path), read_only=True)
-    row = conn.execute("SELECT CAST(updated_at AS VARCHAR) FROM depot_kv WHERE key = 'k'").fetchone()
+    row = conn.execute(
+        "SELECT CAST(updated_at AS VARCHAR) FROM depot_kv WHERE key = 'k'"
+    ).fetchone()
     conn.close()
     assert row is not None
     assert row[0] is not None

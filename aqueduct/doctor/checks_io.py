@@ -68,13 +68,19 @@ def check_capabilities(
         #     engine's package/extra is not installed).
         if exc.no_engines_registered:
             return CheckResult(
-                "capabilities", "fail", str(exc), _ms(t), group="validation",
+                "capabilities",
+                "fail",
+                str(exc),
+                _ms(t),
+                group="validation",
             )
         return CheckResult(
-            "capabilities", "fail",
+            "capabilities",
+            "fail",
             f"engine {engine!r} is not registered — its package/extra is not "
             f"installed. Registered engines: {exc.engines}",
-            _ms(t), group="validation",
+            _ms(t),
+            group="validation",
         )
 
     try:
@@ -100,16 +106,25 @@ def check_capabilities(
         # the right fix for its own state — listed together here only because
         # they share the SAME response shape (a "fail" CheckResult naming the
         # cause), never merged into one message.
-        return [CheckResult(
-            "capabilities", "fail", str(exc), _ms(t), group="validation",
-        )]
+        return [
+            CheckResult(
+                "capabilities",
+                "fail",
+                str(exc),
+                _ms(t),
+                group="validation",
+            )
+        ]
     except Exception as exc:  # noqa: BLE001 — doctor checks never raise
-        return [CheckResult(
-            "capabilities", "skip",
-            f"blueprint did not parse/compile — see other checks: {exc}",
-            _ms(t),
-            group="validation",
-        )]
+        return [
+            CheckResult(
+                "capabilities",
+                "skip",
+                f"blueprint did not parse/compile — see other checks: {exc}",
+                _ms(t),
+                group="validation",
+            )
+        ]
 
     try:
         caps = get_capabilities(engine)
@@ -140,43 +155,60 @@ def check_capabilities(
                 installed = version_cache[dep]
                 name = f"capabilities:{module.id}:{leaf_id}"
                 if installed is None:
-                    results.append(CheckResult(
-                        name, "skip",
-                        f"{dep!r} not installed — cannot verify {leaf_id!r} requires {dep}{spec}",
-                        group="validation",
-                    ))
+                    results.append(
+                        CheckResult(
+                            name,
+                            "skip",
+                            f"{dep!r} not installed — cannot verify {leaf_id!r} requires {dep}{spec}",
+                            group="validation",
+                        )
+                    )
                     continue
                 if version_satisfies(installed, spec):
-                    results.append(CheckResult(
-                        name, "ok",
-                        f"module {module.id!r} uses {leaf_id!r} — requires {dep}{spec}, installed {installed}",
-                        group="validation",
-                    ))
+                    results.append(
+                        CheckResult(
+                            name,
+                            "ok",
+                            f"module {module.id!r} uses {leaf_id!r} — requires {dep}{spec}, installed {installed}",
+                            group="validation",
+                        )
+                    )
                 else:
                     hint = f" {cap.hint}" if cap.hint else ""
-                    results.append(CheckResult(
-                        name, "fail",
-                        f"module {module.id!r} uses {leaf_id!r} — requires {dep}{spec}, "
-                        f"installed {installed}.{hint}",
-                        group="validation",
-                    ))
+                    results.append(
+                        CheckResult(
+                            name,
+                            "fail",
+                            f"module {module.id!r} uses {leaf_id!r} — requires {dep}{spec}, "
+                            f"installed {installed}.{hint}",
+                            group="validation",
+                        )
+                    )
 
     if not results:
-        results.append(CheckResult(
-            "capabilities", "ok", "no version-constrained capabilities used", _ms(t), group="validation",
-        ))
+        results.append(
+            CheckResult(
+                "capabilities",
+                "ok",
+                "no version-constrained capabilities used",
+                _ms(t),
+                group="validation",
+            )
+        )
     return results
 
 
 def check_config(config_path: Path | None) -> CheckResult:
     """Load and schema-validate aqueduct.yml."""
     from aqueduct.config import ConfigError, load_config
+
     t = time.monotonic()
     try:
         cfg = load_config(config_path)
         source = str(config_path) if config_path else "aqueduct.yml (CWD) or defaults"
         return CheckResult(
-            "config", "ok",
+            "config",
+            "ok",
             f"{source}  engine={cfg.deployment.engine}  target={cfg.deployment.target}",
             _ms(t),
         )
@@ -187,6 +219,7 @@ def check_config(config_path: Path | None) -> CheckResult:
 def check_depot(depot_path: Path) -> CheckResult:
     """Open (or create) the Depot DuckDB file and run SELECT 1."""
     import duckdb
+
     t = time.monotonic()
     try:
         depot_path.parent.mkdir(parents=True, exist_ok=True)
@@ -201,6 +234,7 @@ def check_depot(depot_path: Path) -> CheckResult:
 def check_observability(observability_db: Path) -> CheckResult:
     """Create observability.db (and parent dirs) and verify connectivity."""
     import duckdb
+
     t = time.monotonic()
     try:
         observability_db.parent.mkdir(parents=True, exist_ok=True)
@@ -235,7 +269,12 @@ def _check_webhook_connect(url: str, timeout: int) -> CheckResult:
                 ctx = ssl.create_default_context()
                 with ctx.wrap_socket(sock, server_hostname=host):
                     pass
-        return CheckResult("webhook", "ok", f"{host}:{port} → TCP/TLS reachable (connect only, no request sent)", _ms(t))
+        return CheckResult(
+            "webhook",
+            "ok",
+            f"{host}:{port} → TCP/TLS reachable (connect only, no request sent)",
+            _ms(t),
+        )
     except OSError as exc:
         return CheckResult("webhook", "fail", f"{url}: {exc}", _ms(t))
     except Exception as exc:
@@ -268,6 +307,7 @@ def check_webhook(
         return _check_webhook_connect(url, timeout)
 
     import httpx
+
     t = time.monotonic()
     rendered_headers = {"Content-Type": "application/json", **(headers or {})}
 
@@ -279,7 +319,8 @@ def check_webhook(
 
     try:
         resp = httpx.request(
-            probe_method, url,
+            probe_method,
+            url,
             headers=rendered_headers,
             timeout=timeout,
             **kwargs,
@@ -287,13 +328,15 @@ def check_webhook(
         status = resp.status_code
         if status < 500:
             return CheckResult(
-                "webhook", "ok",
+                "webhook",
+                "ok",
                 f"{probe_method} {url} → HTTP {status}",
                 _ms(t),
             )
         else:
             return CheckResult(
-                "webhook", "warn",
+                "webhook",
+                "warn",
                 f"{probe_method} {url} → HTTP {status} (server error — endpoint exists but responded with error)",
                 _ms(t),
             )
@@ -305,6 +348,7 @@ def check_webhook(
 
 def _redact_dsn(dsn: str) -> str:
     from urllib.parse import urlsplit, urlunsplit
+
     try:
         parts = urlsplit(dsn)
         if parts.password:
@@ -325,6 +369,7 @@ def _probe_openai_models(base_url: str, timeout: float = 10) -> tuple[list[str],
     Shared by the main agent check and the cascade-tier preflight ping so both
     report the same "N models available / selected model present" signal."""
     import httpx
+
     try:
         resp = httpx.get(_openai_models_url(base_url), timeout=timeout)
         resp.raise_for_status()
@@ -351,6 +396,7 @@ def check_agent(
                    Skipped if base_url is not configured.
     """
     import httpx
+
     t = time.monotonic()
 
     if agent_provider == "anthropic":
@@ -363,17 +409,21 @@ def check_agent(
         if not key:
             if not explicit_intent:
                 return CheckResult(
-                    "agent", "skip",
+                    "agent",
+                    "skip",
                     "self-healing not configured (opt-in; set agent.provider + "
                     "ANTHROPIC_API_KEY, or agent.provider: openai_compat, to enable)",
-                    _ms(t), group="agent",
+                    _ms(t),
+                    group="agent",
                 )
             return CheckResult(
-                "agent", "warn",
+                "agent",
+                "warn",
                 "agent configured but ANTHROPIC_API_KEY not set — set it, or switch "
                 "agent.provider to openai_compat (Ollama/vLLM/LM Studio). "
                 "Self-healing only; pipeline runs fine without it.",
-                _ms(t), group="agent",
+                _ms(t),
+                group="agent",
             )
         if preflight:
             # Prove the key + endpoint actually work — GET /v1/models lists the
@@ -384,37 +434,48 @@ def check_agent(
             url = api + "/v1/models"
             try:
                 resp = httpx.get(
-                    url, headers={"x-api-key": key, "anthropic-version": "2023-06-01"}, timeout=10,
+                    url,
+                    headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
+                    timeout=10,
                 )
                 resp.raise_for_status()
                 return CheckResult(
-                    "agent", "ok",
+                    "agent",
+                    "ok",
                     f"provider=anthropic  model={model}  key verified ({url})  [preflight]",
-                    _ms(t), group="agent",
+                    _ms(t),
+                    group="agent",
                 )
             except httpx.HTTPStatusError as exc:
                 return CheckResult(
-                    "agent", "warn",
+                    "agent",
+                    "warn",
                     f"provider=anthropic  ANTHROPIC_API_KEY set but {url} returned "
                     f"{exc.response.status_code} — key may be invalid/expired",
-                    _ms(t), group="agent",
+                    _ms(t),
+                    group="agent",
                 )
             except Exception as exc:
                 return CheckResult(
-                    "agent", "warn",
+                    "agent",
+                    "warn",
                     f"provider=anthropic  key set but {url} unreachable: {exc}",
-                    _ms(t), group="agent",
+                    _ms(t),
+                    group="agent",
                 )
         return CheckResult(
-            "agent", "ok",
+            "agent",
+            "ok",
             f"provider=anthropic  model={model}  ANTHROPIC_API_KEY present (API not called)",
-            _ms(t), group="agent",
+            _ms(t),
+            group="agent",
         )
 
     # openai_compat (Ollama, vLLM, LM Studio, …)
     if not base_url:
         return CheckResult(
-            "agent", "skip",
+            "agent",
+            "skip",
             "provider=openai_compat  base_url not configured",
             _ms(t),
         )
@@ -425,13 +486,15 @@ def check_agent(
         return CheckResult("agent", "fail", f"{models_url}: {err}", _ms(t))
     if available and model not in available:
         return CheckResult(
-            "agent", "warn",
+            "agent",
+            "warn",
             f"provider=openai_compat  endpoint={models_url}  ⚠ model={model} not in "
             f"{len(available)} loaded models: {', '.join(available[:5])}",
             _ms(t),
         )
     return CheckResult(
-        "agent", "ok",
+        "agent",
+        "ok",
         f"provider=openai_compat  endpoint={models_url}  model={model}  "
         f"({len(available)} models available)",
         _ms(t),
@@ -447,20 +510,22 @@ def check_secrets(
         return CheckResult("secrets", "ok", "provider=env  (@aq.secret() reads os.environ)", _ms(t))
 
     _PROVIDER_DEPS = {
-        "aws":   ("boto3", "pip install aqueduct-core[aws]"),
-        "gcp":   ("google.cloud.secretmanager", "pip install aqueduct-core[gcp]"),
+        "aws": ("boto3", "pip install aqueduct-core[aws]"),
+        "gcp": ("google.cloud.secretmanager", "pip install aqueduct-core[gcp]"),
         "azure": ("azure.keyvault.secrets", "pip install aqueduct-core[azure]"),
     }
 
     if provider in _PROVIDER_DEPS:
         import importlib as _il
+
         pkg, install_hint = _PROVIDER_DEPS[provider]
         try:
             _il.import_module(pkg)
             return CheckResult("secrets", "ok", f"provider={provider}  ({pkg} installed)", _ms(t))
         except ImportError:
             return CheckResult(
-                "secrets", "fail",
+                "secrets",
+                "fail",
                 f"provider={provider} requires {pkg} which is not installed. {install_hint}",
                 _ms(t),
             )
@@ -468,18 +533,26 @@ def check_secrets(
     if provider == "custom":
         if not resolver:
             return CheckResult(
-                "secrets", "fail",
+                "secrets",
+                "fail",
                 "provider=custom requires secrets.resolver to be set in aqueduct.yml",
                 _ms(t),
             )
         from aqueduct.secrets import load_resolver_fn
+
         try:
             load_resolver_fn(resolver, base_dir)
-            return CheckResult("secrets", "ok", f"provider=custom  resolver={resolver!r} loaded", _ms(t))
+            return CheckResult(
+                "secrets", "ok", f"provider=custom  resolver={resolver!r} loaded", _ms(t)
+            )
         except Exception as exc:
-            return CheckResult("secrets", "fail", f"provider=custom resolver {resolver!r} failed: {exc}", _ms(t))
+            return CheckResult(
+                "secrets", "fail", f"provider=custom resolver {resolver!r} failed: {exc}", _ms(t)
+            )
 
-    return CheckResult("secrets", "warn", f"provider={provider!r} unknown — will fall back to env", _ms(t))
+    return CheckResult(
+        "secrets", "warn", f"provider={provider!r} unknown — will fall back to env", _ms(t)
+    )
 
 
 _HANDOFF_SPACE_WARN_GIB = 5.0
@@ -523,10 +596,12 @@ def check_handoff_free_space(root: str, project_root: Path) -> CheckResult:
     t = time.monotonic()
     if is_remote_uri(root):
         return CheckResult(
-            "handoff-space", "skip",
+            "handoff-space",
+            "skip",
             f"handoff.root={root!r} is a remote URI — free space is a storage-"
             "provider concern (bucket/volume quota), not a local-disk question",
-            _ms(t), group="stores",
+            _ms(t),
+            group="stores",
         )
 
     p = Path(root)
@@ -547,7 +622,11 @@ def check_handoff_free_space(root: str, project_root: Path) -> CheckResult:
         usage = shutil.disk_usage(probe_dir)
     except OSError as exc:
         return CheckResult(
-            "handoff-space", "warn", f"could not stat {probe_dir}: {exc}", _ms(t), group="stores",
+            "handoff-space",
+            "warn",
+            f"could not stat {probe_dir}: {exc}",
+            _ms(t),
+            group="stores",
         )
 
     free_gib = usage.free / (1024**3)
@@ -557,16 +636,19 @@ def check_handoff_free_space(root: str, project_root: Path) -> CheckResult:
 
     if free_gib < _HANDOFF_SPACE_WARN_GIB:
         return CheckResult(
-            "handoff-space", "warn",
+            "handoff-space",
+            "warn",
             f"{detail}  below {_HANDOFF_SPACE_WARN_GIB:.0f} GiB — a handoff materialises a full "
             "intermediate dataset; low headroom risks a mid-run failure after the "
             "upstream island has already done its work",
-            _ms(t), group="stores",
+            _ms(t),
+            group="stores",
         )
     return CheckResult("handoff-space", "ok", detail, _ms(t), group="stores")
 
 
 # ── Runner ────────────────────────────────────────────────────────────────────
+
 
 def check_aqtest(aqtest_path: Path) -> list[CheckResult]:
     """Schema pre-flight on a .aqtest.yml file.
@@ -577,6 +659,7 @@ def check_aqtest(aqtest_path: Path) -> list[CheckResult]:
     surface bad references and missing modules before the user invokes `test`.
     """
     import yaml
+
     t = time.monotonic()
     results: list[CheckResult] = []
 
@@ -589,46 +672,64 @@ def check_aqtest(aqtest_path: Path) -> list[CheckResult]:
         return [CheckResult("aqtest", "fail", f"invalid YAML in {aqtest_path}: {exc}", _ms(t))]
 
     if not isinstance(raw, dict):
-        return [CheckResult("aqtest", "fail", f"{aqtest_path}: top-level must be a YAML mapping", _ms(t))]
+        return [
+            CheckResult(
+                "aqtest", "fail", f"{aqtest_path}: top-level must be a YAML mapping", _ms(t)
+            )
+        ]
 
     version = raw.get("aqueduct_test")
     if version not in ("1.0", 1, "1"):
-        return [CheckResult(
-            "aqtest", "fail",
-            f"{aqtest_path}: missing or unsupported aqueduct_test version: {version!r}",
-            _ms(t),
-        )]
+        return [
+            CheckResult(
+                "aqtest",
+                "fail",
+                f"{aqtest_path}: missing or unsupported aqueduct_test version: {version!r}",
+                _ms(t),
+            )
+        ]
 
     bp_ref = raw.get("blueprint")
     if not bp_ref:
-        results.append(CheckResult("aqtest", "fail", f"{aqtest_path}: missing 'blueprint' field", _ms(t)))
+        results.append(
+            CheckResult("aqtest", "fail", f"{aqtest_path}: missing 'blueprint' field", _ms(t))
+        )
         return results
 
     bp_path = (aqtest_path.parent / bp_ref).resolve()
     if not bp_path.exists():
-        results.append(CheckResult(
-            "aqtest", "fail",
-            f"{aqtest_path}: blueprint reference {bp_ref!r} does not resolve to an existing file ({bp_path})",
-            _ms(t),
-        ))
+        results.append(
+            CheckResult(
+                "aqtest",
+                "fail",
+                f"{aqtest_path}: blueprint reference {bp_ref!r} does not resolve to an existing file ({bp_path})",
+                _ms(t),
+            )
+        )
         return results
 
     tests = raw.get("tests") or []
     if not tests:
-        results.append(CheckResult("aqtest", "warn", f"{aqtest_path}: no test cases declared", _ms(t)))
+        results.append(
+            CheckResult("aqtest", "warn", f"{aqtest_path}: no test cases declared", _ms(t))
+        )
         return results
 
     # Cross-reference module IDs against the parsed blueprint
     try:
         from aqueduct.parser.parser import parse as _parse_bp
+
         bp = _parse_bp(str(bp_path))
         bp_module_ids = {m.id for m in bp.modules}
     except Exception as exc:
-        results.append(CheckResult(
-            "aqtest", "fail",
-            f"{aqtest_path}: referenced blueprint {bp_path} failed to parse: {exc}",
-            _ms(t),
-        ))
+        results.append(
+            CheckResult(
+                "aqtest",
+                "fail",
+                f"{aqtest_path}: referenced blueprint {bp_path} failed to parse: {exc}",
+                _ms(t),
+            )
+        )
         return results
 
     bad_cases: list[str] = []
@@ -650,17 +751,23 @@ def check_aqtest(aqtest_path: Path) -> list[CheckResult]:
             bad_cases.append(f"{tid}: no assertions declared")
 
     if bad_cases:
-        results.append(CheckResult(
-            "aqtest", "fail",
-            f"{aqtest_path}: {len(bad_cases)} test case issue(s): " + "; ".join(bad_cases),
-            _ms(t),
-        ))
+        results.append(
+            CheckResult(
+                "aqtest",
+                "fail",
+                f"{aqtest_path}: {len(bad_cases)} test case issue(s): " + "; ".join(bad_cases),
+                _ms(t),
+            )
+        )
     else:
-        results.append(CheckResult(
-            "aqtest", "ok",
-            f"{aqtest_path}: {len(tests)} test case(s), blueprint={bp_ref}",
-            _ms(t),
-        ))
+        results.append(
+            CheckResult(
+                "aqtest",
+                "ok",
+                f"{aqtest_path}: {len(tests)} test case(s), blueprint={bp_ref}",
+                _ms(t),
+            )
+        )
     return results
 
 
@@ -680,6 +787,7 @@ def check_aqscenario(aqscenario_path: Path) -> list[CheckResult]:
 
     try:
         from aqueduct.surveyor.scenario import load_scenario
+
         sc = load_scenario(aqscenario_path)
     except ValueError as exc:
         return [CheckResult("aqscenario", "fail", f"{aqscenario_path}: {exc}", _ms(t))]
@@ -687,50 +795,66 @@ def check_aqscenario(aqscenario_path: Path) -> list[CheckResult]:
         return [CheckResult("aqscenario", "fail", f"{aqscenario_path}: load failed: {exc}", _ms(t))]
 
     if not sc.blueprint:
-        results.append(CheckResult(
-            "aqscenario", "fail",
-            f"{aqscenario_path}: missing 'blueprint' reference",
-            _ms(t),
-        ))
+        results.append(
+            CheckResult(
+                "aqscenario",
+                "fail",
+                f"{aqscenario_path}: missing 'blueprint' reference",
+                _ms(t),
+            )
+        )
         return results
 
     bp_path = (aqscenario_path.parent / sc.blueprint).resolve()
     if not bp_path.exists():
-        results.append(CheckResult(
-            "aqscenario", "fail",
-            f"{aqscenario_path}: blueprint {sc.blueprint!r} does not resolve to an existing file ({bp_path})",
-            _ms(t),
-        ))
+        results.append(
+            CheckResult(
+                "aqscenario",
+                "fail",
+                f"{aqscenario_path}: blueprint {sc.blueprint!r} does not resolve to an existing file ({bp_path})",
+                _ms(t),
+            )
+        )
         return results
 
     inj_module = sc.inject_failure.get("module") if isinstance(sc.inject_failure, dict) else None
     if not inj_module:
-        results.append(CheckResult(
-            "aqscenario", "fail",
-            f"{aqscenario_path}: inject_failure.module is required",
-            _ms(t),
-        ))
+        results.append(
+            CheckResult(
+                "aqscenario",
+                "fail",
+                f"{aqscenario_path}: inject_failure.module is required",
+                _ms(t),
+            )
+        )
         return results
 
     try:
         from aqueduct.parser.parser import parse as _parse_bp
+
         bp = _parse_bp(str(bp_path))
         bp_module_ids = {m.id for m in bp.modules}
     except Exception as exc:
-        results.append(CheckResult(
-            "aqscenario", "fail",
-            f"{aqscenario_path}: referenced blueprint {bp_path} failed to parse: {exc}",
-            _ms(t),
-        ))
+        results.append(
+            CheckResult(
+                "aqscenario",
+                "fail",
+                f"{aqscenario_path}: referenced blueprint {bp_path} failed to parse: {exc}",
+                _ms(t),
+            )
+        )
         return results
 
     if inj_module not in bp_module_ids:
-        results.append(CheckResult(
-            "aqscenario", "fail",
-            f"{aqscenario_path}: inject_failure.module={inj_module!r} not in blueprint "
-            f"(available: {sorted(bp_module_ids)[:5]}{'…' if len(bp_module_ids) > 5 else ''})",
-            _ms(t),
-        ))
+        results.append(
+            CheckResult(
+                "aqscenario",
+                "fail",
+                f"{aqscenario_path}: inject_failure.module={inj_module!r} not in blueprint "
+                f"(available: {sorted(bp_module_ids)[:5]}{'…' if len(bp_module_ids) > 5 else ''})",
+                _ms(t),
+            )
+        )
         return results
 
     expected = sc.expected_patch or {}
@@ -740,11 +864,14 @@ def check_aqscenario(aqscenario_path: Path) -> list[CheckResult]:
         forbidden = len(expected.get("forbidden_ops") or [])
         note = f"  expected_ops={ops_count}  forbidden_ops={forbidden}"
 
-    results.append(CheckResult(
-        "aqscenario", "ok",
-        f"{aqscenario_path}: id={sc.id!r}  failed_module={inj_module!r}{note}",
-        _ms(t),
-    ))
+    results.append(
+        CheckResult(
+            "aqscenario",
+            "ok",
+            f"{aqscenario_path}: id={sc.id!r}  failed_module={inj_module!r}{note}",
+            _ms(t),
+        )
+    )
     return results
 
 
@@ -778,15 +905,21 @@ def check_store_backend(
             from pathlib import Path as _Path
 
             import duckdb as _duckdb
+
             if path_or_dsn is None:
-                return CheckResult(label, "ok", "backend=duckdb  (default per-blueprint routing)", _ms(t))
+                return CheckResult(
+                    label, "ok", "backend=duckdb  (default per-blueprint routing)", _ms(t)
+                )
             p = _Path(path_or_dsn)
             # Per-blueprint routing: path is a directory, not a db file.
             # Verify write access instead of trying duckdb.connect().
             if p.is_dir():
                 from tempfile import NamedTemporaryFile as _Ntf
+
                 _Ntf(dir=str(p), delete=True).close()
-                return CheckResult(label, "ok", f"backend=duckdb  path={path_or_dsn}  (routing base)", _ms(t))
+                return CheckResult(
+                    label, "ok", f"backend=duckdb  path={path_or_dsn}  (routing base)", _ms(t)
+                )
             p.parent.mkdir(parents=True, exist_ok=True)
             conn = _duckdb.connect(str(p))
             try:
@@ -801,14 +934,17 @@ def check_store_backend(
             _rt = "  [preflight: write+read ok]" if preflight else ""
             return CheckResult(label, "ok", f"backend=duckdb  path={path_or_dsn}{_rt}", _ms(t))
         except Exception as exc:
-            return CheckResult(label, "fail", f"backend=duckdb  path={path_or_dsn}  error={exc}", _ms(t))
+            return CheckResult(
+                label, "fail", f"backend=duckdb  path={path_or_dsn}  error={exc}", _ms(t)
+            )
 
     if backend == "postgres":
         try:
             import psycopg2  # type: ignore[import-not-found]
         except ImportError:
             return CheckResult(
-                label, "fail",
+                label,
+                "fail",
                 "backend=postgres but psycopg2 not installed — "
                 "`pip install aqueduct-core[postgres]`",
                 _ms(t),
@@ -829,6 +965,7 @@ def check_store_backend(
                 conn.close()
             # Redact DSN for log line — password lives inside path_or_dsn
             from aqueduct.stores.postgres import _PostgresRelational
+
             redacted = _PostgresRelational.__dict__["location_label"].fget(
                 type("S", (), {"_dsn": path_or_dsn})()
             )
@@ -840,7 +977,8 @@ def check_store_backend(
     if backend == "redis":
         if not is_kv_only:
             return CheckResult(
-                label, "fail",
+                label,
+                "fail",
                 "backend=redis is depot-only; observability and lineage need duckdb or postgres",
                 _ms(t),
             )
@@ -848,9 +986,9 @@ def check_store_backend(
             import redis as _redis  # type: ignore[import-not-found]
         except ImportError:
             return CheckResult(
-                label, "fail",
-                "backend=redis but redis-py not installed — "
-                "`pip install aqueduct-core[redis]`",
+                label,
+                "fail",
+                "backend=redis but redis-py not installed — " "`pip install aqueduct-core[redis]`",
                 _ms(t),
             )
         try:
@@ -862,9 +1000,13 @@ def check_store_backend(
                 client.get(_k)
                 client.delete(_k)
             _rt = "  [preflight: write+read ok]" if preflight else ""
-            return CheckResult(label, "ok", f"backend=redis  url={_redact_dsn(path_or_dsn)}{_rt}", _ms(t))
+            return CheckResult(
+                label, "ok", f"backend=redis  url={_redact_dsn(path_or_dsn)}{_rt}", _ms(t)
+            )
         except Exception as exc:
-            return CheckResult(label, "fail", f"backend=redis  error={_redact_dsn(str(exc))}", _ms(t))
+            return CheckResult(
+                label, "fail", f"backend=redis  error={_redact_dsn(str(exc))}", _ms(t)
+            )
 
     return CheckResult(label, "warn", f"backend={backend!r} unknown", _ms(t))
 
@@ -892,14 +1034,16 @@ def check_remote_target(cfg: Any) -> CheckResult:
         db_cfg = getattr(cfg.deployment, "databricks", None)
         if db_cfg is None:
             return CheckResult(
-                "remote-target", "fail",
+                "remote-target",
+                "fail",
                 "deployment.databricks block is required for target=databricks",
                 _ms(t),
             )
         workspace = getattr(db_cfg, "workspace_url", "")
         if not workspace:
             return CheckResult(
-                "remote-target", "fail",
+                "remote-target",
+                "fail",
                 "deployment.databricks.workspace_url is required",
                 _ms(t),
             )
@@ -907,7 +1051,8 @@ def check_remote_target(cfg: Any) -> CheckResult:
         token = os.environ.get("DATABRICKS_TOKEN")
         if not token:
             return CheckResult(
-                "remote-target", "fail",
+                "remote-target",
+                "fail",
                 "DATABRICKS_TOKEN environment variable is not set — "
                 "set it or reference it via @aq.secret('DATABRICKS_TOKEN')",
                 _ms(t),
@@ -916,6 +1061,7 @@ def check_remote_target(cfg: Any) -> CheckResult:
         # Liveness check
         try:
             import httpx as _httpx
+
             ws = workspace.rstrip("/")
             if not ws.startswith("https://"):
                 ws = f"https://{ws}"
@@ -927,20 +1073,23 @@ def check_remote_target(cfg: Any) -> CheckResult:
             r.raise_for_status()
         except Exception as exc:
             return CheckResult(
-                "remote-target", "fail",
+                "remote-target",
+                "fail",
                 f"Databricks API unreachable at {workspace!r}: {exc}",
                 _ms(t),
             )
 
         return CheckResult(
-            "remote-target", "ok",
+            "remote-target",
+            "ok",
             f"Databricks workspace={workspace}  cluster_id={getattr(db_cfg, 'cluster_id', None) or 'new_cluster'}",
             _ms(t),
         )
 
     # emr / dataproc — not yet wired
     return CheckResult(
-        "remote-target", "warn",
+        "remote-target",
+        "warn",
         f"remote target {target!r} is not yet implemented for doctor checks",
         _ms(t),
     )

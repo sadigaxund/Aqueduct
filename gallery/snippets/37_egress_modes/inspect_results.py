@@ -13,11 +13,15 @@ MODES = [
     ("Replace Where", "data/output/modes_replace/"),
 ]
 
+
 def read_parquet_dir(path: str) -> pd.DataFrame:
     if not os.path.isdir(path):
         return pd.DataFrame()
-    parts = [os.path.join(path, f) for f in os.listdir(path)
-             if f.endswith(".parquet") or os.path.isdir(os.path.join(path, f))]
+    parts = [
+        os.path.join(path, f)
+        for f in os.listdir(path)
+        if f.endswith(".parquet") or os.path.isdir(os.path.join(path, f))
+    ]
     if not parts:
         return pd.DataFrame()
     dfs = []
@@ -27,6 +31,7 @@ def read_parquet_dir(path: str) -> pd.DataFrame:
         elif p.endswith(".parquet"):
             dfs.append(pd.read_parquet(p))
     return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
+
 
 def main():
     for label, path in MODES:
@@ -48,6 +53,7 @@ def main():
     console.print("  • Ignore: silently skips if target exists")
     console.print("  • Overwrite Partition: replaces only matching partitions")
     console.print("  • Replace Where: replaces rows matching a condition")
+
 
 if __name__ == "__main__":
     main()

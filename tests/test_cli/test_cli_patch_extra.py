@@ -2,6 +2,7 @@
 
 Covers ⏳ items from TEST_MANIFEST.md Phase 18 git-lifecycle section.
 """
+
 import json
 import subprocess
 import pytest
@@ -12,8 +13,8 @@ from pathlib import Path
 from click.testing import CliRunner
 from aqueduct.cli import cli
 
-
 # ── shared fixture ─────────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def setup(tmp_path):
@@ -22,7 +23,8 @@ def setup(tmp_path):
     project.mkdir()
 
     bp_path = project / "blueprint.yml"
-    bp_path.write_text("""\
+    bp_path.write_text(
+        """\
 aqueduct: '1.0'
 id: test_bp
 name: Test
@@ -32,12 +34,15 @@ modules:
     label: Source
     config: {path: data.csv}
 edges: []
-""")
-    (project / "aqueduct.yml").write_text(f"""
+"""
+    )
+    (project / "aqueduct.yml").write_text(
+        f"""
 stores:
   depots: {{default: {{path: "{project}/depot.db"}}}}
   obs: {{path: "{project}/obs.db"}}
-""")
+"""
+    )
 
     patches_dir = project / "patches"
     for sub in ("pending", "applied", "rejected"):
@@ -46,7 +51,9 @@ stores:
     pending_patch = {
         "patch_id": "P001",
         "rationale": "Fix the source path to use new location",
-        "operations": [{"op": "set_module_config_key", "module_id": "src", "key": "path", "value": "new.csv"}],
+        "operations": [
+            {"op": "set_module_config_key", "module_id": "src", "key": "path", "value": "new.csv"}
+        ],
     }
     patch_file = patches_dir / "pending" / "P001.json"
     patch_file.write_text(json.dumps(pending_patch))
@@ -56,6 +63,7 @@ stores:
 
 # ── patch discard tests ────────────────────────────────────────────────────────
 
+
 class TestPatchDiscard:
     def test_no_uncommitted_patches_git_checkout_still_runs(self, setup, monkeypatch):
         """No applied patches → git checkout runs, 0 patches moved."""
@@ -63,6 +71,7 @@ class TestPatchDiscard:
         runner = CliRunner()
 
         mock_calls = []
+
         def mock_run(args, **kwargs):
             mock_calls.append(list(args) if isinstance(args, list) else args)
             return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
@@ -93,6 +102,7 @@ class TestPatchDiscard:
         result = runner.invoke(cli, ["patch", "discard", "--blueprint", str(bp_path)])
 
         from aqueduct.exit_codes import DATA_OR_RUNTIME
+
         assert result.exit_code == DATA_OR_RUNTIME
 
     def test_patches_moved_count_printed(self, setup, monkeypatch):
@@ -121,6 +131,7 @@ class TestPatchDiscard:
 
 
 # ── patch list tests ───────────────────────────────────────────────────────────
+
 
 class TestPatchList:
     def test_pending_patches_tabular_output(self, setup):
@@ -179,8 +190,12 @@ class TestPatchList:
         project, bp_path, patches_dir, patch_file = setup
         runner = CliRunner()
 
-        (patches_dir / "applied" / "PA.json").write_text(json.dumps({"patch_id": "PA", "rationale": "Applied"}))
-        (patches_dir / "rejected" / "PR.json").write_text(json.dumps({"patch_id": "PR", "rationale": "Rejected"}))
+        (patches_dir / "applied" / "PA.json").write_text(
+            json.dumps({"patch_id": "PA", "rationale": "Applied"})
+        )
+        (patches_dir / "rejected" / "PR.json").write_text(
+            json.dumps({"patch_id": "PR", "rationale": "Rejected"})
+        )
 
         result = runner.invoke(
             cli, ["patch", "list", "--blueprint", str(bp_path), "--status", "all"]
@@ -232,11 +247,13 @@ class TestPatchList:
                 "run_id": "run-xyz",
                 "blueprint_id": "test_bp",
                 "failed_module": "src",
-            }
+            },
         }
         (patches_dir / "pending" / "P002.json").write_text(json.dumps(meta_patch))
 
-        result = runner.invoke(cli, ["patch", "list", "--blueprint", str(bp_path), "--format", "json"])
+        result = runner.invoke(
+            cli, ["patch", "list", "--blueprint", str(bp_path), "--format", "json"]
+        )
         assert result.exit_code == 0
 
         parsed = json.loads(result.output)
@@ -258,6 +275,7 @@ class TestPatchList:
 
 
 # ── _patches_root_from_blueprint unit tests ────────────────────────────────────
+
 
 class TestPatchesRootFromBlueprint:
     def test_finds_aqueduct_yml_in_parent(self, tmp_path):

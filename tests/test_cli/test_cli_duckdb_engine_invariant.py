@@ -131,9 +131,7 @@ def test_run_store_dir_then_report_store_dir_finds_the_run(tmp_path):
     out_path = tmp_path / "out.csv"
 
     bp = tmp_path / "bp.yml"
-    bp.write_text(
-        _ROUTING_BP.format(in_path=in_path, out_path=out_path), encoding="utf-8"
-    )
+    bp.write_text(_ROUTING_BP.format(in_path=in_path, out_path=out_path), encoding="utf-8")
     cfg = tmp_path / "aqueduct.yml"
     cfg.write_text(_ROUTING_CFG, encoding="utf-8")
 
@@ -143,8 +141,7 @@ def test_run_store_dir_then_report_store_dir_finds_the_run(tmp_path):
 
     run_result = runner.invoke(
         cli,
-        ["run", str(bp), "--config", str(cfg), "--store-dir", str(store_dir),
-         "--run-id", run_id],
+        ["run", str(bp), "--config", str(cfg), "--store-dir", str(store_dir), "--run-id", run_id],
     )
     assert run_result.exit_code == exit_codes.SUCCESS, run_result.output
 
@@ -153,8 +150,7 @@ def test_run_store_dir_then_report_store_dir_finds_the_run(tmp_path):
 
     report_result = runner.invoke(
         cli,
-        ["report", run_id, "--config", str(cfg), "--store-dir", str(store_dir),
-         "--format", "json"],
+        ["report", run_id, "--config", str(cfg), "--store-dir", str(store_dir), "--format", "json"],
     )
     assert report_result.exit_code == exit_codes.SUCCESS, report_result.output
     payload = json.loads(report_result.output)

@@ -14,8 +14,14 @@ pytestmark = pytest.mark.unit
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+
 def _make_cfg(workspace_url="https://dbc-test.cloud.databricks.com", cluster_id="my-cluster"):
-    from aqueduct.config import AqueductConfig, DatabricksDeployConfig, DeploymentConfig, SecretsConfig
+    from aqueduct.config import (
+        AqueductConfig,
+        DatabricksDeployConfig,
+        DeploymentConfig,
+        SecretsConfig,
+    )
 
     return AqueductConfig(
         deployment=DeploymentConfig(
@@ -42,15 +48,20 @@ def _mock_response(json_data=None, status_code=200):
 
 # ── Config validation ────────────────────────────────────────────────────────
 
+
 class TestDatabricksDeployConfig:
     def test_valid_with_cluster_id(self):
         from aqueduct.config import DatabricksDeployConfig
-        cfg = DatabricksDeployConfig(workspace_url="https://test.cloud.databricks.com", cluster_id="c1")
+
+        cfg = DatabricksDeployConfig(
+            workspace_url="https://test.cloud.databricks.com", cluster_id="c1"
+        )
         assert cfg.cluster_id == "c1"
         assert cfg.new_cluster is None
 
     def test_valid_with_new_cluster(self):
         from aqueduct.config import DatabricksDeployConfig
+
         cfg = DatabricksDeployConfig(
             workspace_url="https://test.cloud.databricks.com",
             new_cluster={"spark_version": "15.3", "node_type_id": "i3.xlarge", "num_workers": 1},
@@ -60,11 +71,13 @@ class TestDatabricksDeployConfig:
 
     def test_missing_both_raises(self):
         from aqueduct.config import DatabricksDeployConfig
+
         with pytest.raises(ValueError, match="cluster_id or new_cluster"):
             DatabricksDeployConfig(workspace_url="https://test.cloud.databricks.com")
 
     def test_both_raises(self):
         from aqueduct.config import DatabricksDeployConfig
+
         with pytest.raises(ValueError, match="mutually exclusive"):
             DatabricksDeployConfig(
                 workspace_url="https://test.cloud.databricks.com",
@@ -75,11 +88,15 @@ class TestDatabricksDeployConfig:
     def test_extra_fields_forbidden(self):
         from aqueduct.config import DatabricksDeployConfig
         from pydantic import ValidationError
+
         with pytest.raises(ValidationError):
-            DatabricksDeployConfig(workspace_url="https://test.cloud.databricks.com", cluster_id="c1", unknown=42)
+            DatabricksDeployConfig(
+                workspace_url="https://test.cloud.databricks.com", cluster_id="c1", unknown=42
+            )
 
     def test_databricks_in_deployment_config(self):
         from aqueduct.config import DatabricksDeployConfig, DeploymentConfig
+
         d = DeploymentConfig(
             target="databricks",
             databricks=DatabricksDeployConfig(workspace_url="https://x.com", cluster_id="c1"),
@@ -89,6 +106,7 @@ class TestDatabricksDeployConfig:
 
 
 # ── Submitter ────────────────────────────────────────────────────────────────
+
 
 class TestDatabricksSubmitterPackage:
     @mock.patch.dict("os.environ", {"DATABRICKS_TOKEN": "test-token"})
@@ -100,18 +118,19 @@ class TestDatabricksSubmitterPackage:
 
         with mock.patch("aqueduct.deploy.databricks.httpx.post") as mock_post:
             mock_post.side_effect = [
-                _mock_response({"handle": 1}),   # dbfs/create
-                _mock_response({}),               # dbfs/add-block
-                _mock_response({}),               # dbfs/close
-                _mock_response({"handle": 2}),   # dbfs/create (config)
-                _mock_response({}),               # dbfs/add-block
-                _mock_response({}),               # dbfs/close
-                _mock_response({"handle": 3}),   # dbfs/create (bootstrap)
-                _mock_response({}),               # dbfs/add-block
-                _mock_response({}),               # dbfs/close
+                _mock_response({"handle": 1}),  # dbfs/create
+                _mock_response({}),  # dbfs/add-block
+                _mock_response({}),  # dbfs/close
+                _mock_response({"handle": 2}),  # dbfs/create (config)
+                _mock_response({}),  # dbfs/add-block
+                _mock_response({}),  # dbfs/close
+                _mock_response({"handle": 3}),  # dbfs/create (bootstrap)
+                _mock_response({}),  # dbfs/add-block
+                _mock_response({}),  # dbfs/close
             ]
 
             from aqueduct.deploy.databricks import DatabricksSubmitter
+
             sub = DatabricksSubmitter()
             packaged = sub.package(str(blueprint), cfg)
 
@@ -129,15 +148,16 @@ class TestDatabricksSubmitterPackage:
 
         with mock.patch("aqueduct.deploy.databricks.httpx.post") as mock_post:
             mock_post.side_effect = [
-                _mock_response({"handle": 1}),   # dbfs/create (blueprint)
-                _mock_response({}),               # dbfs/add-block
-                _mock_response({}),               # dbfs/close
-                _mock_response({"handle": 2}),   # dbfs/create (bootstrap)
-                _mock_response({}),               # dbfs/add-block
-                _mock_response({}),               # dbfs/close
+                _mock_response({"handle": 1}),  # dbfs/create (blueprint)
+                _mock_response({}),  # dbfs/add-block
+                _mock_response({}),  # dbfs/close
+                _mock_response({"handle": 2}),  # dbfs/create (bootstrap)
+                _mock_response({}),  # dbfs/add-block
+                _mock_response({}),  # dbfs/close
             ]
 
             from aqueduct.deploy.databricks import DatabricksSubmitter
+
             sub = DatabricksSubmitter()
             packaged = sub.package(str(blueprint), cfg)
 
@@ -151,8 +171,10 @@ class TestDatabricksSubmitterPackage:
         blueprint.write_text("blueprint: test\nmodules: []\n")
 
         from aqueduct.deploy.databricks import DatabricksSubmitter
+
         sub = DatabricksSubmitter()
         from aqueduct.errors import ConfigError
+
         with pytest.raises(ConfigError, match="DATABRICKS_TOKEN"):
             sub.package(str(blueprint), cfg)
 
@@ -175,6 +197,7 @@ class TestDatabricksSubmitterSubmit:
             mock_post.return_value = _mock_response({"run_id": 98765})
 
             from aqueduct.deploy.databricks import DatabricksSubmitter
+
             sub = DatabricksSubmitter()
             job_id = sub.submit(packaged, cfg)
 
@@ -203,6 +226,7 @@ class TestDatabricksSubmitterSubmit:
             mock_post.return_value = _mock_response({"run_id": 98765})
 
             from aqueduct.deploy.databricks import DatabricksSubmitter
+
             sub = DatabricksSubmitter()
             sub.submit(packaged, cfg)
 
@@ -233,14 +257,17 @@ class TestDatabricksSubmitterPoll:
         cfg = _make_cfg()
 
         with mock.patch("aqueduct.deploy.databricks.httpx.get") as mock_get:
-            mock_get.return_value = _mock_response({
-                "state": {
-                    "life_cycle_state": "TERMINATED",
-                    "result_state": "SUCCESS",
+            mock_get.return_value = _mock_response(
+                {
+                    "state": {
+                        "life_cycle_state": "TERMINATED",
+                        "result_state": "SUCCESS",
+                    }
                 }
-            })
+            )
 
             from aqueduct.deploy.databricks import DatabricksSubmitter
+
             sub = DatabricksSubmitter()
             result = sub.poll("job-1", cfg)
 
@@ -251,15 +278,18 @@ class TestDatabricksSubmitterPoll:
         cfg = _make_cfg()
 
         with mock.patch("aqueduct.deploy.databricks.httpx.get") as mock_get:
-            mock_get.return_value = _mock_response({
-                "state": {
-                    "life_cycle_state": "TERMINATED",
-                    "result_state": "FAILED",
-                    "state_message": "driver error",
+            mock_get.return_value = _mock_response(
+                {
+                    "state": {
+                        "life_cycle_state": "TERMINATED",
+                        "result_state": "FAILED",
+                        "state_message": "driver error",
+                    }
                 }
-            })
+            )
 
             from aqueduct.deploy.databricks import DatabricksSubmitter
+
             sub = DatabricksSubmitter()
             result = sub.poll("job-1", cfg)
 
@@ -273,13 +303,18 @@ class TestDatabricksSubmitterPoll:
         that must surface as an `AqueductError` subclass."""
         cfg = _make_cfg()
 
-        with mock.patch("aqueduct.deploy.databricks.httpx.get") as mock_get, \
-             mock.patch("aqueduct.deploy.databricks.time.sleep"):
-            mock_get.return_value = _mock_response({
-                "state": {"life_cycle_state": "RUNNING"},
-            })
+        with (
+            mock.patch("aqueduct.deploy.databricks.httpx.get") as mock_get,
+            mock.patch("aqueduct.deploy.databricks.time.sleep"),
+        ):
+            mock_get.return_value = _mock_response(
+                {
+                    "state": {"life_cycle_state": "RUNNING"},
+                }
+            )
 
             from aqueduct.deploy.databricks import DatabricksSubmitter, DeployError
+
             sub = DatabricksSubmitter()
             with pytest.raises(DeployError, match="did not finish within"):
                 sub.poll("job-1", cfg, timeout_seconds=0)
@@ -322,6 +357,7 @@ class TestDatabricksSubmitterFetchLogs:
             ]
 
             from aqueduct.deploy.databricks import DatabricksSubmitter
+
             sub = DatabricksSubmitter()
             logs = sub.fetch_logs(packaged, cfg)
 
@@ -347,6 +383,7 @@ class TestDatabricksSubmitterFetchLogs:
             mock_get.return_value.status_code = 404
 
             from aqueduct.deploy.databricks import DatabricksSubmitter
+
             sub = DatabricksSubmitter()
             assert sub.fetch_logs(packaged, cfg) == ""
 
@@ -356,6 +393,7 @@ class TestGetSubmitter:
         cfg = _make_cfg()
         from aqueduct.deploy import get_submitter
         from aqueduct.deploy.databricks import DatabricksSubmitter
+
         sub = get_submitter("databricks", cfg)
         assert isinstance(sub, DatabricksSubmitter)
 
@@ -366,12 +404,14 @@ class TestGetSubmitter:
         # normal `aqueduct run` path today (see get_submitter's docstring).
         cfg = _make_cfg()
         from aqueduct.deploy import DeployError, get_submitter
+
         with pytest.raises(DeployError, match="not yet implemented"):
             get_submitter("emr", cfg)
 
     def test_unknown_target_not_implemented(self):
         cfg = _make_cfg()
         from aqueduct.deploy import DeployError, get_submitter
+
         with pytest.raises(DeployError, match="No submitter"):
             get_submitter("unknown", cfg)
 
@@ -380,12 +420,14 @@ class TestRemoteHealNotSupported:
     def test_raises(self):
         from aqueduct.deploy.base import RemoteHealNotSupported
         from aqueduct.deploy.databricks import DatabricksSubmitter
+
         cfg = _make_cfg()
         with pytest.raises(RemoteHealNotSupported, match="not yet supported"):
             DatabricksSubmitter().fetch_failure_context("job-1", cfg)
 
 
 # ── Doctor check ─────────────────────────────────────────────────────────────
+
 
 class TestCheckRemoteTarget:
     @mock.patch.dict("os.environ", {"DATABRICKS_TOKEN": "test-token"})
@@ -396,6 +438,7 @@ class TestCheckRemoteTarget:
             mock_head.return_value = _mock_response({})
 
             from aqueduct.doctor.checks_io import check_remote_target
+
             result = check_remote_target(cfg)
             assert result.status == "ok"
 
@@ -403,17 +446,20 @@ class TestCheckRemoteTarget:
     def test_missing_token(self):
         cfg = _make_cfg()
         from aqueduct.doctor.checks_io import check_remote_target
+
         result = check_remote_target(cfg)
         assert result.status == "fail"
         assert "DATABRICKS_TOKEN" in result.detail
 
     def test_local_target_skipped(self):
         from aqueduct.config import AqueductConfig, DeploymentConfig, SecretsConfig
+
         cfg = AqueductConfig(
             deployment=DeploymentConfig(target="local"),
             secrets=SecretsConfig(provider="env"),
         )
         from aqueduct.doctor.checks_io import check_remote_target
+
         result = check_remote_target(cfg)
         assert result.status == "skip"
         assert "no remote cluster" in result.detail

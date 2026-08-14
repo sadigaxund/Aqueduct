@@ -282,9 +282,7 @@ class TestBlueprintLevelOverrideEndToEnd:
         from aqueduct.executor.session_config import resolve_session_engine_config
 
         manifest = self._compile(tmp_path, "", "bp_none")
-        cfg = AqueductConfig(
-            engine=EngineConfig(duckdb=DuckDBEngineConfig(memory_limit="256MiB"))
-        )
+        cfg = AqueductConfig(engine=EngineConfig(duckdb=DuckDBEngineConfig(memory_limit="256MiB")))
         engine_config = resolve_session_engine_config(cfg, "duckdb", manifest)
         assert engine_config["memory_limit"] == "256MiB"
 

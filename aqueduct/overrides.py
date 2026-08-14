@@ -43,12 +43,13 @@ class OverrideError(AqueductError):
 
 @dataclass(frozen=True)
 class Override:
-    path: tuple[str, ...]   # dotted path split into segments
-    value: Any              # already coerced (scalar) or JSON-parsed
-    raw: str                # original "path=value" item, for error messages
+    path: tuple[str, ...]  # dotted path split into segments
+    value: Any  # already coerced (scalar) or JSON-parsed
+    raw: str  # original "path=value" item, for error messages
 
 
 # ── parsing + coercion ────────────────────────────────────────────────────────
+
 
 def _coerce_scalar(token: str) -> Any:
     """Coerce a bare ``--set`` value: bool/null first, then int, then float, else str."""
@@ -68,7 +69,17 @@ def _coerce_scalar(token: str) -> Any:
     # "inf"/"nan" spellings — none of which a `--set` user means as a number.
     # Reject those before the float() call so they fall through to the
     # literal-string branch, same intent as the int-form guard above.
-    if "_" in token or low in ("inf", "-inf", "+inf", "infinity", "-infinity", "+infinity", "nan", "-nan", "+nan"):
+    if "_" in token or low in (
+        "inf",
+        "-inf",
+        "+inf",
+        "infinity",
+        "-infinity",
+        "+infinity",
+        "nan",
+        "-nan",
+        "+nan",
+    ):
         return token
     try:
         return float(token)
@@ -82,13 +93,11 @@ def parse_set_items(items: typing.Iterable[str]) -> list[Override]:
     for item in items:
         eq = item.find("=")
         if eq <= 0:
-            raise OverrideError(
-                f"--set must be PATH=VALUE (or PATH:=JSON), got: {item!r}"
-            )
-        if item[eq - 1] == ":":           # PATH:=JSON
-            path_str, raw_val, is_json = item[: eq - 1], item[eq + 1:], True
-        else:                              # PATH=scalar
-            path_str, raw_val, is_json = item[:eq], item[eq + 1:], False
+            raise OverrideError(f"--set must be PATH=VALUE (or PATH:=JSON), got: {item!r}")
+        if item[eq - 1] == ":":  # PATH:=JSON
+            path_str, raw_val, is_json = item[: eq - 1], item[eq + 1 :], True
+        else:  # PATH=scalar
+            path_str, raw_val, is_json = item[:eq], item[eq + 1 :], False
         segments = tuple(s for s in path_str.split("."))
         if not path_str or any(not s for s in segments):
             # Report the PATH only, never `item` — it embeds the (possibly
@@ -109,7 +118,7 @@ def parse_set_items(items: typing.Iterable[str]) -> list[Override]:
 
 # ── schema introspection (routing + suggestions) ───────────────────────────────
 
-_FREEFORM = object()   # sentinel: a dict[str, Any] node accepts arbitrary keys
+_FREEFORM = object()  # sentinel: a dict[str, Any] node accepts arbitrary keys
 
 
 def _unwrap(annotation: Any) -> Any:
@@ -157,16 +166,18 @@ def model_accepts_path(model_cls: type[BaseModel], path: tuple[str, ...]) -> boo
     cur: Any = model_cls
     for seg in path:
         if cur is _FREEFORM:
-            return True                       # inside an open dict — anything goes
+            return True  # inside an open dict — anything goes
         if not (isinstance(cur, type) and issubclass(cur, BaseModel)):
-            return False                      # path goes deeper than a leaf scalar
+            return False  # path goes deeper than a leaf scalar
         if seg not in _field_names(cur):
             return False
         cur = _unwrap(cur.model_fields[seg].annotation) if seg in cur.model_fields else _FREEFORM
     return True
 
 
-def suggest_for_path(model_classes: typing.Sequence[type[BaseModel]], path: tuple[str, ...]) -> str | None:
+def suggest_for_path(
+    model_classes: typing.Sequence[type[BaseModel]], path: tuple[str, ...]
+) -> str | None:
     """Suggest the nearest valid sibling for the deepest resolvable segment.
 
     Walks each candidate root as far as the path resolves, then fuzzy-matches the
@@ -190,7 +201,9 @@ def suggest_for_path(model_classes: typing.Sequence[type[BaseModel]], path: tupl
                 elif depth == best_depth and seg == bad_seg:
                     candidates |= names
                 break
-            cur = _unwrap(cur.model_fields[seg].annotation) if seg in cur.model_fields else _FREEFORM
+            cur = (
+                _unwrap(cur.model_fields[seg].annotation) if seg in cur.model_fields else _FREEFORM
+            )
     if best_depth < 0 or bad_seg is None:
         return None
     depth, bad, candidate_list = best_depth, bad_seg, sorted(candidates)
@@ -205,6 +218,7 @@ def suggest_for_path(model_classes: typing.Sequence[type[BaseModel]], path: tupl
 
 
 # ── nesting + merge + apply ─────────────────────────────────────────────────────
+
 
 def to_nested(overrides: typing.Iterable[Override]) -> dict[str, Any]:
     """Fold a list of overrides into one nested dict."""

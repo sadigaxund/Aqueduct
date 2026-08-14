@@ -153,7 +153,10 @@ def _post_with_retry(
             return response
         logger.warning(
             "LLM provider returned %d — retry %d/%d in %.1fs",
-            response.status_code, attempt, max_retries, sleep,
+            response.status_code,
+            attempt,
+            max_retries,
+            sleep,
         )
         time.sleep(sleep)
 
@@ -304,8 +307,13 @@ def _call_agent(
 
     if cfg.provider == "openai_compat":
         return _call_openai_compat(
-            messages, cfg.model, cfg.max_tokens, cfg.base_url, system_prompt,
-            cfg.provider_options, timeout=cfg.timeout,
+            messages,
+            cfg.model,
+            cfg.max_tokens,
+            cfg.base_url,
+            system_prompt,
+            cfg.provider_options,
+            timeout=cfg.timeout,
             api_key=cfg.api_key,
             temperature_override=temperature_override,
             deadline=deadline,
@@ -320,7 +328,10 @@ def _call_agent(
         )
     else:
         return _call_anthropic(
-            messages, cfg.model, cfg.max_tokens, system_prompt,
+            messages,
+            cfg.model,
+            cfg.max_tokens,
+            system_prompt,
             timeout=cfg.timeout,
             api_key=cfg.api_key,
             temperature_override=temperature_override,
@@ -388,10 +399,13 @@ def _call_anthropic(
     if provider_options:
         # Same config block is shared with openai_compat — drop its
         # ollama_-prefixed keys rather than corrupting the Anthropic payload.
-        payload.update({
-            k: v for k, v in provider_options.items()
-            if not k.startswith("ollama_") and k != "response_format"
-        })
+        payload.update(
+            {
+                k: v
+                for k, v in provider_options.items()
+                if not k.startswith("ollama_") and k != "response_format"
+            }
+        )
     if temperature_override is not None:
         payload["temperature"] = temperature_override
     effective_timeout = float(deadline if deadline is not None else timeout)
@@ -409,10 +423,17 @@ def _call_anthropic(
     # streaming call from an agentic-mode heal simply proceeds tool-free.
     if tools and toolbox is not None and on_token is None:
         return _call_anthropic_with_tools(
-            messages, payload, headers, url,
-            tools=tools, toolbox=toolbox, max_tool_calls=max_tool_calls,
-            tool_state=tool_state, effective_timeout=effective_timeout,
-            max_retries=max_retries, backoff_seconds=backoff_seconds,
+            messages,
+            payload,
+            headers,
+            url,
+            tools=tools,
+            toolbox=toolbox,
+            max_tool_calls=max_tool_calls,
+            tool_state=tool_state,
+            effective_timeout=effective_timeout,
+            max_retries=max_retries,
+            backoff_seconds=backoff_seconds,
         )
 
     # Streaming path — only when a live-token sink is supplied (the non-streaming
@@ -421,6 +442,7 @@ def _call_anthropic(
         return _stream_anthropic(url, payload, headers, effective_timeout, on_token)
 
     with httpx.Client() as client:
+
         def _do_post(read_timeout: float) -> httpx.Response:
             return client.post(
                 url,
@@ -428,6 +450,7 @@ def _call_anthropic(
                 json=payload,
                 timeout=min(effective_timeout, read_timeout),
             )
+
         response = _post_with_retry(
             _do_post,
             total_seconds=effective_timeout,
@@ -488,14 +511,20 @@ def _call_anthropic_with_tools(
             payload["tools"] = anthropic_tools
 
         with httpx.Client() as client:
+
             def _do_post(read_timeout: float, _payload=payload) -> httpx.Response:
                 return client.post(
-                    url, headers=headers, json=_payload,
+                    url,
+                    headers=headers,
+                    json=_payload,
                     timeout=min(effective_timeout, read_timeout),
                 )
+
             response = _post_with_retry(
-                _do_post, total_seconds=effective_timeout,
-                max_retries=max_retries, backoff_seconds=backoff_seconds,
+                _do_post,
+                total_seconds=effective_timeout,
+                max_retries=max_retries,
+                backoff_seconds=backoff_seconds,
             )
             data = response.json()
 
@@ -536,17 +565,21 @@ def _call_anthropic_with_tools(
             _t0 = time.monotonic()
             result = toolbox.call(_name, _args)
             if tool_state is not None:
-                tool_state.tool_call_log.append({
-                    "name": _name,
-                    "args_summary": _tool_args_summary(_args),
-                    "duration_ms": int((time.monotonic() - _t0) * 1000),
-                    "result_preview": _tool_result_preview(result),
-                })
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": block.get("id"),
-                "content": json.dumps(result, default=str),
-            })
+                tool_state.tool_call_log.append(
+                    {
+                        "name": _name,
+                        "args_summary": _tool_args_summary(_args),
+                        "duration_ms": int((time.monotonic() - _t0) * 1000),
+                        "result_preview": _tool_result_preview(result),
+                    }
+                )
+            tool_results.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": block.get("id"),
+                    "content": json.dumps(result, default=str),
+                }
+            )
         convo = [*convo, {"role": "user", "content": tool_results}]
 
         if tool_state is not None and tool_state.tool_calls_used >= max_tool_calls:
@@ -612,7 +645,9 @@ def _call_openai_compat(
         "response_format": {"type": "json_object"},
     }
     if provider_options:
-        ollama_opts = {k[len("ollama_"):]: v for k, v in provider_options.items() if k.startswith("ollama_")}
+        ollama_opts = {
+            k[len("ollama_") :]: v for k, v in provider_options.items() if k.startswith("ollama_")
+        }
         generic_opts = {k: v for k, v in provider_options.items() if not k.startswith("ollama_")}
         if ollama_opts:
             payload["options"] = ollama_opts
@@ -633,14 +668,23 @@ def _call_openai_compat(
     # this heal session already proved the endpoint tool-incapable
     # (tool_state.supported is False) — no repeated probe-and-degrade churn.
     if (
-        tools and toolbox is not None and on_token is None
+        tools
+        and toolbox is not None
+        and on_token is None
         and not (tool_state is not None and tool_state.supported is False)
     ):
         return _call_openai_compat_with_tools(
-            messages, payload, headers, url,
-            tools=tools, toolbox=toolbox, max_tool_calls=max_tool_calls,
-            supports_tools=supports_tools, tool_state=tool_state,
-            effective_read=effective_read, max_retries=max_retries,
+            messages,
+            payload,
+            headers,
+            url,
+            tools=tools,
+            toolbox=toolbox,
+            max_tool_calls=max_tool_calls,
+            supports_tools=supports_tools,
+            tool_state=tool_state,
+            effective_read=effective_read,
+            max_retries=max_retries,
             backoff_seconds=backoff_seconds,
         )
 
@@ -650,16 +694,20 @@ def _call_openai_compat(
         return _stream_openai_compat(url, payload, headers, effective_read, on_token)
 
     with httpx.Client() as client:
+
         def _do_post(read_timeout: float) -> httpx.Response:
             return client.post(
                 url,
                 json=payload,
                 headers=headers,
                 timeout=httpx.Timeout(
-                    connect=15.0, read=min(effective_read, read_timeout),
-                    write=30.0, pool=5.0,
+                    connect=15.0,
+                    read=min(effective_read, read_timeout),
+                    write=30.0,
+                    pool=5.0,
                 ),
             )
+
         response = _post_with_retry(
             _do_post,
             total_seconds=effective_read,
@@ -675,7 +723,11 @@ def _call_openai_compat(
             "or been interrupted mid-generation."
         )
     usage = data.get("usage") or {}
-    return text, int(usage.get("prompt_tokens", 0) or 0), int(usage.get("completion_tokens", 0) or 0)
+    return (
+        text,
+        int(usage.get("prompt_tokens", 0) or 0),
+        int(usage.get("completion_tokens", 0) or 0),
+    )
 
 
 def _call_openai_compat_with_tools(
@@ -717,24 +769,47 @@ def _call_openai_compat_with_tools(
     client = httpx.Client()
     try:
         return _run_openai_tool_loop(
-            client, url, headers, base_payload, system_msgs, convo,
-            openai_tools=openai_tools, toolbox=toolbox, max_tool_calls=max_tool_calls,
-            tool_state=tool_state, effective_read=effective_read,
-            max_retries=max_retries, backoff_seconds=backoff_seconds,
-            ti_total=ti_total, to_total=to_total,
-            tools_withdrawn=tools_withdrawn, probed=probed,
+            client,
+            url,
+            headers,
+            base_payload,
+            system_msgs,
+            convo,
+            openai_tools=openai_tools,
+            toolbox=toolbox,
+            max_tool_calls=max_tool_calls,
+            tool_state=tool_state,
+            effective_read=effective_read,
+            max_retries=max_retries,
+            backoff_seconds=backoff_seconds,
+            ti_total=ti_total,
+            to_total=to_total,
+            tools_withdrawn=tools_withdrawn,
+            probed=probed,
         )
     finally:
         client.close()
 
 
 def _run_openai_tool_loop(
-    client: Any, url: str, headers: dict[str, str], base_payload: dict[str, Any],
-    system_msgs: list[dict[str, Any]], convo: list[dict[str, Any]],
-    *, openai_tools: list[dict[str, Any]], toolbox: Any, max_tool_calls: int,
-    tool_state: ToolCallState | None, effective_read: float,
-    max_retries: int, backoff_seconds: float,
-    ti_total: int, to_total: int, tools_withdrawn: bool, probed: bool,
+    client: Any,
+    url: str,
+    headers: dict[str, str],
+    base_payload: dict[str, Any],
+    system_msgs: list[dict[str, Any]],
+    convo: list[dict[str, Any]],
+    *,
+    openai_tools: list[dict[str, Any]],
+    toolbox: Any,
+    max_tool_calls: int,
+    tool_state: ToolCallState | None,
+    effective_read: float,
+    max_retries: int,
+    backoff_seconds: float,
+    ti_total: int,
+    to_total: int,
+    tools_withdrawn: bool,
+    probed: bool,
 ) -> tuple[str, int, int]:
     import httpx
 
@@ -747,17 +822,23 @@ def _run_openai_tool_loop(
 
         def _do_post(read_timeout: float, _payload=payload) -> httpx.Response:
             return client.post(
-                url, json=_payload, headers=headers,
+                url,
+                json=_payload,
+                headers=headers,
                 timeout=httpx.Timeout(
-                    connect=15.0, read=min(effective_read, read_timeout),
-                    write=30.0, pool=5.0,
+                    connect=15.0,
+                    read=min(effective_read, read_timeout),
+                    write=30.0,
+                    pool=5.0,
                 ),
             )
 
         try:
             response = _post_with_retry(
-                _do_post, total_seconds=effective_read,
-                max_retries=max_retries, backoff_seconds=backoff_seconds,
+                _do_post,
+                total_seconds=effective_read,
+                max_retries=max_retries,
+                backoff_seconds=backoff_seconds,
             )
         except Exception as exc:
             if not probed and not tools_withdrawn and _looks_like_tools_rejection(exc):
@@ -774,7 +855,8 @@ def _run_openai_tool_loop(
                             "[%s] endpoint rejected a tools-enabled request "
                             "(%s) — degrading to the oneshot path for the "
                             "rest of this heal.",
-                            _AGENT_TOOLS_UNSUPPORTED_RULE, exc,
+                            _AGENT_TOOLS_UNSUPPORTED_RULE,
+                            exc,
                         )
                 continue
             raise
@@ -799,7 +881,10 @@ def _run_openai_tool_loop(
                 tool_state.supported = True
             return text, ti_total, to_total
 
-        convo = [*convo, {"role": "assistant", "content": choice_msg.get("content"), "tool_calls": tool_calls}]
+        convo = [
+            *convo,
+            {"role": "assistant", "content": choice_msg.get("content"), "tool_calls": tool_calls},
+        ]
         for tc in tool_calls:
             if tool_state is not None:
                 tool_state.tool_calls_used += 1
@@ -812,17 +897,22 @@ def _run_openai_tool_loop(
             _t0 = time.monotonic()
             result = toolbox.call(name, args)
             if tool_state is not None:
-                tool_state.tool_call_log.append({
-                    "name": name,
-                    "args_summary": _tool_args_summary(args),
-                    "duration_ms": int((time.monotonic() - _t0) * 1000),
-                    "result_preview": _tool_result_preview(result),
-                })
-            convo = [*convo, {
-                "role": "tool",
-                "tool_call_id": tc.get("id"),
-                "content": json.dumps(result, default=str),
-            }]
+                tool_state.tool_call_log.append(
+                    {
+                        "name": name,
+                        "args_summary": _tool_args_summary(args),
+                        "duration_ms": int((time.monotonic() - _t0) * 1000),
+                        "result_preview": _tool_result_preview(result),
+                    }
+                )
+            convo = [
+                *convo,
+                {
+                    "role": "tool",
+                    "tool_call_id": tc.get("id"),
+                    "content": json.dumps(result, default=str),
+                },
+            ]
 
         if tool_state is not None and tool_state.tool_calls_used >= max_tool_calls:
             tools_withdrawn = True  # next turn is forced no-tools (final answer)
@@ -838,10 +928,11 @@ def _iter_sse_data(resp: Any):
     and the OpenAI ``[DONE]`` sentinel). ``resp`` is an open httpx streaming
     response."""
     import json as _json
+
     for line in resp.iter_lines():
         if not line or not line.startswith("data:"):
             continue
-        chunk = line[len("data:"):].strip()
+        chunk = line[len("data:") :].strip()
         if not chunk or chunk == "[DONE]":
             continue
         try:
@@ -859,6 +950,7 @@ def _stream_openai_compat(url, payload, headers, read_timeout, on_token) -> tupl
     is the answer. ``stream_options.include_usage`` requests a final usage frame
     (ignored by servers that don't support it → 0 tokens)."""
     import httpx
+
     payload = {**payload, "stream": True, "stream_options": {"include_usage": True}}
     # Drop structured-output enforcement on the streaming path: several endpoints
     # (Ollama included) BUFFER the whole response instead of emitting incremental
@@ -868,9 +960,16 @@ def _stream_openai_compat(url, payload, headers, read_timeout, on_token) -> tupl
     parts: list[str] = []
     ti = to = 0
     timeout = httpx.Timeout(connect=15.0, read=read_timeout, write=30.0, pool=5.0)
-    with httpx.Client() as client, client.stream(
-        "POST", url, json=payload, headers=headers, timeout=timeout,
-    ) as resp:
+    with (
+        httpx.Client() as client,
+        client.stream(
+            "POST",
+            url,
+            json=payload,
+            headers=headers,
+            timeout=timeout,
+        ) as resp,
+    ):
         resp.raise_for_status()
         for obj in _iter_sse_data(resp):
             choices = obj.get("choices") or []
@@ -902,13 +1001,21 @@ def _stream_anthropic(url, payload, headers, read_timeout, on_token) -> tuple[st
     ``text_delta`` is the answer. Usage arrives on ``message_start`` (input) and
     ``message_delta`` (output)."""
     import httpx
+
     payload = {**payload, "stream": True}
     parts: list[str] = []
     ti = to = 0
     timeout = httpx.Timeout(connect=15.0, read=read_timeout, write=30.0, pool=5.0)
-    with httpx.Client() as client, client.stream(
-        "POST", url, json=payload, headers=headers, timeout=timeout,
-    ) as resp:
+    with (
+        httpx.Client() as client,
+        client.stream(
+            "POST",
+            url,
+            json=payload,
+            headers=headers,
+            timeout=timeout,
+        ) as resp,
+    ):
         resp.raise_for_status()
         for obj in _iter_sse_data(resp):
             t = obj.get("type")

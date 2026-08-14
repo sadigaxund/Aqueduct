@@ -33,12 +33,14 @@ BLUEPRINTS = Path(__file__).parent.parent / "fixtures" / "blueprints"
 def _compile(bp, bp_path):
     """Lazy compiler import to avoid pyspark at collection time."""
     from aqueduct.compiler.compiler import compile as compiler_compile
+
     return compiler_compile(bp, blueprint_path=bp_path)
 
 
 def _exec(manifest, spark, store_dir=None, **kwargs):
     """Lazy executor import to avoid pyspark at collection time."""
     from aqueduct.executor.spark.executor import execute
+
     return execute(manifest, spark, store_dir=store_dir, **kwargs)
 
 
@@ -52,13 +54,18 @@ def _run(blueprint_name: str, overrides: dict, spark: SparkSession, store_dir=No
 
 # ── Baseline ──────────────────────────────────────────────────────────────────
 
+
 def test_linear_ingress_egress(spark: SparkSession, sample_data, tmp_path):
     """Ingress → Egress: all rows pass through unchanged."""
     out = tmp_path / "out"
-    result = _run("bp_linear.yml", {
-        "input_path": str(sample_data / "orders.parquet"),
-        "output_path": str(out),
-    }, spark)
+    result = _run(
+        "bp_linear.yml",
+        {
+            "input_path": str(sample_data / "orders.parquet"),
+            "output_path": str(out),
+        },
+        spark,
+    )
 
     assert result.status == "success", result.module_results
     statuses = {r.module_id: r.status for r in result.module_results}
@@ -71,13 +78,18 @@ def test_linear_ingress_egress(spark: SparkSession, sample_data, tmp_path):
 
 # ── Channel ───────────────────────────────────────────────────────────────────
 
+
 def test_channel_sql_filter(spark: SparkSession, sample_data, tmp_path):
     """Channel SQL filter: 1 null-amount row removed → 9 rows in output."""
     out = tmp_path / "out"
-    result = _run("bp_channel_filter.yml", {
-        "input_path": str(sample_data / "orders.parquet"),
-        "output_path": str(out),
-    }, spark)
+    result = _run(
+        "bp_channel_filter.yml",
+        {
+            "input_path": str(sample_data / "orders.parquet"),
+            "output_path": str(out),
+        },
+        spark,
+    )
 
     assert result.status == "success", result.module_results
     assert spark.read.parquet(str(out)).count() == 9
@@ -85,15 +97,20 @@ def test_channel_sql_filter(spark: SparkSession, sample_data, tmp_path):
 
 # ── Junction ──────────────────────────────────────────────────────────────────
 
+
 def test_junction_conditional_split(spark: SparkSession, sample_data, tmp_path):
     """Junction splits by region: us_path gets 5 rows, eu_path gets 5 rows."""
     us_out = tmp_path / "us"
     eu_out = tmp_path / "eu"
-    result = _run("bp_junction_conditional.yml", {
-        "input_path": str(sample_data / "orders.parquet"),
-        "us_path": str(us_out),
-        "eu_path": str(eu_out),
-    }, spark)
+    result = _run(
+        "bp_junction_conditional.yml",
+        {
+            "input_path": str(sample_data / "orders.parquet"),
+            "us_path": str(us_out),
+            "eu_path": str(eu_out),
+        },
+        spark,
+    )
 
     assert result.status == "success", result.module_results
 
@@ -107,15 +124,20 @@ def test_junction_conditional_split(spark: SparkSession, sample_data, tmp_path):
 
 # ── Funnel ────────────────────────────────────────────────────────────────────
 
+
 def test_funnel_union_all(spark: SparkSession, sample_data, tmp_path):
     """Funnel union_all stacks two identical inputs: 10 + 10 = 20 rows."""
     out = tmp_path / "out"
     orders = str(sample_data / "orders.parquet")
-    result = _run("bp_funnel_union.yml", {
-        "input_a_path": orders,
-        "input_b_path": orders,
-        "output_path": str(out),
-    }, spark)
+    result = _run(
+        "bp_funnel_union.yml",
+        {
+            "input_a_path": orders,
+            "input_b_path": orders,
+            "output_path": str(out),
+        },
+        spark,
+    )
 
     assert result.status == "success", result.module_results
     assert spark.read.parquet(str(out)).count() == 20
@@ -123,15 +145,20 @@ def test_funnel_union_all(spark: SparkSession, sample_data, tmp_path):
 
 # ── Spillway ──────────────────────────────────────────────────────────────────
 
+
 def test_spillway_error_routing(spark: SparkSession, sample_data, tmp_path):
     """Spillway: null-amount row routes to bad_sink; good rows go to good_sink."""
     good = tmp_path / "good"
     bad = tmp_path / "bad"
-    result = _run("bp_spillway.yml", {
-        "input_path": str(sample_data / "orders.parquet"),
-        "good_path": str(good),
-        "bad_path": str(bad),
-    }, spark)
+    result = _run(
+        "bp_spillway.yml",
+        {
+            "input_path": str(sample_data / "orders.parquet"),
+            "good_path": str(good),
+            "bad_path": str(bad),
+        },
+        spark,
+    )
 
     assert result.status == "success", result.module_results
 
@@ -152,14 +179,20 @@ def test_spillway_error_routing(spark: SparkSession, sample_data, tmp_path):
 
 # ── Probe ─────────────────────────────────────────────────────────────────────
 
+
 def test_probe_does_not_halt_blueprint(spark: SparkSession, sample_data, tmp_path):
     """Probe signals captured; blueprint completes successfully regardless."""
     out = tmp_path / "out"
     store = tmp_path / "signals"
-    result = _run("bp_probe.yml", {
-        "input_path": str(sample_data / "orders.parquet"),
-        "output_path": str(out),
-    }, spark, store_dir=store)
+    result = _run(
+        "bp_probe.yml",
+        {
+            "input_path": str(sample_data / "orders.parquet"),
+            "output_path": str(out),
+        },
+        spark,
+        store_dir=store,
+    )
 
     assert result.status == "success", result.module_results
 
@@ -176,13 +209,18 @@ def test_probe_does_not_halt_blueprint(spark: SparkSession, sample_data, tmp_pat
 
 # ── Regulator ─────────────────────────────────────────────────────────────────
 
+
 def test_regulator_open_gate_passthrough(spark: SparkSession, sample_data, tmp_path):
     """Regulator with no surveyor: gate defaults open, all rows reach Egress."""
     out = tmp_path / "out"
-    result = _run("bp_regulator_passthrough.yml", {
-        "input_path": str(sample_data / "orders.parquet"),
-        "output_path": str(out),
-    }, spark)
+    result = _run(
+        "bp_regulator_passthrough.yml",
+        {
+            "input_path": str(sample_data / "orders.parquet"),
+            "output_path": str(out),
+        },
+        spark,
+    )
 
     assert result.status == "success", result.module_results
     statuses = {r.module_id: r.status for r in result.module_results}
@@ -193,16 +231,20 @@ def test_regulator_open_gate_passthrough(spark: SparkSession, sample_data, tmp_p
 
 def test_regulator_closed_gate_skips_downstream(spark: SparkSession, sample_data, tmp_path):
     """Regulator with closed gate (mock surveyor): Egress gets skipped."""
+
     class _ClosedSurveyor:
         def evaluate_regulator(self, module_id: str) -> bool:
             return False
 
     out = tmp_path / "out"
     bp_path = BLUEPRINTS / "bp_regulator_passthrough.yml"
-    bp = parse(str(bp_path), cli_overrides={
-        "input_path": str(sample_data / "orders.parquet"),
-        "output_path": str(out),
-    })
+    bp = parse(
+        str(bp_path),
+        cli_overrides={
+            "input_path": str(sample_data / "orders.parquet"),
+            "output_path": str(out),
+        },
+    )
     manifest = _compile(bp, bp_path)
     result = _exec(manifest, spark, surveyor=_ClosedSurveyor())
 
@@ -217,6 +259,7 @@ def test_regulator_closed_gate_skips_downstream(spark: SparkSession, sample_data
 
 # ── Junction → Funnel → Channel regression ───────────────────────────────────
 
+
 def test_junction_funnel_channel_pattern(spark: SparkSession, sample_data, tmp_path):
     """Regression: Junction branch edges must connect to Funnel, not Channel directly.
 
@@ -224,10 +267,14 @@ def test_junction_funnel_channel_pattern(spark: SparkSession, sample_data, tmp_p
     All rows (US + EU = 10) must appear in output with blueprint_tag column added.
     """
     out = tmp_path / "out"
-    result = _run("bp_junction_funnel_channel.yml", {
-        "input_path": str(sample_data / "orders.parquet"),
-        "output_path": str(out),
-    }, spark)
+    result = _run(
+        "bp_junction_funnel_channel.yml",
+        {
+            "input_path": str(sample_data / "orders.parquet"),
+            "output_path": str(out),
+        },
+        spark,
+    )
 
     assert result.status == "success", result.module_results
 
@@ -247,10 +294,14 @@ def test_chained_channels(spark: SparkSession, sample_data, tmp_path):
     adds 'tag' column → Egress writes 9 rows each having tag='processed'.
     """
     out = tmp_path / "out"
-    result = _run("bp_chained_channels.yml", {
-        "input_path": str(sample_data / "orders.parquet"),
-        "output_path": str(out),
-    }, spark)
+    result = _run(
+        "bp_chained_channels.yml",
+        {
+            "input_path": str(sample_data / "orders.parquet"),
+            "output_path": str(out),
+        },
+        spark,
+    )
 
     assert result.status == "success", result.module_results
     statuses = {r.module_id: r.status for r in result.module_results}
@@ -280,20 +331,27 @@ def test_lineage_written_after_channel_run(spark: SparkSession, sample_data, tmp
     store.mkdir(parents=True, exist_ok=True)
     obs_store = DuckDBObservabilityStore(store / "observability.db")
     from aqueduct.surveyor.surveyor import _DDL
+
     with obs_store.connect() as cur:
         cur.execute(_DDL)
 
     out = tmp_path / "out"
-    result = _run("bp_channel_filter.yml", {
-        "input_path": str(sample_data / "orders.parquet"),
-        "output_path": str(out),
-    }, spark, store_dir=store)
+    result = _run(
+        "bp_channel_filter.yml",
+        {
+            "input_path": str(sample_data / "orders.parquet"),
+            "output_path": str(out),
+        },
+        spark,
+        store_dir=store,
+    )
 
     assert result.status == "success", result.module_results
     obs_db = store / "observability.db"
     assert obs_db.exists(), "observability.db must be written after channel run"
 
     import duckdb
+
     conn = duckdb.connect(str(obs_db))
     count = conn.execute("SELECT COUNT(*) FROM column_lineage").fetchone()[0]
     conn.close()
@@ -304,17 +362,25 @@ def test_linear_ingress_egress_metrics(spark: SparkSession, sample_data, tmp_pat
     """Ingress → Egress: verify module_metrics recorded in obs.db."""
     out = tmp_path / "out"
     store = tmp_path / "store"
-    result = _run("bp_linear.yml", {
-        "input_path": str(sample_data / "orders.parquet"),
-        "output_path": str(out),
-    }, spark, store_dir=store)
+    result = _run(
+        "bp_linear.yml",
+        {
+            "input_path": str(sample_data / "orders.parquet"),
+            "output_path": str(out),
+        },
+        spark,
+        store_dir=store,
+    )
 
     assert result.status == "success"
 
     import duckdb
+
     conn = duckdb.connect(str(store / "observability.db"))
     # Schema: (run_id, module_id, records_read, bytes_read, records_written, bytes_written, duration_ms, captured_at)
-    metrics = conn.execute("SELECT module_id, records_read, bytes_read, records_written, bytes_written, duration_ms FROM module_metrics").fetchall()
+    metrics = conn.execute(
+        "SELECT module_id, records_read, bytes_read, records_written, bytes_written, duration_ms FROM module_metrics"
+    ).fetchall()
     conn.close()
 
     metrics_map = {m[0]: m[1:] for m in metrics}
@@ -322,30 +388,38 @@ def test_linear_ingress_egress_metrics(spark: SparkSession, sample_data, tmp_pat
     # src (Ingress)
     src = metrics_map["src"]
     assert src[0] == 10  # records_read
-    assert src[1] > 0    # bytes_read
-    assert src[4] > 0    # duration_ms
+    assert src[1] > 0  # bytes_read
+    assert src[4] > 0  # duration_ms
 
     # sink (Egress)
     sink = metrics_map["sink"]
     assert sink[2] == 10  # records_written
-    assert sink[3] > 0    # bytes_written
-    assert sink[4] > 0    # duration_ms
+    assert sink[3] > 0  # bytes_written
+    assert sink[4] > 0  # duration_ms
 
 
 def test_channel_metrics(spark: SparkSession, sample_data, tmp_path):
     """Channel: verify duration_ms recorded."""
     out = tmp_path / "out"
     store = tmp_path / "store"
-    result = _run("bp_channel_filter.yml", {
-        "input_path": str(sample_data / "orders.parquet"),
-        "output_path": str(out),
-    }, spark, store_dir=store)
+    result = _run(
+        "bp_channel_filter.yml",
+        {
+            "input_path": str(sample_data / "orders.parquet"),
+            "output_path": str(out),
+        },
+        spark,
+        store_dir=store,
+    )
 
     assert result.status == "success"
 
     import duckdb
+
     conn = duckdb.connect(str(store / "observability.db"))
-    metrics = conn.execute("SELECT module_id, duration_ms FROM module_metrics WHERE module_id = 'clean'").fetchone()
+    metrics = conn.execute(
+        "SELECT module_id, duration_ms FROM module_metrics WHERE module_id = 'clean'"
+    ).fetchone()
     conn.close()
 
     assert metrics[1] > 0
@@ -353,13 +427,15 @@ def test_channel_metrics(spark: SparkSession, sample_data, tmp_path):
 
 # ── Phase 65 — Table-first addressing ──────────────────────────────────────────
 
+
 def test_table_ingress_egress_round_trip(spark: SparkSession, tmp_path):
     """Blueprints using table: address data via the local session catalog."""
     spark.sql("DROP TABLE IF EXISTS _aq_bp_test_src_tbl")
     spark.range(10).selectExpr("id", "id % 2 AS even").write.saveAsTable("_aq_bp_test_src_tbl")
 
     bp_path = tmp_path / "bp_table.yml"
-    bp_path.write_text(f"""aqueduct: "1.0"
+    bp_path.write_text(
+        f"""aqueduct: "1.0"
 id: table_test.rt
 name: "Table round trip"
 modules:
@@ -378,7 +454,8 @@ modules:
 edges:
   - from: src
     to: sink
-""")
+"""
+    )
     bp = parse(str(bp_path))
     manifest = _compile(bp, bp_path)
     result = _exec(manifest, spark, store_dir=tmp_path / "store")
@@ -396,7 +473,8 @@ edges:
 def test_table_and_path_mutually_exclusive_at_parse(spark: SparkSession, tmp_path):
     """table: + path: together are rejected."""
     bp_path = tmp_path / "bp_mutex.yml"
-    bp_path.write_text(f"""aqueduct: "1.0"
+    bp_path.write_text(
+        f"""aqueduct: "1.0"
 id: table_test.mutex
 name: "mutual exclusivity"
 modules:
@@ -417,9 +495,11 @@ modules:
 edges:
   - from: src
     to: sink
-""")
+"""
+    )
     bp = parse(str(bp_path))
     from aqueduct.compiler.compiler import compile as compiler_compile
+
     manifest = compiler_compile(bp, blueprint_path=bp_path)
     # The executor captures module failures into the ExecutionResult (it does not
     # propagate). The mutex error surfaces as a failed module with the message.

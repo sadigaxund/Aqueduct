@@ -35,7 +35,9 @@ from aqueduct.surveyor.surveyor import Surveyor
 
 def _bp(modules, edges):
     d = {
-        "aqueduct": "1.0", "id": "polyglot_test_bp", "name": "t",
+        "aqueduct": "1.0",
+        "id": "polyglot_test_bp",
+        "name": "t",
         "modules": modules,
         "edges": edges,
     }
@@ -69,10 +71,20 @@ def test_spark_to_duckdb_handoff_e2e_success(spark: SparkSession, tmp_path):
 
     bp = _bp(
         [
-            {"id": "in", "label": "in", "type": "Ingress", "engine": "spark",
-             "config": {"format": "parquet", "path": in_path}},
-            {"id": "out", "label": "out", "type": "Egress", "engine": "duckdb",
-             "config": {"format": "parquet", "path": out_path, "mode": "overwrite"}},
+            {
+                "id": "in",
+                "label": "in",
+                "type": "Ingress",
+                "engine": "spark",
+                "config": {"format": "parquet", "path": in_path},
+            },
+            {
+                "id": "out",
+                "label": "out",
+                "type": "Egress",
+                "engine": "duckdb",
+                "config": {"format": "parquet", "path": out_path, "mode": "overwrite"},
+            },
         ],
         edges=[{"from": "in", "to": "out"}],
     )
@@ -87,8 +99,12 @@ def test_spark_to_duckdb_handoff_e2e_success(spark: SparkSession, tmp_path):
     surveyor.start(run_id)
 
     result = run_polyglot(
-        manifest, run_id=run_id, handoff_root=handoff_root, store_dir=store_dir,
-        surveyor=surveyor, master_url="local[1]",
+        manifest,
+        run_id=run_id,
+        handoff_root=handoff_root,
+        store_dir=store_dir,
+        surveyor=surveyor,
+        master_url="local[1]",
     )
 
     assert result.status == ExecutionStatus.SUCCESS, result.module_results
@@ -120,10 +136,20 @@ def test_duckdb_to_spark_handoff_e2e_success(spark: SparkSession, tmp_path):
 
     bp = _bp(
         [
-            {"id": "in", "label": "in", "type": "Ingress", "engine": "duckdb",
-             "config": {"format": "parquet", "path": in_path}},
-            {"id": "out", "label": "out", "type": "Egress", "engine": "spark",
-             "config": {"format": "parquet", "path": out_path, "mode": "overwrite"}},
+            {
+                "id": "in",
+                "label": "in",
+                "type": "Ingress",
+                "engine": "duckdb",
+                "config": {"format": "parquet", "path": in_path},
+            },
+            {
+                "id": "out",
+                "label": "out",
+                "type": "Egress",
+                "engine": "spark",
+                "config": {"format": "parquet", "path": out_path, "mode": "overwrite"},
+            },
         ],
         edges=[{"from": "in", "to": "out"}],
     )
@@ -137,8 +163,12 @@ def test_duckdb_to_spark_handoff_e2e_success(spark: SparkSession, tmp_path):
     surveyor.start(run_id)
 
     result = run_polyglot(
-        manifest, run_id=run_id, handoff_root=handoff_root, store_dir=store_dir,
-        surveyor=surveyor, master_url="local[1]",
+        manifest,
+        run_id=run_id,
+        handoff_root=handoff_root,
+        store_dir=store_dir,
+        surveyor=surveyor,
+        master_url="local[1]",
     )
 
     assert result.status == ExecutionStatus.SUCCESS, result.module_results
@@ -176,10 +206,20 @@ def test_timestamp_tz_survives_spark_to_duckdb_handoff(spark: SparkSession, tmp_
 
     bp = _bp(
         [
-            {"id": "in", "label": "in", "type": "Ingress", "engine": "spark",
-             "config": {"format": "parquet", "path": in_path}},
-            {"id": "out", "label": "out", "type": "Egress", "engine": "duckdb",
-             "config": {"format": "parquet", "path": out_path, "mode": "overwrite"}},
+            {
+                "id": "in",
+                "label": "in",
+                "type": "Ingress",
+                "engine": "spark",
+                "config": {"format": "parquet", "path": in_path},
+            },
+            {
+                "id": "out",
+                "label": "out",
+                "type": "Egress",
+                "engine": "duckdb",
+                "config": {"format": "parquet", "path": out_path, "mode": "overwrite"},
+            },
         ],
         edges=[{"from": "in", "to": "out"}],
     )
@@ -191,8 +231,12 @@ def test_timestamp_tz_survives_spark_to_duckdb_handoff(spark: SparkSession, tmp_
     surveyor.start(run_id)
 
     result = run_polyglot(
-        manifest, run_id=run_id, handoff_root=handoff_root, store_dir=store_dir,
-        surveyor=surveyor, master_url="local[1]",
+        manifest,
+        run_id=run_id,
+        handoff_root=handoff_root,
+        store_dir=store_dir,
+        surveyor=surveyor,
+        master_url="local[1]",
     )
     assert result.status == ExecutionStatus.SUCCESS, result.module_results
 
@@ -210,16 +254,26 @@ def test_timestamp_ntz_unaffected_by_output_timestamp_type_default(spark: SparkS
     round-trips as a naive TIMESTAMP now that the session default changed."""
     in_path = str(tmp_path / "in.parquet")
     out_path = str(tmp_path / "out")
-    spark.sql(
-        "SELECT CAST('2024-06-15 10:30:00' AS TIMESTAMP_NTZ) AS ts, 1 AS n"
-    ).write.parquet(in_path)
+    spark.sql("SELECT CAST('2024-06-15 10:30:00' AS TIMESTAMP_NTZ) AS ts, 1 AS n").write.parquet(
+        in_path
+    )
 
     bp = _bp(
         [
-            {"id": "in", "label": "in", "type": "Ingress", "engine": "spark",
-             "config": {"format": "parquet", "path": in_path}},
-            {"id": "out", "label": "out", "type": "Egress", "engine": "duckdb",
-             "config": {"format": "parquet", "path": out_path, "mode": "overwrite"}},
+            {
+                "id": "in",
+                "label": "in",
+                "type": "Ingress",
+                "engine": "spark",
+                "config": {"format": "parquet", "path": in_path},
+            },
+            {
+                "id": "out",
+                "label": "out",
+                "type": "Egress",
+                "engine": "duckdb",
+                "config": {"format": "parquet", "path": out_path, "mode": "overwrite"},
+            },
         ],
         edges=[{"from": "in", "to": "out"}],
     )
@@ -231,8 +285,12 @@ def test_timestamp_ntz_unaffected_by_output_timestamp_type_default(spark: SparkS
     surveyor.start(run_id)
 
     result = run_polyglot(
-        manifest, run_id=run_id, handoff_root=handoff_root, store_dir=store_dir,
-        surveyor=surveyor, master_url="local[1]",
+        manifest,
+        run_id=run_id,
+        handoff_root=handoff_root,
+        store_dir=store_dir,
+        surveyor=surveyor,
+        master_url="local[1]",
     )
     assert result.status == ExecutionStatus.SUCCESS, result.module_results
 
@@ -246,16 +304,24 @@ def test_timestamp_tz_survives_duckdb_to_spark_handoff(spark: SparkSession, tmp_
     writer always annotates the logical type correctly."""
     in_path = str(tmp_path / "in.parquet")
     out_path = str(tmp_path / "out.parquet")
-    duckdb.sql(
-        "SELECT TIMESTAMPTZ '2024-06-15 10:30:00+00' AS ts, 1 AS n"
-    ).to_parquet(in_path)
+    duckdb.sql("SELECT TIMESTAMPTZ '2024-06-15 10:30:00+00' AS ts, 1 AS n").to_parquet(in_path)
 
     bp = _bp(
         [
-            {"id": "in", "label": "in", "type": "Ingress", "engine": "duckdb",
-             "config": {"format": "parquet", "path": in_path}},
-            {"id": "out", "label": "out", "type": "Egress", "engine": "spark",
-             "config": {"format": "parquet", "path": out_path, "mode": "overwrite"}},
+            {
+                "id": "in",
+                "label": "in",
+                "type": "Ingress",
+                "engine": "duckdb",
+                "config": {"format": "parquet", "path": in_path},
+            },
+            {
+                "id": "out",
+                "label": "out",
+                "type": "Egress",
+                "engine": "spark",
+                "config": {"format": "parquet", "path": out_path, "mode": "overwrite"},
+            },
         ],
         edges=[{"from": "in", "to": "out"}],
     )
@@ -267,8 +333,12 @@ def test_timestamp_tz_survives_duckdb_to_spark_handoff(spark: SparkSession, tmp_
     surveyor.start(run_id)
 
     result = run_polyglot(
-        manifest, run_id=run_id, handoff_root=handoff_root, store_dir=store_dir,
-        surveyor=surveyor, master_url="local[1]",
+        manifest,
+        run_id=run_id,
+        handoff_root=handoff_root,
+        store_dir=store_dir,
+        surveyor=surveyor,
+        master_url="local[1]",
     )
     assert result.status == ExecutionStatus.SUCCESS, result.module_results
 
@@ -292,10 +362,20 @@ def test_spill_kept_on_failure_and_reused_on_resume(spark: SparkSession, tmp_pat
 
     bp = _bp(
         [
-            {"id": "in", "label": "in", "type": "Ingress", "engine": "spark",
-             "config": {"format": "parquet", "path": in_path}},
-            {"id": "out", "label": "out", "type": "Egress", "engine": "duckdb",
-             "config": {"format": "parquet", "path": out_path, "mode": "overwrite"}},
+            {
+                "id": "in",
+                "label": "in",
+                "type": "Ingress",
+                "engine": "spark",
+                "config": {"format": "parquet", "path": in_path},
+            },
+            {
+                "id": "out",
+                "label": "out",
+                "type": "Egress",
+                "engine": "duckdb",
+                "config": {"format": "parquet", "path": out_path, "mode": "overwrite"},
+            },
         ],
         edges=[{"from": "in", "to": "out"}],
     )
@@ -305,6 +385,7 @@ def test_spill_kept_on_failure_and_reused_on_resume(spark: SparkSession, tmp_pat
     store_dir = tmp_path / "obs"
 
     import aqueduct.executor.duckdb_.executor as duckdb_exec_mod
+
     real_write_egress = duckdb_exec_mod.write_egress
     call_count = {"n": 0}
 
@@ -320,8 +401,12 @@ def test_spill_kept_on_failure_and_reused_on_resume(spark: SparkSession, tmp_pat
     run_id_1 = "run-fail-1"
     surveyor1.start(run_id_1)
     result1 = run_polyglot(
-        manifest, run_id=run_id_1, handoff_root=handoff_root, store_dir=store_dir,
-        surveyor=surveyor1, master_url="local[1]",
+        manifest,
+        run_id=run_id_1,
+        handoff_root=handoff_root,
+        store_dir=store_dir,
+        surveyor=surveyor1,
+        master_url="local[1]",
     )
     assert result1.status == ExecutionStatus.ERROR
     statuses1 = {r.module_id: r.status for r in result1.module_results}
@@ -336,8 +421,13 @@ def test_spill_kept_on_failure_and_reused_on_resume(spark: SparkSession, tmp_pat
     run_id_2 = "run-fail-2-resumed"
     surveyor2.start(run_id_2)
     result2 = run_polyglot(
-        manifest, run_id=run_id_2, handoff_root=handoff_root, store_dir=store_dir,
-        surveyor=surveyor2, master_url="local[1]", resume_run_id=run_id_1,
+        manifest,
+        run_id=run_id_2,
+        handoff_root=handoff_root,
+        store_dir=store_dir,
+        surveyor=surveyor2,
+        master_url="local[1]",
+        resume_run_id=run_id_1,
     )
 
     assert result2.status == ExecutionStatus.SUCCESS, result2.module_results
@@ -366,10 +456,20 @@ def test_orphan_sweep_runs_at_the_start_of_run_polyglot(spark: SparkSession, tmp
 
     bp = _bp(
         [
-            {"id": "in", "label": "in", "type": "Ingress", "engine": "spark",
-             "config": {"format": "parquet", "path": in_path}},
-            {"id": "out", "label": "out", "type": "Egress", "engine": "duckdb",
-             "config": {"format": "parquet", "path": out_path, "mode": "overwrite"}},
+            {
+                "id": "in",
+                "label": "in",
+                "type": "Ingress",
+                "engine": "spark",
+                "config": {"format": "parquet", "path": in_path},
+            },
+            {
+                "id": "out",
+                "label": "out",
+                "type": "Egress",
+                "engine": "duckdb",
+                "config": {"format": "parquet", "path": out_path, "mode": "overwrite"},
+            },
         ],
         edges=[{"from": "in", "to": "out"}],
     )
@@ -409,8 +509,12 @@ def test_orphan_sweep_runs_at_the_start_of_run_polyglot(spark: SparkSession, tmp
     run_id = "run-live"
     surveyor.start(run_id)
     result = run_polyglot(
-        manifest, run_id=run_id, handoff_root=handoff_root, store_dir=store_dir,
-        surveyor=surveyor, master_url="local[1]",
+        manifest,
+        run_id=run_id,
+        handoff_root=handoff_root,
+        store_dir=store_dir,
+        surveyor=surveyor,
+        master_url="local[1]",
     )
 
     assert result.status == ExecutionStatus.SUCCESS, result.module_results
@@ -432,14 +536,34 @@ def test_disjoint_different_engine_components_run_as_two_pure_flows(spark: Spark
 
     bp = _bp(
         [
-            {"id": "s_in", "label": "s_in", "type": "Ingress", "engine": "spark",
-             "config": {"format": "parquet", "path": spark_in}},
-            {"id": "s_out", "label": "s_out", "type": "Egress", "engine": "spark",
-             "config": {"format": "parquet", "path": spark_out, "mode": "overwrite"}},
-            {"id": "d_in", "label": "d_in", "type": "Ingress", "engine": "duckdb",
-             "config": {"format": "parquet", "path": duckdb_in}},
-            {"id": "d_out", "label": "d_out", "type": "Egress", "engine": "duckdb",
-             "config": {"format": "parquet", "path": duckdb_out, "mode": "overwrite"}},
+            {
+                "id": "s_in",
+                "label": "s_in",
+                "type": "Ingress",
+                "engine": "spark",
+                "config": {"format": "parquet", "path": spark_in},
+            },
+            {
+                "id": "s_out",
+                "label": "s_out",
+                "type": "Egress",
+                "engine": "spark",
+                "config": {"format": "parquet", "path": spark_out, "mode": "overwrite"},
+            },
+            {
+                "id": "d_in",
+                "label": "d_in",
+                "type": "Ingress",
+                "engine": "duckdb",
+                "config": {"format": "parquet", "path": duckdb_in},
+            },
+            {
+                "id": "d_out",
+                "label": "d_out",
+                "type": "Egress",
+                "engine": "duckdb",
+                "config": {"format": "parquet", "path": duckdb_out, "mode": "overwrite"},
+            },
         ],
         edges=[
             {"from": "s_in", "to": "s_out"},
@@ -457,8 +581,12 @@ def test_disjoint_different_engine_components_run_as_two_pure_flows(spark: Spark
     surveyor.start(run_id)
 
     result = run_polyglot(
-        manifest, run_id=run_id, handoff_root=handoff_root, store_dir=store_dir,
-        surveyor=surveyor, master_url="local[1]",
+        manifest,
+        run_id=run_id,
+        handoff_root=handoff_root,
+        store_dir=store_dir,
+        surveyor=surveyor,
+        master_url="local[1]",
     )
 
     assert result.status == ExecutionStatus.SUCCESS, result.module_results
@@ -485,10 +613,20 @@ def test_record_result_false_skips_the_internal_surveyor_record(spark: SparkSess
 
     bp = _bp(
         [
-            {"id": "in", "label": "in", "type": "Ingress", "engine": "spark",
-             "config": {"format": "parquet", "path": in_path}},
-            {"id": "out", "label": "out", "type": "Egress", "engine": "duckdb",
-             "config": {"format": "parquet", "path": out_path, "mode": "overwrite"}},
+            {
+                "id": "in",
+                "label": "in",
+                "type": "Ingress",
+                "engine": "spark",
+                "config": {"format": "parquet", "path": in_path},
+            },
+            {
+                "id": "out",
+                "label": "out",
+                "type": "Egress",
+                "engine": "duckdb",
+                "config": {"format": "parquet", "path": out_path, "mode": "overwrite"},
+            },
         ],
         edges=[{"from": "in", "to": "out"}],
     )
@@ -498,8 +636,13 @@ def test_record_result_false_skips_the_internal_surveyor_record(spark: SparkSess
 
     mock_surveyor = MagicMock()
     result = run_polyglot(
-        manifest, run_id="run-no-record", handoff_root=handoff_root, store_dir=store_dir,
-        surveyor=mock_surveyor, master_url="local[1]", record_result=False,
+        manifest,
+        run_id="run-no-record",
+        handoff_root=handoff_root,
+        store_dir=store_dir,
+        surveyor=mock_surveyor,
+        master_url="local[1]",
+        record_result=False,
     )
 
     assert result.status == ExecutionStatus.SUCCESS
@@ -518,10 +661,20 @@ def test_record_result_true_default_still_records_internally(spark: SparkSession
 
     bp = _bp(
         [
-            {"id": "in", "label": "in", "type": "Ingress", "engine": "spark",
-             "config": {"format": "parquet", "path": in_path}},
-            {"id": "out", "label": "out", "type": "Egress", "engine": "duckdb",
-             "config": {"format": "parquet", "path": out_path, "mode": "overwrite"}},
+            {
+                "id": "in",
+                "label": "in",
+                "type": "Ingress",
+                "engine": "spark",
+                "config": {"format": "parquet", "path": in_path},
+            },
+            {
+                "id": "out",
+                "label": "out",
+                "type": "Egress",
+                "engine": "duckdb",
+                "config": {"format": "parquet", "path": out_path, "mode": "overwrite"},
+            },
         ],
         edges=[{"from": "in", "to": "out"}],
     )
@@ -531,15 +684,21 @@ def test_record_result_true_default_still_records_internally(spark: SparkSession
 
     mock_surveyor = MagicMock()
     result = run_polyglot(
-        manifest, run_id="run-default-record", handoff_root=handoff_root, store_dir=store_dir,
-        surveyor=mock_surveyor, master_url="local[1]",
+        manifest,
+        run_id="run-default-record",
+        handoff_root=handoff_root,
+        store_dir=store_dir,
+        surveyor=mock_surveyor,
+        master_url="local[1]",
     )
 
     assert result.status == ExecutionStatus.SUCCESS
     mock_surveyor.record.assert_called_once_with(result, engine=None)
 
 
-def test_failed_engine_names_the_failing_island_not_the_default(spark: SparkSession, tmp_path, monkeypatch):
+def test_failed_engine_names_the_failing_island_not_the_default(
+    spark: SparkSession, tmp_path, monkeypatch
+):
     """A structural failure raised straight out of one island's ``execute()``
     (not caught as a per-module ModuleResult) must still be attributed to
     THAT island's engine on the returned ExecutionResult — the gap fixed by
@@ -553,10 +712,20 @@ def test_failed_engine_names_the_failing_island_not_the_default(spark: SparkSess
 
     bp = _bp(
         [
-            {"id": "in", "label": "in", "type": "Ingress", "engine": "spark",
-             "config": {"format": "parquet", "path": in_path}},
-            {"id": "out", "label": "out", "type": "Egress", "engine": "duckdb",
-             "config": {"format": "parquet", "path": out_path, "mode": "overwrite"}},
+            {
+                "id": "in",
+                "label": "in",
+                "type": "Ingress",
+                "engine": "spark",
+                "config": {"format": "parquet", "path": in_path},
+            },
+            {
+                "id": "out",
+                "label": "out",
+                "type": "Egress",
+                "engine": "duckdb",
+                "config": {"format": "parquet", "path": out_path, "mode": "overwrite"},
+            },
         ],
         edges=[{"from": "in", "to": "out"}],
     )
@@ -570,7 +739,10 @@ def test_failed_engine_names_the_failing_island_not_the_default(spark: SparkSess
     monkeypatch.setattr(duckdb_exec_mod, "execute", _boom)
 
     result = run_polyglot(
-        manifest, run_id="run-structural-fail", handoff_root=handoff_root, store_dir=store_dir,
+        manifest,
+        run_id="run-structural-fail",
+        handoff_root=handoff_root,
+        store_dir=store_dir,
         master_url="local[1]",
     )
 

@@ -78,6 +78,7 @@ _URI_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://")
 
 # ── Sub-models ────────────────────────────────────────────────────────────────
 
+
 class DatabricksDeployConfig(BaseModel):
     """Per-target settings for ``deployment.target: databricks``.
 
@@ -85,6 +86,7 @@ class DatabricksDeployConfig(BaseModel):
     ``DATABRICKS_TOKEN`` env var or ``@aq.secret(...)`` — never plaintext
     in this block.
     """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     workspace_url: str = Field(
@@ -100,7 +102,7 @@ class DatabricksDeployConfig(BaseModel):
     new_cluster: dict | None = Field(
         default=None,
         description="Raw cluster-creation spec per the Databricks Jobs API new_cluster object. "
-                    "Mutually exclusive with cluster_id.",
+        "Mutually exclusive with cluster_id.",
         json_schema_extra={"engine_scoped": True},
     )
     libraries: list[dict] | None = Field(
@@ -117,9 +119,7 @@ class DatabricksDeployConfig(BaseModel):
     @model_validator(mode="after")
     def _validate_cluster(self) -> DatabricksDeployConfig:
         if not self.cluster_id and not self.new_cluster:
-            raise ValueError(
-                "deployment.databricks: one of cluster_id or new_cluster is required"
-            )
+            raise ValueError("deployment.databricks: one of cluster_id or new_cluster is required")
         if self.cluster_id and self.new_cluster:
             raise ValueError(
                 "deployment.databricks: cluster_id and new_cluster are mutually exclusive"
@@ -209,8 +209,7 @@ class DeploymentConfig(BaseModel):
 
         if self.target == "databricks" and self.databricks is None:
             raise ConfigError(
-                "deployment.target=databricks requires the "
-                "deployment.databricks block to be set"
+                "deployment.target=databricks requires the " "deployment.databricks block to be set"
             )
 
         if self.target in ("emr", "dataproc"):
@@ -221,6 +220,7 @@ class DeploymentConfig(BaseModel):
             )
 
         return self
+
     databricks: DatabricksDeployConfig | None = Field(
         default=None,
         description="Databricks Jobs API settings. Required when target=databricks.",
@@ -239,6 +239,7 @@ class RelationalStoreConfig(BaseModel):
     redis is KV-only and cannot satisfy joins/aggregates that the observability
     queries rely on.
     """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     backend: RelationalBackend = Field(
@@ -286,6 +287,7 @@ class RelationalStoreConfig(BaseModel):
 
 class KVStoreConfig(BaseModel):
     """Backend config for the depot — accepts relational or pure KV backends."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     backend: KVBackend = Field(
@@ -300,8 +302,7 @@ class KVStoreConfig(BaseModel):
     path: Annotated[str, FsPath()] = Field(
         ...,
         description=(
-            "DuckDB: local file path. Postgres: libpq DSN. "
-            "Redis: `redis://host:port/db` URL."
+            "DuckDB: local file path. Postgres: libpq DSN. " "Redis: `redis://host:port/db` URL."
         ),
     )
 
@@ -321,6 +322,7 @@ class DepotMountConfig(BaseModel):
     **cross-blueprint** sharing (raw, unprefixed keys) — the *only* place key
     collisions are possible, and an explicit choice.
     """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     backend: KVBackend = Field(
@@ -334,8 +336,8 @@ class DepotMountConfig(BaseModel):
     shared: bool = Field(
         default=False,
         description="False (default) = per-blueprint isolated (keys prefixed by blueprint_id). "
-                    "True = cross-blueprint shared (raw keys) — collisions become your "
-                    "deliberate semantics; for parallel writers use postgres/redis.",
+        "True = cross-blueprint shared (raw keys) — collisions become your "
+        "deliberate semantics; for parallel writers use postgres/redis.",
     )
 
 
@@ -353,6 +355,7 @@ class ObjectStoreConfig(BaseModel):
     config‑file directory while ``s3://`` / ``gs://`` / ``abfs://`` URIs pass
     through verbatim.
     """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     backend: ObjectBackend = Field(
@@ -385,6 +388,7 @@ class BenchmarkStoreConfig(BaseModel):
     benchmark.duckdb``); set it to a file path or, for ``backend: postgres``, a
     libpq DSN.
     """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     backend: RelationalBackend = Field(
@@ -414,8 +418,6 @@ class BenchmarkStoreConfig(BaseModel):
         ),
         json_schema_extra={"engine_scoped": False},
     )
-
-
 
 
 def _anchor_fs_path_fields_under_stores(data: dict, base_dir: Path) -> None:
@@ -481,7 +483,8 @@ class StoresConfig(BaseModel):
     )
     depots: dict[str, DepotMountConfig] = Field(
         default_factory=lambda: {
-            "default": DepotMountConfig(backend="duckdb", path=".aqueduct/depot.db")},
+            "default": DepotMountConfig(backend="duckdb", path=".aqueduct/depot.db")
+        },
         description=(
             "Depot KV mounts (`@aq.depot.*`), keyed by name. The implicit "
             "`default` mount (per-blueprint isolated, DuckDB) always exists even "
@@ -509,8 +512,11 @@ class StoresConfig(BaseModel):
         """All mounts (name → config) including the implicit default if absent."""
         if "default" in self.depots:
             return dict(self.depots)
-        return {"default": DepotMountConfig(backend="duckdb", path=".aqueduct/depot.db"),
-                **self.depots}
+        return {
+            "default": DepotMountConfig(backend="duckdb", path=".aqueduct/depot.db"),
+            **self.depots,
+        }
+
     blob: ObjectStoreConfig = Field(
         default_factory=ObjectStoreConfig,
         description=(
@@ -574,6 +580,7 @@ class MetricsConfig(BaseModel):
     See docs/spark_guide.md ("DataFrame.observe() and Whole-Stage Codegen") for
     the tradeoff between accurate per-module attribution and codegen overhead.
     """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     use_observe: bool = Field(
@@ -595,11 +602,16 @@ class ProbesConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     max_sample_rows: int = Field(
-        default=100, ge=1, description="Maximum rows to sample in probes (>= 1)",
+        default=100,
+        ge=1,
+        description="Maximum rows to sample in probes (>= 1)",
         json_schema_extra={"engine_scoped": True},
     )
     default_sample_fraction: float = Field(
-        default=0.1, gt=0, le=1, description="Default sampling fraction (0 < x <= 1)",
+        default=0.1,
+        gt=0,
+        le=1,
+        description="Default sampling fraction (0 < x <= 1)",
         json_schema_extra={"engine_scoped": True},
     )
     # Full probe actions are gated by `danger.allow_full_probe_actions` (inverted polarity).
@@ -670,8 +682,8 @@ class SecretsConfig(BaseModel):
     resolver: str | None = Field(
         default=None,
         description="Dotted import path for custom provider: 'mypackage.secrets.fetch'. "
-                    "Callable signature: (key: str) -> str | None. "
-                    "Return None to fall back to os.environ.",
+        "Callable signature: (key: str) -> str | None. "
+        "Return None to fall back to os.environ.",
         json_schema_extra={"engine_scoped": False},
     )
 
@@ -705,15 +717,18 @@ class AgentRetryConfig(BaseModel):
     overrun ``agent.budget.max_seconds``. Shared by production heal and
     ``aqueduct benchmark`` (same provider path).
     """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     max_retries: int = Field(
-        default=2, ge=0,
+        default=2,
+        ge=0,
         description="Extra attempts after the first call on 429/503/529. 0 disables retry.",
         json_schema_extra={"engine_scoped": False},
     )
     backoff_seconds: float = Field(
-        default=2.0, gt=0,
+        default=2.0,
+        gt=0,
         description="Base backoff; attempt N sleeps ~backoff_seconds * 2^N (+ jitter), capped by the remaining budget deadline.",
         json_schema_extra={"engine_scoped": False},
     )
@@ -731,6 +746,7 @@ class AgentMemoryConfig(BaseModel):
     disable ``replay`` when re-running gates (sandbox Spark time) is more
     expensive than fresh LLM tokens.
     """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     replay: bool = Field(
@@ -775,10 +791,12 @@ class AgentConnectionConfig(AgentPolicySchema):
     default approval mode" for a fleet of otherwise-unrelated Blueprints; a
     field here with nothing to resolve it would be a silent no-op (AGENTS.md).
     """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     provider: Literal["anthropic", "openai_compat"] = Field(
-        default="anthropic", json_schema_extra={"engine_scoped": False},
+        default="anthropic",
+        json_schema_extra={"engine_scoped": False},
     )
     base_url: str | None = Field(default=None, json_schema_extra={"engine_scoped": False})
     model: str = Field(default=DEFAULT_LLM_MODEL, json_schema_extra={"engine_scoped": False})
@@ -808,7 +826,8 @@ class AgentConnectionConfig(AgentPolicySchema):
         json_schema_extra={"engine_scoped": False},
     )
     provider_options: dict[str, Any] | None = Field(
-        default=None, json_schema_extra={"engine_scoped": False},
+        default=None,
+        json_schema_extra={"engine_scoped": False},
     )
     timeout: float = Field(
         default=300.0,
@@ -1017,13 +1036,17 @@ class WebhookEndpointConfig(BaseModel):
 
     In header values, ${VAR} resolves to os.environ[VAR] as a fallback.
     """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     url: str = Field(
-        ..., description="HTTP(S) endpoint URL", json_schema_extra={"engine_scoped": False},
+        ...,
+        description="HTTP(S) endpoint URL",
+        json_schema_extra={"engine_scoped": False},
     )
     method: Literal["POST", "PUT", "PATCH"] = Field(
-        default="POST", json_schema_extra={"engine_scoped": False},
+        default="POST",
+        json_schema_extra={"engine_scoped": False},
     )
     headers: dict[str, str] = Field(
         default_factory=dict,
@@ -1039,7 +1062,9 @@ class WebhookEndpointConfig(BaseModel):
         json_schema_extra={"engine_scoped": False},
     )
     timeout: int = Field(
-        default=10, ge=1, description="HTTP socket timeout in seconds (>= 1)",
+        default=10,
+        ge=1,
+        description="HTTP socket timeout in seconds (>= 1)",
         json_schema_extra={"engine_scoped": False},
     )
     secret: str | None = Field(
@@ -1113,6 +1138,7 @@ class WebhooksConfig(BaseModel):
 
 # ── Top-level config ──────────────────────────────────────────────────────────
 
+
 class WarningsConfig(BaseModel):
     """Phase 30a — controls Aqueduct's diagnostic warnings (compile-time + session-startup).
 
@@ -1121,13 +1147,14 @@ class WarningsConfig(BaseModel):
     mechanism: blacklist rule_ids, or the single sentinel ``"*"`` to silence
     every diagnostic (CI smoke jobs, one-shot scripts), or empty for none.
     """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     suppress: list[str] = Field(
         default_factory=list,
         description=(
             "List of `rule_id` strings to silence (copy IDs from the "
-            "`AQ-WARN [...]` prefix). The single entry `\"*\"` silences ALL "
+            '`AQ-WARN [...]` prefix). The single entry `"*"` silences ALL '
             "Aqueduct warnings."
         ),
         json_schema_extra={"engine_scoped": False},
@@ -1167,18 +1194,19 @@ class LineageConfig(BaseModel):
     `infra/http.py`; no engine module reads either key. A DuckDB run emits
     OpenLineage events exactly like a Spark run.
     """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     openlineage_url: str | None = Field(
         default=None,
         description="OpenLineage receiver endpoint (Marquez / DataHub / Atlan). "
-                    "POST target for run events. Unset → emission disabled.",
+        "POST target for run events. Unset → emission disabled.",
         json_schema_extra={"engine_scoped": False},
     )
     openlineage_namespace: str = Field(
         default="aqueduct",
         description="OpenLineage namespace for jobs and datasets emitted by this run "
-                    "(engine-independent — see class docstring).",
+        "(engine-independent — see class docstring).",
         json_schema_extra={"engine_scoped": False},
     )
 
@@ -1193,6 +1221,7 @@ class SparkEngineConfig(BaseModel):
     Spark-only; every other engine ignores them (config-leaf governance,
     docs/specs.md §10.9) without ceremony.
     """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     master_url: str = Field(
@@ -1248,6 +1277,7 @@ class DuckDBEngineConfig(BaseModel):
     configured (measured: the SAME credentials against the SAME bucket
     name fail when only ``s3_endpoint`` is omitted).
     """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     memory_limit: str | None = Field(
@@ -1409,6 +1439,7 @@ class EngineConfig(BaseModel):
     Adding a new engine's settings is a new sub-block here, not a new
     top-level `<engine>_config` dict.
     """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     spark: SparkEngineConfig = Field(default_factory=SparkEngineConfig)
@@ -1436,6 +1467,7 @@ class HandoffConfig(BaseModel):
     run; kept when `keep_on_failure` is true (the default) so a rerun
     reads the existing spill instead of recomputing it.
     """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     root: str = Field(
@@ -1471,10 +1503,12 @@ class AqueductConfig(BaseModel):
     LLM connection defaults (provider, base_url, model) live here.
     Per-blueprint policy (approval) lives in the Blueprint agent: block.
     """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     aqueduct_config: str = Field(
-        default="2.0", description="Config schema version",
+        default="2.0",
+        description="Config schema version",
         json_schema_extra={"engine_scoped": False},
     )
     deployment: DeploymentConfig = Field(default_factory=DeploymentConfig)
@@ -1560,10 +1594,10 @@ class AqueductConfig(BaseModel):
             return self  # handled by DeploymentConfig._validate_engine
 
         _EXPECTED: dict[str, str] = {
-            "local":       "local",
-            "standalone":  "spark://",
-            "yarn":        "yarn",
-            "kubernetes":  "k8s://",
+            "local": "local",
+            "standalone": "spark://",
+            "yarn": "yarn",
+            "kubernetes": "k8s://",
         }
         expected = _EXPECTED.get(target)
         if expected is None:
@@ -1594,9 +1628,9 @@ _DEFAULT_FILENAME = "aqueduct.yml"
 # Provider → (probe module, install hint). Keep in sync with secrets.py and
 # pyproject.toml [project.optional-dependencies].
 _SECRETS_BACKEND_REQUIREMENTS: dict[str, tuple[str, str]] = {
-    "aws":   ("boto3",                           "pip install aqueduct-core[aws]"),
-    "gcp":   ("google.cloud.secretmanager",      "pip install aqueduct-core[gcp]"),
-    "azure": ("azure.keyvault.secrets",          "pip install aqueduct-core[azure]"),
+    "aws": ("boto3", "pip install aqueduct-core[aws]"),
+    "gcp": ("google.cloud.secretmanager", "pip install aqueduct-core[gcp]"),
+    "azure": ("azure.keyvault.secrets", "pip install aqueduct-core[azure]"),
 }
 
 
@@ -1604,12 +1638,12 @@ _SECRETS_BACKEND_REQUIREMENTS: dict[str, tuple[str, str]] = {
 # `duckdb` is always available (it is a hard dependency of aqueduct-core).
 _STORE_BACKEND_REQUIREMENTS: dict[str, tuple[str, str]] = {
     "postgres": ("psycopg2", "pip install aqueduct-core[postgres]"),
-    "redis":    ("redis",    "pip install aqueduct-core[redis]"),
+    "redis": ("redis", "pip install aqueduct-core[redis]"),
 }
 
 _OBJECT_BACKEND_REQUIREMENTS: dict[str, tuple[str, str]] = {
-    "s3":   ("s3fs",  "pip install aqueduct-core[object-store]"),
-    "gcs":  ("gcsfs", "pip install aqueduct-core[object-store]"),
+    "s3": ("s3fs", "pip install aqueduct-core[object-store]"),
+    "gcs": ("gcsfs", "pip install aqueduct-core[object-store]"),
     "adls": ("adlfs", "pip install aqueduct-core[object-store]"),
 }
 
@@ -1639,8 +1673,7 @@ def _validate_store_backends(stores_cfg: StoresConfig) -> None:
         ("benchmark", stores_cfg.benchmark.backend),
     ]
     _checks.extend(
-        (f"depots.{name}", mount.backend)
-        for name, mount in stores_cfg.effective_depots().items()
+        (f"depots.{name}", mount.backend) for name, mount in stores_cfg.effective_depots().items()
     )
     for store_label, backend in _checks:
         if backend == "duckdb":
@@ -1768,7 +1801,8 @@ def _validate_secrets_backend(secrets_cfg: SecretsConfig) -> None:
             f"Or install all secret backends:  pip install aqueduct-core[secrets]"
         )
 
-_ENV_VAR_RE = re.compile(r'\$\{([^}:]+)(?::[-]?(.*?))?\}')
+
+_ENV_VAR_RE = re.compile(r"\$\{([^}:]+)(?::[-]?(.*?))?\}")
 # Matches: "@aq.secret('KEY')" or "@aq.secret(\"KEY\")" with optional surrounding YAML quotes
 _AQ_SECRET_RE = re.compile(r"""["']?@aq\.secret\(['"]([^'"]+)['"]\)["']?""")
 
@@ -1916,8 +1950,9 @@ def load_config(path: Path | None = None) -> AqueductConfig:
         return AqueductConfig()
 
     if not isinstance(data, dict):
-        raise ConfigError(f"Config file {resolved} must be a YAML mapping, not {type(data).__name__}")
-
+        raise ConfigError(
+            f"Config file {resolved} must be a YAML mapping, not {type(data).__name__}"
+        )
 
     # ── Agent API key insecure-literal check ──────────────────────────────────
     # Inspect the raw pre-expansion text so we can distinguish
@@ -1929,7 +1964,12 @@ def load_config(path: Path | None = None) -> AqueductConfig:
         if isinstance(_raw_data, dict):
             _raw_agent = _raw_data.get("agent") or {}
             _raw_key = _raw_agent.get("api_key") if isinstance(_raw_agent, dict) else None
-            if isinstance(_raw_key, str) and _raw_key.strip() and not _raw_key.startswith("@aq.secret(") and "${" not in _raw_key:
+            if (
+                isinstance(_raw_key, str)
+                and _raw_key.strip()
+                and not _raw_key.startswith("@aq.secret(")
+                and "${" not in _raw_key
+            ):
                 # Routed through emit() (not a raw warnings.warn) so
                 # `warnings.suppress: [insecure_api_key]` /
                 # `--suppress-warning insecure_api_key` actually does
@@ -1975,10 +2015,12 @@ def load_config(path: Path | None = None) -> AqueductConfig:
     # + run context that does not exist at config-load time (override-downstream,
     # not propagate-uphill — see specs §5.3.1). Reject with a clear pointer
     # instead of letting an unresolved literal leak into a config value.
-    _bad_aq = sorted({
-        f"@aq.{m.group(1)}"
-        for m in re.finditer(r"@aq\.(?!secret\b)([a-zA-Z_][\w.]*)", pass1_text)
-    })
+    _bad_aq = sorted(
+        {
+            f"@aq.{m.group(1)}"
+            for m in re.finditer(r"@aq\.(?!secret\b)([a-zA-Z_][\w.]*)", pass1_text)
+        }
+    )
     if _bad_aq:
         raise ConfigError(
             f"{resolved}: {', '.join(_bad_aq)} cannot be used in aqueduct.yml — only "
@@ -1996,7 +2038,9 @@ def load_config(path: Path | None = None) -> AqueductConfig:
         _register_agent_api_key_for_redaction(cfg_pass1)
         return cfg_pass1
 
-    pass2_text, missing_secrets = _expand_secrets(pass1_text, cfg_pass1.secrets, base_dir=str(_cfg_dir))
+    pass2_text, missing_secrets = _expand_secrets(
+        pass1_text, cfg_pass1.secrets, base_dir=str(_cfg_dir)
+    )
     if missing_secrets:
         unique_missing = list(dict.fromkeys(missing_secrets))
         raise ConfigError(

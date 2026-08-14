@@ -138,13 +138,17 @@ def compute_type_chain(
     by_id = {m.id: m for m in modules}
     upstream: dict[str, list[str]] = {}
     for m in modules:
-        upstream[m.id] = [e.from_id for e in edges if e.to_id == m.id and getattr(e, "port", "main") == "main"]
+        upstream[m.id] = [
+            e.from_id for e in edges if e.to_id == m.id and getattr(e, "port", "main") == "main"
+        ]
 
     # Per-Channel output→hop maps for every SQL Channel.
     col_maps: dict[str, dict[str, ChainHop]] = {}
     for m in modules:
         if m.type == ModuleType.Channel and m.config.get("op") == "sql":
-            col_maps[m.id] = _channel_column_map(m.id, m.config.get("query", ""), upstream.get(m.id, []))
+            col_maps[m.id] = _channel_column_map(
+                m.id, m.config.get("query", ""), upstream.get(m.id, [])
+            )
 
     # Resolve the starting Channel.
     start = channel_id

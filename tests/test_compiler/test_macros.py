@@ -3,6 +3,7 @@
 from __future__ import annotations
 from pathlib import Path
 import pytest
+
 pytestmark = pytest.mark.unit
 from aqueduct.compiler.macros import MacroError, resolve_macros, resolve_macros_in_config
 from aqueduct.compiler.compiler import compile
@@ -55,7 +56,7 @@ class TestSqlMacros:
         """A comma inside a quoted value must not be mistaken for the
         separator before the NEXT argument either."""
         macros = {"m": "{{ a }}|{{ b }}"}
-        text = "{{ macros.m(a=\"x,y\", b=2) }}"
+        text = '{{ macros.m(a="x,y", b=2) }}'
         assert resolve_macros(text, macros) == "x,y|2"
 
     def test_resolve_macros_call_with_no_args_and_body_placeholder_raises(self):
@@ -74,7 +75,7 @@ class TestSqlMacros:
         config = {
             "query": "SELECT {{ macros.v }}",
             "nested": {"val": "X: {{ macros.v }}"},
-            "list": ["{{ macros.v }}", 456]
+            "list": ["{{ macros.v }}", 456],
         }
         resolved = resolve_macros_in_config(config, macros)
         assert resolved["query"] == "SELECT 123"
@@ -106,10 +107,10 @@ edges:
 """
         bp_path = tmp_path / "bp.yml"
         bp_path.write_text(bp_text)
-        
+
         bp = parse(str(bp_path))
         manifest = compile(bp)
-        
+
         filtered_mod = next(m for m in manifest.modules if m.id == "filtered")
         assert filtered_mod.config["query"] == "SELECT * FROM input WHERE status = 'ACTIVE'"
 
@@ -117,11 +118,13 @@ edges:
 class TestMacroResolution:
     def test_simple_substitution(self):
         from aqueduct.compiler.macros import resolve_macros
+
         result = resolve_macros("SELECT * FROM t WHERE {{ macros.f }}", {"f": "x = 1"})
         assert result == "SELECT * FROM t WHERE x = 1"
 
     def test_parameterized_substitution(self):
         from aqueduct.compiler.macros import resolve_macros
+
         result = resolve_macros(
             "{{ macros.trunc(col=ts, period=day) }}",
             {"trunc": "DATE_TRUNC('{{ period }}', {{ col }})"},
@@ -130,6 +133,7 @@ class TestMacroResolution:
 
     def test_quoted_param_value(self):
         from aqueduct.compiler.macros import resolve_macros
+
         result = resolve_macros(
             "{{ macros.trunc(col=ts, period='month') }}",
             {"trunc": "DATE_TRUNC('{{ period }}', {{ col }})"},
@@ -138,26 +142,31 @@ class TestMacroResolution:
 
     def test_unknown_macro_raises(self):
         from aqueduct.compiler.macros import MacroError, resolve_macros
+
         with pytest.raises(MacroError, match="not defined"):
             resolve_macros("{{ macros.nonexistent }}", {"other": "x"})
 
     def test_missing_param_raises(self):
         from aqueduct.compiler.macros import MacroError, resolve_macros
+
         with pytest.raises(MacroError, match="not supplied"):
             resolve_macros("{{ macros.f(a=1) }}", {"f": "{{ a }} AND {{ b }}"})
 
     def test_no_macros_passthrough(self):
         from aqueduct.compiler.macros import resolve_macros
+
         sql = "SELECT 1"
         assert resolve_macros(sql, {}) is sql
 
     def test_no_tokens_passthrough(self):
         from aqueduct.compiler.macros import resolve_macros
+
         sql = "SELECT * FROM t"
         assert resolve_macros(sql, {"f": "x"}) == sql
 
     def test_resolve_in_dict(self):
         from aqueduct.compiler.macros import resolve_macros_in_config
+
         result = resolve_macros_in_config(
             {"query": "SELECT {{ macros.col }} FROM t"},
             {"col": "amount"},
@@ -166,9 +175,11 @@ class TestMacroResolution:
 
     def test_resolve_in_list(self):
         from aqueduct.compiler.macros import resolve_macros_in_config
+
         result = resolve_macros_in_config(["{{ macros.x }}", 42], {"x": "hello"})
         assert result == ["hello", 42]
 
     def test_resolve_non_string_passthrough(self):
         from aqueduct.compiler.macros import resolve_macros_in_config
+
         assert resolve_macros_in_config(99, {"x": "y"}) == 99

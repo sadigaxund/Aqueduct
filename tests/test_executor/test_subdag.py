@@ -3,6 +3,7 @@
 from __future__ import annotations
 from pathlib import Path
 import pytest
+
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
 from pyspark.sql import SparkSession
 
@@ -83,9 +84,24 @@ class TestSubDagSelectors:
         manifest = Manifest(
             blueprint_id="test.subdag",
             modules=(
-                Module(id="ing", type="Ingress", label="Ingress", config={"format": "parquet", "path": in_path}),
-                Module(id="ch", type="Channel", label="Ch", config={"op": "sql", "query": "SELECT * FROM ing"}),
-                Module(id="eg", type="Egress", label="Egress", config={"format": "parquet", "path": out_path}),
+                Module(
+                    id="ing",
+                    type="Ingress",
+                    label="Ingress",
+                    config={"format": "parquet", "path": in_path},
+                ),
+                Module(
+                    id="ch",
+                    type="Channel",
+                    label="Ch",
+                    config={"op": "sql", "query": "SELECT * FROM ing"},
+                ),
+                Module(
+                    id="eg",
+                    type="Egress",
+                    label="Egress",
+                    config={"format": "parquet", "path": out_path},
+                ),
             ),
             edges=(
                 Edge(from_id="ing", to_id="ch"),

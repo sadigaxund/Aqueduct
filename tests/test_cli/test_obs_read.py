@@ -1,4 +1,5 @@
 """Phase 69 — canonical backend-aware observability read resolver."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -27,13 +28,18 @@ def _cfg(path=None, backend="duckdb"):
 def _make_db(p: Path, with_run: str | None = None):
     p.parent.mkdir(parents=True, exist_ok=True)
     c = duckdb.connect(str(p))
-    c.execute("CREATE TABLE run_records (run_id VARCHAR, blueprint_id VARCHAR, status VARCHAR, started_at TIMESTAMPTZ, finished_at TIMESTAMPTZ, module_results VARCHAR)")
+    c.execute(
+        "CREATE TABLE run_records (run_id VARCHAR, blueprint_id VARCHAR, status VARCHAR, started_at TIMESTAMPTZ, finished_at TIMESTAMPTZ, module_results VARCHAR)"
+    )
     if with_run:
-        c.execute("INSERT INTO run_records VALUES (?, 'bp', 'success', now(), now(), '[]')", [with_run])
+        c.execute(
+            "INSERT INTO run_records VALUES (?, 'bp', 'success', now(), now(), '[]')", [with_run]
+        )
     c.close()
 
 
 # ── resolve_duckdb_obs_path ──────────────────────────────────────────────────
+
 
 def test_resolve_store_dir(tmp_path):
     _make_db(tmp_path / "observability.db")
@@ -92,6 +98,7 @@ def test_resolve_location_only_dir_by_run_id(tmp_path):
 
 # ── open_obs_read ────────────────────────────────────────────────────────────
 
+
 def test_open_duckdb_returns_store(tmp_path):
     base = tmp_path / "obs"
     _make_db(base / "beta" / "observability.db")
@@ -117,6 +124,7 @@ def test_open_postgres_uses_get_stores():
 
 # ── resolve_obs_store_dir / open_obs_write (ISSUE-036: per-blueprint write) ────
 
+
 def test_write_dir_default_routes_per_blueprint():
     assert resolve_obs_store_dir(_cfg(), "beta") == Path(".aqueduct/observability/beta")
 
@@ -130,7 +138,10 @@ def test_write_dir_cli_store_dir_wins(tmp_path):
     """--store-dir wins over the configured path AND is itself a routing base
     (docs/specs.md §10.4.1: "same per-blueprint split, but under your
     directory") — not the per-blueprint directory verbatim."""
-    assert resolve_obs_store_dir(_cfg(path="anything"), "beta", store_dir=str(tmp_path)) == tmp_path / "beta"
+    assert (
+        resolve_obs_store_dir(_cfg(path="anything"), "beta", store_dir=str(tmp_path))
+        == tmp_path / "beta"
+    )
 
 
 def test_open_obs_write_creates_per_blueprint_file(tmp_path):

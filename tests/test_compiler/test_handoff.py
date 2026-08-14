@@ -46,7 +46,9 @@ def _m(id_, type_=ModuleType.Channel, engine=None, config=None):
 
 def _bp(modules, edges=None, udf_registry=None):
     d = {
-        "aqueduct": "1.0", "id": "bp", "name": "t",
+        "aqueduct": "1.0",
+        "id": "bp",
+        "name": "t",
         "modules": modules,
         **({"edges": edges} if edges is not None else {}),
         **({"udf_registry": udf_registry} if udf_registry is not None else {}),
@@ -150,8 +152,10 @@ def test_zero_boundaries_returns_inputs_unchanged():
 
 def test_disjoint_different_engine_components_get_zero_handoffs():
     modules = [
-        _m("a1", engine="spark"), _m("a2", engine="spark"),
-        _m("b1", engine="duckdb"), _m("b2", engine="duckdb"),
+        _m("a1", engine="spark"),
+        _m("a2", engine="spark"),
+        _m("b1", engine="duckdb"),
+        _m("b2", engine="duckdb"),
     ]
     edges = [
         Edge(from_id="a1", to_id="a2"),
@@ -174,10 +178,16 @@ def test_lineage_passes_through_a_handoff_unchanged():
     modules = (
         _m("a", config={"op": "sql", "query": "SELECT 1"}),
         Module(
-            id="h", type=ModuleType.Handoff, label="h",
+            id="h",
+            type=ModuleType.Handoff,
+            label="h",
             config={
-                "edge_id": "h", "from_module": "a", "to_module": "b",
-                "from_engine": "spark", "to_engine": "duckdb", "port": "main",
+                "edge_id": "h",
+                "from_module": "a",
+                "to_module": "b",
+                "from_engine": "spark",
+                "to_engine": "duckdb",
+                "port": "main",
             },
             synthetic=True,
         ),
@@ -197,9 +207,11 @@ def test_lineage_passes_through_a_handoff_unchanged():
 
 def test_user_declared_handoff_module_is_rejected():
     with pytest.raises(ParseError, match="reserved"):
-        _bp([
-            {"id": "sneaky", "label": "sneaky", "type": "Handoff", "config": {}},
-        ])
+        _bp(
+            [
+                {"id": "sneaky", "label": "sneaky", "type": "Handoff", "config": {}},
+            ]
+        )
 
 
 # ── Full compile(): the compile-time warning ────────────────────────────────
@@ -208,10 +220,20 @@ def test_user_declared_handoff_module_is_rejected():
 def test_compile_emits_cross_engine_handoff_io_warning_naming_the_point():
     bp = _bp(
         [
-            {"id": "extract", "label": "extract", "type": "Channel", "engine": "spark",
-             "config": {"op": "sql", "query": "SELECT 1 AS x"}},
-            {"id": "agg", "label": "agg", "type": "Channel", "engine": "duckdb",
-             "config": {"op": "sql", "query": "SELECT * FROM extract"}},
+            {
+                "id": "extract",
+                "label": "extract",
+                "type": "Channel",
+                "engine": "spark",
+                "config": {"op": "sql", "query": "SELECT 1 AS x"},
+            },
+            {
+                "id": "agg",
+                "label": "agg",
+                "type": "Channel",
+                "engine": "duckdb",
+                "config": {"op": "sql", "query": "SELECT * FROM extract"},
+            },
         ],
         edges=[{"from": "extract", "to": "agg"}],
     )
@@ -233,10 +255,20 @@ def test_compile_emits_cross_engine_handoff_io_warning_naming_the_point():
 def test_compile_handoff_warning_suppressed():
     bp = _bp(
         [
-            {"id": "extract", "label": "extract", "type": "Channel", "engine": "spark",
-             "config": {"op": "sql", "query": "SELECT 1 AS x"}},
-            {"id": "agg", "label": "agg", "type": "Channel", "engine": "duckdb",
-             "config": {"op": "sql", "query": "SELECT * FROM extract"}},
+            {
+                "id": "extract",
+                "label": "extract",
+                "type": "Channel",
+                "engine": "spark",
+                "config": {"op": "sql", "query": "SELECT 1 AS x"},
+            },
+            {
+                "id": "agg",
+                "label": "agg",
+                "type": "Channel",
+                "engine": "duckdb",
+                "config": {"op": "sql", "query": "SELECT * FROM extract"},
+            },
         ],
         edges=[{"from": "extract", "to": "agg"}],
     )
@@ -250,10 +282,18 @@ def test_compile_handoff_warning_suppressed():
 def test_compile_single_engine_blueprint_no_handoff_no_warning():
     bp = _bp(
         [
-            {"id": "in", "label": "in", "type": "Ingress",
-             "config": {"format": "csv", "path": "/tmp/x.csv"}},
-            {"id": "out", "label": "out", "type": "Egress",
-             "config": {"format": "parquet", "path": "/tmp/y", "mode": "overwrite"}},
+            {
+                "id": "in",
+                "label": "in",
+                "type": "Ingress",
+                "config": {"format": "csv", "path": "/tmp/x.csv"},
+            },
+            {
+                "id": "out",
+                "label": "out",
+                "type": "Egress",
+                "config": {"format": "parquet", "path": "/tmp/y", "mode": "overwrite"},
+            },
         ],
         edges=[{"from": "in", "to": "out"}],
     )
@@ -288,8 +328,10 @@ def test_handoff_config_rejects_unknown_key():
 
 
 def test_handoff_config_overrides_from_yaml():
-    cfg = AqueductConfig.model_validate({
-        "handoff": {"root": "/mnt/shared/handoff", "keep_on_failure": False},
-    })
+    cfg = AqueductConfig.model_validate(
+        {
+            "handoff": {"root": "/mnt/shared/handoff", "keep_on_failure": False},
+        }
+    )
     assert cfg.handoff.root == "/mnt/shared/handoff"
     assert cfg.handoff.keep_on_failure is False

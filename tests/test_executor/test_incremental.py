@@ -7,13 +7,17 @@ from aqueduct.parser.models import Module, Edge, RetryPolicy
 
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
+
 class MockDepot:
     def __init__(self, initial=None):
         self.data = initial or {}
+
     def get(self, key, default=None):
         return self.data.get(key, default)
+
     def put(self, key, value):
         self.data[key] = value
+
 
 def create_manifest(modules, edges):
     return Manifest(
@@ -30,25 +34,36 @@ def create_manifest(modules, edges):
         udf_registry={},
         macros={},
         checkpoint=False,
-        provenance_map=ProvenanceMap(blueprint_id="test_bp", blueprint_path="", modules={}, context={}),
-        inputs_fingerprint={}
+        provenance_map=ProvenanceMap(
+            blueprint_id="test_bp", blueprint_path="", modules={}, context={}
+        ),
+        inputs_fingerprint={},
     )
+
 
 def test_incremental_watermark_no_prior(spark, tmp_path):
     """materialize=incremental, no prior watermark -> query ${ctx._watermark} replaced with sentinel '1900-01-01 00:00:00'."""
     in_path = str(tmp_path / "in.parquet")
-    spark.range(5).selectExpr("CAST('2024-01-01 10:00:00' AS TIMESTAMP) as ts", "id").write.parquet(in_path)
-    
+    spark.range(5).selectExpr("CAST('2024-01-01 10:00:00' AS TIMESTAMP) as ts", "id").write.parquet(
+        in_path
+    )
+
     depot = MockDepot()
     manifest = create_manifest(
         modules=(
-            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
-            Module(id="inc", type="Channel", label="Inc", materialize="incremental", watermark_column="ts", config={
-                "op": "sql",
-                "query": "SELECT * FROM in WHERE ts > ${ctx._watermark}"
-            }),
+            Module(
+                id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}
+            ),
+            Module(
+                id="inc",
+                type="Channel",
+                label="Inc",
+                materialize="incremental",
+                watermark_column="ts",
+                config={"op": "sql", "query": "SELECT * FROM in WHERE ts > ${ctx._watermark}"},
+            ),
         ),
-        edges=(Edge(from_id="in", to_id="inc", port="main"),)
+        edges=(Edge(from_id="in", to_id="inc", port="main"),),
     )
 
     result = execute(manifest, spark, depot=depot)
@@ -57,127 +72,179 @@ def test_incremental_watermark_no_prior(spark, tmp_path):
     # No Egress in this manifest, so watermark is not advanced (watermark write is
     # deferred to post-Egress; tested in test_incremental_watermark_with_prior)
 
+
 def test_incremental_watermark_with_prior(spark, tmp_path):
     """materialize=incremental, prior watermark in Depot -> query substituted with stored value."""
     in_path = str(tmp_path / "in_prior.parquet")
     # Rows with timestamps before and after watermark
-    spark.createDataFrame([
-        ("2024-01-01 10:00:00", 1),
-        ("2024-01-01 12:00:00", 2),
-    ], ["ts", "id"]).selectExpr("CAST(ts AS TIMESTAMP) as ts", "id").write.parquet(in_path)
-    
+    spark.createDataFrame(
+        [
+            ("2024-01-01 10:00:00", 1),
+            ("2024-01-01 12:00:00", 2),
+        ],
+        ["ts", "id"],
+    ).selectExpr("CAST(ts AS TIMESTAMP) as ts", "id").write.parquet(in_path)
+
     depot = MockDepot({"test_bp:inc_p:_watermark": "2024-01-01 11:00:00"})
-    
+
     out_path = str(tmp_path / "out_p.parquet")
     manifest = create_manifest(
         modules=(
-            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
-            Module(id="inc_p", type="Channel", label="Inc", materialize="incremental", watermark_column="ts", config={
-                "op": "sql",
-                "query": "SELECT * FROM in WHERE ts > ${ctx._watermark}"
-            }),
-            Module(id="out", type="Egress", label="Out", config={"format": "parquet", "path": out_path}),
+            Module(
+                id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}
+            ),
+            Module(
+                id="inc_p",
+                type="Channel",
+                label="Inc",
+                materialize="incremental",
+                watermark_column="ts",
+                config={"op": "sql", "query": "SELECT * FROM in WHERE ts > ${ctx._watermark}"},
+            ),
+            Module(
+                id="out", type="Egress", label="Out", config={"format": "parquet", "path": out_path}
+            ),
         ),
         edges=(
             Edge(from_id="in", to_id="inc_p", port="main"),
             Edge(from_id="inc_p", to_id="out", port="main"),
-        )
+        ),
     )
-    
+
     result = execute(manifest, spark, depot=depot)
     assert result.status == "success"
-    
+
     # Should only have rows after 11:00:00
     df_out = spark.read.parquet(out_path)
     assert df_out.count() == 1
     assert df_out.collect()[0]["id"] == 2
-    
+
     # New watermark should be 12:00:00
     assert depot.get("test_bp:inc_p:_watermark") == "2024-01-01 12:00:00"
+
 
 def test_incremental_watermark_failure_not_updated(spark, tmp_path):
     """materialize=incremental, Channel fails -> watermark NOT updated in Depot."""
     in_path = str(tmp_path / "in_fail.parquet")
-    spark.range(5).selectExpr("CAST('2024-01-01 10:00:00' AS TIMESTAMP) as ts", "id").write.parquet(in_path)
-    
+    spark.range(5).selectExpr("CAST('2024-01-01 10:00:00' AS TIMESTAMP) as ts", "id").write.parquet(
+        in_path
+    )
+
     depot = MockDepot({"test_bp:inc_f:_watermark": "2024-01-01 09:00:00"})
     manifest = create_manifest(
         modules=(
-            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
-            Module(id="inc_f", type="Channel", label="Inc", materialize="incremental", watermark_column="ts", config={
-                "op": "sql",
-                "query": "SELECT * FROM non_existent"
-            }),
+            Module(
+                id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}
+            ),
+            Module(
+                id="inc_f",
+                type="Channel",
+                label="Inc",
+                materialize="incremental",
+                watermark_column="ts",
+                config={"op": "sql", "query": "SELECT * FROM non_existent"},
+            ),
         ),
-        edges=(Edge(from_id="in", to_id="inc_f", port="main"),)
+        edges=(Edge(from_id="in", to_id="inc_f", port="main"),),
     )
-    
+
     result = execute(manifest, spark, depot=depot)
     assert result.status == "error"
-    
+
     # Watermark should still be 09:00:00
     assert depot.get("test_bp:inc_f:_watermark") == "2024-01-01 09:00:00"
+
 
 def test_incremental_egress_overwrite_warning(spark, tmp_path, caplog):
     """materialize=incremental, downstream Egress has mode=overwrite -> warning logged."""
     in_path = str(tmp_path / "in_warn.parquet")
-    spark.range(1).selectExpr("CAST('2024-01-01 10:00:00' AS TIMESTAMP) as ts").write.parquet(in_path)
-    
+    spark.range(1).selectExpr("CAST('2024-01-01 10:00:00' AS TIMESTAMP) as ts").write.parquet(
+        in_path
+    )
+
     manifest = create_manifest(
         modules=(
-            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
-            Module(id="inc", type="Channel", label="Inc", materialize="incremental", watermark_column="ts", config={
-                "op": "sql",
-                "query": "SELECT * FROM in"
-            }),
-            Module(id="out", type="Egress", label="Out", config={"format": "parquet", "path": str(tmp_path/"out"), "mode": "overwrite"}),
+            Module(
+                id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}
+            ),
+            Module(
+                id="inc",
+                type="Channel",
+                label="Inc",
+                materialize="incremental",
+                watermark_column="ts",
+                config={"op": "sql", "query": "SELECT * FROM in"},
+            ),
+            Module(
+                id="out",
+                type="Egress",
+                label="Out",
+                config={"format": "parquet", "path": str(tmp_path / "out"), "mode": "overwrite"},
+            ),
         ),
         edges=(
             Edge(from_id="in", to_id="inc", port="main"),
             Edge(from_id="inc", to_id="out", port="main"),
-        )
+        ),
     )
-    
+
     with caplog.at_level("WARNING"):
         execute(manifest, spark)
-    
+
     assert "mode=overwrite" in caplog.text
+
 
 def test_incremental_no_materialize_no_logic(spark, tmp_path):
     """no materialize key -> normal Channel execution, no watermark logic."""
     in_path = str(tmp_path / "in_none.parquet")
-    spark.range(1).selectExpr("CAST('2024-01-01 10:00:00' AS TIMESTAMP) as ts").write.parquet(in_path)
-    
+    spark.range(1).selectExpr("CAST('2024-01-01 10:00:00' AS TIMESTAMP) as ts").write.parquet(
+        in_path
+    )
+
     depot = MockDepot()
     manifest = create_manifest(
         modules=(
-            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
-            Module(id="inc", type="Channel", label="Inc", watermark_column="ts", config={
-                "op": "sql",
-                "query": "SELECT * FROM in"
-            }),
+            Module(
+                id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}
+            ),
+            Module(
+                id="inc",
+                type="Channel",
+                label="Inc",
+                watermark_column="ts",
+                config={"op": "sql", "query": "SELECT * FROM in"},
+            ),
         ),
-        edges=(Edge(from_id="in", to_id="inc", port="main"),)
+        edges=(Edge(from_id="in", to_id="inc", port="main"),),
     )
 
     execute(manifest, spark, depot=depot)
     # Depot should be empty
     assert not depot.data
 
+
 def test_incremental_depot_none_no_crash(spark, tmp_path):
     """materialize=incremental, depot=None -> query uses sentinel, no crash."""
     in_path = str(tmp_path / "in_nodepot.parquet")
-    spark.range(1).selectExpr("CAST('2024-01-01 10:00:00' AS TIMESTAMP) as ts").write.parquet(in_path)
-    
+    spark.range(1).selectExpr("CAST('2024-01-01 10:00:00' AS TIMESTAMP) as ts").write.parquet(
+        in_path
+    )
+
     manifest = create_manifest(
         modules=(
-            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
-            Module(id="inc", type="Channel", label="Inc", materialize="incremental", watermark_column="ts", config={
-                "op": "sql",
-                "query": "SELECT * FROM in WHERE ts > ${ctx._watermark}"
-            }),
+            Module(
+                id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}
+            ),
+            Module(
+                id="inc",
+                type="Channel",
+                label="Inc",
+                materialize="incremental",
+                watermark_column="ts",
+                config={"op": "sql", "query": "SELECT * FROM in WHERE ts > ${ctx._watermark}"},
+            ),
         ),
-        edges=(Edge(from_id="in", to_id="inc", port="main"),)
+        edges=(Edge(from_id="in", to_id="inc", port="main"),),
     )
 
     result = execute(manifest, spark, depot=None)
@@ -191,11 +258,15 @@ def test_incremental_depot_none_no_crash(spark, tmp_path):
 def test_compute_watermark_from_output_parquet(spark, tmp_path):
     """parquet format → spark.read.parquet.agg(MAX).collect()"""
     from aqueduct.executor.spark.executor import _compute_watermark_from_output
+
     out_path = str(tmp_path / "watermark_test.parquet")
-    spark.createDataFrame([
-        ("2024-01-01 10:00:00", 1),
-        ("2024-01-01 12:00:00", 2),
-    ], ["ts", "id"]).selectExpr("CAST(ts AS TIMESTAMP) as ts", "id").write.parquet(out_path)
+    spark.createDataFrame(
+        [
+            ("2024-01-01 10:00:00", 1),
+            ("2024-01-01 12:00:00", 2),
+        ],
+        ["ts", "id"],
+    ).selectExpr("CAST(ts AS TIMESTAMP) as ts", "id").write.parquet(out_path)
     result = _compute_watermark_from_output(spark, out_path, "parquet", "ts")
     assert result is not None
     assert "2024-01-01 12:00:00" in result
@@ -203,6 +274,7 @@ def test_compute_watermark_from_output_parquet(spark, tmp_path):
 
 def test_compute_watermark_from_output_missing_path_returns_none(spark, tmp_path):
     from aqueduct.executor.spark.executor import _compute_watermark_from_output
+
     result = _compute_watermark_from_output(spark, str(tmp_path / "nonexistent"), "parquet", "ts")
     assert result is None
 
@@ -233,6 +305,7 @@ def test_compute_watermark_from_output_delta_format(spark, tmp_path):
 def test_compute_watermark_from_output_delta_format_none_fallback(spark, tmp_path):
     """delta format with no Delta Lake → returns None (non-fatal)."""
     from aqueduct.executor.spark.executor import _compute_watermark_from_output
+
     # Real spark session without delta — sql will raise; should return None
     result = _compute_watermark_from_output(spark, str(tmp_path / "no_delta"), "delta", "ts")
     assert result is None
@@ -252,14 +325,30 @@ def test_watermark_depot_only_no_sidecar(spark, tmp_path):
     depot = MockDepot()
     manifest = create_manifest(
         modules=(
-            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
-            Module(id="inc", type="Channel", label="Inc", materialize="incremental", watermark_column="ts", config={
-                "op": "sql",
-                "query": "SELECT * FROM in WHERE ts > ${ctx._watermark}",
-            }),
-            Module(id="out", type="Egress", label="Out", config={
-                "format": "parquet", "path": out_path, "mode": "append",
-            }),
+            Module(
+                id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}
+            ),
+            Module(
+                id="inc",
+                type="Channel",
+                label="Inc",
+                materialize="incremental",
+                watermark_column="ts",
+                config={
+                    "op": "sql",
+                    "query": "SELECT * FROM in WHERE ts > ${ctx._watermark}",
+                },
+            ),
+            Module(
+                id="out",
+                type="Egress",
+                label="Out",
+                config={
+                    "format": "parquet",
+                    "path": out_path,
+                    "mode": "append",
+                },
+            ),
         ),
         edges=(
             Edge(from_id="in", to_id="inc", port="main"),
@@ -281,20 +370,39 @@ def test_watermark_no_depot_warns_and_persists_nothing(spark, tmp_path, caplog):
     in_path = str(tmp_path / "in_nd.parquet")
     out_path = str(tmp_path / "out_nd")
     spark.createDataFrame(
-        [("2024-01-01 10:00:00", 1)], ["ts", "id"],
-    ).selectExpr("CAST(ts AS TIMESTAMP) as ts", "id").write.parquet(in_path)
+        [("2024-01-01 10:00:00", 1)],
+        ["ts", "id"],
+    ).selectExpr(
+        "CAST(ts AS TIMESTAMP) as ts", "id"
+    ).write.parquet(in_path)
 
     store_dir = tmp_path / "store_nd"
     manifest = create_manifest(
         modules=(
-            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
-            Module(id="inc", type="Channel", label="Inc", materialize="incremental", watermark_column="ts", config={
-                "op": "sql",
-                "query": "SELECT * FROM in WHERE ts > ${ctx._watermark}",
-            }),
-            Module(id="out", type="Egress", label="Out", config={
-                "format": "parquet", "path": out_path, "mode": "append",
-            }),
+            Module(
+                id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}
+            ),
+            Module(
+                id="inc",
+                type="Channel",
+                label="Inc",
+                materialize="incremental",
+                watermark_column="ts",
+                config={
+                    "op": "sql",
+                    "query": "SELECT * FROM in WHERE ts > ${ctx._watermark}",
+                },
+            ),
+            Module(
+                id="out",
+                type="Egress",
+                label="Out",
+                config={
+                    "format": "parquet",
+                    "path": out_path,
+                    "mode": "append",
+                },
+            ),
         ),
         edges=(
             Edge(from_id="in", to_id="inc", port="main"),
@@ -317,11 +425,14 @@ def test_watermark_computed_from_output_not_channel_df(spark, tmp_path):
 
     in_path = str(tmp_path / "in_nodbl.parquet")
     out_path = str(tmp_path / "out_nodbl")
-    spark.range(3).selectExpr("CAST('2024-09-01 00:00:00' AS TIMESTAMP) as ts").write.parquet(in_path)
+    spark.range(3).selectExpr("CAST('2024-09-01 00:00:00' AS TIMESTAMP) as ts").write.parquet(
+        in_path
+    )
     store_dir = tmp_path / "store_nodbl"
 
     call_log = []
     import aqueduct.executor.spark.executor as executor_mod
+
     original_compute = executor_mod._compute_watermark_from_output
 
     def spy_compute(spark_session, path, fmt, wm_col):
@@ -330,24 +441,40 @@ def test_watermark_computed_from_output_not_channel_df(spark, tmp_path):
 
     manifest = create_manifest(
         modules=(
-            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
-            Module(id="inc", type="Channel", label="Inc", materialize="incremental", watermark_column="ts", config={
-                "op": "sql",
-                "query": "SELECT * FROM in WHERE ts > ${ctx._watermark}",
-            }),
-            Module(id="out", type="Egress", label="Out", config={
-                "format": "parquet",
-                "path": out_path,
-                "mode": "overwrite",
-            }),
+            Module(
+                id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}
+            ),
+            Module(
+                id="inc",
+                type="Channel",
+                label="Inc",
+                materialize="incremental",
+                watermark_column="ts",
+                config={
+                    "op": "sql",
+                    "query": "SELECT * FROM in WHERE ts > ${ctx._watermark}",
+                },
+            ),
+            Module(
+                id="out",
+                type="Egress",
+                label="Out",
+                config={
+                    "format": "parquet",
+                    "path": out_path,
+                    "mode": "overwrite",
+                },
+            ),
         ),
         edges=(
             Edge(from_id="in", to_id="inc", port="main"),
             Edge(from_id="inc", to_id="out", port="main"),
-        )
+        ),
     )
 
-    with patch("aqueduct.executor.spark.executor._compute_watermark_from_output", side_effect=spy_compute):
+    with patch(
+        "aqueduct.executor.spark.executor._compute_watermark_from_output", side_effect=spy_compute
+    ):
         result = execute(manifest, spark, store_dir=store_dir)
 
     assert result.status == "success"

@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
+
 pytestmark = pytest.mark.unit
 from click.testing import CliRunner
 
@@ -33,18 +34,22 @@ def _bp_with_guardrails(allowed_paths=(), forbidden_ops=()):
 
 
 def _patch(*ops):
-    return PatchSpec.model_validate({
-        "patch_id": "test-patch",
-        "rationale": "test",
-        "operations": list(ops),
-    })
+    return PatchSpec.model_validate(
+        {
+            "patch_id": "test-patch",
+            "rationale": "test",
+            "operations": list(ops),
+        }
+    )
 
 
 class TestGuardrails:
     def test_no_restrictions_always_pass(self):
         bp = _bp_with_guardrails()
         spec = _patch({"op": "remove_module", "module_id": "x"})
-        assert _check_guardrails(spec, bp, cfg=_CFG).status == "not_applicable"  # passes → returns None, no raise
+        assert (
+            _check_guardrails(spec, bp, cfg=_CFG).status == "not_applicable"
+        )  # passes → returns None, no raise
 
     def test_forbidden_op_blocks(self):
         bp = _bp_with_guardrails(forbidden_ops=("remove_module",))
@@ -61,103 +66,150 @@ class TestGuardrails:
     # ── set_module_config_key path enforcement ────────────────────────────────
     def test_set_key_path_matching_passes(self):
         bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
-        spec = _patch({
-            "op": "set_module_config_key", "module_id": "x",
-            "key": "path", "value": "s3a://prod/orders/",
-        })
-        assert _check_guardrails(spec, bp, cfg=_CFG).status == "not_applicable"  # path in allowlist → passes
+        spec = _patch(
+            {
+                "op": "set_module_config_key",
+                "module_id": "x",
+                "key": "path",
+                "value": "s3a://prod/orders/",
+            }
+        )
+        assert (
+            _check_guardrails(spec, bp, cfg=_CFG).status == "not_applicable"
+        )  # path in allowlist → passes
 
     def test_set_key_path_non_matching_blocks(self):
         bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
-        spec = _patch({
-            "op": "set_module_config_key", "module_id": "x",
-            "key": "path", "value": "s3a://staging/orders/",
-        })
+        spec = _patch(
+            {
+                "op": "set_module_config_key",
+                "module_id": "x",
+                "key": "path",
+                "value": "s3a://staging/orders/",
+            }
+        )
         with pytest.raises(PatchError, match="s3a://staging/orders/"):
             _check_guardrails(spec, bp, cfg=_CFG)
 
     def test_set_key_non_path_key_ignored(self):
         bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
-        spec = _patch({
-            "op": "set_module_config_key", "module_id": "x",
-            "key": "format", "value": "/etc/passwd",
-        })
-        assert _check_guardrails(spec, bp, cfg=_CFG).status == "not_applicable"  # only path/output_path keys are checked
+        spec = _patch(
+            {
+                "op": "set_module_config_key",
+                "module_id": "x",
+                "key": "format",
+                "value": "/etc/passwd",
+            }
+        )
+        assert (
+            _check_guardrails(spec, bp, cfg=_CFG).status == "not_applicable"
+        )  # only path/output_path keys are checked
 
     def test_set_key_arcade_expanded_id_skipped(self):
         bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
-        spec = _patch({
-            "op": "set_module_config_key", "module_id": "arcade__ingress",
-            "key": "path", "value": "s3a://staging/anywhere/",
-        })
-        assert _check_guardrails(spec, bp, cfg=_CFG).status == "not_applicable"  # arcade-expanded id skipped here
+        spec = _patch(
+            {
+                "op": "set_module_config_key",
+                "module_id": "arcade__ingress",
+                "key": "path",
+                "value": "s3a://staging/anywhere/",
+            }
+        )
+        assert (
+            _check_guardrails(spec, bp, cfg=_CFG).status == "not_applicable"
+        )  # arcade-expanded id skipped here
 
     # ── replace_module_config path enforcement (regression for bypass bug) ────
     def test_replace_config_path_matching_passes(self):
         bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
-        spec = _patch({
-            "op": "replace_module_config", "module_id": "x",
-            "config": {"format": "parquet", "path": "s3a://prod/orders/"},
-        })
-        assert _check_guardrails(spec, bp, cfg=_CFG).status == "not_applicable"  # config path in allowlist → passes
+        spec = _patch(
+            {
+                "op": "replace_module_config",
+                "module_id": "x",
+                "config": {"format": "parquet", "path": "s3a://prod/orders/"},
+            }
+        )
+        assert (
+            _check_guardrails(spec, bp, cfg=_CFG).status == "not_applicable"
+        )  # config path in allowlist → passes
 
     def test_replace_config_path_non_matching_blocks(self):
         bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
-        spec = _patch({
-            "op": "replace_module_config", "module_id": "x",
-            "config": {"format": "parquet", "path": "/etc/passwd"},
-        })
+        spec = _patch(
+            {
+                "op": "replace_module_config",
+                "module_id": "x",
+                "config": {"format": "parquet", "path": "/etc/passwd"},
+            }
+        )
         with pytest.raises(PatchError, match="/etc/passwd"):
             _check_guardrails(spec, bp, cfg=_CFG)
 
     def test_replace_config_output_path_blocks(self):
         bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
-        spec = _patch({
-            "op": "replace_module_config", "module_id": "x",
-            "config": {"format": "parquet", "output_path": "/tmp/leak"},
-        })
+        spec = _patch(
+            {
+                "op": "replace_module_config",
+                "module_id": "x",
+                "config": {"format": "parquet", "output_path": "/tmp/leak"},
+            }
+        )
         with pytest.raises(PatchError, match="/tmp/leak"):
             _check_guardrails(spec, bp, cfg=_CFG)
 
     # ── insert_module / add_probe / add_arcade_ref carry full module dicts ────
     def test_insert_module_path_blocks(self):
         bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
-        spec = _patch({
-            "op": "insert_module",
-            "module": {
-                "id": "new_ingress", "type": "Ingress", "label": "x",
-                "config": {"format": "parquet", "path": "s3a://attacker/data/"},
-            },
-            "edges_to_add": [], "edges_to_remove": [],
-        })
+        spec = _patch(
+            {
+                "op": "insert_module",
+                "module": {
+                    "id": "new_ingress",
+                    "type": "Ingress",
+                    "label": "x",
+                    "config": {"format": "parquet", "path": "s3a://attacker/data/"},
+                },
+                "edges_to_add": [],
+                "edges_to_remove": [],
+            }
+        )
         with pytest.raises(PatchError, match="s3a://attacker/data/"):
             _check_guardrails(spec, bp, cfg=_CFG)
 
     def test_add_probe_path_blocks(self):
         bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
-        spec = _patch({
-            "op": "add_probe",
-            "module": {
-                "id": "p", "type": "Probe", "label": "p",
-                "attach_to": "x",
-                "config": {"path": "/etc/secret", "signals": []},
-            },
-            "edges_to_add": [],
-        })
+        spec = _patch(
+            {
+                "op": "add_probe",
+                "module": {
+                    "id": "p",
+                    "type": "Probe",
+                    "label": "p",
+                    "attach_to": "x",
+                    "config": {"path": "/etc/secret", "signals": []},
+                },
+                "edges_to_add": [],
+            }
+        )
         with pytest.raises(PatchError, match="/etc/secret"):
             _check_guardrails(spec, bp, cfg=_CFG)
 
     def test_add_arcade_ref_path_blocks(self):
         bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
-        spec = _patch({
-            "op": "add_arcade_ref",
-            "module": {
-                "id": "arc", "type": "Arcade", "label": "a",
-                "ref": "arcades/x.yml",
-                "config": {"output_path": "/var/leak"},
-            },
-            "edges_to_add": [], "edges_to_remove": [],
-        })
+        spec = _patch(
+            {
+                "op": "add_arcade_ref",
+                "module": {
+                    "id": "arc",
+                    "type": "Arcade",
+                    "label": "a",
+                    "ref": "arcades/x.yml",
+                    "config": {"output_path": "/var/leak"},
+                },
+                "edges_to_add": [],
+                "edges_to_remove": [],
+            }
+        )
         with pytest.raises(PatchError, match="/var/leak"):
             _check_guardrails(spec, bp, cfg=_CFG)
 
@@ -176,69 +228,97 @@ class TestEngineConfigAllowlistGate:
     # ── 1. denied key (absolute ban) ───────────────────────────────────────
     def test_denied_key_blocks(self):
         bp = _bp_with_guardrails()
-        spec = _patch({
-            "op": "set_engine_config", "engine": "spark",
-            "key": "spark.master", "value": "local[*]",
-        })
+        spec = _patch(
+            {
+                "op": "set_engine_config",
+                "engine": "spark",
+                "key": "spark.master",
+                "value": "local[*]",
+            }
+        )
         with pytest.raises(PatchError, match="redirects where work runs"):
             _check_guardrails(spec, bp, cfg=_CFG)
 
     # ── 2. allowed key, denied value (scoped ban) ───────────────────────────
     def test_allowed_key_denied_value_blocks(self):
         bp = _bp_with_guardrails()
-        spec = _patch({
-            "op": "set_engine_config", "engine": "spark",
-            "key": "spark.driver.maxResultSize", "value": 0,
-        })
+        spec = _patch(
+            {
+                "op": "set_engine_config",
+                "engine": "spark",
+                "key": "spark.driver.maxResultSize",
+                "value": 0,
+            }
+        )
         with pytest.raises(PatchError, match="0 means unlimited"):
             _check_guardrails(spec, bp, cfg=_CFG)
 
     # ── 3. key on no list (fail closed) ─────────────────────────────────────
     def test_key_on_no_list_blocks(self):
         bp = _bp_with_guardrails()
-        spec = _patch({
-            "op": "set_engine_config", "engine": "spark",
-            "key": "spark.totally.unlisted.key", "value": "x",
-        })
+        spec = _patch(
+            {
+                "op": "set_engine_config",
+                "engine": "spark",
+                "key": "spark.totally.unlisted.key",
+                "value": "x",
+            }
+        )
         with pytest.raises(PatchError, match="not on engine 'spark'"):
             _check_guardrails(spec, bp, cfg=_CFG)
 
     # ── 4. allowed key, wrong type ───────────────────────────────────────────
     def test_allowed_key_wrong_type_blocks(self):
         bp = _bp_with_guardrails()
-        spec = _patch({
-            "op": "set_engine_config", "engine": "spark",
-            "key": "spark.sql.shuffle.partitions", "value": "200",  # str, not int
-        })
+        spec = _patch(
+            {
+                "op": "set_engine_config",
+                "engine": "spark",
+                "key": "spark.sql.shuffle.partitions",
+                "value": "200",  # str, not int
+            }
+        )
         with pytest.raises(PatchError, match="expected int, got str"):
             _check_guardrails(spec, bp, cfg=_CFG)
 
     # ── plus: allowed + well-typed passes ────────────────────────────────────
     def test_allowed_well_typed_key_passes(self):
         bp = _bp_with_guardrails()
-        spec = _patch({
-            "op": "set_engine_config", "engine": "spark",
-            "key": "spark.sql.shuffle.partitions", "value": 200,
-        })
+        spec = _patch(
+            {
+                "op": "set_engine_config",
+                "engine": "spark",
+                "key": "spark.sql.shuffle.partitions",
+                "value": 200,
+            }
+        )
         # `pass`, not `not_applicable`: this patch DOES write engine config
         # and the write changes the resolved value (nothing set it before).
         assert _check_guardrails(spec, bp, cfg=_CFG).status == "pass"
 
     def test_allowed_typed_field_duckdb_passes(self):
         bp = _bp_with_guardrails()
-        spec = _patch({
-            "op": "set_engine_config", "engine": "duckdb",
-            "key": "threads", "value": 4,
-        })
+        spec = _patch(
+            {
+                "op": "set_engine_config",
+                "engine": "duckdb",
+                "key": "threads",
+                "value": 4,
+            }
+        )
         assert _check_guardrails(spec, bp, cfg=_CFG).status == "pass"
 
     # ── plus: unregistered engine fails closed ───────────────────────────────
     def test_unregistered_engine_fails_closed(self):
         bp = _bp_with_guardrails()
-        spec = _patch({
-            "op": "set_engine_config", "engine": "flink",
-            "key": "x", "value": "y",
-        })
+        spec = _patch(
+            {
+                "op": "set_engine_config",
+                "engine": "flink",
+                "key": "x",
+                "value": "y",
+            }
+        )
         with pytest.raises(PatchError, match="not a registered aqueduct engine"):
             _check_guardrails(spec, bp, cfg=_CFG)
 
@@ -248,28 +328,40 @@ class TestEngineConfigAllowlistGate:
     #    command name without any other test catching it ────────────────────
     def test_denied_key_message_names_policy_command(self):
         bp = _bp_with_guardrails()
-        spec = _patch({
-            "op": "set_engine_config", "engine": "spark",
-            "key": "spark.master", "value": "local[*]",
-        })
+        spec = _patch(
+            {
+                "op": "set_engine_config",
+                "engine": "spark",
+                "key": "spark.master",
+                "value": "local[*]",
+            }
+        )
         with pytest.raises(PatchError, match=r"aqueduct patch policy --engine spark"):
             _check_guardrails(spec, bp, cfg=_CFG)
 
     def test_key_on_no_list_message_names_policy_command(self):
         bp = _bp_with_guardrails()
-        spec = _patch({
-            "op": "set_engine_config", "engine": "spark",
-            "key": "spark.totally.unlisted.key", "value": "x",
-        })
+        spec = _patch(
+            {
+                "op": "set_engine_config",
+                "engine": "spark",
+                "key": "spark.totally.unlisted.key",
+                "value": "x",
+            }
+        )
         with pytest.raises(PatchError, match=r"aqueduct patch policy --engine spark"):
             _check_guardrails(spec, bp, cfg=_CFG)
 
     def test_unregistered_engine_message_names_policy_command(self):
         bp = _bp_with_guardrails()
-        spec = _patch({
-            "op": "set_engine_config", "engine": "flink",
-            "key": "x", "value": "y",
-        })
+        spec = _patch(
+            {
+                "op": "set_engine_config",
+                "engine": "flink",
+                "key": "x",
+                "value": "y",
+            }
+        )
         with pytest.raises(PatchError, match=r"aqueduct patch policy"):
             _check_guardrails(spec, bp, cfg=_CFG)
 
@@ -281,13 +373,15 @@ class TestEngineConfigAllowlistGate:
         from aqueduct.errors import EngineConfigAllowlistError
 
         bp = _bp_with_guardrails()
-        spec = _patch({
-            "op": "set_engine_config", "engine": "spark",
-            "key": "spark.sql.shuffle.partitions", "value": 200,
-        })
-        with patch.object(
-            apply_mod, "discover_registered_engines", lambda: {"spark": tmp_path}
-        ):
+        spec = _patch(
+            {
+                "op": "set_engine_config",
+                "engine": "spark",
+                "key": "spark.sql.shuffle.partitions",
+                "value": 200,
+            }
+        )
+        with patch.object(apply_mod, "discover_registered_engines", lambda: {"spark": tmp_path}):
             with pytest.raises(EngineConfigAllowlistError):
                 _check_guardrails(spec, bp, cfg=_CFG)
 
@@ -329,26 +423,37 @@ edges: []
         backup_file = backup_dir / f"{patch_id}_20260101T000000_blueprint.yml"
         backup_file.write_text(self._ORIGINAL_BP)
         applied_record = applied_dir / f"{patch_id}.json"
-        applied_record.write_text(json.dumps({
-            "_aq_meta": {"run_id": "run-001", "blueprint_id": "test.rollback"},
-            "operations": [],
-        }))
+        applied_record.write_text(
+            json.dumps(
+                {
+                    "_aq_meta": {"run_id": "run-001", "blueprint_id": "test.rollback"},
+                    "operations": [],
+                }
+            )
+        )
         return {"bp_path": bp_path, "backup_file": backup_file}
 
     def test_patch_rollback_restores_blueprint(self, tmp_path):
         env = self._setup_patch_env(tmp_path)
         runner = CliRunner()
         with patch("subprocess.run") as mock_run:
-            mock_log = MagicMock(returncode=0, stdout=f"h1\x1fSubject line\nBody with abc123\x1eENDCOMMIT")
+            mock_log = MagicMock(
+                returncode=0, stdout=f"h1\x1fSubject line\nBody with abc123\x1eENDCOMMIT"
+            )
+
             def side_effect(cmd, **kw):
-                if "log" in cmd: return mock_log
+                if "log" in cmd:
+                    return mock_log
                 if "checkout" in cmd:
                     env["bp_path"].write_text(env["backup_file"].read_text())
                     return MagicMock(returncode=0)
                 if "diff-tree" in cmd:
                     return MagicMock(returncode=0, stdout="blueprint.yml\n")
                 return MagicMock(returncode=0)
+
             mock_run.side_effect = side_effect
-            result = runner.invoke(cli, ["patch", "rollback", str(env["bp_path"]), "--to", "abc123"])
+            result = runner.invoke(
+                cli, ["patch", "rollback", str(env["bp_path"]), "--to", "abc123"]
+            )
         assert result.exit_code == 0
         assert "Original" in env["bp_path"].read_text()

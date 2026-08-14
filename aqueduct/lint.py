@@ -39,13 +39,14 @@ LINT_SCHEMA_VERSION = "1.0"
 class LintFinding:
     """One lint result. ``module_id`` is None for blueprint-wide findings."""
 
-    rule_id: str           # "AQ-LINT001"
-    severity: str          # "warn" | "error"
+    rule_id: str  # "AQ-LINT001"
+    severity: str  # "warn" | "error"
     message: str
     module_id: str | None = None
 
 
 # ── structural rules ──────────────────────────────────────────────────────────
+
 
 def _rule_unused_module(bp: Blueprint) -> Iterator[LintFinding]:
     """AQ-LINT001 — a module no edge / depends_on / spillway / attach_to touches."""
@@ -58,10 +59,10 @@ def _rule_unused_module(bp: Blueprint) -> Iterator[LintFinding]:
     for m in bp.modules:
         touched.update(m.depends_on)
         if m.spillway:
-            touched.add(m.id)        # the module produces the spillway output
+            touched.add(m.id)  # the module produces the spillway output
             touched.add(m.spillway)
         if m.attach_to:
-            touched.add(m.id)        # a Probe tap is "connected" via attach_to
+            touched.add(m.id)  # a Probe tap is "connected" via attach_to
             touched.add(m.attach_to)
     for m in bp.modules:
         if m.id not in touched:
@@ -74,10 +75,11 @@ def _rule_unused_module(bp: Blueprint) -> Iterator[LintFinding]:
                 "it is orphaned and will be skipped at runtime"
                 if m.type == ModuleType.Probe
                 else "it is orphaned — the run will fail with a "
-                "\"no main-port incoming edges\" error for this module"
+                '"no main-port incoming edges" error for this module'
             )
             yield LintFinding(
-                "AQ-LINT001", "warn",
+                "AQ-LINT001",
+                "warn",
                 f"module {m.id!r} ({m.type}) is not referenced by any edge, "
                 f"depends_on, spillway, or attach_to — {_fate}",
                 m.id,
@@ -90,14 +92,16 @@ def _rule_label(bp: Blueprint) -> Iterator[LintFinding]:
         label = (m.label or "").strip()
         if not label:
             yield LintFinding(
-                "AQ-LINT002", "warn",
+                "AQ-LINT002",
+                "warn",
                 f"module {m.id!r} has an empty label — a human-readable label "
                 "improves readability and gives the heal LLM better context",
                 m.id,
             )
         elif label == m.id:
             yield LintFinding(
-                "AQ-LINT002", "warn",
+                "AQ-LINT002",
+                "warn",
                 f"module {m.id!r} label just repeats its id — a descriptive "
                 "label improves readability and heal-LLM context",
                 m.id,
@@ -113,7 +117,8 @@ def _rule_duplicate_edge(bp: Blueprint) -> Iterator[LintFinding]:
     for (from_id, to_id, port), n in counts.items():
         if n > 1:
             yield LintFinding(
-                "AQ-LINT003", "warn",
+                "AQ-LINT003",
+                "warn",
                 f"duplicate edge {from_id!r} → {to_id!r} (port={port!r}) "
                 f"declared {n} times — remove the redundant edge",
                 to_id,
@@ -121,6 +126,7 @@ def _rule_duplicate_edge(bp: Blueprint) -> Iterator[LintFinding]:
 
 
 # ── SQL rule helpers ────────────────────────────────────────────────────────────
+
 
 def _sql_channels(bp: Blueprint) -> Iterator[tuple[str, str]]:
     """Yield ``(module_id, query)`` for every Channel with ``op: sql``."""
@@ -168,6 +174,7 @@ def _top_select(stmt):
 
 # ── SQL rules ─────────────────────────────────────────────────────────────────
 
+
 def _rule_self_join_collision(bp: Blueprint) -> Iterator[LintFinding]:
     """AQ-LINT004 — same relation referenced 2+ times without distinct aliases."""
     import sqlglot.expressions as exp
@@ -198,7 +205,8 @@ def _rule_self_join_collision(bp: Blueprint) -> Iterator[LintFinding]:
             if any(a in seen or seen.add(a) for a in aliases):  # type: ignore[func-returns-value]
                 qualified = ".".join(p for p in key if p) or key[-1]
                 yield LintFinding(
-                    "AQ-LINT004", "warn",
+                    "AQ-LINT004",
+                    "warn",
                     f"Channel {mid!r}: relation {qualified!r} is referenced "
                     f"{len(aliases)} times without distinct aliases — Spark "
                     "self-joins need explicit, distinct aliases or column "
@@ -233,7 +241,8 @@ def _rule_cartesian_join(bp: Blueprint) -> Iterator[LintFinding]:
             if real_condition:
                 continue
             yield LintFinding(
-                "AQ-LINT010", "warn",
+                "AQ-LINT010",
+                "warn",
                 f"Channel {mid!r}: JOIN without an ON/USING condition produces "
                 "a cartesian product — add a join predicate, or write CROSS "
                 "JOIN explicitly if the cross product is intended",
@@ -272,7 +281,8 @@ def _rule_star_into_egress(bp: Blueprint) -> Iterator[LintFinding]:
             continue
         if any(p.find(exp.Star) for p in sel.expressions):
             yield LintFinding(
-                "AQ-LINT011", "warn",
+                "AQ-LINT011",
+                "warn",
                 f"Channel {mid!r} uses SELECT * and feeds directly into an "
                 "Egress — an upstream schema change silently changes the "
                 "written schema; list output columns explicitly",
@@ -304,12 +314,12 @@ def _rule_groupby_mismatch(bp: Blueprint) -> Iterator[LintFinding]:
             for agg in p.find_all(exp.AggFunc)
         )
         has_bare_col = any(
-            isinstance(p.this if isinstance(p, exp.Alias) else p, exp.Column)
-            for p in projections
+            isinstance(p.this if isinstance(p, exp.Alias) else p, exp.Column) for p in projections
         )
         if has_agg and has_bare_col:
             yield LintFinding(
-                "AQ-LINT012", "warn",
+                "AQ-LINT012",
+                "warn",
                 f"Channel {mid!r}: SELECT mixes aggregate function(s) with a "
                 "non-aggregated column but has no GROUP BY — Spark rejects this "
                 "at runtime; add a GROUP BY clause or aggregate the column",

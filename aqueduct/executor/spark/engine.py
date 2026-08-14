@@ -124,7 +124,10 @@ def _read_source_schema(module: Any, session: Any) -> dict[str, str]:
 
 
 def _sample_source_rows(
-    module: Any, session: Any, n: int = 10, base_dir: str | None = None,
+    module: Any,
+    session: Any,
+    n: int = 10,
+    base_dir: str | None = None,
 ) -> list[dict[str, Any]]:
     """``ExecutorProtocol.sample_source_rows`` for Spark — lazy ``pyspark`` import.
 

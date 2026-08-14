@@ -73,6 +73,7 @@ _COMBINED_RE: re.Pattern[str] | None = None
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+
 def register(value: str, key_hint: str | None = None) -> bool:
     """Register a resolved secret value for global redaction.
 
@@ -137,6 +138,7 @@ def registered_values() -> Iterable[str]:
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
+
 
 def _redact_string(text: str) -> str:
     global _COMBINED_RE

@@ -1,4 +1,3 @@
-
 import pytest
 
 from aqueduct.config import load_config
@@ -6,18 +5,20 @@ from aqueduct.parser.parser import parse, parse_dict
 
 pytestmark = pytest.mark.unit
 
+
 def test_blueprint_path_resolution_relative(tmp_path):
     # Setup directories
     bp_dir = tmp_path / "blueprints"
     bp_dir.mkdir()
     data_dir = bp_dir / "data" / "input"
     data_dir.mkdir(parents=True)
-    
+
     csv_file = data_dir / "events.csv"
     csv_file.write_text("col1,col2\n1,2")
-    
+
     bp_file = bp_dir / "blueprint.yml"
-    bp_file.write_text("""
+    bp_file.write_text(
+        """
 aqueduct: "1.0"
 id: test_path_res
 name: Test Path Resolution
@@ -29,17 +30,20 @@ modules:
       format: csv
       path: data/input/events.csv
 edges: []
-""")
-    
+"""
+    )
+
     bp = parse(bp_file)
     ingress = next(m for m in bp.modules if m.id == "ingress")
     # Should resolve relative to the blueprint directory (bp_dir)
     expected_path = (bp_dir / "data/input/events.csv").resolve()
     assert ingress.config["path"] == str(expected_path)
 
+
 def test_blueprint_path_resolution_uri(tmp_path):
     bp_file = tmp_path / "blueprint.yml"
-    bp_file.write_text("""
+    bp_file.write_text(
+        """
 aqueduct: "1.0"
 id: test_path_res_uri
 name: Test Path Resolution URI
@@ -51,15 +55,18 @@ modules:
       format: parquet
       path: s3://bucket/key.parquet
 edges: []
-""")
+"""
+    )
     bp = parse(bp_file)
     ingress = next(m for m in bp.modules if m.id == "ingress")
     # URIs should pass through unchanged
     assert ingress.config["path"] == "s3://bucket/key.parquet"
 
+
 def test_blueprint_path_resolution_absolute(tmp_path):
     bp_file = tmp_path / "blueprint.yml"
-    bp_file.write_text("""
+    bp_file.write_text(
+        """
 aqueduct: "1.0"
 id: test_path_res_abs
 name: Test Path Resolution Absolute
@@ -71,24 +78,29 @@ modules:
       format: csv
       path: /abs/data.csv
 edges: []
-""")
+"""
+    )
     bp = parse(bp_file)
     ingress = next(m for m in bp.modules if m.id == "ingress")
     # Absolute paths should pass through unchanged
     assert ingress.config["path"] == "/abs/data.csv"
 
+
 def test_config_store_path_resolution_relative(tmp_path):
     cfg_dir = tmp_path / "config"
     cfg_dir.mkdir()
     cfg_file = cfg_dir / "aqueduct.yml"
-    cfg_file.write_text("""
+    cfg_file.write_text(
+        """
 stores:
   observability:
     path: .aqueduct/observability
-""")
+"""
+    )
     cfg = load_config(cfg_file)
     expected_path = (cfg_dir / ".aqueduct/observability").resolve()
     assert cfg.stores.observability.path == str(expected_path)
+
 
 def test_module_config_other_keys_resolution(tmp_path):
     """Channel has NO path-typed config keys (``path_keys.get_path_keys("Channel")
@@ -103,7 +115,8 @@ def test_module_config_other_keys_resolution(tmp_path):
     Channel's typed `config:` (`extra="forbid"`) now rejects them outright.
     """
     bp_file = tmp_path / "blueprint.yml"
-    bp_file.write_text("""
+    bp_file.write_text(
+        """
 aqueduct: "1.0"
 id: test_other_keys
 name: Test Other Keys
@@ -115,7 +128,8 @@ modules:
       op: filter
       condition: "path/looking/but/not/a/path > 0"
 edges: []
-""")
+"""
+    )
     bp = parse(bp_file)
     mod = next(m for m in bp.modules if m.id == "mod")
     # Never anchored — Channel has no path keys, and `condition` isn't one
@@ -259,6 +273,7 @@ def test_path_keys_registry_per_module_type():
     JAR location, and both need anchoring for the same reason."""
     pytest.importorskip("pyspark")
     from aqueduct.executor.path_keys import get_path_keys
+
     assert get_path_keys("Ingress") == ("path",)
     assert get_path_keys("Egress") == ("path",)
     assert get_path_keys("UDF") == ("jar", "path")
@@ -322,10 +337,13 @@ def test_fs_path_marker_visible_on_store_fields():
     marker so the schema-driven walker in config.py picks them up."""
     from aqueduct.config import KVStoreConfig, RelationalStoreConfig
     from aqueduct.parser.fs_path import field_is_fs_path
+
     for cls in (RelationalStoreConfig, KVStoreConfig):
         field_info = cls.model_fields["path"]
         meta = tuple(field_info.metadata)
-        assert field_is_fs_path(meta, field_info.annotation) is not None, f"{cls.__name__}.path missing FsPath()"
+        assert (
+            field_is_fs_path(meta, field_info.annotation) is not None
+        ), f"{cls.__name__}.path missing FsPath()"
 
 
 def test_fs_path_marker_seen_through_optional_on_this_interpreter():
@@ -377,6 +395,7 @@ def test_config_anchors_store_paths_via_fs_path_walker(tmp_path):
         "  depots: { default: { backend: redis,  path: 'redis://h:6379/0' } }\n"
     )
     from aqueduct.config import load_config
+
     c = load_config(cfg_file)
     assert c.stores.observability.path == str((tmp_path / ".aqueduct/obs").resolve())
     # URI passthrough — walker bails on any ``://`` value.

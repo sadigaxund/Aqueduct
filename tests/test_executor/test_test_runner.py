@@ -5,77 +5,93 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
+
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
+
 
 class TestTestRunnerHelpers:
     """Tests for pure helpers in test_runner.py — no Spark needed."""
 
     def test_schema_ddl_uses_spark_types_directly(self):
         from aqueduct.executor.spark.test_runner import _schema_ddl
+
         ddl = _schema_ddl({"order_id": "bigint", "name": "string"})
         assert "`order_id` bigint" in ddl
         assert "`name` string" in ddl
 
     def test_schema_ddl_decimal_with_precision(self):
         from aqueduct.executor.spark.test_runner import _schema_ddl
+
         ddl = _schema_ddl({"amount": "decimal(38,2)"})
         assert "`amount` decimal(38,2)" in ddl
 
     def test_sql_literal_string(self):
         from aqueduct.executor.spark.test_runner import _sql_literal
+
         assert _sql_literal("hello") == "'hello'"
 
     def test_sql_literal_int(self):
         from aqueduct.executor.spark.test_runner import _sql_literal
+
         assert _sql_literal(42) == "42"
 
     def test_sql_literal_bool(self):
         from aqueduct.executor.spark.test_runner import _sql_literal
+
         assert _sql_literal(True) == "TRUE"
         assert _sql_literal(False) == "FALSE"
 
     def test_assertion_result_dataclass(self):
         from aqueduct.executor.spark.test_runner import AssertionResult
+
         ar = AssertionResult(passed=True, assertion_type="row_count", message="ok")
         assert ar.passed is True
 
     def test_test_suite_result_success_property(self):
         from aqueduct.executor.spark.test_runner import TestSuiteResult
+
         suite = TestSuiteResult(total=2, passed=2, failed=0)
         assert suite.success is True
 
     def test_test_suite_result_failure_property(self):
         from aqueduct.executor.spark.test_runner import TestSuiteResult
+
         suite = TestSuiteResult(total=2, passed=1, failed=1)
         assert suite.success is False
 
     def test_testable_types_constant(self):
         from aqueduct.executor.spark.test_runner import _TESTABLE_TYPES
+
         assert "Channel" in _TESTABLE_TYPES
         assert "Ingress" not in _TESTABLE_TYPES
         assert "Egress" not in _TESTABLE_TYPES
 
     def test_run_test_file_missing_blueprint(self, tmp_path):
         from aqueduct.executor.spark.test_runner import TestSchemaError, run_test_file
+
         test_file = tmp_path / "t.yml"
         test_file.write_text("aqueduct_test: '1.0'\ntests: []\n", encoding="utf-8")
         from unittest.mock import MagicMock
+
         with pytest.raises(TestSchemaError, match="blueprint"):
             run_test_file(test_file, spark=MagicMock())
 
     def test_run_test_file_blueprint_not_found(self, tmp_path):
         from aqueduct.executor.spark.test_runner import TestSchemaError, run_test_file
+
         test_file = tmp_path / "t.yml"
         test_file.write_text(
             "aqueduct_test: '1.0'\nblueprint: nonexistent.yml\ntests: []\n",
             encoding="utf-8",
         )
         from unittest.mock import MagicMock
+
         with pytest.raises(TestSchemaError, match="not found"):
             run_test_file(test_file, spark=MagicMock())
 
     def test_run_test_file_no_tests_returns_empty_suite(self, tmp_path):
         from aqueduct.executor.spark.test_runner import run_test_file
+
         # Create a minimal valid blueprint
         bp = tmp_path / "bp.yml"
         bp.write_text(
@@ -88,6 +104,7 @@ class TestTestRunnerHelpers:
             encoding="utf-8",
         )
         from unittest.mock import MagicMock
+
         suite = run_test_file(test_file, spark=MagicMock())
         assert suite.total == 0
         assert suite.success is True
@@ -98,11 +115,13 @@ class TestTestRunnerCaseExecution:
 
     def _channel_module(self, mid="ch"):
         from aqueduct.parser.models import Module
+
         return Module(id=mid, type="Channel", label="C", config={"op": "sql", "query": "SELECT 1"})
 
     def test_run_test_case_missing_module_field(self):
         from aqueduct.executor.spark.test_runner import _run_test_case
         from unittest.mock import MagicMock
+
         result = _run_test_case({"id": "t1"}, {}, MagicMock())
         assert result.passed is False
         assert "missing 'module'" in result.error
@@ -110,6 +129,7 @@ class TestTestRunnerCaseExecution:
     def test_run_test_case_module_not_in_blueprint(self):
         from aqueduct.executor.spark.test_runner import _run_test_case
         from unittest.mock import MagicMock
+
         result = _run_test_case({"id": "t1", "module": "nonexistent"}, {}, MagicMock())
         assert result.passed is False
         assert "not found in blueprint" in result.error
@@ -118,6 +138,7 @@ class TestTestRunnerCaseExecution:
         from aqueduct.executor.spark.test_runner import _run_test_case
         from aqueduct.parser.models import Module
         from unittest.mock import MagicMock
+
         mod = Module(id="src", type="Ingress", label="S", config={})
         result = _run_test_case(
             {"id": "t1", "module": "src", "inputs": {"x": {"schema": {}, "rows": []}}},
@@ -130,6 +151,7 @@ class TestTestRunnerCaseExecution:
     def test_input_missing_schema_field(self):
         from aqueduct.executor.spark.test_runner import _run_test_case
         from unittest.mock import MagicMock
+
         mod = self._channel_module()
         result = _run_test_case(
             {"id": "t", "module": "ch", "inputs": {"src": {"rows": [[1]]}}},
@@ -142,10 +164,17 @@ class TestTestRunnerCaseExecution:
     def test_create_df_failure_returns_error(self):
         from aqueduct.executor.spark.test_runner import _run_test_case
         from unittest.mock import MagicMock, patch
+
         mod = self._channel_module()
-        with patch("aqueduct.executor.spark.test_runner._create_df", side_effect=RuntimeError("boom")):
+        with patch(
+            "aqueduct.executor.spark.test_runner._create_df", side_effect=RuntimeError("boom")
+        ):
             result = _run_test_case(
-                {"id": "t", "module": "ch", "inputs": {"src": {"schema": {"id": "long"}, "rows": []}}},
+                {
+                    "id": "t",
+                    "module": "ch",
+                    "inputs": {"src": {"schema": {"id": "long"}, "rows": []}},
+                },
                 {"ch": mod},
                 MagicMock(),
             )
@@ -155,15 +184,22 @@ class TestTestRunnerCaseExecution:
     def test_assertion_exception_captured_as_failure(self):
         from aqueduct.executor.spark.test_runner import _run_test_case
         from unittest.mock import MagicMock, patch
+
         mod = self._channel_module()
         fake_df = MagicMock()
         with patch("aqueduct.executor.spark.test_runner._create_df", return_value=fake_df):
             with patch("aqueduct.executor.spark.test_runner._execute_module", return_value=fake_df):
-                with patch("aqueduct.executor.spark.test_runner._run_assertion", side_effect=RuntimeError("assert boom")):
+                with patch(
+                    "aqueduct.executor.spark.test_runner._run_assertion",
+                    side_effect=RuntimeError("assert boom"),
+                ):
                     result = _run_test_case(
-                        {"id": "t", "module": "ch",
-                         "inputs": {"src": {"schema": {"id": "long"}, "rows": []}},
-                         "assertions": [{"type": "row_count", "expected": 0}]},
+                        {
+                            "id": "t",
+                            "module": "ch",
+                            "inputs": {"src": {"schema": {"id": "long"}, "rows": []}},
+                            "assertions": [{"type": "row_count", "expected": 0}],
+                        },
                         {"ch": mod},
                         MagicMock(),
                     )
@@ -177,6 +213,7 @@ class TestRunTestFileLoop:
     def test_run_test_file_with_passing_test(self, tmp_path):
         from aqueduct.executor.spark.test_runner import run_test_file, TestCaseResult
         from unittest.mock import MagicMock, patch
+
         bp = tmp_path / "bp.yml"
         bp.write_text(
             "aqueduct: '1.0'\nid: p\nname: P\nmodules: []\nedges: []\n",
@@ -188,7 +225,9 @@ class TestRunTestFileLoop:
             encoding="utf-8",
         )
         passing_result = TestCaseResult(test_id="t1", passed=True)
-        with patch("aqueduct.executor.spark.test_runner._run_test_case", return_value=passing_result):
+        with patch(
+            "aqueduct.executor.spark.test_runner._run_test_case", return_value=passing_result
+        ):
             suite = run_test_file(test_file, spark=MagicMock())
         assert suite.total == 1
         assert suite.passed == 1
@@ -198,6 +237,7 @@ class TestRunTestFileLoop:
     def test_run_test_file_with_failing_test(self, tmp_path):
         from aqueduct.executor.spark.test_runner import run_test_file, TestCaseResult
         from unittest.mock import MagicMock, patch
+
         bp = tmp_path / "bp.yml"
         bp.write_text(
             "aqueduct: '1.0'\nid: p\nname: P\nmodules: []\nedges: []\n",
@@ -209,7 +249,9 @@ class TestRunTestFileLoop:
             encoding="utf-8",
         )
         failing_result = TestCaseResult(test_id="t1", passed=False, error="bad")
-        with patch("aqueduct.executor.spark.test_runner._run_test_case", return_value=failing_result):
+        with patch(
+            "aqueduct.executor.spark.test_runner._run_test_case", return_value=failing_result
+        ):
             suite = run_test_file(test_file, spark=MagicMock())
         assert suite.failed == 1
         assert suite.success is False

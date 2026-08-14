@@ -26,8 +26,8 @@ ChangeKind = Literal["dropped", "type_changed", "added"]
 class SchemaChange:
     column: str
     kind: ChangeKind
-    baseline_type: str | None = None   # None for 'added'
-    live_type: str | None = None       # None for 'dropped'
+    baseline_type: str | None = None  # None for 'added'
+    live_type: str | None = None  # None for 'dropped'
 
     @property
     def breaking(self) -> bool:
@@ -87,7 +87,9 @@ def diff_schemas(baseline: dict[str, str], live: dict[str, str]) -> DriftResult:
         if col not in live:
             changes.append(SchemaChange(col, "dropped", baseline_type=btype))
         elif live[col] != btype:
-            changes.append(SchemaChange(col, "type_changed", baseline_type=btype, live_type=live[col]))
+            changes.append(
+                SchemaChange(col, "type_changed", baseline_type=btype, live_type=live[col])
+            )
     for col, ltype in live.items():
         if col not in baseline:
             changes.append(SchemaChange(col, "added", live_type=ltype))

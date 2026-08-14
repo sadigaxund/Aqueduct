@@ -25,7 +25,6 @@ from aqueduct.executor.spill import (
 )
 from aqueduct.surveyor.ddl import _DDL
 
-
 # ── is_remote_uri / local_only_or_fsspec_available ──────────────────────────
 
 

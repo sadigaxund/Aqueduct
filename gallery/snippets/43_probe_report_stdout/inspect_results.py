@@ -5,11 +5,14 @@ import os
 
 console = Console()
 
+
 def main():
     out_path = "data/output/result.parquet"
 
     if not os.path.exists(out_path):
-        console.print("[bold red]✗[/bold red] Output not found — did you run 'aqueduct run blueprint.yml'?")
+        console.print(
+            "[bold red]✗[/bold red] Output not found — did you run 'aqueduct run blueprint.yml'?"
+        )
         return
 
     df = pd.read_parquet(out_path)
@@ -27,6 +30,7 @@ def main():
         "rows, distinct counts, value distribution). No data store needed "
         "to inspect a Probe result.[/dim]"
     )
+
 
 if __name__ == "__main__":
     main()

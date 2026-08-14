@@ -15,6 +15,7 @@ naming the offending key. Tier-0 (`${ENV}`/`${ctx.*}`) resolution for these
 fields now only happens for `aqueduct.yml`'s `agent:` block
 (`AgentConnectionConfig`), covered in `tests/test_parser/test_config.py`.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -116,10 +117,7 @@ class TestAgentBlockPassThrough:
     def test_policy_fields_passthrough_unchanged(self, tmp_path):
         bp = _write_bp(
             tmp_path,
-            agent_block=(
-                "  approval: human\n"
-                "  sandbox_mode: preflight\n"
-            ),
+            agent_block=("  approval: human\n" "  sandbox_mode: preflight\n"),
         )
         result = parse(bp)
         assert result.agent.approval_mode == "human"

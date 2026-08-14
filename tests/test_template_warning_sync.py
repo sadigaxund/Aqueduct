@@ -113,4 +113,6 @@ def test_parser_actually_finds_the_known_rule_ids():
     documented_compile = _ids_after(_template_lines(), "Available compile-time rule IDs")
     documented_startup = _ids_after(_template_lines(), "Session-startup rules")
     assert documented_compile, "parser found zero compile-time rule ids -- template format changed?"
-    assert documented_startup, "parser found zero session-startup rule ids -- template format changed?"
+    assert (
+        documented_startup
+    ), "parser found zero session-startup rule ids -- template format changed?"

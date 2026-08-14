@@ -233,7 +233,9 @@ def run_hooks(
                 )
                 continue
             if len(chain) + 1 >= _MAX_DEPTH:
-                _warn(f"[hook_depth] blueprint hook skipped — chain depth cap ({_MAX_DEPTH}) reached")
+                _warn(
+                    f"[hook_depth] blueprint hook skipped — chain depth cap ({_MAX_DEPTH}) reached"
+                )
                 continue
             if not target.exists():
                 _warn(f"[hook_failed] {label} — blueprint not found: {target}")
@@ -241,8 +243,14 @@ def run_hooks(
 
             if h.in_process and session is not None:
                 handled = _run_in_process_blueprint_hook(
-                    target=target, label=f"in-process {h.value}", session=session,
-                    engine=engine, chain=chain, bp_path=bp_path, warn=_warn, ok=_ok,
+                    target=target,
+                    label=f"in-process {h.value}",
+                    session=session,
+                    engine=engine,
+                    chain=chain,
+                    bp_path=bp_path,
+                    warn=_warn,
+                    ok=_ok,
                     allow_command_hooks=allow_command_hooks,
                 )
                 if handled:
@@ -276,6 +284,7 @@ def run_hooks(
             try:
                 from aqueduct.config import WebhookEndpointConfig
                 from aqueduct.surveyor.webhook import fire_webhook
+
                 endpoint = WebhookEndpointConfig.model_validate(
                     raw if isinstance(raw, dict) else {"url": raw}
                 )
@@ -293,7 +302,9 @@ def run_hooks(
         # blueprint / command — synchronous subprocess with timeout
         t0 = time.monotonic()
         try:
-            rc = subprocess.run(argv, env=env, timeout=h.timeout, check=False).returncode  # noqa: S603 — argv is fixed (shlex, no shell); command entries are danger-gated
+            rc = subprocess.run(
+                argv, env=env, timeout=h.timeout, check=False
+            ).returncode  # noqa: S603 — argv is fixed (shlex, no shell); command entries are danger-gated
         except subprocess.TimeoutExpired:
             _warn(f"[hook_failed] {label} — timeout after {h.timeout}s")
             rc = -1
@@ -344,7 +355,9 @@ def _run_in_process_blueprint_hook(
 
     try:
         t_bp = _parse(str(target))
-    except Exception as exc:  # noqa: BLE001 — parse errors are reported as hook failures, not raised
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 — parse errors are reported as hook failures, not raised
         warn(f"[hook_failed] {label} — parse error: {exc}")
         return True
 
@@ -355,6 +368,7 @@ def _run_in_process_blueprint_hook(
         # guessing at a merge policy. (No pyspark import needed on this
         # branch — keeps the fallback usable on a [spark]-less install too.)
         from aqueduct.cli.style import info as _info
+
         _info(
             f"[hook_inprocess_fallback] {label} — target sets engine.{engine}.* config, "
             "falling back to subprocess (session config would conflict)"
@@ -367,7 +381,9 @@ def _run_in_process_blueprint_hook(
 
     try:
         t_manifest = _compiler_compile(t_bp, blueprint_path=target, engine=engine)
-    except Exception as exc:  # noqa: BLE001 — compile errors are reported as hook failures, not raised
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 — compile errors are reported as hook failures, not raised
         warn(f"[hook_failed] {label} — compile error: {exc}")
         return True
 
@@ -375,7 +391,9 @@ def _run_in_process_blueprint_hook(
     t_run_id = str(uuid.uuid4())
     t0 = time.monotonic()
     try:
-        t_result = execute_fn(t_manifest, session, run_id=t_run_id, store_dir=None, surveyor=None, depot=None)
+        t_result = execute_fn(
+            t_manifest, session, run_id=t_run_id, store_dir=None, surveyor=None, depot=None
+        )
     except ExecuteError as exc:
         warn(f"[hook_failed] {label} — {exc}")
         return True
@@ -385,7 +403,9 @@ def _run_in_process_blueprint_hook(
     if success:
         ok(label, dur)
     else:
-        failing = next((r for r in t_result.module_results if r.status == ExecutionStatus.ERROR), None)
+        failing = next(
+            (r for r in t_result.module_results if r.status == ExecutionStatus.ERROR), None
+        )
         detail = f" — {failing.module_id}: {failing.error}" if failing is not None else ""
         warn(f"[hook_failed] {label}{detail}  ·  {_fmt_dur(dur)}")
 
@@ -397,11 +417,15 @@ def _run_in_process_blueprint_hook(
     t_entries = t_bp.hooks.on_success if success else t_bp.hooks.on_failure
     if t_entries:
         run_hooks(
-            t_entries, t_event,
-            run_id=t_run_id, status=t_status,
-            blueprint_id=t_bp.id, blueprint_path=str(target),
+            t_entries,
+            t_event,
+            run_id=t_run_id,
+            status=t_status,
+            blueprint_id=t_bp.id,
+            blueprint_path=str(target),
             allow_command_hooks=allow_command_hooks,
-            session=session, _chain=new_chain,
+            session=session,
+            _chain=new_chain,
         )
     return True
 
@@ -437,7 +461,7 @@ def static_hook_check(blueprint_path: Path) -> list[str]:
     def _walk(path: Path) -> None:
         rp = str(path.resolve())
         if rp in visiting:
-            cycle = " → ".join([Path(p).name for p in visiting[visiting.index(rp):]] + [path.name])
+            cycle = " → ".join([Path(p).name for p in visiting[visiting.index(rp) :]] + [path.name])
             problems.append(f"hook cycle: {cycle}")
             return
         if len(visiting) >= _MAX_DEPTH:

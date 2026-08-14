@@ -72,9 +72,7 @@ def topological_order(modules: list[Module], edges: list[Edge]) -> list[str]:
     """
     cycle_nodes = detect_cycles(modules, edges)
     if cycle_nodes:
-        raise ParseError(
-            f"Cycle detected in module graph. Involved modules: {cycle_nodes}"
-        )
+        raise ParseError(f"Cycle detected in module graph. Involved modules: {cycle_nodes}")
 
     adj, in_degree = _build_adjacency(modules, edges)
     queue = deque(node for node, deg in in_degree.items() if deg == 0)

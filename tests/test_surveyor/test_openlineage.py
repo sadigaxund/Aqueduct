@@ -2,6 +2,7 @@
 
 Pure/unit only (no live OpenLineage server — httpx is mocked).
 """
+
 from __future__ import annotations
 
 import logging
@@ -22,8 +23,8 @@ from aqueduct.surveyor.openlineage import (
     run_uuid,
 )
 
-
 # ── config ───────────────────────────────────────────────────────────────────
+
 
 def test_lineage_config_defaults_to_disabled():
     cfg = AqueductConfig()
@@ -38,21 +39,39 @@ def test_lineage_config_rejects_unknown_key():
 
 # ── run_uuid ─────────────────────────────────────────────────────────────────
 
+
 def test_run_uuid_is_deterministic():
     assert run_uuid("run_abc") == run_uuid("run_abc")
     assert run_uuid("run_abc") != run_uuid("run_def")
     # valid UUID string
     import uuid
+
     uuid.UUID(run_uuid("run_abc"))
 
 
 # ── columnLineage facet ──────────────────────────────────────────────────────
 
+
 def test_build_column_lineage_facet_maps_fields_and_dedups():
     rows = [
-        {"channel_id": "c", "output_column": "amount", "source_table": "orders", "source_column": "amt"},
-        {"channel_id": "c", "output_column": "amount", "source_table": "orders", "source_column": "amt"},
-        {"channel_id": "c", "output_column": "region", "source_table": "orders", "source_column": "region"},
+        {
+            "channel_id": "c",
+            "output_column": "amount",
+            "source_table": "orders",
+            "source_column": "amt",
+        },
+        {
+            "channel_id": "c",
+            "output_column": "amount",
+            "source_table": "orders",
+            "source_column": "amt",
+        },
+        {
+            "channel_id": "c",
+            "output_column": "region",
+            "source_table": "orders",
+            "source_column": "region",
+        },
     ]
     facet = build_column_lineage_facet(rows, "ns")
     assert set(facet["fields"]) == {"amount", "region"}
@@ -77,12 +96,15 @@ def test_build_column_lineage_facet_empty_returns_none():
 
 # ── datasets ─────────────────────────────────────────────────────────────────
 
+
 def _manifest():
     return SimpleNamespace(
         blueprint_id="demo.bp",
         modules=(
             SimpleNamespace(id="read", type="Ingress", config={"path": "s3://in/orders"}),
-            SimpleNamespace(id="t", type="Channel", config={"op": "sql", "query": "SELECT a FROM read"}),
+            SimpleNamespace(
+                id="t", type="Channel", config={"op": "sql", "query": "SELECT a FROM read"}
+            ),
             SimpleNamespace(id="write", type="Egress", config={"path": "s3://out/daily"}),
         ),
         edges=(SimpleNamespace(from_id="read", to_id="t", port="main"),),
@@ -97,10 +119,15 @@ def test_extract_datasets_splits_ingress_and_egress():
 
 # ── run event ────────────────────────────────────────────────────────────────
 
+
 def test_build_run_event_complete_shape():
     ev = build_run_event(
-        "COMPLETE", run_id="run_1", job_namespace="ns", job_name="demo.bp",
-        inputs=[], outputs=[{"namespace": "ns", "name": "out"}],
+        "COMPLETE",
+        run_id="run_1",
+        job_namespace="ns",
+        job_name="demo.bp",
+        inputs=[],
+        outputs=[{"namespace": "ns", "name": "out"}],
     )
     assert ev["eventType"] == "COMPLETE"
     assert ev["run"]["runId"] == run_uuid("run_1")
@@ -111,24 +138,32 @@ def test_build_run_event_complete_shape():
 
 def test_build_run_event_fail_carries_error_facet():
     ev = build_run_event(
-        "FAIL", run_id="run_1", job_namespace="ns", job_name="bp",
-        inputs=[], outputs=[], error_message="boom",
+        "FAIL",
+        run_id="run_1",
+        job_namespace="ns",
+        job_name="bp",
+        inputs=[],
+        outputs=[],
+        error_message="boom",
     )
     assert ev["run"]["facets"]["errorMessage"]["message"] == "boom"
 
 
 def test_build_run_event_rejects_invalid_type():
     with pytest.raises(ValueError, match="eventType"):
-        build_run_event("NOPE", run_id="r", job_namespace="n", job_name="j",
-                        inputs=[], outputs=[])
+        build_run_event("NOPE", run_id="r", job_namespace="n", job_name="j", inputs=[], outputs=[])
 
 
 # ── emitter ──────────────────────────────────────────────────────────────────
 
+
 def test_emitter_normalises_url():
     m = _manifest()
     assert OpenLineageEmitter("http://h:5000", "ns", m)._url == "http://h:5000/api/v1/lineage"
-    assert OpenLineageEmitter("http://h:5000/api/v1/lineage", "ns", m)._url == "http://h:5000/api/v1/lineage"
+    assert (
+        OpenLineageEmitter("http://h:5000/api/v1/lineage", "ns", m)._url
+        == "http://h:5000/api/v1/lineage"
+    )
 
 
 def test_emitter_posts_event_with_column_lineage_facet():
@@ -160,6 +195,7 @@ def test_emitter_lazy_start_for_unstarted_run():
             c.kwargs["json"]  # touch
         # join any spawned threads
         import threading as _t
+
         for t in _t.enumerate():
             if t.name == "surveyor-openlineage":
                 t.join(timeout=2)
@@ -174,6 +210,7 @@ def test_emitter_no_duplicate_start_when_already_started():
         emitter.emit("START", run_id="r1")
         emitter.emit("COMPLETE", run_id="r1")
         import threading as _t
+
         for t in _t.enumerate():
             if t.name == "surveyor-openlineage":
                 t.join(timeout=2)

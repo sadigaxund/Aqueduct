@@ -52,6 +52,7 @@ logger = logging.getLogger(__name__)
 
 # ── Result types ──────────────────────────────────────────────────────────────
 
+
 @dataclass
 class AssertionResult:
     passed: bool
@@ -95,6 +96,7 @@ def _schema_ddl(schema: dict[str, str]) -> str:
 
 # ── DataFrame creation ────────────────────────────────────────────────────────
 
+
 def _create_df(spark: SparkSession, schema_dict: dict[str, str], rows: list[list]) -> DataFrame:
     from pyspark.sql.types import StructType, _parse_datatype_string
 
@@ -102,6 +104,7 @@ def _create_df(spark: SparkSession, schema_dict: dict[str, str], rows: list[list
     for col_name, col_type in schema_dict.items():
         dtype = _parse_datatype_string(col_type)
         from pyspark.sql.types import StructField
+
         fields.append(StructField(col_name, dtype, nullable=True))
 
     schema = StructType(fields)
@@ -109,6 +112,7 @@ def _create_df(spark: SparkSession, schema_dict: dict[str, str], rows: list[list
 
 
 # ── Assertion evaluation ──────────────────────────────────────────────────────
+
 
 def _run_assertion(
     assertion: dict[str, Any],
@@ -133,9 +137,7 @@ def _run_assertion(
         missing = []
         for expected_row in expected_rows:
             filter_parts = [
-                f"`{col}` = {_sql_literal(val)}"
-                if val is not None
-                else f"`{col}` IS NULL"
+                f"`{col}` = {_sql_literal(val)}" if val is not None else f"`{col}` IS NULL"
                 for col, val in expected_row.items()
             ]
             filter_expr = " AND ".join(filter_parts)
@@ -143,13 +145,19 @@ def _run_assertion(
             if count == 0:
                 missing.append(expected_row)
         passed = len(missing) == 0
-        msg = "all expected rows found" if passed else f"{len(missing)} expected row(s) not found: {missing}"
+        msg = (
+            "all expected rows found"
+            if passed
+            else f"{len(missing)} expected row(s) not found: {missing}"
+        )
         return AssertionResult(passed=passed, assertion_type="contains", message=msg)
 
     elif atype == "sql":
         expr = assertion.get("expr", "")
         if not expr:
-            return AssertionResult(passed=False, assertion_type="sql", message="sql assertion missing 'expr'")
+            return AssertionResult(
+                passed=False, assertion_type="sql", message="sql assertion missing 'expr'"
+            )
         result_df.createOrReplaceTempView(view_name)
         try:
             row = spark.sql(expr).collect()
@@ -200,23 +208,31 @@ def _execute_module(
     """Run a single module against inline DataFrames. Returns result DataFrame(s)."""
     if module.type == ModuleType.Channel:
         from aqueduct.executor.spark.channel import execute_channel
+
         return execute_channel(module, input_dfs, spark)
 
     elif module.type == ModuleType.Junction:
         from aqueduct.executor.spark.junction import execute_junction
+
         if len(input_dfs) != 1:
-            raise TestSchemaError(f"Junction {module.id!r} expects exactly 1 input, got {len(input_dfs)}")
+            raise TestSchemaError(
+                f"Junction {module.id!r} expects exactly 1 input, got {len(input_dfs)}"
+            )
         df = next(iter(input_dfs.values()))
         return execute_junction(module, df)
 
     elif module.type == ModuleType.Funnel:
         from aqueduct.executor.spark.funnel import execute_funnel
+
         return execute_funnel(module, input_dfs)
 
     elif module.type == ModuleType.Assert:
         from aqueduct.executor.spark.assert_ import execute_assert
+
         if len(input_dfs) != 1:
-            raise TestSchemaError(f"Assert {module.id!r} expects exactly 1 input, got {len(input_dfs)}")
+            raise TestSchemaError(
+                f"Assert {module.id!r} expects exactly 1 input, got {len(input_dfs)}"
+            )
         df = next(iter(input_dfs.values()))
         passing_df, _ = execute_assert(module, df, spark, run_id="test", blueprint_id="test")
         return passing_df
@@ -230,6 +246,7 @@ def _execute_module(
 
 # ── Test case runner ──────────────────────────────────────────────────────────
 
+
 def _run_test_case(
     test_case: dict[str, Any],
     blueprint_modules: dict[str, Any],
@@ -238,17 +255,21 @@ def _run_test_case(
     test_id = test_case.get("id", "(unnamed)")
     target_id: str = test_case.get("module", "")
     if not target_id:
-        return TestCaseResult(test_id=test_id, passed=False, error="test case missing 'module' field")
+        return TestCaseResult(
+            test_id=test_id, passed=False, error="test case missing 'module' field"
+        )
 
     module = blueprint_modules.get(target_id)
     if module is None:
         return TestCaseResult(
-            test_id=test_id, passed=False,
+            test_id=test_id,
+            passed=False,
             error=f"module {target_id!r} not found in blueprint",
         )
     if module.type not in _TESTABLE_TYPES:
         return TestCaseResult(
-            test_id=test_id, passed=False,
+            test_id=test_id,
+            passed=False,
             error=f"module {target_id!r} is type {module.type!r}; only {sorted(_TESTABLE_TYPES)} are testable",
         )
 
@@ -263,14 +284,16 @@ def _run_test_case(
         rows = src_spec.get("rows", [])
         if not schema_dict:
             return TestCaseResult(
-                test_id=test_id, passed=False,
+                test_id=test_id,
+                passed=False,
                 error=f"input {src_id!r} missing 'schema'",
             )
         try:
             input_dfs[src_id] = _create_df(spark, schema_dict, rows)
         except Exception as exc:
             return TestCaseResult(
-                test_id=test_id, passed=False,
+                test_id=test_id,
+                passed=False,
                 error=f"failed to create DataFrame for input {src_id!r}: {exc}",
             )
 
@@ -287,13 +310,17 @@ def _run_test_case(
             result_df = raw_result.get(branch)
             if result_df is None:
                 return TestCaseResult(
-                    test_id=test_id, passed=False,
+                    test_id=test_id,
+                    passed=False,
                     error=f"Junction branch {branch!r} not found in output",
                 )
         else:
             first_key = next(iter(raw_result))
             result_df = raw_result[first_key]
-            logger.debug("Junction test: using branch %r (first). Specify 'branch:' to select another.", first_key)
+            logger.debug(
+                "Junction test: using branch %r (first). Specify 'branch:' to select another.",
+                first_key,
+            )
     else:
         result_df = raw_result
 
@@ -323,6 +350,7 @@ def _run_test_case(
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
 
 def run_test_file(
     test_file: Path,
@@ -359,6 +387,7 @@ def run_test_file(
 
     # Parse blueprint (no compile — we only need module config, not @aq.* resolution)
     from aqueduct.parser.parser import parse
+
     bp = parse(str(bp_path))
     modules_by_id = {m.id: m for m in bp.modules}
 

@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 RETRYABLE_DELIVERY_STATUS = frozenset({429, 500, 502, 503, 504})
 RETRYABLE_PROVIDER_STATUS = frozenset({429, 503, 529})
 
-DEFAULT_DELIVERY_ATTEMPTS = 2          # total tries per delivery (1 retry)
+DEFAULT_DELIVERY_ATTEMPTS = 2  # total tries per delivery (1 retry)
 DEFAULT_DELIVERY_BACKOFF_SECONDS = 2.0
 
 
@@ -116,24 +116,37 @@ def deliver_with_retry(
             if resp.status_code < 400:
                 return
             retryable = resp.status_code in retryable_status
-            _log(label, method, url, f"returned HTTP {resp.status_code}", retryable, attempt, attempts)
+            _log(
+                label,
+                method,
+                url,
+                f"returned HTTP {resp.status_code}",
+                retryable,
+                attempt,
+                attempts,
+            )
         except httpx.RequestError as exc:
             retryable = True
             _log(label, method, url, f"failed: {exc}", retryable, attempt, attempts)
         except Exception as exc:  # noqa: BLE001 — a delivery bug must never crash the run
-            logger.warning("[aqueduct] %s %s %r raised unexpected error: %s", label, method, url, exc)
+            logger.warning(
+                "[aqueduct] %s %s %r raised unexpected error: %s", label, method, url, exc
+            )
             return
         if not retryable or attempt >= attempts:
             return
         time.sleep(backoff_delay(attempt, backoff_seconds, jitter=jitter))
 
 
-def _log(label: str, method: str, url: str, what: str, retryable: bool, attempt: int, attempts: int) -> None:
+def _log(
+    label: str, method: str, url: str, what: str, retryable: bool, attempt: int, attempts: int
+) -> None:
     suffix = f" — retrying ({attempt}/{attempts})" if retryable and attempt < attempts else ""
     logger.warning("[aqueduct] %s %s %r %s%s", label, method, url, what, suffix)
 
 
 # ── Webhook delivery pipeline ─────────────────────────────────────────────────
+
 
 def _deliver_webhook_payload(
     url: str,
@@ -168,11 +181,15 @@ def _deliver_webhook_payload(
 
     return fire_and_forget(
         lambda: deliver_with_retry(
-            method, url,
+            method,
+            url,
             json=None if signed_content is not None else body,
             content=signed_content,
-            headers=rendered_headers, timeout=timeout, label="webhook",
-            attempts=attempts, backoff_seconds=backoff_seconds,
+            headers=rendered_headers,
+            timeout=timeout,
+            label="webhook",
+            attempts=attempts,
+            backoff_seconds=backoff_seconds,
         ),
         name="surveyor-webhook",
     )

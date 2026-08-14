@@ -3,6 +3,7 @@ the object store (`stores.blob`), write it into the local checkout.
 
 Local backend only (no s3) — deterministic, no Spark, no network.
 """
+
 from __future__ import annotations
 
 import json
@@ -19,15 +20,25 @@ from aqueduct.cli import cli
 
 
 def _blueprint(path: Path) -> None:
-    path.write_text(yaml.dump({
-        "aqueduct": "1.0",
-        "id": "test.bp",
-        "name": "Test Blueprint",
-        "modules": [
-            {"id": "in", "type": "Ingress", "label": "In", "config": {"format": "parquet", "path": "p1"}}
-        ],
-        "edges": [],
-    }), encoding="utf-8")
+    path.write_text(
+        yaml.dump(
+            {
+                "aqueduct": "1.0",
+                "id": "test.bp",
+                "name": "Test Blueprint",
+                "modules": [
+                    {
+                        "id": "in",
+                        "type": "Ingress",
+                        "label": "In",
+                        "config": {"format": "parquet", "path": "p1"},
+                    }
+                ],
+                "edges": [],
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def _seed_index(row_status: str, object_key: str, patch_id: str = "p1") -> None:
@@ -40,10 +51,15 @@ def _seed_index(row_status: str, object_key: str, patch_id: str = "p1") -> None:
     store = DuckDBObservabilityStore(db)
     with store.connect() as cur:
         ix.ensure_schema(cur)
-        ix.upsert(cur, ix.PatchIndexRow(
-            patch_id=patch_id, status=row_status, object_key=object_key,
-            blueprint_id="test.bp",
-        ))
+        ix.upsert(
+            cur,
+            ix.PatchIndexRow(
+                patch_id=patch_id,
+                status=row_status,
+                object_key=object_key,
+                blueprint_id="test.bp",
+            ),
+        )
 
 
 def test_patch_pull_writes_local_body():

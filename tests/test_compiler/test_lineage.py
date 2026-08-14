@@ -5,11 +5,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+
 pytestmark = pytest.mark.integration
 
 from aqueduct.compiler.lineage import _extract_sql_lineage, write_lineage
 from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
-
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -125,9 +125,7 @@ class TestWriteLineage:
 
     def test_observability_store_none_returns_silently(self):
         """write_lineage with observability_store=None returns without error."""
-        modules = (
-            _mod("ch1", "Channel", {"op": "sql", "query": "SELECT a FROM src"}),
-        )
+        modules = (_mod("ch1", "Channel", {"op": "sql", "query": "SELECT a FROM src"}),)
         edges = (_edge("src", "ch1"),)
         # no store → graceful no-op, returns None, never raises
         assert write_lineage("pipe1", "run1", modules, edges, observability_store=None) is None
@@ -197,17 +195,20 @@ class TestCliLineage:
 
     def _make_lineage_db(self, tmp_path: Path) -> Path:
         import duckdb
+
         store = tmp_path / "lineage_store"
         store.mkdir()
         db_path = store / "observability.db"
         conn = duckdb.connect(str(db_path))
-        conn.execute("""
+        conn.execute(
+            """
             CREATE TABLE column_lineage (
                 blueprint_id VARCHAR, run_id VARCHAR,
                 channel_id VARCHAR, output_column VARCHAR,
                 source_table VARCHAR, source_column VARCHAR
             )
-        """)
+        """
+        )
         conn.execute(
             "INSERT INTO column_lineage VALUES (?, ?, ?, ?, ?, ?)",
             ["pipe.a", "run1", "ch1", "amount", "orders", "total"],
@@ -219,6 +220,7 @@ class TestCliLineage:
         from click.testing import CliRunner
         from aqueduct.cli import cli
         import json
+
         store = self._make_lineage_db(tmp_path)
         result = CliRunner().invoke(cli, ["lineage", "pipe.a", "--store-dir", str(store)])
         assert result.exit_code == 0
@@ -229,8 +231,11 @@ class TestCliLineage:
         from click.testing import CliRunner
         from aqueduct.cli import cli
         import json
+
         store = self._make_lineage_db(tmp_path)
-        result = CliRunner().invoke(cli, ["lineage", "pipe.a", "--store-dir", str(store), "--format", "json"])
+        result = CliRunner().invoke(
+            cli, ["lineage", "pipe.a", "--store-dir", str(store), "--format", "json"]
+        )
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert len(data) == 1
@@ -239,24 +244,32 @@ class TestCliLineage:
     def test_from_filter(self, tmp_path):
         from click.testing import CliRunner
         from aqueduct.cli import cli
+
         store = self._make_lineage_db(tmp_path)
-        result = CliRunner().invoke(cli, ["lineage", "pipe.a", "--store-dir", str(store), "--from", "orders"])
+        result = CliRunner().invoke(
+            cli, ["lineage", "pipe.a", "--store-dir", str(store), "--from", "orders"]
+        )
         assert result.exit_code == 0
         assert "amount" in result.output
 
     def test_column_filter_no_match(self, tmp_path):
         from click.testing import CliRunner
         from aqueduct.cli import cli
+
         store = self._make_lineage_db(tmp_path)
-        result = CliRunner().invoke(cli, ["lineage", "pipe.a", "--store-dir", str(store), "--column", "nope"])
+        result = CliRunner().invoke(
+            cli, ["lineage", "pipe.a", "--store-dir", str(store), "--column", "nope"]
+        )
         assert result.exit_code == 0
         assert "No lineage records" in result.output
 
     def test_missing_lineage_db_exits_1(self, tmp_path):
         from click.testing import CliRunner
         from aqueduct.cli import cli
+
         store = tmp_path / "empty"
         store.mkdir()
         result = CliRunner().invoke(cli, ["lineage", "pipe.a", "--store-dir", str(store)])
         from aqueduct.exit_codes import DATA_OR_RUNTIME
+
         assert result.exit_code == DATA_OR_RUNTIME

@@ -3,6 +3,7 @@
 Pure / store-only unit tests (no Spark). The live source read and full
 `aqueduct drift` command are covered by a stub in tests/test_backlog.py.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -14,6 +15,7 @@ pytestmark = pytest.mark.unit
 
 
 # ── classifier ──────────────────────────────────────────────────────────────
+
 
 def test_no_drift_when_identical():
     r = diff_schemas({"a": "int", "b": "string"}, {"a": "int", "b": "string"})
@@ -55,12 +57,13 @@ def test_schemachange_breaking_property():
 
 # ── synthetic FailureContext ────────────────────────────────────────────────
 
+
 def test_synthetic_fc_surfaces_rename_candidates():
     r = diff_schemas({"amount": "double", "id": "int"}, {"amount_usd": "double", "id": "int"})
     fc = build_synthetic_failure_context("bp.x", "load", r, "{}", engine="duckdb")
     assert fc.error_class == PREDICTED_DRIFT_ERROR_CLASS
     assert fc.failed_module == "load"
-    assert fc.object_name == "amount"           # the missing column
+    assert fc.object_name == "amount"  # the missing column
     assert fc.suggested_columns == ("amount_usd",)  # rename candidate for the agent
     assert fc.run_id.startswith("drift-")
     assert "Predicted schema drift" in fc.error_message
@@ -71,6 +74,7 @@ def test_synthetic_fc_surfaces_rename_candidates():
 
 # ── store baseline round-trip ───────────────────────────────────────────────
 
+
 def test_baseline_roundtrip(tmp_path):
     from aqueduct.drift import store as ds
     from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
@@ -79,14 +83,25 @@ def test_baseline_roundtrip(tmp_path):
     ds.ensure_schema(obs)
     assert ds.get_baseline(obs, "bp.x", "load") is None
 
-    ds.record_check(obs, blueprint_id="bp.x", module_id="load",
-                    baseline_schema=None, live_schema={"a": "int"}, status="baseline_set")
+    ds.record_check(
+        obs,
+        blueprint_id="bp.x",
+        module_id="load",
+        baseline_schema=None,
+        live_schema={"a": "int"},
+        status="baseline_set",
+    )
     assert ds.get_baseline(obs, "bp.x", "load") == {"a": "int"}
 
     # newest live_schema becomes the baseline
-    ds.record_check(obs, blueprint_id="bp.x", module_id="load",
-                    baseline_schema={"a": "int"}, live_schema={"a": "int", "b": "string"},
-                    status="drift_benign")
+    ds.record_check(
+        obs,
+        blueprint_id="bp.x",
+        module_id="load",
+        baseline_schema={"a": "int"},
+        live_schema={"a": "int", "b": "string"},
+        status="drift_benign",
+    )
     assert ds.get_baseline(obs, "bp.x", "load") == {"a": "int", "b": "string"}
 
 
@@ -99,6 +114,7 @@ def test_heal_drift_stages_to_configured_backend(monkeypatch, tmp_path):
     from types import SimpleNamespace
     import aqueduct.agent as A
     import aqueduct.drift.context as DC
+
     D = importlib.import_module("aqueduct.cli.drift")  # the module, not the click Command
 
     captured = {}
@@ -107,13 +123,22 @@ def test_heal_drift_stages_to_configured_backend(monkeypatch, tmp_path):
         captured["patch_store"] = patch_store
 
     monkeypatch.setattr(A, "stage_patch_for_human", _fake_stage)
-    monkeypatch.setattr(A, "generate_agent_patch",
-                        lambda **k: SimpleNamespace(patch=SimpleNamespace(patch_id="p1")))
+    monkeypatch.setattr(
+        A, "generate_agent_patch", lambda **k: SimpleNamespace(patch=SimpleNamespace(patch_id="p1"))
+    )
     monkeypatch.setattr(DC, "build_synthetic_failure_context", lambda *a, **k: object())
 
-    eng = SimpleNamespace(model="m", max_reprompts=1, budget=None, provider="anthropic",
-                          base_url=None, api_key=None, provider_options=None, timeout=30,
-                          prompt_context=None)
+    eng = SimpleNamespace(
+        model="m",
+        max_reprompts=1,
+        budget=None,
+        provider="anthropic",
+        base_url=None,
+        api_key=None,
+        provider_options=None,
+        timeout=30,
+        prompt_context=None,
+    )
     cfg = SimpleNamespace(
         agent=eng,
         stores=SimpleNamespace(blob=SimpleNamespace(backend="s3", path="s3://bucket/prefix")),
@@ -123,4 +148,6 @@ def test_heal_drift_stages_to_configured_backend(monkeypatch, tmp_path):
     pid = D._heal_drift(cfg, "bp", "mod", object(), "{}", tmp_path / "patches")
     assert pid == "p1"
     assert captured["patch_store"] is not None
-    assert "s3://bucket/prefix" in captured["patch_store"].location_label  # configured backend, not local
+    assert (
+        "s3://bucket/prefix" in captured["patch_store"].location_label
+    )  # configured backend, not local

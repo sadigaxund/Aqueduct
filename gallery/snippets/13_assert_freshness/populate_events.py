@@ -1,4 +1,5 @@
 """Generate events CSV with dynamic timestamps relative to now."""
+
 import os
 from datetime import datetime, timedelta
 

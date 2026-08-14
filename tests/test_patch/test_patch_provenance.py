@@ -34,36 +34,42 @@ def test_every_grammar_op_is_classified_closure():
     assert covered == set(VALID_PATCH_OPS)
 
 
-@pytest.mark.parametrize("op_name,classification", [
-    ("replace_module_config", ENGINE_SHAPED),
-    ("replace_module_label", DIALECT_NEUTRAL),
-    ("insert_module", ENGINE_SHAPED),
-    ("remove_module", DIALECT_NEUTRAL),
-    ("replace_context_value", DIALECT_NEUTRAL),
-    ("add_probe", DIALECT_NEUTRAL),
-    ("replace_edge", DIALECT_NEUTRAL),
-    ("set_module_on_failure", DIALECT_NEUTRAL),
-    ("replace_retry_policy", DIALECT_NEUTRAL),
-    ("add_arcade_ref", DIALECT_NEUTRAL),
-    ("defer_to_human", DIALECT_NEUTRAL),
-    ("set_engine_config", ENGINE_SHAPED),
-    ("replace_macro", ENGINE_SHAPED),
-])
+@pytest.mark.parametrize(
+    "op_name,classification",
+    [
+        ("replace_module_config", ENGINE_SHAPED),
+        ("replace_module_label", DIALECT_NEUTRAL),
+        ("insert_module", ENGINE_SHAPED),
+        ("remove_module", DIALECT_NEUTRAL),
+        ("replace_context_value", DIALECT_NEUTRAL),
+        ("add_probe", DIALECT_NEUTRAL),
+        ("replace_edge", DIALECT_NEUTRAL),
+        ("set_module_on_failure", DIALECT_NEUTRAL),
+        ("replace_retry_policy", DIALECT_NEUTRAL),
+        ("add_arcade_ref", DIALECT_NEUTRAL),
+        ("defer_to_human", DIALECT_NEUTRAL),
+        ("set_engine_config", ENGINE_SHAPED),
+        ("replace_macro", ENGINE_SHAPED),
+    ],
+)
 def test_static_op_classification(op_name, classification):
     assert classify_op(_FakeOp(op_name)) == classification
 
 
-@pytest.mark.parametrize("key,expected", [
-    ("path", DIALECT_NEUTRAL),
-    ("output_path", DIALECT_NEUTRAL),
-    ("max_attempts", DIALECT_NEUTRAL),
-    ("query", ENGINE_SHAPED),
-    ("sql", ENGINE_SHAPED),
-    ("format", ENGINE_SHAPED),
-    ("mode", ENGINE_SHAPED),
-    ("options.mergeSchema", ENGINE_SHAPED),
-    (None, ENGINE_SHAPED),  # missing key — conservative
-])
+@pytest.mark.parametrize(
+    "key,expected",
+    [
+        ("path", DIALECT_NEUTRAL),
+        ("output_path", DIALECT_NEUTRAL),
+        ("max_attempts", DIALECT_NEUTRAL),
+        ("query", ENGINE_SHAPED),
+        ("sql", ENGINE_SHAPED),
+        ("format", ENGINE_SHAPED),
+        ("mode", ENGINE_SHAPED),
+        ("options.mergeSchema", ENGINE_SHAPED),
+        (None, ENGINE_SHAPED),  # missing key — conservative
+    ],
+)
 def test_set_module_config_key_field_sensitive(key, expected):
     assert classify_op(_FakeOp("set_module_config_key", key=key)) == expected
 
@@ -98,14 +104,18 @@ def test_detect_engine_version_duckdb_installed():
 def test_build_healed_by_record_none_without_engine_meta():
     """A hand-authored patch with no _aq_meta.engine gets no healed_by record."""
     rec = build_healed_by_record(
-        patch_id="p1", operations=[_FakeOp("replace_module_label")],
-        meta={}, applied_at="2026-01-01T00:00:00Z",
+        patch_id="p1",
+        operations=[_FakeOp("replace_module_label")],
+        meta={},
+        applied_at="2026-01-01T00:00:00Z",
     )
     assert rec is None
 
     rec_none_meta = build_healed_by_record(
-        patch_id="p1", operations=[_FakeOp("replace_module_label")],
-        meta=None, applied_at="2026-01-01T00:00:00Z",
+        patch_id="p1",
+        operations=[_FakeOp("replace_module_label")],
+        meta=None,
+        applied_at="2026-01-01T00:00:00Z",
     )
     assert rec_none_meta is None
 

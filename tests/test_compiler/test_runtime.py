@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 import pytest
+
 pytestmark = pytest.mark.unit
 from aqueduct.compiler.runtime import AqFunctions, resolve_tier1_str
 from aqueduct.compiler.compiler import compile
@@ -40,6 +41,7 @@ class TestTier1Resolution:
 
     def test_date_yesterday(self):
         from datetime import timedelta
+
         result = resolve_tier1_str("@aq.date.yesterday()", self.reg)
         assert result == (date.today() - timedelta(days=1)).isoformat()
 
@@ -65,9 +67,10 @@ class TestTier1Resolution:
 
     def test_runtime_prev_run_id_exists(self, tmp_path):
         from aqueduct.depot.depot import DepotStore
+
         store = DepotStore(tmp_path / "depot.db")
         store.put("_last_run_id", "test-run-999")
-        
+
         reg = AqFunctions(run_id="test-run-001", depot=store)
         result = resolve_tier1_str("@aq.run.prev_id()", reg)
         assert result == "test-run-999"
@@ -75,6 +78,7 @@ class TestTier1Resolution:
     def test_runtime_timestamp_is_iso(self):
         result = resolve_tier1_str("@aq.run.timestamp()", self.reg)
         from datetime import datetime
+
         dt = datetime.fromisoformat(result)
         assert dt.tzinfo is not None
 
@@ -97,10 +101,9 @@ class TestTier1Resolution:
         assert result == ""
 
     def test_nested_call_resolved(self):
-        result = resolve_tier1_str(
-            "@aq.date.offset(base='@aq.date.today()', days=1)", self.reg
-        )
+        result = resolve_tier1_str("@aq.date.offset(base='@aq.date.today()', days=1)", self.reg)
         from datetime import timedelta
+
         assert result == (date.today() + timedelta(days=1)).isoformat()
 
     def test_tier1_in_string_context(self):
@@ -135,7 +138,7 @@ class TestTier1Resolution:
             "aqueduct: '1.0'\nid: test\nname: Test\n"
             "context:\n"
             "  run_date: '@aq.date.today()'\n"
-            "  path: \"data/${ctx.run_date}/output\"\n"
+            '  path: "data/${ctx.run_date}/output"\n'
             "modules:\n  - id: m\n    type: Channel\n    label: M\n    config:\n      op: sql\n      query: SELECT 1\n"
             "edges: []\n"
         )
@@ -161,6 +164,7 @@ class TestLogicalExecutionDate:
 
     def test_runtime_timestamp_with_execution_date_is_midnight_utc(self):
         from datetime import datetime
+
         aq = AqFunctions(execution_date=date(2026, 1, 15))
         ts = aq.run_timestamp()
         parsed = datetime.fromisoformat(ts)
@@ -176,6 +180,7 @@ class TestCompilerEdgeCases:
         from aqueduct.parser.parser import parse
         from aqueduct.compiler.compiler import compile as compiler_compile
         from unittest.mock import MagicMock
+
         bp_file = tmp_path / "bp.yml"
         bp_file.write_text(
             "aqueduct: '1.0'\nid: p\nname: P\n"
@@ -193,6 +198,7 @@ class TestCompilerEdgeCases:
         from aqueduct.parser.parser import parse
         from aqueduct.compiler.compiler import compile as compiler_compile
         from unittest.mock import MagicMock
+
         bp_file = tmp_path / "bp.yml"
         bp_file.write_text(
             "aqueduct: '1.0'\nid: p\nname: P\n"
@@ -215,9 +221,11 @@ class TestAqMeta:
 
     def test_meta_resolves(self):
         reg = AqFunctions(
-            blueprint_id="my_bp", blueprint_name="My BP",
+            blueprint_id="my_bp",
+            blueprint_name="My BP",
             blueprint_path="/proj/blueprints/my_bp.yml",
-            deployment_env="cluster", deployment_target="databricks",
+            deployment_env="cluster",
+            deployment_target="databricks",
             deployment_engine="spark",
         )
         assert resolve_tier1_str("@aq.blueprint.id()", reg) == "my_bp"
@@ -281,7 +289,7 @@ class TestAqMeta:
         bp_file = tmp_path / "bp.yml"
         bp_file.write_text(
             "aqueduct: '1.0'\nid: meta_demo\nname: Meta Demo\n"
-            "context:\n  tag: \"@aq.blueprint.id()-@aq.deployment.env()\"\n"
+            'context:\n  tag: "@aq.blueprint.id()-@aq.deployment.env()"\n'
             "modules:\n"
             "  - id: out\n    type: Egress\n    label: Out\n"
             "    config:\n      format: parquet\n      path: /tmp/${ctx.tag}\n      mode: overwrite\n"

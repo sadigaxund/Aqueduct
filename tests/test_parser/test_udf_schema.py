@@ -4,6 +4,7 @@ Locks the documented specs §5.4 UDF contract — python `module:`/`entry:` and
 java/scala `jar:`/`class:` — and confirms entries are now strictly validated
 (`extra="forbid"`), the gap that previously let a typo through to a late failure.
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -20,21 +21,39 @@ from aqueduct.parser.parser import ParseError, parse
 def _parse_with_udf(udf: dict):
     d = tempfile.mkdtemp()
     p = pathlib.Path(d) / "bp.yml"
-    p.write_text(yaml.dump({
-        "aqueduct": "1.0", "id": "t.bp", "name": "T",
-        "udf_registry": [udf],
-        "modules": [{"id": "in", "type": "Ingress", "label": "In",
-                     "config": {"format": "parquet", "path": "p"}}],
-        "edges": [],
-    }), encoding="utf-8")
+    p.write_text(
+        yaml.dump(
+            {
+                "aqueduct": "1.0",
+                "id": "t.bp",
+                "name": "T",
+                "udf_registry": [udf],
+                "modules": [
+                    {
+                        "id": "in",
+                        "type": "Ingress",
+                        "label": "In",
+                        "config": {"format": "parquet", "path": "p"},
+                    }
+                ],
+                "edges": [],
+            }
+        ),
+        encoding="utf-8",
+    )
     return parse(str(p))
 
 
 def test_python_udf_documented_form_parses_to_executor_dict():
-    bp = _parse_with_udf({
-        "id": "clean_phone", "lang": "python",
-        "module": "my_project.udfs", "entry": "clean_phone", "return_type": "STRING",
-    })
+    bp = _parse_with_udf(
+        {
+            "id": "clean_phone",
+            "lang": "python",
+            "module": "my_project.udfs",
+            "entry": "clean_phone",
+            "return_type": "STRING",
+        }
+    )
     entry = bp.udf_registry[0]
     assert entry["id"] == "clean_phone"
     assert entry["module"] == "my_project.udfs"
@@ -43,9 +62,14 @@ def test_python_udf_documented_form_parses_to_executor_dict():
 
 
 def test_java_udf_class_alias_round_trips():
-    bp = _parse_with_udf({
-        "id": "geohash", "lang": "java", "jar": "libs/geo.jar", "class": "com.example.GeoUDF",
-    })
+    bp = _parse_with_udf(
+        {
+            "id": "geohash",
+            "lang": "java",
+            "jar": "libs/geo.jar",
+            "class": "com.example.GeoUDF",
+        }
+    )
     entry = bp.udf_registry[0]
     # `class` is the YAML key the executor reads back (aliased from class_name)
     assert entry["class"] == "com.example.GeoUDF"
@@ -59,9 +83,14 @@ def test_java_udf_class_alias_round_trips():
 
 def test_java_udf_absolute_jar_path_left_untouched():
     """An already-absolute `jar:` path must not be re-anchored/mangled."""
-    bp = _parse_with_udf({
-        "id": "geohash", "lang": "java", "jar": "/opt/jars/geo.jar", "class": "com.example.GeoUDF",
-    })
+    bp = _parse_with_udf(
+        {
+            "id": "geohash",
+            "lang": "java",
+            "jar": "/opt/jars/geo.jar",
+            "class": "com.example.GeoUDF",
+        }
+    )
     entry = bp.udf_registry[0]
     assert entry["jar"] == "/opt/jars/geo.jar"
 
@@ -69,9 +98,14 @@ def test_java_udf_absolute_jar_path_left_untouched():
 def test_java_udf_uri_jar_path_left_untouched():
     """A URI-shaped `jar:` (s3://, gs://, ...) is not a local filesystem
     path and must not be anchored against base_dir."""
-    bp = _parse_with_udf({
-        "id": "geohash", "lang": "java", "jar": "s3://bucket/jars/geo.jar", "class": "com.example.GeoUDF",
-    })
+    bp = _parse_with_udf(
+        {
+            "id": "geohash",
+            "lang": "java",
+            "jar": "s3://bucket/jars/geo.jar",
+            "class": "com.example.GeoUDF",
+        }
+    )
     entry = bp.udf_registry[0]
     assert entry["jar"] == "s3://bucket/jars/geo.jar"
 

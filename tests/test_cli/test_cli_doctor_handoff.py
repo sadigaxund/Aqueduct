@@ -28,6 +28,7 @@ pytestmark = pytest.mark.unit
 
 # ── check_handoff_free_space ────────────────────────────────────────────────
 
+
 class TestCheckHandoffFreeSpace:
     def test_remote_root_is_skipped(self, tmp_path):
         r = check_handoff_free_space("s3://bucket/handoff", tmp_path)
@@ -103,6 +104,7 @@ class TestCheckHandoffFreeSpace:
 
 # ── check_handoff_engine_access ─────────────────────────────────────────────
 
+
 @pytest.fixture(autouse=True)
 def _registered_engines():
     """Ensure spark + duckdb are registered (import side effect), and restore
@@ -174,7 +176,8 @@ class TestCheckHandoffEngineAccess:
 
     def test_no_registered_engines_skips_cleanly(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
-            "aqueduct.executor.capabilities.load_engines", lambda: None,
+            "aqueduct.executor.capabilities.load_engines",
+            lambda: None,
         )
         CAPABILITY_REGISTRY.clear()
         results = check_handoff_engine_access(str(tmp_path / "handoff"), tmp_path, preflight=False)
@@ -186,7 +189,9 @@ class TestCheckHandoffEngineAccess:
         from unittest.mock import patch
 
         with patch.dict(_sys.modules, {"duckdb": None}):
-            results = check_handoff_engine_access(str(tmp_path / "handoff"), tmp_path, preflight=False)
+            results = check_handoff_engine_access(
+                str(tmp_path / "handoff"), tmp_path, preflight=False
+            )
         by_name = {r.name: r for r in results}
         assert by_name["handoff-access:duckdb"].status == "skip"
         assert "not installed" in by_name["handoff-access:duckdb"].detail

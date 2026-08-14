@@ -95,14 +95,17 @@ from aqueduct.models import Edge, Manifest, Module, ModuleType, RetryPolicy
 
 logger = logging.getLogger(__name__)
 
+
 def _mr(**kwargs) -> ModuleResult:
     """Construct a ModuleResult, auto-collecting per-module runtime warnings."""
     return ModuleResult(**kwargs, warnings=_collect_module_warnings())
+
 
 _T = TypeVar("_T")
 
 
 # ── Retry helper ──────────────────────────────────────────────────────────────
+
 
 def _is_retriable(exc: Exception, policy: RetryPolicy) -> bool:
     """Return True if this exception should be retried per policy."""
@@ -129,7 +132,7 @@ def _backoff_seconds(attempt: int, policy: RetryPolicy) -> float:
     elif strategy == "linear":
         delay = base * (attempt + 1)
     else:  # exponential (default)
-        delay = base * (2 ** attempt)
+        delay = base * (2**attempt)
 
     delay = min(delay, cap)
     if policy.jitter:
@@ -176,7 +179,9 @@ def _with_retry(
                     logger.warning(
                         "[runtime_retry_deadline] Module %r: deadline exceeded "
                         "(%.0fs elapsed, limit=%ds); not retrying.",
-                        module_id, elapsed, policy.deadline_seconds,
+                        module_id,
+                        elapsed,
+                        policy.deadline_seconds,
                     )
                     break
 
@@ -192,13 +197,19 @@ def _with_retry(
                         logger.warning(
                             "[runtime_retry_exhausted] Module %r: attempt %d/%d "
                             "failed (%s); giving up",
-                            module_id, attempt + 1, policy.max_attempts, concise_error(str(exc)),
+                            module_id,
+                            attempt + 1,
+                            policy.max_attempts,
+                            concise_error(str(exc)),
                         )
                     else:
                         logger.warning(
                             "[runtime_retry_non_retriable] Module %r: non-retriable "
                             "error on attempt %d/%d: %s",
-                            module_id, attempt + 1, policy.max_attempts, concise_error(str(exc)),
+                            module_id,
+                            attempt + 1,
+                            policy.max_attempts,
+                            concise_error(str(exc)),
                         )
                 break
 
@@ -206,11 +217,16 @@ def _with_retry(
             logger.warning(
                 "[runtime_retry_waiting] Module %r: attempt %d/%d failed (%s); "
                 "retrying in %.1fs",
-                module_id, attempt + 1, policy.max_attempts, concise_error(str(exc)), sleep,
+                module_id,
+                attempt + 1,
+                policy.max_attempts,
+                concise_error(str(exc)),
+                sleep,
             )
             time.sleep(sleep)
 
     raise last_exc
+
 
 def _write_checkpoint(
     module: Module,
@@ -228,7 +244,12 @@ def _write_checkpoint(
             try:
                 df.write.mode("overwrite").parquet(str(module_ckpt / name))
             except Exception as exc:
-                logger.warning("[runtime_checkpoint_write_failed] Checkpoint write failed for %r/%s: %s", module.id, name, exc)
+                logger.warning(
+                    "[runtime_checkpoint_write_failed] Checkpoint write failed for %r/%s: %s",
+                    module.id,
+                    name,
+                    exc,
+                )
                 return
     (module_ckpt / "_aq_done").write_text("", encoding="utf-8")
     logger.debug("Checkpoint written: %s", module_ckpt)
@@ -248,9 +269,7 @@ def _module_retry_policy(module: Module, manifest_policy: RetryPolicy) -> RetryP
         try:
             return RetryPolicy(**module.on_failure)
         except TypeError as exc:
-            raise ExecuteError(
-                f"Module {module.id!r} on_failure has invalid keys: {exc}"
-            ) from exc
+            raise ExecuteError(f"Module {module.id!r} on_failure has invalid keys: {exc}") from exc
     if module.retry is not None:
         return module.retry
     return manifest_policy
@@ -303,6 +322,7 @@ def _resolve_observability_store(store_dir: Path | None, observability_store: An
     if store_dir is None:
         return None
     from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+
     store_dir.mkdir(parents=True, exist_ok=True)
     return DuckDBObservabilityStore(store_dir / "observability.db")
 
@@ -319,6 +339,7 @@ def _write_maintenance_metrics(
         return
     try:
         from datetime import datetime
+
         with store.connect() as cur:
             cur.execute(_MAINTENANCE_METRICS_DDL)
             cur.execute(
@@ -350,6 +371,7 @@ def _write_stage_metrics(
         return
     try:
         from datetime import datetime
+
         with store.connect() as cur:
             cur.execute(_MODULE_METRICS_DDL)
             cur.execute(
@@ -396,9 +418,7 @@ def _update_metric(
         logger.debug("Metric update failed for %r.%s: %s", module_id, column, exc)
 
 
-_SUPPORTED_TYPES: frozenset[str] = frozenset(
-    {m for m in ModuleType if m != ModuleType.Arcade}
-)
+_SUPPORTED_TYPES: frozenset[str] = frozenset({m for m in ModuleType if m != ModuleType.Arcade})
 
 # Ports that carry control signals only, not DataFrames.
 # Spillway IS a data edge (routes error rows); only "signal" is control-only.
@@ -416,6 +436,7 @@ _GATE_CLOSED: object = object()
 
 
 # ── DAG helpers ───────────────────────────────────────────────────────────────
+
 
 def _is_data_edge(edge: Edge) -> bool:
     return edge.port not in _SIGNAL_PORTS
@@ -465,6 +486,7 @@ def _apply_spillway_filter(val: Any, edge: Edge) -> Any:
     if val is None or _is_gate_closed(val):
         return val
     from pyspark.sql import functions as F
+
     return val.filter(F.col(AQ_ERROR_TYPE).isin(list(edge.error_types)))
 
 
@@ -479,12 +501,12 @@ def _cache_if_multi_spillway(df: Any, module_id: str, edges: tuple[Edge, ...]) -
     is appropriate (see spark_guide caching-strategy). No explicit
     unpersist — frames are run-scoped and released when the session stops.
     """
-    n_consumers = sum(
-        1 for e in edges if e.from_id == module_id and e.port == "spillway"
-    )
+    n_consumers = sum(1 for e in edges if e.from_id == module_id and e.port == "spillway")
     if n_consumers > 1:
         logger.debug(
-            "[%s] %d spillway consumers — caching quarantine frame", module_id, n_consumers,
+            "[%s] %d spillway consumers — caching quarantine frame",
+            module_id,
+            n_consumers,
         )
         return df.cache()
     return df
@@ -520,8 +542,7 @@ def _topo_sort(modules: tuple[Module, ...], edges: tuple[Edge, ...]) -> list[Mod
         processed = {m.id for m in order}
         remaining = [mid for mid in module_map if mid not in processed]
         raise ExecuteError(
-            f"Cycle detected in Manifest execution graph. "
-            f"Modules in cycle: {remaining}"
+            f"Cycle detected in Manifest execution graph. " f"Modules in cycle: {remaining}"
         )
 
     return order
@@ -685,16 +706,13 @@ def _compute_watermark_from_output(
     """
     try:
         from pyspark.sql import functions as _F
+
         if fmt == "delta":
             result = spark.sql(
                 f"SELECT MAX(`{watermark_col}`) AS wm FROM delta.`{path}`"
             ).collect()[0][0]
         else:
-            result = (
-                spark.read.format(fmt).load(path)
-                .agg(_F.max(watermark_col))
-                .collect()[0][0]
-            )
+            result = spark.read.format(fmt).load(path).agg(_F.max(watermark_col)).collect()[0][0]
         return str(result) if result is not None else None
     except Exception:
         return None
@@ -707,7 +725,8 @@ def _find_downstream_egress_ids(
     """Return IDs of all Egress modules reachable (any depth) downstream of channel_id."""
     reachable = _reachable_forward(channel_id, manifest.edges)
     return [
-        m.id for m in manifest.modules
+        m.id
+        for m in manifest.modules
         if m.id in reachable and m.id != channel_id and m.type == ModuleType.Egress
     ]
 
@@ -753,6 +772,7 @@ def _selector_included(
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
 
 def execute(
     manifest: Manifest,
@@ -835,8 +855,8 @@ def execute(
     # `checkpoint_root` (aqueduct.yml) overrides the derived
     # `<store_dir>/checkpoints/` location entirely — when set, checkpoints
     # live directly under `checkpoint_root/<run_id>/`.
-    checkpoints_base: Path | None = checkpoint_root if checkpoint_root else (
-        store_dir / "checkpoints" if store_dir else None
+    checkpoints_base: Path | None = (
+        checkpoint_root if checkpoint_root else (store_dir / "checkpoints" if store_dir else None)
     )
 
     checkpoint_dir: Path | None = None
@@ -844,9 +864,7 @@ def execute(
     if checkpoints_base and any_checkpoint:
         checkpoint_dir = checkpoints_base / run_id
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        (checkpoint_dir / "_manifest_hash").write_text(
-            _manifest_hash(manifest), encoding="utf-8"
-        )
+        (checkpoint_dir / "_manifest_hash").write_text(_manifest_hash(manifest), encoding="utf-8")
 
     resume_dir: Path | None = None
     if checkpoints_base and resume_run_id:
@@ -872,6 +890,7 @@ def execute(
     if not warnings_silence_all:
         try:
             from aqueduct.executor.spark.warnings import run_all as _run_session_warnings
+
             for _rid, _msg in _run_session_warnings(manifest, spark, suppress=warnings_suppress):
                 _aq_emit(_rid, _msg, suppress=warnings_suppress)
         except Exception:
@@ -892,7 +911,10 @@ def execute(
         if excluded:
             logger.info(
                 "Selector active (from=%s, to=%s): skipping %d module(s): %s",
-                from_module, to_module, len(excluded), excluded,
+                from_module,
+                to_module,
+                len(excluded),
+                excluded,
             )
 
     # Shared execution state — frame_store keys are disjoint across components so
@@ -980,9 +1002,7 @@ def execute(
                                 frame_store[f"{module.id}.{bid}"] = spark.read.parquet(
                                     str(branch_ckpt)
                                 )
-                    local_results.append(
-                        _mr(module_id=module.id, status=ExecutionStatus.SUCCESS)
-                    )
+                    local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
                     logger.info("Module %r: resumed from checkpoint, skipping execution", module.id)
                     continue
 
@@ -1005,13 +1025,18 @@ def execute(
                         continue
                     _signal_fail(trigger_agent=getattr(fail_result, "trigger_agent", False))
                     return
-                _obs_df, _obs = observe_df(df, f"{module.id}_read", "records_read", enabled=use_observe)
+                _obs_df, _obs = observe_df(
+                    df, f"{module.id}_read", "records_read", enabled=use_observe
+                )
                 local_ingress_obs[module.id] = _obs
                 _write_stage_metrics(
-                    module.id, run_id,
-                    {**null_metrics(),
-                     "bytes_read": dir_bytes(module.config.get("path", "")),
-                     "duration_ms": int((time.monotonic() - _t0) * 1000)},
+                    module.id,
+                    run_id,
+                    {
+                        **null_metrics(),
+                        "bytes_read": dir_bytes(module.config.get("path", "")),
+                        "duration_ms": int((time.monotonic() - _t0) * 1000),
+                    },
                     store_dir,
                     observability_store=observability_store,
                 )
@@ -1040,9 +1065,7 @@ def execute(
                         )
                         break
                     if val is None:
-                        err = (
-                            f"[{module.id}] upstream {edge.from_id!r} produced no DataFrame."
-                        )
+                        err = f"[{module.id}] upstream {edge.from_id!r} produced no DataFrame."
                         local_results.append(
                             _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=err)
                         )
@@ -1064,13 +1087,13 @@ def execute(
                         _depot_key = f"{manifest.blueprint_id}:{module.id}:_watermark"
                         # Phase 53 — Depot is the sole watermark store.
                         _watermark_val = (
-                            (depot.get(_depot_key, "") if depot else "")
-                            or "1900-01-01 00:00:00"
-                        )
+                            depot.get(_depot_key, "") if depot else ""
+                        ) or "1900-01-01 00:00:00"
                         _query = module.config.get("query", "")
                         _patched_query = _query.replace("${ctx._watermark}", f"'{_watermark_val}'")
                         if _patched_query != _query:
                             import dataclasses as _dc
+
                             _channel_module = _dc.replace(
                                 module,
                                 config={**module.config, "query": _patched_query},
@@ -1090,7 +1113,8 @@ def execute(
                                     "materialize=incremental → downstream Egress "
                                     "%r uses mode=overwrite; incremental rows will "
                                     "replace prior data.",
-                                    module.id, _ds_m.id,
+                                    module.id,
+                                    _ds_m.id,
                                 )
 
                     try:
@@ -1112,22 +1136,24 @@ def execute(
                     # ── Spillway split ─────────────────────────────────────────
                     spillway_condition: str | None = module.config.get("spillway_condition")
                     has_spillway_edge = any(
-                        e.from_id == module.id and e.port == "spillway"
-                        for e in manifest.edges
+                        e.from_id == module.id and e.port == "spillway" for e in manifest.edges
                     )
                     if spillway_condition and has_spillway_edge:
                         from pyspark.sql import functions as F
+
                         good_df = df.filter(f"NOT ({spillway_condition})")
                         error_df = (
                             df.filter(spillway_condition)
-                              .withColumn(AQ_ERROR_MODULE, F.lit(module.id))
-                              .withColumn(AQ_ERROR_MSG, F.lit("spillway_condition matched"))
-                              .withColumn(AQ_ERROR_TYPE, F.lit("SpillwayCondition"))
-                              .withColumn(AQ_ERROR_TS, F.current_timestamp())
+                            .withColumn(AQ_ERROR_MODULE, F.lit(module.id))
+                            .withColumn(AQ_ERROR_MSG, F.lit("spillway_condition matched"))
+                            .withColumn(AQ_ERROR_TYPE, F.lit("SpillwayCondition"))
+                            .withColumn(AQ_ERROR_TS, F.current_timestamp())
                         )
                         frame_store[module.id] = good_df
                         frame_store[f"{module.id}.spillway"] = _cache_if_multi_spillway(
-                            error_df, module.id, manifest.edges,
+                            error_df,
+                            module.id,
+                            manifest.edges,
                         )
                     elif spillway_condition and not has_spillway_edge:
                         # Static mismatch — warned at compile time
@@ -1150,12 +1176,15 @@ def execute(
                             _pending_watermarks[_eg_id] = (module.id, _watermark_col, _depot_key)
 
                     _write_stage_metrics(
-                        module.id, run_id,
+                        module.id,
+                        run_id,
                         {**null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
                         store_dir,
                         observability_store=observability_store,
                     )
-                    _write_checkpoint(module, checkpoint_dir, manifest, data={"data": frame_store[module.id]})
+                    _write_checkpoint(
+                        module, checkpoint_dir, manifest, data={"data": frame_store[module.id]}
+                    )
                     local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
 
             # ── Junction ──────────────────────────────────────────────────────
@@ -1178,9 +1207,7 @@ def execute(
                     local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
                     continue
                 if val is None:
-                    err = (
-                        f"[{module.id}] upstream {upstream_id!r} produced no DataFrame."
-                    )
+                    err = f"[{module.id}] upstream {upstream_id!r} produced no DataFrame."
                     local_results.append(
                         _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=err)
                     )
@@ -1208,7 +1235,8 @@ def execute(
                     return
 
                 _write_stage_metrics(
-                    module.id, run_id,
+                    module.id,
+                    run_id,
                     {**null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
                     store_dir,
                     observability_store=observability_store,
@@ -1243,9 +1271,7 @@ def execute(
                         skipped = True
                         break
                     if val is None:
-                        err = (
-                            f"[{module.id}] upstream {store_key!r} produced no DataFrame."
-                        )
+                        err = f"[{module.id}] upstream {store_key!r} produced no DataFrame."
                         local_results.append(
                             _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=err)
                         )
@@ -1278,7 +1304,8 @@ def execute(
                     _signal_fail(trigger_agent=getattr(fail_result, "trigger_agent", False))
                     return
                 _write_stage_metrics(
-                    module.id, run_id,
+                    module.id,
+                    run_id,
                     {**null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
                     store_dir,
                     observability_store=observability_store,
@@ -1318,18 +1345,35 @@ def execute(
 
                 try:
                     passing_df, quarantine_df = execute_assert(
-                        module, val, spark, run_id, manifest.blueprint_id,
+                        module,
+                        val,
+                        spark,
+                        run_id,
+                        manifest.blueprint_id,
                         base_dir=manifest.base_dir,
                     )
                 except AssertError as exc:
                     local_results.append(
-                        _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=str(exc), error_type=exc.error_type, exception=exc)
+                        _mr(
+                            module_id=module.id,
+                            status=ExecutionStatus.ERROR,
+                            error=str(exc),
+                            error_type=exc.error_type,
+                            exception=exc,
+                        )
                     )
                     _signal_fail(trigger_agent=exc.trigger_agent)
                     return
-                except Exception as exc:  # noqa: BLE001 — assert dispatch must fail cleanly, not leak a raw traceback
+                except (
+                    Exception
+                ) as exc:  # noqa: BLE001 — assert dispatch must fail cleanly, not leak a raw traceback
                     local_results.append(
-                        _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=str(exc), exception=exc)
+                        _mr(
+                            module_id=module.id,
+                            status=ExecutionStatus.ERROR,
+                            error=str(exc),
+                            exception=exc,
+                        )
                     )
                     _signal_fail()
                     return
@@ -1337,7 +1381,9 @@ def execute(
                 frame_store[module.id] = passing_df
                 if quarantine_df is not None and has_spillway_edge:
                     frame_store[f"{module.id}.spillway"] = _cache_if_multi_spillway(
-                        quarantine_df, module.id, manifest.edges,
+                        quarantine_df,
+                        module.id,
+                        manifest.edges,
                     )
                 elif quarantine_df is not None:
                     logger.warning(
@@ -1372,9 +1418,7 @@ def execute(
                     local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
                     continue
                 if val is None:
-                    err = (
-                        f"[{module.id}] upstream {upstream_id!r} produced no DataFrame."
-                    )
+                    err = f"[{module.id}] upstream {upstream_id!r} produced no DataFrame."
                     local_results.append(
                         _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=err)
                     )
@@ -1389,14 +1433,15 @@ def execute(
                 # 1s; long-running waits can set 300s.
                 poll_interval = max(0.5, float(module.config.get("poll_seconds", 30.0)))
                 elapsed = 0.0
-                
+
                 gate_open = surveyor.evaluate_regulator(module.id) if surveyor else True
-                
+
                 # If gate is closed and we have a timeout, poll until open or timeout
                 if not gate_open and timeout_sec > 0 and surveyor:
                     logger.info(
                         "[%s] Regulator gate closed; polling for signal (timeout=%ss)...",
-                        module.id, timeout_sec,
+                        module.id,
+                        timeout_sec,
                     )
                     while not gate_open and elapsed < timeout_sec:
                         time.sleep(poll_interval)
@@ -1408,7 +1453,8 @@ def execute(
                     if not gate_open:
                         logger.info(
                             "[%s] Regulator timeout_seconds=%s reached; gate still closed — applying on_block.",
-                            module.id, timeout_sec,
+                            module.id,
+                            timeout_sec,
                         )
 
                 if gate_open:
@@ -1460,9 +1506,7 @@ def execute(
                     local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
                     continue
                 if val is None:
-                    err = (
-                        f"[{module.id}] upstream {edge.from_id!r} produced no DataFrame."
-                    )
+                    err = f"[{module.id}] upstream {edge.from_id!r} produced no DataFrame."
                     local_results.append(
                         _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=err)
                     )
@@ -1471,11 +1515,15 @@ def execute(
                 val = _apply_spillway_filter(val, edge)
 
                 mod_policy = _module_retry_policy(module, manifest.retry_policy)
-                _obs_df, _obs = observe_df(val, f"{module.id}_egress", "records_written", enabled=use_observe)
+                _obs_df, _obs = observe_df(
+                    val, f"{module.id}_egress", "records_written", enabled=use_observe
+                )
                 _t0 = time.monotonic()
                 try:
                     _with_retry(
-                        lambda: write_egress(_obs_df, module, depot=depot, base_dir=manifest.base_dir),
+                        lambda: write_egress(
+                            _obs_df, module, depot=depot, base_dir=manifest.base_dir
+                        ),
                         mod_policy,
                         module.id,
                     )
@@ -1488,11 +1536,14 @@ def execute(
                     _signal_fail(trigger_agent=getattr(fail_result, "trigger_agent", False))
                     return
                 _write_stage_metrics(
-                    module.id, run_id,
-                    {**null_metrics(),
-                     "records_written": get_observation(_obs, "records_written"),
-                     "bytes_written": dir_bytes(module.config.get("path", "")),
-                     "duration_ms": int((time.monotonic() - _t0) * 1000)},
+                    module.id,
+                    run_id,
+                    {
+                        **null_metrics(),
+                        "records_written": get_observation(_obs, "records_written"),
+                        "bytes_written": dir_bytes(module.config.get("path", "")),
+                        "duration_ms": int((time.monotonic() - _t0) * 1000),
+                    },
                     store_dir,
                     observability_store=observability_store,
                 )
@@ -1507,11 +1558,18 @@ def execute(
                     # iceberg drives procedures off `table`; delta/hudi off `path`.
                     if _maint_path or _maint_table:
                         _maint_timing = run_maintenance(
-                            spark, module.id, _maint_path, _maintenance_cfg,
-                            fmt=_maint_fmt, table=_maint_table,
+                            spark,
+                            module.id,
+                            _maint_path,
+                            _maintenance_cfg,
+                            fmt=_maint_fmt,
+                            table=_maint_table,
                         )
                         _write_maintenance_metrics(
-                            module.id, run_id, _maint_timing, store_dir,
+                            module.id,
+                            run_id,
+                            _maint_timing,
+                            store_dir,
                             observability_store=observability_store,
                         )
 
@@ -1527,7 +1585,8 @@ def execute(
                                 "[runtime_watermark_compute_failed] [%s] Could "
                                 "not compute watermark from output path %r; "
                                 "watermark not advanced this run.",
-                                module.id, _eg_path,
+                                module.id,
+                                _eg_path,
                             )
                         elif depot is None:
                             logger.warning(
@@ -1536,13 +1595,18 @@ def execute(
                                 "depot is configured — it cannot be persisted, "
                                 "so the next run re-scans all source data. "
                                 "Configure stores.depots.",
-                                module.id, _ch_id, _wm_col, _new_wm,
+                                module.id,
+                                _ch_id,
+                                _wm_col,
+                                _new_wm,
                             )
                         else:
                             depot.put(_wm_depot_key, _new_wm)
                             logger.debug(
                                 "[%s] Watermark persisted to depot: %s=%s",
-                                module.id, _wm_col, _new_wm,
+                                module.id,
+                                _wm_col,
+                                _new_wm,
                             )
 
                 local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
@@ -1586,7 +1650,9 @@ def execute(
                     key = _frame_key(edge.from_id, edge.port)
                     val = frame_store.get(key)
                     if _is_gate_closed(val):
-                        local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
+                        local_results.append(
+                            _mr(module_id=module.id, status=ExecutionStatus.SKIPPED)
+                        )
                         continue
                     if val is None:
                         err = f"[{module.id}] upstream {edge.from_id!r} produced no DataFrame."
@@ -1600,15 +1666,23 @@ def execute(
                     except Exception as exc:
                         err = f"[{module.id}] handoff spill write to {spill_uri!r} failed: {exc}"
                         local_results.append(
-                            _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=err, exception=exc)
+                            _mr(
+                                module_id=module.id,
+                                status=ExecutionStatus.ERROR,
+                                error=err,
+                                exception=exc,
+                            )
                         )
                         _signal_fail()
                         return
                     _write_stage_metrics(
-                        module.id, run_id,
-                        {**null_metrics(),
-                         "bytes_written": dir_bytes(spill_uri),
-                         "duration_ms": int((time.monotonic() - _t0) * 1000)},
+                        module.id,
+                        run_id,
+                        {
+                            **null_metrics(),
+                            "bytes_written": dir_bytes(spill_uri),
+                            "duration_ms": int((time.monotonic() - _t0) * 1000),
+                        },
                         store_dir,
                         observability_store=observability_store,
                     )
@@ -1620,15 +1694,23 @@ def execute(
                     except Exception as exc:
                         err = f"[{module.id}] handoff spill read from {spill_uri!r} failed: {exc}"
                         local_results.append(
-                            _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=err, exception=exc)
+                            _mr(
+                                module_id=module.id,
+                                status=ExecutionStatus.ERROR,
+                                error=err,
+                                exception=exc,
+                            )
                         )
                         _signal_fail()
                         return
                     _write_stage_metrics(
-                        module.id, run_id,
-                        {**null_metrics(),
-                         "bytes_read": dir_bytes(spill_uri),
-                         "duration_ms": int((time.monotonic() - _t0) * 1000)},
+                        module.id,
+                        run_id,
+                        {
+                            **null_metrics(),
+                            "bytes_read": dir_bytes(spill_uri),
+                            "duration_ms": int((time.monotonic() - _t0) * 1000),
+                        },
                         store_dir,
                         observability_store=observability_store,
                     )
@@ -1643,15 +1725,31 @@ def execute(
                 if source_val is None or _is_gate_closed(source_val):
                     logger.debug(
                         "Probe %r: attach_to=%r not available; skipping.",
-                        module.id, source_id,
+                        module.id,
+                        source_id,
                     )
                 elif store_dir is not None:
                     try:
-                        _probe_notes = execute_probe(module, source_val, spark, run_id, store_dir, block_full_actions=block_full_actions, observability_store=observability_store, sampling=sampling, base_dir=manifest.base_dir) or ()
+                        _probe_notes = (
+                            execute_probe(
+                                module,
+                                source_val,
+                                spark,
+                                run_id,
+                                store_dir,
+                                block_full_actions=block_full_actions,
+                                observability_store=observability_store,
+                                sampling=sampling,
+                                base_dir=manifest.base_dir,
+                            )
+                            or ()
+                        )
                     except Exception as exc:
                         logger.warning("[runtime_probe_error] Probe %r failed: %s", module.id, exc)
 
-                local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS, notes=_probe_notes))
+                local_results.append(
+                    _mr(module_id=module.id, status=ExecutionStatus.SUCCESS, notes=_probe_notes)
+                )
 
         # Component completed — merge local results into shared collections
         _merge()
@@ -1659,29 +1757,20 @@ def execute(
     # ── Dispatch ──────────────────────────────────────────────────────────────
     if parallel:
         all_module_ids = {m.id for m in order}
-        components = _find_connected_components(
-            all_module_ids, manifest.edges, manifest.modules
-        )
+        components = _find_connected_components(all_module_ids, manifest.edges, manifest.modules)
 
         if len(components) > 1:
-            component_orders = [
-                [m for m in order if m.id in comp_ids]
-                for comp_ids in components
-            ]
+            component_orders = [[m for m in order if m.id in comp_ids] for comp_ids in components]
             logger.info(
                 "Parallel execution: %d independent components detected",
                 len(component_orders),
             )
-            with concurrent.futures.ThreadPoolExecutor(
-                max_workers=len(component_orders)
-            ) as pool:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(component_orders)) as pool:
                 futures = [pool.submit(_run_component, co) for co in component_orders]
                 for f in concurrent.futures.as_completed(futures):
                     exc = f.exception()
                     if exc is not None:
-                        logger.error(
-                            "Component thread raised unexpected exception: %s", exc
-                        )
+                        logger.error("Component thread raised unexpected exception: %s", exc)
                         _cancel_event.set()
         else:
             # Single component — no thread overhead
@@ -1691,7 +1780,9 @@ def execute(
 
     if _cancel_event.is_set():
         return _fail(
-            manifest.blueprint_id, run_id, module_results,
+            manifest.blueprint_id,
+            run_id,
+            module_results,
             trigger_agent=bool(_trigger_agent_flag and _trigger_agent_flag[0]),
         )
 
@@ -1704,7 +1795,14 @@ def execute(
             try:
                 _rr = get_observation(_obs, "records_read")
                 if _rr is not None:
-                    _update_metric(store_dir, run_id, _mod_id, "records_read", _rr, observability_store=observability_store)
+                    _update_metric(
+                        store_dir,
+                        run_id,
+                        _mod_id,
+                        "records_read",
+                        _rr,
+                        observability_store=observability_store,
+                    )
             except Exception as exc:
                 logger.debug("Observation collection failed for %r: %s", _mod_id, exc)
 
@@ -1713,8 +1811,12 @@ def execute(
         _obs = _resolve_observability_store(store_dir, observability_store)
         try:
             from aqueduct.compiler.lineage import write_lineage
+
             write_lineage(
-                manifest.blueprint_id, run_id, manifest.modules, manifest.edges,
+                manifest.blueprint_id,
+                run_id,
+                manifest.modules,
+                manifest.edges,
                 observability_store=_obs,
             )
         except Exception as exc:
@@ -1722,8 +1824,11 @@ def execute(
         # Phase 56 — Channel SQL fingerprints (changelog of semantic SQL changes).
         try:
             from aqueduct.compiler.fingerprint import write_fingerprints
+
             write_fingerprints(
-                manifest.blueprint_id, run_id, manifest.modules,
+                manifest.blueprint_id,
+                run_id,
+                manifest.modules,
                 observability_store=_obs,
             )
         except Exception as exc:
@@ -1736,7 +1841,10 @@ def execute(
     if surveyor is not None or explain_capture is not None:
         try:
             from aqueduct.patch.explain_gate import capture_plan_snapshot
-            _succeeded = {r.module_id for r in module_results if r.status == ExecutionStatus.SUCCESS}
+
+            _succeeded = {
+                r.module_id for r in module_results if r.status == ExecutionStatus.SUCCESS
+            }
             for _mod in manifest.modules:
                 if _mod.id not in _succeeded or _mod.type == ModuleType.Egress:
                     continue
@@ -1811,9 +1919,14 @@ def _on_retry_exhausted(
     # IngressError / ChannelError / Py4JJavaError chains its underlying
     # PySparkException via `raise ... from exc`, so the extractor's __cause__
     # walk finds it from here.
-    module_results.append(_mr(
-        module_id=module.id, status=ExecutionStatus.ERROR, error=str(exc), exception=exc,
-    ))
+    module_results.append(
+        _mr(
+            module_id=module.id,
+            status=ExecutionStatus.ERROR,
+            error=str(exc),
+            exception=exc,
+        )
+    )
 
     # Per-module failure webhook — fires for terminal on_exhaustion actions
     # (trigger_agent / quarantine), not for alert_only (blueprint continues).
@@ -1826,6 +1939,7 @@ def _on_retry_exhausted(
         import os as _os
 
         from aqueduct.infra.http import _deliver_webhook_payload
+
         raw = module.on_failure_webhook
         full_payload = {
             "run_id": run_id,
@@ -1852,25 +1966,39 @@ def _on_retry_exhausted(
             secret = raw.get("secret")
             # Render ${VAR} tokens in headers and secret (mirrors fire_webhook).
             import re as _re
+
             _token_re = _re.compile(r"\$\{([^}]+)\}")
+
             def _render_val(val):
                 if not isinstance(val, str):
                     return val
                 return _token_re.sub(
-                    lambda m: str(full_payload.get(m.group(1), _os.environ.get(m.group(1), m.group(0)))),
+                    lambda m: str(
+                        full_payload.get(m.group(1), _os.environ.get(m.group(1), m.group(0)))
+                    ),
                     val,
                 )
+
             headers = {k: _render_val(v) for k, v in headers.items()}
             if secret:
                 secret = _render_val(secret)
         _deliver_webhook_payload(
-            url, full_payload,
-            method=method, headers=headers, timeout=timeout,
-            attempts=attempts, backoff_seconds=backoff, secret=secret,
+            url,
+            full_payload,
+            method=method,
+            headers=headers,
+            timeout=timeout,
+            attempts=attempts,
+            backoff_seconds=backoff,
+            secret=secret,
         )
 
     if on_exhaustion == "alert_only":
-        logger.warning("[runtime_retry_exhausted_alert] [%s] Retry exhausted (alert_only): %s — blueprint continues.", module.id, exc)
+        logger.warning(
+            "[runtime_retry_exhausted_alert] [%s] Retry exhausted (alert_only): %s — blueprint continues.",
+            module.id,
+            exc,
+        )
         return True, None
     elif on_exhaustion == "trigger_agent":
         return False, _fail(blueprint_id, run_id, module_results, trigger_agent=True)

@@ -14,6 +14,7 @@ a ``MagicMock`` makes ``.stop()`` a no-op and never touches a real session — a
 it works whether or not ``pyspark`` is installed, since the drift CI job runs
 ``-m "not spark"``).
 """
+
 from __future__ import annotations
 
 import sys
@@ -91,8 +92,15 @@ def project(tmp_path, monkeypatch):
 
 def _invoke(tmp_path, store):
     return CliRunner().invoke(
-        cli, ["drift", str(tmp_path / "bp.yml"),
-              "--config", str(tmp_path / "aqueduct.yml"), "--store-dir", str(store)],
+        cli,
+        [
+            "drift",
+            str(tmp_path / "bp.yml"),
+            "--config",
+            str(tmp_path / "aqueduct.yml"),
+            "--store-dir",
+            str(store),
+        ],
     )
 
 

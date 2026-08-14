@@ -22,9 +22,11 @@ def _show_schema_snapshot(payload: dict):
 
 
 def _show_row_count_estimate(payload: dict):
-    console.print(f"[bold blue]Row Count Estimate:[/bold blue] {payload.get('estimate', '?')}"
-                  f"  [dim](method={payload.get('method', '?')}, "
-                  f"fraction={payload.get('fraction', '?')})[/dim]")
+    console.print(
+        f"[bold blue]Row Count Estimate:[/bold blue] {payload.get('estimate', '?')}"
+        f"  [dim](method={payload.get('method', '?')}, "
+        f"fraction={payload.get('fraction', '?')})[/dim]"
+    )
 
 
 def _show_null_rates(payload: dict):
@@ -46,8 +48,10 @@ def _show_sample_rows(payload: dict):
         console.print("[dim]Sample Rows: (none)[/dim]")
         return
     keys = list(rows[0].keys())
-    t = Table(title=f"Sample Rows ({len(rows)} rows, requested {payload.get('n', '?')})",
-              header_style="bold blue")
+    t = Table(
+        title=f"Sample Rows ({len(rows)} rows, requested {payload.get('n', '?')})",
+        header_style="bold blue",
+    )
     for k in keys:
         t.add_column(str(k))
     for row in rows:
@@ -62,9 +66,11 @@ def _show_value_distribution(payload: dict):
         return
     for col, s in stats.items():
         if s.get("count_non_null", 0) == 0:
-            console.print(f"[dim]Value Distribution — {col}: not computed "
-                          f"(fraction={payload.get('fraction')}, "
-                          f"sample too small)[/dim]")
+            console.print(
+                f"[dim]Value Distribution — {col}: not computed "
+                f"(fraction={payload.get('fraction')}, "
+                f"sample too small)[/dim]"
+            )
             continue
         st = Table(title=f"Value Distribution — {col}", header_style="bold blue")
         st.add_column("Metric")
@@ -99,8 +105,10 @@ def _show_distinct_count(payload: dict):
         t.add_row(col, str(cnt))
     console.print(t)
     if all_zero:
-        console.print("[dim]All counts are 0 — sampling fraction "
-                      f"{payload.get('fraction')} was too small for this dataset.[/dim]")
+        console.print(
+            "[dim]All counts are 0 — sampling fraction "
+            f"{payload.get('fraction')} was too small for this dataset.[/dim]"
+        )
 
 
 def _show_data_freshness(payload: dict):
@@ -115,8 +123,11 @@ def _show_data_freshness(payload: dict):
 
 def _show_partition_stats(payload: dict):
     num_parts = payload.get("num_partitions", None)
-    console.print(f"[bold blue]Partition Stats:[/bold blue] {num_parts} partition(s)"
-                  if num_parts else "[dim]Partition Stats: (none)[/dim]")
+    console.print(
+        f"[bold blue]Partition Stats:[/bold blue] {num_parts} partition(s)"
+        if num_parts
+        else "[dim]Partition Stats: (none)[/dim]"
+    )
 
 
 _SIGNAL_DISPLAY = {
@@ -134,7 +145,9 @@ _SIGNAL_DISPLAY = {
 def main():
     db_path = Path(".aqueduct/observability.db")
     if not db_path.exists():
-        console.print(f"[bold red]✗[/bold red] Observability DB not found at {db_path}. Did you run the pipeline?")
+        console.print(
+            f"[bold red]✗[/bold red] Observability DB not found at {db_path}. Did you run the pipeline?"
+        )
         return
 
     con = duckdb.connect(str(db_path))
@@ -161,7 +174,9 @@ def main():
             if st in seen:
                 continue
             seen.add(st)
-            payload = json.loads(payload_raw) if isinstance(payload_raw, str) else (payload_raw or {})
+            payload = (
+                json.loads(payload_raw) if isinstance(payload_raw, str) else (payload_raw or {})
+            )
             console.print(f"[bold cyan]━━━ {st} ━━━[/bold cyan]")
             display_fn = _SIGNAL_DISPLAY.get(st)
             if display_fn:
@@ -170,10 +185,12 @@ def main():
                 console.print(json.dumps(payload, indent=2, default=str))
             console.print()
 
-        console.print("[dim]Each signal is collected without stopping the pipeline. "
-                      "The payload column stores the full result as a JSON blob.\n"
-                      "Signals requiring full data scans (value_distribution, distinct_count) "
-                      "may be empty when the sampling fraction is too small.[/dim]")
+        console.print(
+            "[dim]Each signal is collected without stopping the pipeline. "
+            "The payload column stores the full result as a JSON blob.\n"
+            "Signals requiring full data scans (value_distribution, distinct_count) "
+            "may be empty when the sampling fraction is too small.[/dim]"
+        )
     finally:
         con.close()
 

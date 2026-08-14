@@ -42,11 +42,17 @@ from aqueduct.models import ModuleType
 @click.option("--store-dir", default=None, help="Observability store directory")
 @click.option("--patches-dir", default="patches", show_default=True, help="Patch lifecycle root")
 @click.option(
-    "--module", "only_module", default=None,
+    "--module",
+    "only_module",
+    default=None,
     help="Limit the check to a single Ingress module id (default: all Ingress).",
 )
 @click.option(
-    "--format", "fmt", type=click.Choice(["text", "json"]), default="text", show_default=True,
+    "--format",
+    "fmt",
+    type=click.Choice(["text", "json"]),
+    default="text",
+    show_default=True,
 )
 @_env_options
 def drift(
@@ -87,7 +93,8 @@ def drift(
     try:
         bp = parse(blueprint)
         manifest = compiler_compile(
-            bp, blueprint_path=Path(blueprint),
+            bp,
+            blueprint_path=Path(blueprint),
             deployment_env=getattr(cfg.deployment, "env", None),
             deployment_target=getattr(cfg.deployment, "target", None),
         )
@@ -99,7 +106,11 @@ def drift(
     if only_module:
         ingress = [m for m in ingress if m.id == only_module]
     if not ingress:
-        click.echo("✗ no Ingress modules to check" + (f" (module {only_module!r} not found)" if only_module else ""), err=True)
+        click.echo(
+            "✗ no Ingress modules to check"
+            + (f" (module {only_module!r} not found)" if only_module else ""),
+            err=True,
+        )
         sys.exit(exit_codes.USAGE_ERROR)
 
     # Per-blueprint write store (mirrors `run` — must not open the routing
@@ -115,7 +126,9 @@ def drift(
     from aqueduct.executor.spark.session import make_spark_session
 
     merged_spark_config = resolve_session_engine_config(cfg, "spark", manifest)
-    session = make_spark_session(manifest.blueprint_id, merged_spark_config, master_url=cfg.engine.spark.master_url)
+    session = make_spark_session(
+        manifest.blueprint_id, merged_spark_config, master_url=cfg.engine.spark.master_url
+    )
 
     results: list[dict[str, Any]] = []
     undiffable = False
@@ -134,11 +147,17 @@ def drift(
             baseline = drift_store.get_baseline(obs, manifest.blueprint_id, mod.id)
             if baseline is None:
                 drift_store.record_check(
-                    obs, blueprint_id=manifest.blueprint_id, module_id=mod.id,
-                    baseline_schema=None, live_schema=live, status="baseline_set",
+                    obs,
+                    blueprint_id=manifest.blueprint_id,
+                    module_id=mod.id,
+                    baseline_schema=None,
+                    live_schema=live,
+                    status="baseline_set",
                 )
                 results.append({"module": mod.id, "status": "baseline_set", "columns": len(live)})
-                click.echo(f"◆ {mod.id}: baseline established ({len(live)} columns) — no prior schema to diff")
+                click.echo(
+                    f"◆ {mod.id}: baseline established ({len(live)} columns) — no prior schema to diff"
+                )
                 continue
 
             result = diff_schemas(baseline, live)
@@ -150,26 +169,37 @@ def drift(
                 except Exception:
                     _src_yaml = None
                 patch_id = _heal_drift(
-                    cfg, manifest.blueprint_id, mod.id, result, manifest_json, Path(patches_dir),
+                    cfg,
+                    manifest.blueprint_id,
+                    mod.id,
+                    result,
+                    manifest_json,
+                    Path(patches_dir),
                     blueprint_source_yaml=_src_yaml,
                 )
                 if patch_id:
                     staged_any = True
 
             drift_store.record_check(
-                obs, blueprint_id=manifest.blueprint_id, module_id=mod.id,
-                baseline_schema=baseline, live_schema=live, status=result.status,
+                obs,
+                blueprint_id=manifest.blueprint_id,
+                module_id=mod.id,
+                baseline_schema=baseline,
+                live_schema=live,
+                status=result.status,
                 breaking_changes=[_change_dict(c) for c in result.breaking] or None,
                 benign_changes=[_change_dict(c) for c in result.benign] or None,
                 patch_id=patch_id,
             )
-            results.append({
-                "module": mod.id,
-                "status": result.status,
-                "breaking": [c.describe() for c in result.breaking],
-                "benign": [c.describe() for c in result.benign],
-                "patch_id": patch_id,
-            })
+            results.append(
+                {
+                    "module": mod.id,
+                    "status": result.status,
+                    "breaking": [c.describe() for c in result.breaking],
+                    "benign": [c.describe() for c in result.benign],
+                    "patch_id": patch_id,
+                }
+            )
             _echo_result(mod.id, result, patch_id)
     finally:
         try:
@@ -188,7 +218,12 @@ def drift(
 
 
 def _change_dict(c: Any) -> dict[str, Any]:
-    return {"column": c.column, "kind": c.kind, "baseline_type": c.baseline_type, "live_type": c.live_type}
+    return {
+        "column": c.column,
+        "kind": c.kind,
+        "baseline_type": c.baseline_type,
+        "live_type": c.live_type,
+    }
 
 
 def _echo_result(module_id: str, result: Any, patch_id: str | None) -> None:
@@ -231,7 +266,10 @@ def _heal_drift(
         return None
 
     failure_ctx = build_synthetic_failure_context(
-        blueprint_id, module_id, result, manifest_json,
+        blueprint_id,
+        module_id,
+        result,
+        manifest_json,
         engine=cfg.deployment.engine,
         blueprint_source_yaml=blueprint_source_yaml,
     )
@@ -258,6 +296,7 @@ def _heal_drift(
     # Stage to the configured patch store (local OR s3/gcs/adls per stores.blob),
     # not a hardcoded local dir — so a remote backend actually receives the body.
     from aqueduct.stores.object_store import make_patch_store
+
     _patch_store = make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, patches_path)
     stage_patch_for_human(agent_result.patch, patches_path, failure_ctx, patch_store=_patch_store)
     return agent_result.patch.patch_id

@@ -10,9 +10,13 @@ def main():
     output = Path("data/output/orders.parquet")
 
     if not output.exists():
-        console.print("[bold yellow]⚠[/bold yellow] Output not found. The pipeline failed on purpose (wrong column 'total').")
+        console.print(
+            "[bold yellow]⚠[/bold yellow] Output not found. The pipeline failed on purpose (wrong column 'total')."
+        )
         console.print("  Run [bold]aqueduct heal blueprint.yml[/bold] to trigger self-healing.")
-        console.print("\n  [dim]The agent analyses the failure and proposes a fix (total → total_amt).[/dim]")
+        console.print(
+            "\n  [dim]The agent analyses the failure and proposes a fix (total → total_amt).[/dim]"
+        )
         console.print("  Then apply with [bold]aqueduct patch commit[/bold].")
         return
 
@@ -27,7 +31,9 @@ def main():
         for row in rows:
             t.add_row(*[str(v) for v in row])
         console.print(t)
-        console.print(f"\n[dim]Row count: {len(rows)} — self-healing agent fixed the column name (total → total_amt)[/dim]")
+        console.print(
+            f"\n[dim]Row count: {len(rows)} — self-healing agent fixed the column name (total → total_amt)[/dim]"
+        )
     finally:
         con.close()
 

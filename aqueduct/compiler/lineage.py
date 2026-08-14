@@ -71,12 +71,14 @@ def _extract_sql_lineage(
         elif isinstance(inner, exp.Star):
             # SELECT * → wildcard entry per upstream table
             for src in upstream_ids:
-                rows.append({
-                    "channel_id": channel_id,
-                    "output_column": "*",
-                    "source_table": src,
-                    "source_column": "*",
-                })
+                rows.append(
+                    {
+                        "channel_id": channel_id,
+                        "output_column": "*",
+                        "source_table": src,
+                        "source_column": "*",
+                    }
+                )
             continue
         else:
             out_col = str(inner)[:64]
@@ -88,7 +90,7 @@ def _extract_sql_lineage(
         has_window = next(inner.find_all(exp.Window), None) is not None
         spec_col_ids: set[int] = set()
         for win in inner.find_all(exp.Window):
-            for part in (win.args.get("partition_by") or []):
+            for part in win.args.get("partition_by") or []:
                 spec_col_ids.update(id(c) for c in part.find_all(exp.Column))
             order = win.args.get("order")
             if order is not None:
@@ -99,22 +101,28 @@ def _extract_sql_lineage(
         if not col_refs:
             # Window function with no value columns, a literal, or a set function:
             # no single source column. Window/expression → "*"; literal → its text.
-            rows.append({
-                "channel_id": channel_id,
-                "output_column": out_col,
-                "source_table": "",
-                "source_column": "*" if has_window else str(inner)[:64],
-            })
+            rows.append(
+                {
+                    "channel_id": channel_id,
+                    "output_column": out_col,
+                    "source_table": "",
+                    "source_column": "*" if has_window else str(inner)[:64],
+                }
+            )
             continue
 
         for col_ref in col_refs:
-            src_table = alias_to_table.get(col_ref.table, col_ref.table) or (upstream_ids[0] if len(upstream_ids) == 1 else "")
-            rows.append({
-                "channel_id": channel_id,
-                "output_column": out_col,
-                "source_table": src_table,
-                "source_column": col_ref.name,
-            })
+            src_table = alias_to_table.get(col_ref.table, col_ref.table) or (
+                upstream_ids[0] if len(upstream_ids) == 1 else ""
+            )
+            rows.append(
+                {
+                    "channel_id": channel_id,
+                    "output_column": out_col,
+                    "source_table": src_table,
+                    "source_column": col_ref.name,
+                }
+            )
 
     return rows
 
@@ -219,17 +227,16 @@ def compute_lineage_rows(
     column-by-column (e.g. a subquery/CTE) — precise enough at this
     fidelity level, and consistent with the rest of this module.
     """
-    channel_modules = [m for m in modules if m.type == ModuleType.Channel and m.config.get("op") == "sql"]
+    channel_modules = [
+        m for m in modules if m.type == ModuleType.Channel and m.config.get("op") == "sql"
+    ]
     handoff_modules = [m for m in modules if m.type == ModuleType.Handoff]
     if not channel_modules and not handoff_modules:
         return []
 
     upstream_map: dict[str, list[str]] = {}
     for m in channel_modules:
-        upstream_map[m.id] = [
-            e.from_id for e in edges
-            if e.to_id == m.id and e.port == "main"
-        ]
+        upstream_map[m.id] = [e.from_id for e in edges if e.to_id == m.id and e.port == "main"]
 
     all_rows: list[dict[str, str]] = []
     for m in channel_modules:
@@ -302,7 +309,9 @@ def write_lineage(
 
         logger.debug(
             "Lineage: wrote %d rows for blueprint %r run %r",
-            len(all_rows), blueprint_id, run_id,
+            len(all_rows),
+            blueprint_id,
+            run_id,
         )
 
     except Exception as exc:

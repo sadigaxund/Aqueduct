@@ -2278,9 +2278,8 @@ def run(
                             f"parses ({_re_exc}) — falling through to Agent",
                             err=True,
                         )
-                    if (
-                        _replay_patch is not None
-                        and _heal_memory.contains_set_engine_config(_replay_patch.operations)
+                    if _replay_patch is not None and _heal_memory.contains_set_engine_config(
+                        _replay_patch.operations
                     ):
                         # Engine/session config is environment-specific (right
                         # for the cluster it was healed on, not necessarily

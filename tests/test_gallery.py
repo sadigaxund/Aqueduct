@@ -65,8 +65,10 @@ def test_snippet_parses_and_compiles(bp_path, monkeypatch):
     # DeploymentConfig defaults so blueprints using @aq.deployment.* don't
     # spuriously fail here.
     manifest = compile_bp(
-        parse(bp_path), blueprint_path=bp_path,
-        deployment_env="local", deployment_target="local",
+        parse(bp_path),
+        blueprint_path=bp_path,
+        deployment_env="local",
+        deployment_target="local",
     )
     assert manifest.modules, f"{bp_path} compiled to an empty manifest"
 
@@ -113,7 +115,8 @@ def test_aqscenario_heals_with_mocked_agent(sc_path, tmp_path):
 
     with patch("aqueduct.agent.generate_agent_patch") as m:
         m.return_value = AgentPatchResult(
-            patch=None, attempts=1,
+            patch=None,
+            attempts=1,
             stop_reason=StopReason.SOLVED,
         )
         result = run_scenario(scenario, model="test-model", patches_dir=tmp_path)

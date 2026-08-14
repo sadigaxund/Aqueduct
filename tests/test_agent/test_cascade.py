@@ -51,10 +51,13 @@ class TestGenerateCascadePatch:
 
     def _success_result(self, model_num: int = 1) -> AgentPatchResult:
         from aqueduct.patch.grammar import PatchSpec
+
         p = PatchSpec(
-            patch_id=f"p{model_num}", rationale="fix",
-            operations=[{"op": "set_module_config_key",
-                         "module_id": "m1", "key": "k", "value": "v"}],
+            patch_id=f"p{model_num}",
+            rationale="fix",
+            operations=[
+                {"op": "set_module_config_key", "module_id": "m1", "key": "k", "value": "v"}
+            ],
         )
         return AgentPatchResult(patch=p, attempts=1, stop_reason=StopReason.SOLVED)
 
@@ -151,12 +154,13 @@ class TestGenerateCascadePatch:
         # Tier 2 falls back to cascade default max_reprompts=5
         assert calls[1][1]["agent_cfg"].max_reprompts == 5
 
-
     def test_tier1_deferred_escalates_to_tier2(self, fctx, patches_dir):
         """tier1 stop_reason='deferred' (patch non-None) with tier2 present → escalates to tier2."""
         with patch("aqueduct.agent.cascade.generate_agent_patch") as mock_gen:
             defer_result = AgentPatchResult(
-                patch=None, attempts=2, stop_reason=StopReason.DEFERRED,
+                patch=None,
+                attempts=2,
+                stop_reason=StopReason.DEFERRED,
             )
             mock_gen.side_effect = [
                 defer_result,
@@ -177,7 +181,9 @@ class TestGenerateCascadePatch:
         """Final-tier 'deferred' → defer result (patch + stop_reason) returned to caller for staging."""
         with patch("aqueduct.agent.cascade.generate_agent_patch") as mock_gen:
             defer_result = AgentPatchResult(
-                patch=None, attempts=1, stop_reason=StopReason.DEFERRED,
+                patch=None,
+                attempts=1,
+                stop_reason=StopReason.DEFERRED,
             )
             mock_gen.return_value = defer_result
 
@@ -236,7 +242,12 @@ class TestGenerateCascadePatch:
         """budget=BudgetConfig(max_tokens_total=N) passed to cascade — every tier budget keeps max_tokens_total=N."""
         from aqueduct.agent.budget import BudgetConfig
 
-        base_budget = BudgetConfig(max_tokens_total=9999, same_error_consecutive=2, same_signature_overall=3, progress_stalled_window=3)
+        base_budget = BudgetConfig(
+            max_tokens_total=9999,
+            same_error_consecutive=2,
+            same_signature_overall=3,
+            progress_stalled_window=3,
+        )
 
         with patch("aqueduct.agent.cascade.generate_agent_patch") as mock_gen:
             mock_gen.side_effect = [
@@ -273,29 +284,46 @@ class TestGenerateCascadePatch:
             )
 
         calls = mock_gen.call_args_list
-        assert calls[0][1]["agent_cfg"].last_apply_error == "previous patch failed: UNRESOLVED_COLUMN"
-        assert calls[1][1]["agent_cfg"].last_apply_error == "previous patch failed: UNRESOLVED_COLUMN"
+        assert (
+            calls[0][1]["agent_cfg"].last_apply_error == "previous patch failed: UNRESOLVED_COLUMN"
+        )
+        assert (
+            calls[1][1]["agent_cfg"].last_apply_error == "previous patch failed: UNRESOLVED_COLUMN"
+        )
 
 
 # ── Phase 46 — cascade-wide token cap ──────────────────────────────────────────
 
+
 class TestCascadeSpanningBudget:
     def _result_with_tokens(self, tokens: int) -> AgentPatchResult:
-        return AgentPatchResult(patch=None, attempts=1, stop_reason=StopReason.STUCK_SIGNATURE,
-                                tokens_in_total=tokens, tokens_out_total=0)
+        return AgentPatchResult(
+            patch=None,
+            attempts=1,
+            stop_reason=StopReason.STUCK_SIGNATURE,
+            tokens_in_total=tokens,
+            tokens_out_total=0,
+        )
 
     def _success(self, model_num: int = 1) -> AgentPatchResult:
         from aqueduct.patch.grammar import PatchSpec
+
         return AgentPatchResult(
-            patch=PatchSpec(patch_id=f"p{model_num}", rationale="fix",
-                            operations=[{"op": "set_module_config_key",
-                                         "module_id": "m1", "key": "k", "value": "v"}]),
-            attempts=1, stop_reason=StopReason.SOLVED,
+            patch=PatchSpec(
+                patch_id=f"p{model_num}",
+                rationale="fix",
+                operations=[
+                    {"op": "set_module_config_key", "module_id": "m1", "key": "k", "value": "v"}
+                ],
+            ),
+            attempts=1,
+            stop_reason=StopReason.SOLVED,
         )
 
     def test_tier2_gets_remaining_tokens(self, tmp_path):
         """max_tokens_total spans cascade: tier 2 gets remaining after tier 1."""
         from aqueduct.agent.budget import BudgetConfig
+
         with patch("aqueduct.agent.cascade.generate_agent_patch") as mock_gen:
             mock_gen.side_effect = [
                 self._result_with_tokens(tokens=300),
@@ -303,7 +331,8 @@ class TestCascadeSpanningBudget:
             ]
             result = generate_cascade_patch(
                 tiers=[_tier("model-a"), _tier("model-b")],
-                failure_ctx=_fctx(), patches_dir=tmp_path,
+                failure_ctx=_fctx(),
+                patches_dir=tmp_path,
                 budget=BudgetConfig(max_tokens_total=1000),
             )
         calls = mock_gen.call_args_list
@@ -314,13 +343,15 @@ class TestCascadeSpanningBudget:
     def test_cascade_stops_when_token_cap_exhausted(self, tmp_path):
         """When remaining < 1, cascade stops with budget_tokens_exceeded."""
         from aqueduct.agent.budget import BudgetConfig
+
         with patch("aqueduct.agent.cascade.generate_agent_patch") as mock_gen:
             mock_gen.side_effect = [
                 self._result_with_tokens(tokens=1000),
             ]
             result = generate_cascade_patch(
                 tiers=[_tier("model-a"), _tier("model-b"), _tier("model-c")],
-                failure_ctx=_fctx(), patches_dir=tmp_path,
+                failure_ctx=_fctx(),
+                patches_dir=tmp_path,
                 budget=BudgetConfig(max_tokens_total=1000),
             )
         assert mock_gen.call_count == 1
@@ -346,17 +377,23 @@ class TestCascadeSpanningBudget:
         stale_patch = PatchSpec(
             patch_id="stale",
             rationale="best-effort diagnosis from tier 1",
-            operations=[{"op": "set_module_config_key", "module_id": "m1", "key": "k", "value": "v"}],
+            operations=[
+                {"op": "set_module_config_key", "module_id": "m1", "key": "k", "value": "v"}
+            ],
         )
         escalating_result_with_patch = AgentPatchResult(
-            patch=stale_patch, attempts=1, stop_reason=StopReason.STUCK_SIGNATURE,
-            tokens_in_total=1000, tokens_out_total=0,
+            patch=stale_patch,
+            attempts=1,
+            stop_reason=StopReason.STUCK_SIGNATURE,
+            tokens_in_total=1000,
+            tokens_out_total=0,
         )
         with patch("aqueduct.agent.cascade.generate_agent_patch") as mock_gen:
             mock_gen.side_effect = [escalating_result_with_patch]
             result = generate_cascade_patch(
                 tiers=[_tier("model-a"), _tier("model-b"), _tier("model-c")],
-                failure_ctx=_fctx(), patches_dir=tmp_path,
+                failure_ctx=_fctx(),
+                patches_dir=tmp_path,
                 budget=BudgetConfig(max_tokens_total=1000),
             )
         assert mock_gen.call_count == 1
@@ -372,6 +409,7 @@ class TestCascadeSpanningBudget:
     def test_null_tokens_total_unconstrained(self, tmp_path):
         """max_tokens_total: null → tiers unconstrained."""
         from aqueduct.agent.budget import BudgetConfig
+
         with patch("aqueduct.agent.cascade.generate_agent_patch") as mock_gen:
             mock_gen.side_effect = [
                 self._result_with_tokens(tokens=900),
@@ -379,7 +417,8 @@ class TestCascadeSpanningBudget:
             ]
             result = generate_cascade_patch(
                 tiers=[_tier("model-a"), _tier("model-b")],
-                failure_ctx=_fctx(), patches_dir=tmp_path,
+                failure_ctx=_fctx(),
+                patches_dir=tmp_path,
                 budget=BudgetConfig(max_tokens_total=None),
             )
         calls = mock_gen.call_args_list

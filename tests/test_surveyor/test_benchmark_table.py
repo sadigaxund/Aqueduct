@@ -25,8 +25,8 @@ pytestmark = pytest.mark.unit
 
 from aqueduct.surveyor.scenario import format_benchmark_table
 
-
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
 
 def _r(
     *,
@@ -71,12 +71,14 @@ def _lines_of_char(rendered: str, char: str) -> list[str]:
 
 # ── Empty results ──────────────────────────────────────────────────────────────
 
+
 def test_empty_results_returns_no_results():
     out = _render({}, ["model-a"])
     assert out == "(no results)"
 
 
 # ── Rule-line width regression ─────────────────────────────────────────────────
+
 
 class TestRuleLineWidth:
     """The heavy (═) and light (─) bars must be the SAME length as data rows."""
@@ -92,9 +94,9 @@ class TestRuleLineWidth:
         assert header_lines, "Expected header row containing 'Scenario'"
         header_w = len(header_lines[0])
         for hl in heavy_lines:
-            assert len(hl) == header_w, (
-                f"Heavy rule width {len(hl)} != header width {header_w}:\n{out}"
-            )
+            assert (
+                len(hl) == header_w
+            ), f"Heavy rule width {len(hl)} != header width {header_w}:\n{out}"
 
     def test_light_bar_same_width_as_header_single_model(self):
         results = {"scenario-alpha": {"model-a": _r(passed=True)}}
@@ -105,31 +107,30 @@ class TestRuleLineWidth:
         assert light_lines, "Expected at least one light (─) rule line"
         header_w = len(header_lines[0])
         for ll in light_lines:
-            assert len(ll) == header_w, (
-                f"Light rule width {len(ll)} != header width {header_w}:\n{out}"
-            )
+            assert (
+                len(ll) == header_w
+            ), f"Light rule width {len(ll)} != header width {header_w}:\n{out}"
 
     def test_rule_lines_same_width_as_data_rows(self):
-        results = {"my-scenario": {"model-a": _r(passed=True, confidence=0.85, duration_seconds=12.0)}}
+        results = {
+            "my-scenario": {"model-a": _r(passed=True, confidence=0.85, duration_seconds=12.0)}
+        }
         out = _render(results, ["model-a"])
         lines = out.splitlines()
 
         # Only check that rule lines match the header width — summary row
         # labels (e.g. "Avg confidence") may be wider than "Scenario" column.
         header_lines = [ln for ln in lines if "Scenario" in ln]
-        rule_lines = [
-            ln for ln in lines
-            if ln and all(c in ("═", "─") for c in ln)
-        ]
+        rule_lines = [ln for ln in lines if ln and all(c in ("═", "─") for c in ln)]
 
         assert header_lines, "Expected header row containing 'Scenario'"
         assert rule_lines, "Expected at least one rule line"
 
         header_w = len(header_lines[0])
         for rl in rule_lines:
-            assert len(rl) == header_w, (
-                f"Rule line width {len(rl)} != header width {header_w}\n{out}"
-            )
+            assert (
+                len(rl) == header_w
+            ), f"Rule line width {len(rl)} != header width {header_w}\n{out}"
 
     def test_rule_lines_same_width_multi_model(self):
         """Regression: multi-model rule lines must match header width."""
@@ -145,17 +146,14 @@ class TestRuleLineWidth:
         }
         out = _render(results, ["model-alpha", "model-beta"])
         header_lines = [ln for ln in out.splitlines() if "Scenario" in ln]
-        rule_lines = [
-            ln for ln in out.splitlines()
-            if ln and all(c in ("═", "─") for c in ln)
-        ]
+        rule_lines = [ln for ln in out.splitlines() if ln and all(c in ("═", "─") for c in ln)]
         assert header_lines, "Expected header row"
         assert rule_lines, "Expected rule lines"
         header_w = len(header_lines[0])
         for rl in rule_lines:
-            assert len(rl) == header_w, (
-                f"Rule line width {len(rl)} != header width {header_w}\n{out}"
-            )
+            assert (
+                len(rl) == header_w
+            ), f"Rule line width {len(rl)} != header width {header_w}\n{out}"
 
     def test_rule_lines_same_width_long_scenario_id(self):
         """Scenario IDs wider than 'Scenario' heading must still produce uniform rows."""
@@ -164,36 +162,36 @@ class TestRuleLineWidth:
         out = _render(results, ["model-a"])
         lines = [ln for ln in out.splitlines() if ln]
         widths = {len(ln) for ln in lines}
-        assert len(widths) == 1, (
-            f"Long scenario id table has non-uniform line widths: {sorted(widths)}\n{out}"
-        )
+        assert (
+            len(widths) == 1
+        ), f"Long scenario id table has non-uniform line widths: {sorted(widths)}\n{out}"
 
     def test_rule_lines_same_width_wide_cell_content(self):
         """Wide cell values (FAIL with long decoration) must not break uniformity."""
         results = {
             "sc": {
                 "model-with-a-very-long-name-here": _r(
-                    passed=False, confidence=None,
-                    diag_score=0.75, duration_seconds=99.9,
+                    passed=False,
+                    confidence=None,
+                    diag_score=0.75,
+                    duration_seconds=99.9,
                 )
             }
         }
         out = _render(results, ["model-with-a-very-long-name-here"])
         header_lines = [ln for ln in out.splitlines() if "Scenario" in ln]
-        rule_lines = [
-            ln for ln in out.splitlines()
-            if ln and all(c in ("═", "─") for c in ln)
-        ]
+        rule_lines = [ln for ln in out.splitlines() if ln and all(c in ("═", "─") for c in ln)]
         assert header_lines, "Expected header row"
         assert rule_lines, "Expected rule lines"
         header_w = len(header_lines[0])
         for rl in rule_lines:
-            assert len(rl) == header_w, (
-                f"Rule line width {len(rl)} != header width {header_w}\n{out}"
-            )
+            assert (
+                len(rl) == header_w
+            ), f"Rule line width {len(rl)} != header width {header_w}\n{out}"
 
 
 # ── Content correctness ────────────────────────────────────────────────────────
+
 
 class TestTableContent:
     def test_pass_appears_for_passing_result(self):
@@ -271,14 +269,11 @@ class TestTableContent:
         results = {"s": {"m": _r(passed=True, confidence=None, diag_score=None)}}
         out = _render(results, ["m"])
         header_lines = [ln for ln in out.splitlines() if "Scenario" in ln]
-        rule_lines = [
-            ln for ln in out.splitlines()
-            if ln and all(c in ("═", "─") for c in ln)
-        ]
+        rule_lines = [ln for ln in out.splitlines() if ln and all(c in ("═", "─") for c in ln)]
         assert header_lines, "Expected header line"
         assert rule_lines, "Expected rule lines"
         header_w = len(header_lines[0])
         for rl in rule_lines:
-            assert len(rl) == header_w, (
-                f"Rule line width {len(rl)} != header width {header_w}\n{out}"
-            )
+            assert (
+                len(rl) == header_w
+            ), f"Rule line width {len(rl)} != header width {header_w}\n{out}"

@@ -3,6 +3,7 @@ Surveyor provenance_json building, and Agent _build_provenance_section.
 
 Covers ⏳ items from TEST_MANIFEST.md Phase 19 section.
 """
+
 from __future__ import annotations
 
 import json
@@ -12,8 +13,8 @@ pytestmark = pytest.mark.unit
 
 from aqueduct.surveyor.models import FailureContext
 
-
 # ── FailureContext.provenance_json ─────────────────────────────────────────────
+
 
 def _make_ctx(**kwargs) -> FailureContext:
     defaults = dict(
@@ -183,19 +184,24 @@ except ImportError:
 from aqueduct.compiler.provenance import ProvenanceMap, ModuleProvenance, ValueProvenance
 
 
-def _make_execution_result(blueprint_id="test.bp", status="error", run_id="r1", failed_module="m1", error="err"):
+def _make_execution_result(
+    blueprint_id="test.bp", status="error", run_id="r1", failed_module="m1", error="err"
+):
     return ExecutionResult(
         blueprint_id=blueprint_id,
         run_id=run_id,
         status=status,
         module_results=[
-            ModuleResult(module_id=failed_module, status=status, error=error if status == "error" else None),
+            ModuleResult(
+                module_id=failed_module, status=status, error=error if status == "error" else None
+            ),
         ],
     )
 
 
 def _make_manifest(blueprint_id="test.bp", provenance_map=None):
     from unittest.mock import MagicMock
+
     m = MagicMock()
     m.blueprint_id = blueprint_id
     m.name = "Test"

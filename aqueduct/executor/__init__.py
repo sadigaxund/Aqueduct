@@ -45,9 +45,11 @@ def get_executor(engine: str = "spark"):
 def __getattr__(name: str):
     if name == "execute":
         from aqueduct.executor.spark.executor import execute
+
         return execute
     if name == "ExecuteError":
         from aqueduct.errors import ExecuteError
+
         return ExecuteError
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

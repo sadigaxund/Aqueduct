@@ -19,7 +19,12 @@ def _write_bp(path, healed_by=None):
         "id": "test.bp",
         "name": "Test Blueprint",
         "modules": [
-            {"id": "in", "label": "in", "type": "Ingress", "config": {"format": "parquet", "path": "p1"}},
+            {
+                "id": "in",
+                "label": "in",
+                "type": "Ingress",
+                "config": {"format": "parquet", "path": "p1"},
+            },
         ],
         "edges": [],
     }
@@ -50,7 +55,8 @@ def test_apply_writes_healed_by_block(tmp_path):
         meta={"engine": "duckdb", "engine_version": "1.5.4", "run_id": "r1"},
     )
     apply_patch_file(
-        blueprint_path=bp_path, patch_path=patch_path,
+        blueprint_path=bp_path,
+        patch_path=patch_path,
         patches_dir=tmp_path / "patches",
     )
     written = yaml.safe_load(bp_path.read_text())
@@ -67,17 +73,24 @@ def test_apply_writes_healed_by_block(tmp_path):
 
 
 def test_apply_appends_to_existing_healed_by(tmp_path):
-    existing = [{
-        "patch_id": "p0", "engine": "spark", "classification": "dialect_neutral",
-        "applied_at": "2026-01-01T00:00:00Z", "validated_on": ["spark"],
-    }]
+    existing = [
+        {
+            "patch_id": "p0",
+            "engine": "spark",
+            "classification": "dialect_neutral",
+            "applied_at": "2026-01-01T00:00:00Z",
+            "validated_on": ["spark"],
+        }
+    ]
     bp_path = _write_bp(tmp_path / "bp.yml", healed_by=existing)
     patch_path = _write_patch(
         tmp_path / "patch.json",
-        patch_id="p1", meta={"engine": "duckdb"},
+        patch_id="p1",
+        meta={"engine": "duckdb"},
     )
     apply_patch_file(
-        blueprint_path=bp_path, patch_path=patch_path,
+        blueprint_path=bp_path,
+        patch_path=patch_path,
         patches_dir=tmp_path / "patches",
     )
     written = yaml.safe_load(bp_path.read_text())
@@ -91,7 +104,8 @@ def test_apply_no_healed_by_record_without_engine_meta(tmp_path):
     bp_path = _write_bp(tmp_path / "bp.yml")
     patch_path = _write_patch(tmp_path / "patch.json", meta=None)
     apply_patch_file(
-        blueprint_path=bp_path, patch_path=patch_path,
+        blueprint_path=bp_path,
+        patch_path=patch_path,
         patches_dir=tmp_path / "patches",
     )
     written = yaml.safe_load(bp_path.read_text())
@@ -102,10 +116,13 @@ def test_apply_engine_shaped_classification_from_ops(tmp_path):
     bp_path = _write_bp(tmp_path / "bp.yml")
     patch_path = _write_patch(
         tmp_path / "patch.json",
-        meta={"engine": "duckdb"}, key="format", value="csv",
+        meta={"engine": "duckdb"},
+        key="format",
+        value="csv",
     )
     apply_patch_file(
-        blueprint_path=bp_path, patch_path=patch_path,
+        blueprint_path=bp_path,
+        patch_path=patch_path,
         patches_dir=tmp_path / "patches",
     )
     written = yaml.safe_load(bp_path.read_text())
@@ -113,6 +130,7 @@ def test_apply_engine_shaped_classification_from_ops(tmp_path):
 
 
 # ── stamp_validated_engine ──────────────────────────────────────────────────
+
 
 def test_stamp_validated_engine_noop_without_healed_by(tmp_path):
     bp_path = _write_bp(tmp_path / "bp.yml")
@@ -123,10 +141,15 @@ def test_stamp_validated_engine_noop_without_healed_by(tmp_path):
 
 
 def test_stamp_validated_engine_appends_and_is_idempotent(tmp_path):
-    existing = [{
-        "patch_id": "p1", "engine": "duckdb", "classification": "engine_shaped",
-        "applied_at": "2026-01-01T00:00:00Z", "validated_on": [],
-    }]
+    existing = [
+        {
+            "patch_id": "p1",
+            "engine": "duckdb",
+            "classification": "engine_shaped",
+            "applied_at": "2026-01-01T00:00:00Z",
+            "validated_on": [],
+        }
+    ]
     bp_path = _write_bp(tmp_path / "bp.yml", healed_by=existing)
 
     changed = stamp_validated_engine(bp_path, "spark")
@@ -143,10 +166,20 @@ def test_stamp_validated_engine_appends_and_is_idempotent(tmp_path):
 
 def test_stamp_validated_engine_multiple_records(tmp_path):
     existing = [
-        {"patch_id": "p1", "engine": "duckdb", "classification": "engine_shaped",
-         "applied_at": "2026-01-01T00:00:00Z", "validated_on": []},
-        {"patch_id": "p2", "engine": "spark", "classification": "dialect_neutral",
-         "applied_at": "2026-01-01T00:00:00Z", "validated_on": ["spark"]},
+        {
+            "patch_id": "p1",
+            "engine": "duckdb",
+            "classification": "engine_shaped",
+            "applied_at": "2026-01-01T00:00:00Z",
+            "validated_on": [],
+        },
+        {
+            "patch_id": "p2",
+            "engine": "spark",
+            "classification": "dialect_neutral",
+            "applied_at": "2026-01-01T00:00:00Z",
+            "validated_on": ["spark"],
+        },
     ]
     bp_path = _write_bp(tmp_path / "bp.yml", healed_by=existing)
     changed = stamp_validated_engine(bp_path, "spark")

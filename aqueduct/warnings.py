@@ -108,7 +108,7 @@ def _aq_format(message, category, filename, lineno, line=None) -> str:
     if category is AqueductWarning or isinstance(message, AqueductWarning):
         if msg.startswith(_AQ_PREFIX):
             # "[aqueduct:rule_id] body" → "AQ-WARN [rule_id] body"
-            body = msg[len(_AQ_PREFIX):]
+            body = msg[len(_AQ_PREFIX) :]
             try:
                 rid, rest = body.split("] ", 1)
                 return f"AQ-WARN [{rid}] {rest}\n"

@@ -6,6 +6,7 @@ exception. Skips when the optional `dashboard` extra (streamlit) is absent, so i
 runs in CI / when `pip install -e .[dashboard]` is present but never blocks a base
 install — same pattern as the integration-marked store tests.
 """
+
 from __future__ import annotations
 
 import json
@@ -44,12 +45,18 @@ def seeded_store_dir(tmp_path, monkeypatch):
     p = tmp_path / "observability.db"
     c = duckdb.connect(str(p))
     c.execute(_DDL)
-    mr = json.dumps([{"module_id": "src", "status": "success", "error": ""},
-                     {"module_id": "sink", "status": "success", "error": ""}])
+    mr = json.dumps(
+        [
+            {"module_id": "src", "status": "success", "error": ""},
+            {"module_id": "sink", "status": "success", "error": ""},
+        ]
+    )
     c.execute("INSERT INTO run_records VALUES ('r1','bp.demo','success', now(), now(), ?)", [mr])
     c.execute("INSERT INTO module_metrics VALUES ('r1','src',NULL,NULL,10,100,50,now())")
     c.execute("INSERT INTO module_metrics VALUES ('r1','sink',NULL,NULL,10,120,80,now())")
-    c.execute("INSERT INTO column_lineage VALUES ('bp.demo','r1','ch','amount','src','raw_amount', now())")
+    c.execute(
+        "INSERT INTO column_lineage VALUES ('bp.demo','r1','ch','amount','src','raw_amount', now())"
+    )
     c.close()
     monkeypatch.setenv("AQ_DASH_STORE_DIR", str(tmp_path))
     monkeypatch.delenv("AQ_DASH_CONFIG", raising=False)
@@ -65,7 +72,7 @@ def test_app_renders_without_exception(seeded_store_dir):
 
 
 def test_app_handles_empty_stores(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)        # no .aqueduct/observability anywhere
+    monkeypatch.chdir(tmp_path)  # no .aqueduct/observability anywhere
     monkeypatch.setenv("AQ_DASH_STORE_DIR", str(tmp_path))
     monkeypatch.delenv("AQ_DASH_CONFIG", raising=False)
     at = AppTest.from_file(_APP, default_timeout=30).run()

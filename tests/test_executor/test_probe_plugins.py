@@ -1,4 +1,5 @@
 """Phase 60 — custom probe signal resolver (engine-agnostic, no Spark)."""
+
 from __future__ import annotations
 
 import pytest
@@ -18,6 +19,7 @@ def _demo_signal(df, sig_cfg):  # referenced by the pointer-resolution test
 
 
 # ── custom_signal_source classification ─────────────────────────────────────
+
 
 def test_source_sql():
     assert custom_signal_source({"sql": "MAX(x)"}) == "sql"
@@ -49,6 +51,7 @@ def test_source_partial_pointer_raises():
 
 # ── resolve_callable ────────────────────────────────────────────────────────
 
+
 def test_resolve_pointer_imports_callable():
     fn = resolve_callable(
         {"module": "tests.test_executor.test_probe_plugins", "entry": "_demo_signal"}
@@ -59,7 +62,10 @@ def test_resolve_pointer_imports_callable():
 def test_resolve_pointer_not_callable_raises():
     with pytest.raises(ConfigError, match="is not a callable"):
         resolve_callable(
-            {"module": "tests.test_executor.test_probe_plugins", "entry": "AQ_PROBE_ENTRYPOINT_GROUP"}
+            {
+                "module": "tests.test_executor.test_probe_plugins",
+                "entry": "AQ_PROBE_ENTRYPOINT_GROUP",
+            }
         )
 
 
@@ -80,6 +86,7 @@ def test_entrypoint_group_name_stable():
 
 # ── resolve_callable base_dir (Manifest.base_dir sibling-file resolution) ───
 
+
 def test_resolve_pointer_survives_stdlib_name_collision(tmp_path):
     """A probe module named e.g. ``types`` (stdlib collision) must still load
     correctly, and must never touch the colliding sys.modules entry — same
@@ -95,9 +102,7 @@ def test_resolve_pointer_survives_stdlib_name_collision(tmp_path):
 
     sentinel = sys.modules["types"]
     try:
-        fn = resolve_callable(
-            {"module": "types.probe", "entry": "check"}, base_dir=str(tmp_path)
-        )
+        fn = resolve_callable({"module": "types.probe", "entry": "check"}, base_dir=str(tmp_path))
         assert fn(None, {}) == {"estimate": 1, "metadata": {}, "passed": True}
         assert sys.modules["types"] is sentinel
     finally:

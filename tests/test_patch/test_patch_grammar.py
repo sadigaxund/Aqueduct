@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import pytest
+
 pytestmark = pytest.mark.unit
 from pydantic import ValidationError
 from aqueduct.patch.grammar import PatchSpec, RetiredPatchOpError, SetEngineConfigOp
@@ -14,12 +15,8 @@ def test_valid_patch_spec_parsing():
         "patch_id": "patch_123",
         "rationale": "Fixing SQL query",
         "operations": [
-            {
-                "op": "replace_module_config",
-                "module_id": "m1",
-                "config": {"query": "SELECT 1"}
-            }
-        ]
+            {"op": "replace_module_config", "module_id": "m1", "config": {"query": "SELECT 1"}}
+        ],
     }
     spec = PatchSpec.model_validate(raw_json)
     assert spec.patch_id == "patch_123"
@@ -29,11 +26,7 @@ def test_valid_patch_spec_parsing():
 
 def test_patch_spec_empty_operations():
     # min_length=1 should prevent empty operations list
-    raw_json = {
-        "patch_id": "patch_123",
-        "rationale": "Empty patch",
-        "operations": []
-    }
+    raw_json = {"patch_id": "patch_123", "rationale": "Empty patch", "operations": []}
     with pytest.raises(ValidationError, match="at least 1 item"):
         PatchSpec.model_validate(raw_json)
 
@@ -49,9 +42,7 @@ def test_patch_spec_unknown_top_level_keys_land_in_misc():
         "root_cause": "test",
         "hacker_field": "exploit",
         "rootCause": "ignored alias bucket",
-        "operations": [
-            {"op": "replace_module_label", "module_id": "m1", "label": "L"}
-        ],
+        "operations": [{"op": "replace_module_label", "module_id": "m1", "label": "L"}],
     }
     spec = PatchSpec.model_validate(raw_json)
     # The unknown top-level key lands in misc; canonical fields stay clean.
@@ -64,9 +55,7 @@ def test_patch_operation_discriminator_mismatch():
     raw_json = {
         "patch_id": "p1",
         "rationale": "Wrong op",
-        "operations": [
-            {"op": "invalid_op_name", "module_id": "m1"}
-        ]
+        "operations": [{"op": "invalid_op_name", "module_id": "m1"}],
     }
     # Adjusting for Pydantic v2 error message format
     with pytest.raises(ValidationError, match="invalid_op_name"):
@@ -77,9 +66,7 @@ def test_patch_operation_missing_required_field():
     raw_json = {
         "patch_id": "p1",
         "rationale": "Missing field",
-        "operations": [
-            {"op": "replace_module_config", "module_id": "m1"}  # config is missing
-        ]
+        "operations": [{"op": "replace_module_config", "module_id": "m1"}],  # config is missing
     }
     with pytest.raises(ValidationError, match="Field required"):
         PatchSpec.model_validate(raw_json)
@@ -91,13 +78,8 @@ def test_patch_operation_extra_field_forbidden():
         "patch_id": "p1",
         "rationale": "Extra op field",
         "operations": [
-            {
-                "op": "replace_module_label",
-                "module_id": "m1",
-                "label": "L",
-                "unknown_key": "val"
-            }
-        ]
+            {"op": "replace_module_label", "module_id": "m1", "label": "L", "unknown_key": "val"}
+        ],
     }
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         PatchSpec.model_validate(raw_json)
@@ -114,11 +96,14 @@ def test_patch_spec_json_schema():
     # Phase 47 – replace_macro op should be present in the schema
     assert "ReplaceMacroOp" in ops_schema
     # The discriminator mapping for operations must include the canonical name
-    mapping = schema["properties"]["operations"]["items"].get("discriminator", {}).get("mapping", {})
+    mapping = (
+        schema["properties"]["operations"]["items"].get("discriminator", {}).get("mapping", {})
+    )
     assert "replace_macro" in mapping
 
 
 # ── PatchSpec resilience (1.1.0) ──────────────────────────────────────────────
+
 
 class TestPatchSpecResilience:
     """LLM responses often omit or add fields. The normalizer in
@@ -129,8 +114,11 @@ class TestPatchSpecResilience:
         raw = {
             "rationale": "Fixing column reference in SQL query",
             "operations": [
-                {"op": "replace_module_config", "module_id": "m1",
-                 "config": {"query": "SELECT id FROM t"}}
+                {
+                    "op": "replace_module_config",
+                    "module_id": "m1",
+                    "config": {"query": "SELECT id FROM t"},
+                }
             ],
         }
         spec = PatchSpec.model_validate(raw)
@@ -146,11 +134,10 @@ class TestPatchSpecResilience:
         the pre-validator ran before pydantic field validation rejected it.
         """
         raw = {
-            "operations": [
-                {"op": "replace_module_label", "module_id": "m1", "label": "L"}
-            ],
+            "operations": [{"op": "replace_module_label", "module_id": "m1", "label": "L"}],
         }
         from pydantic import ValidationError
+
         with pytest.raises(ValidationError, match="rationale") as excinfo:
             PatchSpec.model_validate(raw)
         # The normalizer still ran: error input_value shows synthesized patch_id
@@ -161,9 +148,7 @@ class TestPatchSpecResilience:
         """Rationale present but empty → no slug possible; uuid fallback."""
         raw = {
             "rationale": "",
-            "operations": [
-                {"op": "replace_module_label", "module_id": "m1", "label": "L"}
-            ],
+            "operations": [{"op": "replace_module_label", "module_id": "m1", "label": "L"}],
         }
         spec = PatchSpec.model_validate(raw)
         assert spec.patch_id.startswith("auto-")
@@ -179,8 +164,7 @@ class TestPatchSpecResilience:
             "applied_by": "claude",
             "datetime_applied": "2026-05-30T12:00:00Z",
             "operations": [
-                {"op": "replace_module_config", "module_id": "m1",
-                 "config": {"query": "SELECT 1"}}
+                {"op": "replace_module_config", "module_id": "m1", "config": {"query": "SELECT 1"}}
             ],
         }
         spec = PatchSpec.model_validate(raw)
@@ -197,9 +181,7 @@ class TestPatchSpecResilience:
             "version": "1.0",
             "created_at": "2026-01-01T00:00:00Z",
             "updated_at": "2026-01-01T00:00:00Z",
-            "operations": [
-                {"op": "replace_module_label", "module_id": "m1", "label": "L"}
-            ],
+            "operations": [{"op": "replace_module_label", "module_id": "m1", "label": "L"}],
         }
         spec = PatchSpec.model_validate(raw)
         assert spec.misc == {}
@@ -211,9 +193,7 @@ class TestPatchSpecResilience:
         raw = {
             "patch_id": "my-custom-patch-001",
             "rationale": "Manual fix",
-            "operations": [
-                {"op": "replace_module_label", "module_id": "m1", "label": "L"}
-            ],
+            "operations": [{"op": "replace_module_label", "module_id": "m1", "label": "L"}],
         }
         spec = PatchSpec.model_validate(raw)
         assert spec.patch_id == "my-custom-patch-001"
@@ -222,27 +202,24 @@ class TestPatchSpecResilience:
         """Special characters in rationale are sanitised."""
         raw = {
             "rationale": "Fix $PECIAL ch@rs & numbers 123!",
-            "operations": [
-                {"op": "replace_module_label", "module_id": "m1", "label": "L"}
-            ],
+            "operations": [{"op": "replace_module_label", "module_id": "m1", "label": "L"}],
         }
         spec = PatchSpec.model_validate(raw)
         assert spec.patch_id.startswith("auto-")
         # Only lowercase alphanumeric + hyphens
-        slug = spec.patch_id[len("auto-"):]
+        slug = spec.patch_id[len("auto-") :]
         import re
+
         assert re.fullmatch(r"[a-z0-9-]+", slug), f"slug contains bad chars: {slug}"
 
     def test_rationale_long_text_truncated_at_48_chars(self):
         """Long rationale slug is truncated to 48 chars max."""
         raw = {
             "rationale": "This is a very long rationale that should be truncated to forty eight characters or less for the patch id slug which helps keep filenames reasonable",
-            "operations": [
-                {"op": "replace_module_label", "module_id": "m1", "label": "L"}
-            ],
+            "operations": [{"op": "replace_module_label", "module_id": "m1", "label": "L"}],
         }
         spec = PatchSpec.model_validate(raw)
-        slug = spec.patch_id[len("auto-"):]
+        slug = spec.patch_id[len("auto-") :]
         assert len(slug) <= 48
         # Ensure no trailing hyphen
         assert not slug.endswith("-")
@@ -272,10 +249,10 @@ def test_set_spark_config_is_retired():
     could not have worked even if one were still wired."""
     with pytest.raises(RetiredPatchOpError, match="set_spark_config"):
         PatchSpec(
-            patch_id="p", rationale="r",
+            patch_id="p",
+            rationale="r",
             operations=[
-                {"op": "set_spark_config",
-                 "key": "spark.sql.shuffle.partitions", "value": 200},
+                {"op": "set_spark_config", "key": "spark.sql.shuffle.partitions", "value": 200},
             ],
         )
 
@@ -283,7 +260,8 @@ def test_set_spark_config_is_retired():
 def test_macro_alias_normalised():
     """Aliases for replace_macro are normalized to 'replace_macro'."""
     spec = PatchSpec(
-        patch_id="p", rationale="r",
+        patch_id="p",
+        rationale="r",
         operations=[
             {"op": "set_macro", "name": "m", "value": "SELECT 1"},
             {"op": "update_macro", "name": "m", "value": "SELECT 2"},
@@ -291,4 +269,3 @@ def test_macro_alias_normalised():
         ],
     )
     assert all(op.op == "replace_macro" for op in spec.operations)
-

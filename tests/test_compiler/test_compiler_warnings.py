@@ -68,7 +68,7 @@ edges:
         for sig_yaml in [
             "type: row_count_estimate\n          method: spark_listener",
             "type: schema_snapshot",
-            "type: partition_stats"
+            "type: partition_stats",
         ]:
             yaml_str = f"""
 aqueduct: "1.0"
@@ -133,8 +133,7 @@ edges:
             warnings.simplefilter("always", AqueductWarning)
             _compile_yaml(yaml_str, tmp_path)
             assert any(
-                "spillway_port_mismatch" in str(x.message)
-                and "no spillway edge" in str(x.message)
+                "spillway_port_mismatch" in str(x.message) and "no spillway edge" in str(x.message)
                 for x in w
             )
 
@@ -324,8 +323,11 @@ modules: []
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always", AqueductWarning)
             _compile_yaml(yaml_str, tmp_path)
-            assert any("row-at-a-time" in str(x.message) and "python-udf-performance" in str(x.message) for x in w), f"No UDF warning in {[str(x.message) for x in w]}"
-            
+            assert any(
+                "row-at-a-time" in str(x.message) and "python-udf-performance" in str(x.message)
+                for x in w
+            ), f"No UDF warning in {[str(x.message) for x in w]}"
+
     def test_default_udf_warns(self, tmp_path):
         yaml_str = """
 aqueduct: "1.0"
@@ -339,7 +341,10 @@ modules: []
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always", AqueductWarning)
             _compile_yaml(yaml_str, tmp_path)
-            assert any("row-at-a-time" in str(x.message) and "python-udf-performance" in str(x.message) for x in w)
+            assert any(
+                "row-at-a-time" in str(x.message) and "python-udf-performance" in str(x.message)
+                for x in w
+            )
 
     def test_java_udf_no_warn(self, tmp_path):
         yaml_str = """
@@ -373,7 +378,10 @@ modules:
             with warnings.catch_warnings(record=True) as w:
                 warnings.simplefilter("always", AqueductWarning)
                 _compile_yaml(yaml_str, tmp_path)
-                assert any("small files" in str(x.message) and "append-no-partition" in str(x.message) for x in w), f"No egress warning for format {fmt}: {[str(x.message) for x in w]}"
+                assert any(
+                    "small files" in str(x.message) and "append-no-partition" in str(x.message)
+                    for x in w
+                ), f"No egress warning for format {fmt}: {[str(x.message) for x in w]}"
 
     def test_egress_append_with_partition_no_warn(self, tmp_path):
         yaml_str = """
@@ -439,7 +447,10 @@ edges:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always", AqueductWarning)
             _compile_yaml(yaml_str, tmp_path)
-            assert any("downstream consumers" in str(x.message) and "caching-strategy" in str(x.message) for x in w)
+            assert any(
+                "downstream consumers" in str(x.message) and "caching-strategy" in str(x.message)
+                for x in w
+            )
 
     def test_channel_multi_consumer_with_checkpoint_no_warn(self, tmp_path):
         yaml_str = """

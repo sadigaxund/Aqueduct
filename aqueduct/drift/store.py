@@ -38,7 +38,9 @@ def ensure_schema(observability_store: Any) -> None:
         cur.execute(DRIFT_CHECKS_DDL)
 
 
-def get_baseline(observability_store: Any, blueprint_id: str, module_id: str) -> dict[str, str] | None:
+def get_baseline(
+    observability_store: Any, blueprint_id: str, module_id: str
+) -> dict[str, str] | None:
     """Return the last-seen schema for a module, or None when no baseline exists."""
     with observability_store.connect() as cur:
         row = cur.execute(

@@ -61,6 +61,7 @@ def detect_engine_version(engine: str) -> str | None:
         return None
     try:
         from importlib.metadata import PackageNotFoundError, version
+
         return version(dist)
     except PackageNotFoundError:
         return None
@@ -134,6 +135,7 @@ def build_healed_by_record(
         record["perf_baseline"] = perf_baseline
     return record
 
+
 # ── Field-sensitive refinement for set_module_config_key ───────────────────
 # Config keys (dot-notation, matched by exact name or a leading prefix) that
 # carry SQL text, format/dialect options, or cast syntax — anything else set
@@ -141,9 +143,16 @@ def build_healed_by_record(
 # dialect_neutral. Prefix entries end with "." (e.g. "options." covers
 # Ingress/Egress `options.*` format-driver knobs, some of which are
 # dialect-specific — e.g. Delta merge SQL predicates).
-_DIALECT_BEARING_KEYS: frozenset[str] = frozenset({
-    "query", "sql", "format", "mode", "cast_type", "on_new_columns",
-})
+_DIALECT_BEARING_KEYS: frozenset[str] = frozenset(
+    {
+        "query",
+        "sql",
+        "format",
+        "mode",
+        "cast_type",
+        "on_new_columns",
+    }
+)
 _DIALECT_BEARING_PREFIXES: tuple[str, ...] = ("options.",)
 
 

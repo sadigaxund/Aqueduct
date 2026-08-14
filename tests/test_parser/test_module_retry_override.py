@@ -21,7 +21,9 @@ pytestmark = pytest.mark.unit
 
 def _bp(modules: list[dict], retry_policy: dict | None = None) -> dict:
     return {
-        "aqueduct": "1.0", "id": "bp1", "name": "BP",
+        "aqueduct": "1.0",
+        "id": "bp1",
+        "name": "BP",
         **({"retry_policy": retry_policy} if retry_policy else {}),
         "modules": modules,
         "edges": [{"from": modules[0]["id"], "to": modules[-1]["id"]}] if len(modules) > 1 else [],
@@ -29,7 +31,12 @@ def _bp(modules: list[dict], retry_policy: dict | None = None) -> dict:
 
 
 def _mod(mid: str, mtype: str = "Channel", retry: dict | None = None) -> dict:
-    d = {"id": mid, "label": mid, "type": mtype, "config": {"sql": "SELECT 1"} if mtype == "Channel" else {}}
+    d = {
+        "id": mid,
+        "label": mid,
+        "type": mtype,
+        "config": {"sql": "SELECT 1"} if mtype == "Channel" else {},
+    }
     if mtype == "Ingress":
         d["config"] = {"format": "csv", "path": "d.csv"}
     if mtype == "Egress":
@@ -55,9 +62,9 @@ class TestFieldInheritance:
             Path("."),
         )
         a = next(m for m in bp.modules if m.id == "a")
-        assert a.retry.max_attempts == 2          # module override wins
-        assert a.retry.on_exhaustion == "abort"    # inherited from blueprint
-        assert a.retry.deadline_seconds == 120     # inherited from blueprint
+        assert a.retry.max_attempts == 2  # module override wins
+        assert a.retry.on_exhaustion == "abort"  # inherited from blueprint
+        assert a.retry.deadline_seconds == 120  # inherited from blueprint
 
     def test_only_flagged_module_gets_an_override(self):
         bp = parse_dict(
@@ -81,8 +88,20 @@ class TestFieldInheritance:
     def test_backoff_overrides_as_whole_block(self):
         bp = parse_dict(
             _bp(
-                [_mod("a", "Ingress", retry={"backoff": {"strategy": "fixed", "base_seconds": 5}}), _mod("b", "Egress")],
-                retry_policy={"backoff": {"strategy": "linear", "base_seconds": 10, "max_seconds": 300, "jitter": False}},
+                [
+                    _mod(
+                        "a", "Ingress", retry={"backoff": {"strategy": "fixed", "base_seconds": 5}}
+                    ),
+                    _mod("b", "Egress"),
+                ],
+                retry_policy={
+                    "backoff": {
+                        "strategy": "linear",
+                        "base_seconds": 10,
+                        "max_seconds": 300,
+                        "jitter": False,
+                    }
+                },
             ),
             Path("."),
         )
@@ -99,7 +118,14 @@ class TestFieldInheritance:
         bp = parse_dict(
             _bp(
                 [_mod("a", "Ingress", retry={"max_attempts": 4}), _mod("b", "Egress")],
-                retry_policy={"backoff": {"strategy": "linear", "base_seconds": 10, "max_seconds": 300, "jitter": False}},
+                retry_policy={
+                    "backoff": {
+                        "strategy": "linear",
+                        "base_seconds": 10,
+                        "max_seconds": 300,
+                        "jitter": False,
+                    }
+                },
             ),
             Path("."),
         )
@@ -112,7 +138,10 @@ class TestFieldInheritance:
     def test_transient_errors_override_replaces_list_not_merges(self):
         bp = parse_dict(
             _bp(
-                [_mod("a", "Ingress", retry={"transient_errors": ["timeout"]}), _mod("b", "Egress")],
+                [
+                    _mod("a", "Ingress", retry={"transient_errors": ["timeout"]}),
+                    _mod("b", "Egress"),
+                ],
                 retry_policy={"transient_errors": ["connection", "reset"]},
             ),
             Path("."),
@@ -139,7 +168,12 @@ class TestSchemaValidation:
     def test_invalid_on_exhaustion_value_rejected(self):
         with pytest.raises(ParseError):
             parse_dict(
-                _bp([_mod("a", "Ingress", retry={"on_exhaustion": "not_a_real_mode"}), _mod("b", "Egress")]),
+                _bp(
+                    [
+                        _mod("a", "Ingress", retry={"on_exhaustion": "not_a_real_mode"}),
+                        _mod("b", "Egress"),
+                    ]
+                ),
                 Path("."),
             )
 
@@ -147,6 +181,7 @@ class TestSchemaValidation:
 class TestManifestPropagation:
     def test_retry_survives_compile_and_to_dict(self):
         from aqueduct.compiler.compiler import compile as cc
+
         bp = parse_dict(
             _bp([_mod("a", "Ingress", retry={"max_attempts": 3}), _mod("b", "Egress")]),
             Path("."),

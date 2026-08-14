@@ -125,7 +125,9 @@ def write_fingerprints(
 
         logger.debug(
             "Fingerprints: upserted %d Channel rows for blueprint %r run %r",
-            len(rows), blueprint_id, run_id,
+            len(rows),
+            blueprint_id,
+            run_id,
         )
     except Exception as exc:
         logger.debug("Fingerprint write skipped (non-fatal): %s", exc)

@@ -30,6 +30,7 @@ pytestmark = pytest.mark.unit
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _write_bp(tmp_path: Path, content: str) -> Path:
     """Write blueprint YAML to a temp file and return the path."""
     bp_path = tmp_path / "blueprint.yml"
@@ -47,7 +48,9 @@ class TestLinearEdgeInjection:
 
     def test_three_linear_modules_injects_two_edges(self, tmp_path):
         """Ingress → Channel → Egress with no edges: → 2 injected edges in order."""
-        bp_path = _write_bp(tmp_path, """
+        bp_path = _write_bp(
+            tmp_path,
+            """
 aqueduct: "1.0"
 id: le_test
 name: Linear Edge Test
@@ -70,7 +73,8 @@ modules:
     config:
       format: parquet
       path: s3://bucket/out.parquet
-""")
+""",
+        )
         bp = parse(str(bp_path))
         manifest = compiler_compile(bp, blueprint_path=bp_path)
 
@@ -89,7 +93,9 @@ modules:
 
     def test_injected_flag_serialized_in_to_dict(self, tmp_path):
         """manifest.to_dict()['edges'][0] includes 'injected': True."""
-        bp_path = _write_bp(tmp_path, """
+        bp_path = _write_bp(
+            tmp_path,
+            """
 aqueduct: "1.0"
 id: le_serial
 name: Serialization Test
@@ -106,7 +112,8 @@ modules:
     config:
       format: parquet
       path: s3://bucket/b.parquet
-""")
+""",
+        )
         bp = parse(str(bp_path))
         manifest = compiler_compile(bp, blueprint_path=bp_path)
 
@@ -120,7 +127,9 @@ modules:
 
     def test_ingress_channel_egress_assert_all_linear_types(self, tmp_path):
         """All four linear types together → still injects correctly."""
-        bp_path = _write_bp(tmp_path, """
+        bp_path = _write_bp(
+            tmp_path,
+            """
 aqueduct: "1.0"
 id: le_all
 name: All Linear
@@ -148,7 +157,8 @@ modules:
     config:
       format: parquet
       path: s3://bucket/out.parquet
-""")
+""",
+        )
         bp = parse(str(bp_path))
         manifest = compiler_compile(bp, blueprint_path=bp_path)
 
@@ -168,7 +178,9 @@ class TestLinearEdgeErrorOnNonLinear:
 
     def test_junction_with_no_edges_raises(self, tmp_path):
         """Junction present + no edges → CompileError mentioning 'Linear-edge sugar'."""
-        bp_path = _write_bp(tmp_path, """
+        bp_path = _write_bp(
+            tmp_path,
+            """
 aqueduct: "1.0"
 id: le_junction
 name: Junction No Edges
@@ -189,14 +201,17 @@ modules:
     config:
       format: parquet
       path: s3://bucket/b.parquet
-""")
+""",
+        )
         bp = parse(str(bp_path))
         with pytest.raises(CompileError, match="Linear-edge sugar"):
             compiler_compile(bp, blueprint_path=bp_path)
 
     def test_junction_error_names_offending_module(self, tmp_path):
         """CompileError from Junction module includes the module id and type."""
-        bp_path = _write_bp(tmp_path, """
+        bp_path = _write_bp(
+            tmp_path,
+            """
 aqueduct: "1.0"
 id: le_junction_id
 name: Junction Id Test
@@ -211,14 +226,17 @@ modules:
     type: Junction
     label: J
     config: {}
-""")
+""",
+        )
         bp = parse(str(bp_path))
         with pytest.raises(CompileError, match=r"bad_junction.*Junction|Junction.*bad_junction"):
             compiler_compile(bp, blueprint_path=bp_path)
 
     def test_funnel_with_no_edges_raises(self, tmp_path):
         """Funnel present + no edges → CompileError."""
-        bp_path = _write_bp(tmp_path, """
+        bp_path = _write_bp(
+            tmp_path,
+            """
 aqueduct: "1.0"
 id: le_funnel
 name: Funnel No Edges
@@ -240,14 +258,17 @@ modules:
     config:
       format: parquet
       path: s3://bucket/b.parquet
-""")
+""",
+        )
         bp = parse(str(bp_path))
         with pytest.raises(CompileError, match="Linear-edge sugar"):
             compiler_compile(bp, blueprint_path=bp_path)
 
     def test_probe_with_no_edges_raises(self, tmp_path):
         """Probe present + no edges → CompileError."""
-        bp_path = _write_bp(tmp_path, """
+        bp_path = _write_bp(
+            tmp_path,
+            """
 aqueduct: "1.0"
 id: le_probe
 name: Probe No Edges
@@ -265,14 +286,17 @@ modules:
     config:
       signals:
         - type: row_count
-""")
+""",
+        )
         bp = parse(str(bp_path))
         with pytest.raises(CompileError, match="Linear-edge sugar"):
             compiler_compile(bp, blueprint_path=bp_path)
 
     def test_regulator_with_no_edges_raises(self, tmp_path):
         """Regulator present + no edges → CompileError."""
-        bp_path = _write_bp(tmp_path, """
+        bp_path = _write_bp(
+            tmp_path,
+            """
 aqueduct: "1.0"
 id: le_regulator
 name: Regulator No Edges
@@ -287,14 +311,17 @@ modules:
     type: Regulator
     label: R
     config: {}
-""")
+""",
+        )
         bp = parse(str(bp_path))
         with pytest.raises(CompileError, match="Linear-edge sugar"):
             compiler_compile(bp, blueprint_path=bp_path)
 
     def test_error_message_mentions_cannot_auto_chain(self, tmp_path):
         """CompileError text mentions 'cannot be auto-chained' or 'auto-chain'."""
-        bp_path = _write_bp(tmp_path, """
+        bp_path = _write_bp(
+            tmp_path,
+            """
 aqueduct: "1.0"
 id: le_msg
 name: Error Message Check
@@ -309,14 +336,17 @@ modules:
     type: Junction
     label: J
     config: {}
-""")
+""",
+        )
         bp = parse(str(bp_path))
         with pytest.raises(CompileError, match=r"auto-chain"):
             compiler_compile(bp, blueprint_path=bp_path)
 
     def test_arcade_with_no_edges_raises(self, tmp_path):
         """Arcade present + no edges → CompileError mentioning 'Linear-edge sugar'."""
-        bp_path = _write_bp(tmp_path, """
+        bp_path = _write_bp(
+            tmp_path,
+            """
 aqueduct: "1.0"
 id: le_arcade
 name: Arcade No Edges
@@ -331,7 +361,8 @@ modules:
     type: Arcade
     label: Arc
     ref: sub_blueprint.yml
-""")
+""",
+        )
         bp = parse(str(bp_path))
         with pytest.raises(CompileError, match="Linear-edge sugar"):
             compiler_compile(bp, blueprint_path=bp_path)
@@ -347,7 +378,9 @@ class TestExplicitEdgesNoInjection:
 
     def test_explicit_edges_not_injected(self, tmp_path):
         """Blueprint with explicit edges → all edge.injected == False."""
-        bp_path = _write_bp(tmp_path, """
+        bp_path = _write_bp(
+            tmp_path,
+            """
 aqueduct: "1.0"
 id: le_explicit
 name: Explicit Edges
@@ -367,7 +400,8 @@ modules:
 edges:
   - from: src
     to: dst
-""")
+""",
+        )
         bp = parse(str(bp_path))
         manifest = compiler_compile(bp, blueprint_path=bp_path)
 
@@ -376,7 +410,9 @@ edges:
 
     def test_explicit_edges_to_dict_injected_false(self, tmp_path):
         """Explicit edges serialized with 'injected': False in to_dict()."""
-        bp_path = _write_bp(tmp_path, """
+        bp_path = _write_bp(
+            tmp_path,
+            """
 aqueduct: "1.0"
 id: le_serial_false
 name: Explicit Serial
@@ -404,7 +440,8 @@ edges:
     to: b
   - from: b
     to: c
-""")
+""",
+        )
         bp = parse(str(bp_path))
         manifest = compiler_compile(bp, blueprint_path=bp_path)
 
@@ -423,7 +460,9 @@ class TestSingleModuleNoEdges:
 
     def test_single_ingress_no_edges_no_error(self, tmp_path):
         """Single Ingress module with no edges → compiles, zero edges."""
-        bp_path = _write_bp(tmp_path, """
+        bp_path = _write_bp(
+            tmp_path,
+            """
 aqueduct: "1.0"
 id: le_single
 name: Single Module
@@ -434,7 +473,8 @@ modules:
     config:
       format: parquet
       path: s3://bucket/in.parquet
-""")
+""",
+        )
         bp = parse(str(bp_path))
         manifest = compiler_compile(bp, blueprint_path=bp_path)
 
@@ -442,7 +482,9 @@ modules:
 
     def test_single_channel_no_edges_no_error(self, tmp_path):
         """Single Channel module with no edges → compiles, zero edges."""
-        bp_path = _write_bp(tmp_path, """
+        bp_path = _write_bp(
+            tmp_path,
+            """
 aqueduct: "1.0"
 id: le_single_ch
 name: Single Channel
@@ -453,7 +495,8 @@ modules:
     config:
       op: sql
       query: "SELECT 1 AS x"
-""")
+""",
+        )
         bp = parse(str(bp_path))
         manifest = compiler_compile(bp, blueprint_path=bp_path)
 

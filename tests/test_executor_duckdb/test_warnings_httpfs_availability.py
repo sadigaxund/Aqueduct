@@ -18,7 +18,9 @@ pytestmark = pytest.mark.duckdb
 
 
 def _manifest(*modules: Module) -> Manifest:
-    return Manifest(blueprint_id="bp", context={}, modules=tuple(modules), edges=(), engine_config={})
+    return Manifest(
+        blueprint_id="bp", context={}, modules=tuple(modules), edges=(), engine_config={}
+    )
 
 
 def _ingress(path: str) -> Module:
@@ -49,7 +51,16 @@ class TestCheck:
 
     def test_egress_remote_path_also_detected(self, duckdb_con):
         m = _manifest(
-            Module(id="e", type="Egress", label="e", config={"format": "parquet", "path": "gs://bucket/out.parquet", "mode": "overwrite"})
+            Module(
+                id="e",
+                type="Egress",
+                label="e",
+                config={
+                    "format": "parquet",
+                    "path": "gs://bucket/out.parquet",
+                    "mode": "overwrite",
+                },
+            )
         )
         msgs = check(m, duckdb_con)
         assert len(msgs) == 1
@@ -71,7 +82,8 @@ class TestRunAll:
             raise RuntimeError("boom")
 
         monkeypatch.setattr(
-            "aqueduct.executor.duckdb_.warnings.RULES", [("broken_rule", _boom)],
+            "aqueduct.executor.duckdb_.warnings.RULES",
+            [("broken_rule", _boom)],
         )
         assert run_all(_manifest(_ingress("/x.parquet")), duckdb_con) == []
 

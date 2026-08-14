@@ -412,7 +412,9 @@ def _parse_one(
             name = name.strip()
             if not name:
                 raise TypeSpellingError(f"struct field {chunk.strip()!r} has an empty field name.")
-            fields.append(StructField(name, _parse_one(ftype, suppress=suppress, _depth=_depth + 1)))
+            fields.append(
+                StructField(name, _parse_one(ftype, suppress=suppress, _depth=_depth + 1))
+            )
         return Struct(tuple(fields))
 
     m = _DECIMAL_RE.match(s)

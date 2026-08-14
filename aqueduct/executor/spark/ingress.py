@@ -134,9 +134,7 @@ def read_ingress(module: Module, spark: SparkSession, base_dir: str | None = Non
         try:
             fmt = register_custom_source(spark, str(class_path), base_dir)
         except Exception as exc:
-            raise IngressError(
-                f"[{module.id}] custom DataSource {class_path!r}: {exc}"
-            ) from exc
+            raise IngressError(f"[{module.id}] custom DataSource {class_path!r}: {exc}") from exc
 
     # Formats that locate data via options (url/dbtable/topic/etc.), not a file path
     if not path and fmt not in PATHLESS_INGRESS_FORMATS and not is_custom:
@@ -162,9 +160,7 @@ def read_ingress(module: Module, spark: SparkSession, base_dir: str | None = Non
         raise
     except Exception as exc:
         loc = f"at {path!r}" if path else f"(format={fmt!r})"
-        raise IngressError(
-            f"[{module.id}] source not found or unreadable {loc}: {exc}"
-        ) from exc
+        raise IngressError(f"[{module.id}] source not found or unreadable {loc}: {exc}") from exc
 
     # partition_filters — lazy .where() for manual predicate pushdown
     partition_filters: str | None = cfg.get("partition_filters")
@@ -263,7 +259,8 @@ def _enforce_on_new_columns(
         logger.warning(
             "[runtime_ingress_new_columns] [%s] on_new_columns=alert: source "
             "added undeclared column(s) %s.",
-            module.id, new_cols,
+            module.id,
+            new_cols,
         )
 
 
@@ -290,16 +287,12 @@ def _apply_time_travel(module: Module, reader):
     has_version = tt.get("version") is not None
     has_timestamp = tt.get("timestamp") is not None
     if has_version and has_timestamp:
-        raise IngressError(
-            f"[{module.id}] time_travel accepts 'version' OR 'timestamp', not both"
-        )
+        raise IngressError(f"[{module.id}] time_travel accepts 'version' OR 'timestamp', not both")
     if has_version:
         return reader.option("versionAsOf", int(tt["version"]))
     if has_timestamp:
         return reader.option("timestampAsOf", str(tt["timestamp"]))
-    raise IngressError(
-        f"[{module.id}] time_travel requires 'version' or 'timestamp'"
-    )
+    raise IngressError(f"[{module.id}] time_travel requires 'version' or 'timestamp'")
 
 
 def read_source_schema(module: Module, spark: SparkSession) -> dict[str, str]:
@@ -377,4 +370,6 @@ def _validate_schema_hint(
                     f"expected {expected_type!r}, actual {actual[name]!r}"
                 )
     else:
-        raise IngressError(f"[{module_id}] Unknown schema_hint mode: {mode!r}. Use strict, additive, or subset.")
+        raise IngressError(
+            f"[{module_id}] Unknown schema_hint mode: {mode!r}. Use strict, additive, or subset."
+        )

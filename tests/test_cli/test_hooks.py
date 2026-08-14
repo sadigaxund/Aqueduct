@@ -16,12 +16,22 @@ BASE = Path(".")
 
 def _bp(hooks: dict) -> dict:
     return {
-        "aqueduct": "1.0", "id": "bp1", "name": "BP",
+        "aqueduct": "1.0",
+        "id": "bp1",
+        "name": "BP",
         "modules": [
-            {"id": "raw", "label": "R", "type": "Ingress",
-             "config": {"format": "csv", "path": "d.csv"}},
-            {"id": "out", "label": "O", "type": "Egress",
-             "config": {"format": "parquet", "path": "o", "coalesce": 1}},
+            {
+                "id": "raw",
+                "label": "R",
+                "type": "Ingress",
+                "config": {"format": "csv", "path": "d.csv"},
+            },
+            {
+                "id": "out",
+                "label": "O",
+                "type": "Egress",
+                "config": {"format": "parquet", "path": "o", "coalesce": 1},
+            },
         ],
         "edges": [{"from": "raw", "to": "out"}],
         "hooks": hooks,
@@ -30,15 +40,20 @@ def _bp(hooks: dict) -> dict:
 
 class TestHooksParsing:
     def test_all_entry_kinds_parse_verbatim(self):
-        b = parse_dict(_bp({
-            "on_success": [
-                {"blueprint": "next.yml"},
-                {"webhook": "https://x.test/h"},
-                {"webhook": {"url": "https://x.test/h2", "payload": {"r": "${run_id}"}}},
-                {"command": "echo done ${run.id}", "timeout": 30},
-            ],
-            "on_failure": [{"command": "scripts/cleanup.sh"}],
-        }), BASE)
+        b = parse_dict(
+            _bp(
+                {
+                    "on_success": [
+                        {"blueprint": "next.yml"},
+                        {"webhook": "https://x.test/h"},
+                        {"webhook": {"url": "https://x.test/h2", "payload": {"r": "${run_id}"}}},
+                        {"command": "echo done ${run.id}", "timeout": 30},
+                    ],
+                    "on_failure": [{"command": "scripts/cleanup.sh"}],
+                }
+            ),
+            BASE,
+        )
         kinds = [e.kind for e in b.hooks.on_success]
         assert kinds == ["blueprint", "webhook", "webhook", "command"]
         # ${run.id} must survive parse untouched (runtime interpolation)
@@ -47,16 +62,20 @@ class TestHooksParsing:
         assert b.hooks.on_success[0].timeout == 300  # default
         assert bool(b.hooks) and len(b.hooks.on_failure) == 1
 
-    @pytest.mark.parametrize("bad", [
-        {},                                        # none set
-        {"blueprint": "a.yml", "command": "x"},    # two set
-    ])
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {},  # none set
+            {"blueprint": "a.yml", "command": "x"},  # two set
+        ],
+    )
     def test_exactly_one_action_enforced(self, bad):
         with pytest.raises(ParseError, match="exactly one"):
             parse_dict(_bp({"on_success": [bad]}), BASE)
 
     def test_no_hooks_is_falsy_and_serialized_empty(self):
         from aqueduct.compiler.compiler import compile as cc
+
         b = parse_dict(_bp({}), BASE)
         assert not b.hooks
         d = cc(b).to_dict()["hooks"]
@@ -64,6 +83,7 @@ class TestHooksParsing:
 
     def test_manifest_carries_hooks(self):
         from aqueduct.compiler.compiler import compile as cc
+
         b = parse_dict(_bp({"on_failure": [{"command": "x"}]}), BASE)
         m = cc(b)
         assert m.hooks.on_failure[0].kind == "command"
@@ -73,9 +93,13 @@ class TestHooksParsing:
 class TestRunHooks:
     def _run(self, entries, *, allow=False, event="on_success", bp="bp.yml"):
         return hooks_mod.run_hooks(
-            tuple(entries), event,
-            run_id="r1", status="success", blueprint_id="bp",
-            blueprint_path=bp, allow_command_hooks=allow,
+            tuple(entries),
+            event,
+            run_id="r1",
+            status="success",
+            blueprint_id="bp",
+            blueprint_path=bp,
+            allow_command_hooks=allow,
         )
 
     def test_empty_entries_render_nothing(self):
@@ -124,19 +148,31 @@ class TestHooksV2Schema:
     filters, in_process blueprint entries."""
 
     def test_on_patch_pending_and_on_healed_parse(self):
-        b = parse_dict(_bp({
-            "on_patch_pending": [{"webhook": "https://x.test/pending"}],
-            "on_healed": [{"blueprint": "notify.yml", "in_process": True}],
-        }), BASE)
+        b = parse_dict(
+            _bp(
+                {
+                    "on_patch_pending": [{"webhook": "https://x.test/pending"}],
+                    "on_healed": [{"blueprint": "notify.yml", "in_process": True}],
+                }
+            ),
+            BASE,
+        )
         assert b.hooks.on_patch_pending[0].kind == "webhook"
         assert b.hooks.on_healed[0].kind == "blueprint"
         assert b.hooks.on_healed[0].in_process is True
         assert bool(b.hooks)  # __bool__ covers the new events too
 
     def test_when_error_parses_on_failure(self):
-        b = parse_dict(_bp({
-            "on_failure": [{"command": "x", "when_error": ["EmptyDataset", "SparkException"]}],
-        }), BASE)
+        b = parse_dict(
+            _bp(
+                {
+                    "on_failure": [
+                        {"command": "x", "when_error": ["EmptyDataset", "SparkException"]}
+                    ],
+                }
+            ),
+            BASE,
+        )
         assert b.hooks.on_failure[0].when_error == ("EmptyDataset", "SparkException")
 
     def test_when_error_rejected_on_success(self):
@@ -149,10 +185,16 @@ class TestHooksV2Schema:
 
     def test_manifest_serializes_new_events(self):
         from aqueduct.compiler.compiler import compile as cc
-        b = parse_dict(_bp({
-            "on_patch_pending": [{"webhook": "https://x.test"}],
-            "on_healed": [{"blueprint": "n.yml"}],
-        }), BASE)
+
+        b = parse_dict(
+            _bp(
+                {
+                    "on_patch_pending": [{"webhook": "https://x.test"}],
+                    "on_healed": [{"blueprint": "n.yml"}],
+                }
+            ),
+            BASE,
+        )
         d = cc(b).to_dict()["hooks"]
         assert d["on_patch_pending"][0]["kind"] == "webhook"
         assert d["on_healed"][0]["kind"] == "blueprint"
@@ -173,17 +215,27 @@ class TestRunHooksWhenError:
 
     def test_matching_error_type_fires(self, capsys):
         hooks_mod.run_hooks(
-            (HookEntry("command", "echo hi", when_error=("EmptyDataset",)),), "on_failure",
-            run_id="r1", status="failure", blueprint_id="bp", blueprint_path="bp.yml",
-            allow_command_hooks=True, failure_ctx=self._ctx(error_type="EmptyDataset"),
+            (HookEntry("command", "echo hi", when_error=("EmptyDataset",)),),
+            "on_failure",
+            run_id="r1",
+            status="failure",
+            blueprint_id="bp",
+            blueprint_path="bp.yml",
+            allow_command_hooks=True,
+            failure_ctx=self._ctx(error_type="EmptyDataset"),
         )
         assert "echo hi" in capsys.readouterr().out
 
     def test_non_matching_error_type_skips_silently(self, capsys):
         rendered = hooks_mod.run_hooks(
-            (HookEntry("command", "echo hi", when_error=("OtherError",)),), "on_failure",
-            run_id="r1", status="failure", blueprint_id="bp", blueprint_path="bp.yml",
-            allow_command_hooks=True, failure_ctx=self._ctx(error_type="EmptyDataset"),
+            (HookEntry("command", "echo hi", when_error=("OtherError",)),),
+            "on_failure",
+            run_id="r1",
+            status="failure",
+            blueprint_id="bp",
+            blueprint_path="bp.yml",
+            allow_command_hooks=True,
+            failure_ctx=self._ctx(error_type="EmptyDataset"),
         )
         out = capsys.readouterr()
         assert rendered is False
@@ -192,8 +244,12 @@ class TestRunHooksWhenError:
 
     def test_stack_class_candidate_matches(self, capsys):
         hooks_mod.run_hooks(
-            (HookEntry("command", "echo hi", when_error=("SparkException",)),), "on_failure",
-            run_id="r1", status="failure", blueprint_id="bp", blueprint_path="bp.yml",
+            (HookEntry("command", "echo hi", when_error=("SparkException",)),),
+            "on_failure",
+            run_id="r1",
+            status="failure",
+            blueprint_id="bp",
+            blueprint_path="bp.yml",
             allow_command_hooks=True,
             failure_ctx=self._ctx(stack_trace="Traceback...\npyspark.errors.SparkException: boom"),
         )
@@ -201,9 +257,14 @@ class TestRunHooksWhenError:
 
     def test_unset_when_error_always_fires(self, capsys):
         hooks_mod.run_hooks(
-            (HookEntry("command", "echo hi"),), "on_failure",
-            run_id="r1", status="failure", blueprint_id="bp", blueprint_path="bp.yml",
-            allow_command_hooks=True, failure_ctx=self._ctx(error_type="Anything"),
+            (HookEntry("command", "echo hi"),),
+            "on_failure",
+            run_id="r1",
+            status="failure",
+            blueprint_id="bp",
+            blueprint_path="bp.yml",
+            allow_command_hooks=True,
+            failure_ctx=self._ctx(error_type="Anything"),
         )
         assert "echo hi" in capsys.readouterr().out
 
@@ -243,9 +304,14 @@ class TestInProcessBlueprintHook:
             lambda *a, **kw: _FakeCompleted(),
         )
         hooks_mod.run_hooks(
-            (HookEntry("blueprint", "t.yml", in_process=True),), "on_success",
-            run_id="r1", status="success", blueprint_id="caller", blueprint_path=str(caller),
-            allow_command_hooks=False, session=object(),
+            (HookEntry("blueprint", "t.yml", in_process=True),),
+            "on_success",
+            run_id="r1",
+            status="success",
+            blueprint_id="caller",
+            blueprint_path=str(caller),
+            allow_command_hooks=False,
+            session=object(),
         )
         out = capsys.readouterr().out
         assert "hook_inprocess_fallback" in out
@@ -260,9 +326,14 @@ class TestInProcessBlueprintHook:
         # target in this unit test context is fine — we only assert it
         # doesn't crash and takes the subprocess branch).
         rendered = hooks_mod.run_hooks(
-            (HookEntry("blueprint", "ghost.yml", in_process=True),), "on_success",
-            run_id="r1", status="success", blueprint_id="caller", blueprint_path=str(caller),
-            allow_command_hooks=False, session=None,
+            (HookEntry("blueprint", "ghost.yml", in_process=True),),
+            "on_success",
+            run_id="r1",
+            status="success",
+            blueprint_id="caller",
+            blueprint_path=str(caller),
+            allow_command_hooks=False,
+            session=None,
         )
         assert rendered is True
         assert "blueprint not found" in capsys.readouterr().err
@@ -322,6 +393,7 @@ class TestStaticHookCheck:
 
     def test_doctor_check_hooks(self, tmp_path):
         from aqueduct.doctor import check_hooks
+
         self._write(tmp_path / "plain.yml")
         assert check_hooks(tmp_path / "plain.yml").status == "skip"
         self._write(tmp_path / "a.yml", "hooks:\n  on_success:\n    - blueprint: ghost.yml\n")
@@ -350,11 +422,14 @@ class TestValidateHookCycle:
         from click.testing import CliRunner
 
         from aqueduct.cli import cli
+
         self._write_valid_bp(
-            tmp_path / "a.yml", "hooks:\n  on_success:\n    - blueprint: b.yml\n",
+            tmp_path / "a.yml",
+            "hooks:\n  on_success:\n    - blueprint: b.yml\n",
         )
         self._write_valid_bp(
-            tmp_path / "b.yml", "hooks:\n  on_failure:\n    - blueprint: a.yml\n",
+            tmp_path / "b.yml",
+            "hooks:\n  on_failure:\n    - blueprint: a.yml\n",
         )
         result = CliRunner().invoke(cli, ["validate", str(tmp_path / "a.yml")])
         assert result.exit_code == 0  # a hook cycle is a warning, not an invalid file
@@ -364,8 +439,10 @@ class TestValidateHookCycle:
         from click.testing import CliRunner
 
         from aqueduct.cli import cli
+
         self._write_valid_bp(
-            tmp_path / "a.yml", "hooks:\n  on_success:\n    - blueprint: ghost.yml\n",
+            tmp_path / "a.yml",
+            "hooks:\n  on_success:\n    - blueprint: ghost.yml\n",
         )
         result = CliRunner().invoke(cli, ["validate", str(tmp_path / "a.yml")])
         assert result.exit_code == 0
@@ -376,6 +453,7 @@ class TestValidateHookCycle:
         from click.testing import CliRunner
 
         from aqueduct.cli import cli
+
         self._write_valid_bp(tmp_path / "a.yml")
         result = CliRunner().invoke(cli, ["validate", str(tmp_path / "a.yml")])
         assert result.exit_code == 0
@@ -385,6 +463,7 @@ class TestValidateHookCycle:
         from click.testing import CliRunner
 
         from aqueduct.cli import cli
+
         self._write_valid_bp(
             tmp_path / "a.yml",
             "hooks:\n  on_success:\n    - blueprint: ghost.yml\n"
@@ -400,8 +479,10 @@ class TestValidateHookCycle:
         from click.testing import CliRunner
 
         from aqueduct.cli import cli
+
         self._write_valid_bp(
-            tmp_path / "a.yml", "hooks:\n  on_success:\n    - blueprint: ghost.yml\n",
+            tmp_path / "a.yml",
+            "hooks:\n  on_success:\n    - blueprint: ghost.yml\n",
         )
         result = CliRunner().invoke(cli, ["validate", "--format", "json", str(tmp_path / "a.yml")])
         assert result.exit_code == 0
@@ -418,7 +499,9 @@ class TestInProcessHookEngine:
     it were a SparkSession. Caught by gallery snippet 42_hooks_lifecycle
     under a duckdb-engine census run (Phase 78 checkpoint 3b)."""
 
-    def test_in_process_hook_compiles_and_executes_through_parent_engine(self, tmp_path, monkeypatch):
+    def test_in_process_hook_compiles_and_executes_through_parent_engine(
+        self, tmp_path, monkeypatch
+    ):
         from unittest.mock import MagicMock
 
         from aqueduct.cli import hooks as hooks_mod
@@ -440,12 +523,19 @@ class TestInProcessHookEngine:
             return fn
 
         import aqueduct.executor as executor_mod
+
         monkeypatch.setattr(executor_mod, "get_executor", fake_get_executor)
 
         hooks_mod.run_hooks(
-            (HookEntry("blueprint", str(target), in_process=True),), "on_success",
-            run_id="r1", status="success", blueprint_id="a", blueprint_path=str(bp),
-            allow_command_hooks=False, session=object(), engine="duckdb",
+            (HookEntry("blueprint", str(target), in_process=True),),
+            "on_success",
+            run_id="r1",
+            status="success",
+            blueprint_id="a",
+            blueprint_path=str(bp),
+            allow_command_hooks=False,
+            session=object(),
+            engine="duckdb",
         )
         assert seen_engines == ["duckdb"], (
             f"in_process hook must compile+execute through the PARENT's engine "
@@ -477,11 +567,17 @@ class TestInProcessHookEngine:
             return fn
 
         import aqueduct.executor as executor_mod
+
         monkeypatch.setattr(executor_mod, "get_executor", fake_get_executor)
 
         hooks_mod.run_hooks(
-            (HookEntry("blueprint", str(target), in_process=True),), "on_success",
-            run_id="r1", status="success", blueprint_id="a", blueprint_path=str(bp),
-            allow_command_hooks=False, session=object(),
+            (HookEntry("blueprint", str(target), in_process=True),),
+            "on_success",
+            run_id="r1",
+            status="success",
+            blueprint_id="a",
+            blueprint_path=str(bp),
+            allow_command_hooks=False,
+            session=object(),
         )
         assert seen_engines == ["spark"]

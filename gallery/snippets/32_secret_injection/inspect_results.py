@@ -10,7 +10,9 @@ console = Console()
 def main():
     output = Path("data/output/users.parquet")
     if not output.exists():
-        console.print(f"[bold red]✗[/bold red] Output not found at {output}. Did you run the pipeline?")
+        console.print(
+            f"[bold red]✗[/bold red] Output not found at {output}. Did you run the pipeline?"
+        )
         return
 
     salt = os.environ.get("PIPELINE_SALT", "demo_salt")
@@ -26,7 +28,9 @@ def main():
         for row in rows:
             t.add_row(*[str(v) for v in row])
         console.print(t)
-        console.print(f"\n[dim]Row count: {len(rows)} — salt injected: '{salt}' (set PIPELINE_SALT env var to override)[/dim]")
+        console.print(
+            f"\n[dim]Row count: {len(rows)} — salt injected: '{salt}' (set PIPELINE_SALT env var to override)[/dim]"
+        )
     finally:
         con.close()
 

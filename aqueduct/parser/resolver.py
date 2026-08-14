@@ -72,9 +72,7 @@ def _sub_env(value: str) -> str:
 def _sub_ctx(value: str, ctx_map: dict[str, str], depth: int = 0) -> str:
     """Substitute ${ctx.key} patterns from ctx_map. Recursive to handle transitive refs."""
     if depth > 20:
-        raise ParseError(
-            f"Context reference depth limit exceeded — possible cycle near: {value!r}"
-        )
+        raise ParseError(f"Context reference depth limit exceeded — possible cycle near: {value!r}")
 
     def _replace(m: re.Match) -> str:
         key = m.group(1)

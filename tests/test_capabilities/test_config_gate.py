@@ -73,7 +73,9 @@ def test_default_config_is_noop_on_spark():
     assert non_supported == []
 
 
-@pytest.mark.parametrize("cfg_path", _GALLERY_CONFIGS, ids=[p.parent.name for p in _GALLERY_CONFIGS])
+@pytest.mark.parametrize(
+    "cfg_path", _GALLERY_CONFIGS, ids=[p.parent.name for p in _GALLERY_CONFIGS]
+)
 def test_gallery_configs_set_no_dead_config_leaves(cfg_path):
     """Every leaf a real gallery aqueduct.yml explicitly sets must be honoured
     by SOME registered engine — checked against the capability tables directly,
@@ -136,7 +138,9 @@ def test_representative_config_emits_zero_engine_key_ignored_warnings():
     cfg = load_config(cfg_path)
     # Override to an empty suppress set — every gallery aqueduct.yml ships
     # `warnings.suppress: ["*"]`, which would hide a real regression here.
-    cfg_no_suppress = cfg.model_copy(update={"warnings": cfg.warnings.model_copy(update={"suppress": []})})
+    cfg_no_suppress = cfg.model_copy(
+        update={"warnings": cfg.warnings.model_copy(update={"suppress": []})}
+    )
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         _warn_ignored_config_keys(cfg_no_suppress)
@@ -194,10 +198,16 @@ def test_fake_engine_ignored_config_key_warns(_fake_engine):
         warnings.simplefilter("always")
         _warn_ignored_config_keys(cfg)
     msgs = [str(w.message) for w in caught if issubclass(w.category, AqueductWarning)]
-    matching = [m for m in msgs if "engine_key_ignored" in m and "config.engine.spark.master_url" in m]
-    assert len(matching) == 1, f"expected exactly one engine_key_ignored warning for master_url, got: {msgs}"
+    matching = [
+        m for m in msgs if "engine_key_ignored" in m and "config.engine.spark.master_url" in m
+    ]
+    assert (
+        len(matching) == 1
+    ), f"expected exactly one engine_key_ignored warning for master_url, got: {msgs}"
     assert "fake_single_node" in matching[0]
-    assert "master_url is meaningless" in matching[0]  # the hint is actionable, not just the rule id
+    assert (
+        "master_url is meaningless" in matching[0]
+    )  # the hint is actionable, not just the rule id
 
 
 def test_fake_engine_warning_is_suppressible(_fake_engine):

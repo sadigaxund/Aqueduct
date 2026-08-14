@@ -385,9 +385,7 @@ def test_shipped_spark_allowlist_max_result_size_excludes_unlimited_via_deny():
     """Part 2: the `0` = unlimited exclusion moved from a range floor to a
     scoped deny_values row — still enforced, now structurally."""
     allowlist = load_allowlist(_SPARK_PATH, "spark")
-    (entry,) = [
-        d for d in allowlist.deny_entries if d.pattern == "spark.driver.maxResultSize"
-    ]
+    (entry,) = [d for d in allowlist.deny_entries if d.pattern == "spark.driver.maxResultSize"]
     assert entry.deny_values is not None
     assert 0 in entry.deny_values
     assert "0" in entry.deny_values
@@ -675,7 +673,9 @@ def test_validate_against_deny_cannot_be_bypassed_by_a_hand_built_allowlist():
     EngineConfigAllowlist gets exactly the (lack of) protection they built,
     which is a statement about load_allowlist() being the sole legitimate
     source, not a loophole in validate_against_deny() itself."""
-    fabricated = EngineConfigAllowlist(engine="spark", is_free_form=True, entries=(), deny_entries=())
+    fabricated = EngineConfigAllowlist(
+        engine="spark", is_free_form=True, entries=(), deny_entries=()
+    )
     validate_against_deny(fabricated, "spark.master")  # does not raise: no deny data at all
     real = load_allowlist(_SPARK_PATH, "spark")
     with pytest.raises(EngineConfigAllowlistError):
@@ -726,22 +726,28 @@ def test_evaluate_against_real_spark_file_wrong_type():
 
 def test_evaluate_enum_constraint_pass_and_fail():
     allowlist = load_allowlist(_SPARK_PATH, "spark")
-    assert evaluate_set_engine_config(
-        allowlist, "spark.serializer", "org.apache.spark.serializer.KryoSerializer"
-    ) is None
+    assert (
+        evaluate_set_engine_config(
+            allowlist, "spark.serializer", "org.apache.spark.serializer.KryoSerializer"
+        )
+        is None
+    )
     reason = evaluate_set_engine_config(allowlist, "spark.serializer", "com.example.Bogus")
     assert reason is not None
     assert "not one of" in reason
 
 
 def _synthetic_allowlist(entry: AllowlistEntry) -> EngineConfigAllowlist:
-    return EngineConfigAllowlist(engine="spark", is_free_form=True, entries=(entry,), deny_entries=())
+    return EngineConfigAllowlist(
+        engine="spark", is_free_form=True, entries=(entry,), deny_entries=()
+    )
 
 
 def test_evaluate_int_range_constraint_pass_and_fail():
     allowlist = _synthetic_allowlist(
         AllowlistEntry(
-            pattern="spark.sql.shuffle.partitions", value_type="int",
+            pattern="spark.sql.shuffle.partitions",
+            value_type="int",
             constraint=RangeConstraint(minimum=1, maximum=2000),
         )
     )
@@ -754,7 +760,8 @@ def test_evaluate_int_range_constraint_pass_and_fail():
 def test_evaluate_size_range_constraint_pass_and_fail():
     allowlist = _synthetic_allowlist(
         AllowlistEntry(
-            pattern="spark.executor.memory", value_type="size",
+            pattern="spark.executor.memory",
+            value_type="size",
             constraint=RangeConstraint(minimum="128m", maximum="64g"),
         )
     )

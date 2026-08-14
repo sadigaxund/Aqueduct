@@ -3,6 +3,7 @@
 No behaviour change. The click group + shared helpers come from the package;
 commands register onto `cli` when imported at the bottom of __init__.
 """
+
 from __future__ import annotations
 
 import json
@@ -40,6 +41,7 @@ def _store_not_found(
     "wrong cwd / hasn't run yet", not corruption.
     """
     from aqueduct.stores.read import _OBS_ROUTING_ROOT
+
     if store_dir:
         searched = f"{store_dir}/*/observability.db"
     else:
@@ -62,6 +64,7 @@ def _store_not_found(
 
 # ── aqueduct report ───────────────────────────────────────────────────────────
 
+
 @cli.command()
 @click.argument("run_id", required=False, default=None)
 @click.option(
@@ -81,7 +84,7 @@ def _store_not_found(
     default=None,
     metavar="COLUMN",
     help="Cross-run quality trend for one column (null-rate + type history) "
-         "from probe signals. Blueprint-scoped — pass --blueprint.",
+    "from probe signals. Blueprint-scoped — pass --blueprint.",
 )
 @click.option(
     "--blueprint",
@@ -96,7 +99,7 @@ def _store_not_found(
     default=None,
     metavar="ISO_DATE",
     help="With --trend: only include signals captured on/after this date "
-         "(default: last 30 days).",
+    "(default: last 30 days).",
 )
 @click.option(
     "--profile",
@@ -104,8 +107,8 @@ def _store_not_found(
     is_flag=True,
     default=False,
     help="Per-module resource profile (duration + I/O) over module_metrics. "
-         "With RUN_ID: one run, heaviest module first. With --blueprint (no "
-         "RUN_ID): cross-run trend over the last --last runs, flagging slowdowns.",
+    "With RUN_ID: one run, heaviest module first. With --blueprint (no "
+    "RUN_ID): cross-run trend over the last --last runs, flagging slowdowns.",
 )
 @click.option(
     "--last",
@@ -122,25 +125,35 @@ def _store_not_found(
     default="table",
     show_default=True,
     help="Output format. 'html' emits a self-contained run report to stdout "
-         "(redirect to a file, e.g. > run.html).",
+    "(redirect to a file, e.g. > run.html).",
 )
 @_env_options
 def report(
-    run_id: str | None, store_dir: str | None, config_path: str | None,
-    trend_column: str | None, blueprint_arg: str | None, since: str | None,
-    profile: bool, last_n: int, fmt: str,
-    env_file: str | None, cli_env: tuple[str, ...],
+    run_id: str | None,
+    store_dir: str | None,
+    config_path: str | None,
+    trend_column: str | None,
+    blueprint_arg: str | None,
+    since: str | None,
+    profile: bool,
+    last_n: int,
+    fmt: str,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
 ) -> None:
     """Print the Flow Report for a completed run, or a cross-run column trend."""
     if profile:
-        _report_profile(run_id, blueprint_arg, last_n, store_dir, config_path,
-                        fmt, env_file, cli_env)
+        _report_profile(
+            run_id, blueprint_arg, last_n, store_dir, config_path, fmt, env_file, cli_env
+        )
         return
     if trend_column:
-        _report_trend(trend_column, blueprint_arg, since, store_dir, config_path,
-                      fmt, env_file, cli_env)
+        _report_trend(
+            trend_column, blueprint_arg, since, store_dir, config_path, fmt, env_file, cli_env
+        )
         return
     from aqueduct.cli.style import error as _error
+
     if not run_id:
         _error("RUN_ID is required — or pass --trend COLUMN --blueprint ID")
         sys.exit(exit_codes.USAGE_ERROR)
@@ -150,9 +163,7 @@ def report(
     from aqueduct.config import ConfigError, load_config
 
     try:
-        _resolve_and_load_env(
-            env_file, Path(config_path) if config_path else None, cli_env=cli_env
-        )
+        _resolve_and_load_env(env_file, Path(config_path) if config_path else None, cli_env=cli_env)
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
@@ -192,17 +203,30 @@ def report(
                 metrics_rows = []  # module_metrics table may not exist yet
 
     if row is None:
-        _error(f"run {run_id!r} not found in the observability store — `aqueduct runs` lists known run ids")
+        _error(
+            f"run {run_id!r} not found in the observability store — `aqueduct runs` lists known run ids"
+        )
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     run_id_val, blueprint_id, status, started_at, finished_at, module_results_raw = row
-    module_results = json.loads(module_results_raw) if isinstance(module_results_raw, str) else (module_results_raw or [])
+    module_results = (
+        json.loads(module_results_raw)
+        if isinstance(module_results_raw, str)
+        else (module_results_raw or [])
+    )
 
     if fmt == "html":
-        click.echo(_render_run_html(
-            run_id_val, blueprint_id, status, started_at, finished_at,
-            module_results, metrics_rows,
-        ))
+        click.echo(
+            _render_run_html(
+                run_id_val,
+                blueprint_id,
+                status,
+                started_at,
+                finished_at,
+                module_results,
+                metrics_rows,
+            )
+        )
         return
 
     if fmt == "json":
@@ -213,10 +237,9 @@ def report(
         # engine). Derived here rather than re-reading the Manifest — the
         # persisted `module_results` JSON is already the single source this
         # command reads from.
-        _engines = sorted({
-            mr["engine"] for mr in module_results
-            if isinstance(mr, dict) and mr.get("engine")
-        })
+        _engines = sorted(
+            {mr["engine"] for mr in module_results if isinstance(mr, dict) and mr.get("engine")}
+        )
         emit(
             {
                 "run_id": run_id_val,
@@ -254,19 +277,26 @@ def report(
     click.echo(f"  {'Module':<30} {'Status':<10} Error")
     click.echo(f"  {'-'*30} {'-'*10} {'-'*40}")
     for mr in module_results:
-        icon = "✓" if mr.get("status") == ExecutionStatus.SUCCESS else ("⏭" if mr.get("status") == ExecutionStatus.SKIPPED else "✗")
+        icon = (
+            "✓"
+            if mr.get("status") == ExecutionStatus.SUCCESS
+            else ("⏭" if mr.get("status") == ExecutionStatus.SKIPPED else "✗")
+        )
         err = mr.get("error") or ""
         if len(err) > 60:
             err = err[:57] + "..."
         click.echo(f"  {icon} {mr.get('module_id', ''):<28} {mr.get('status', ''):<10} {err}")
 
 
-
 def _first_module_id(module_results: Any) -> str:
     """First module id from a run's module_results JSON (backend-portable —
     computed in Python instead of duckdb-specific json_extract_string)."""
     try:
-        data = json.loads(module_results) if isinstance(module_results, str) else (module_results or [])
+        data = (
+            json.loads(module_results)
+            if isinstance(module_results, str)
+            else (module_results or [])
+        )
         return data[0].get("module_id", "") if data else ""
     except Exception:
         return ""
@@ -280,6 +310,7 @@ def _resolve_blueprint_id(blueprint_arg: str | None) -> str | None:
     if p.suffix in (".yml", ".yaml") and p.exists():
         try:
             from aqueduct.parser.parser import parse
+
             return parse(str(p)).id
         except Exception:
             return blueprint_arg
@@ -306,9 +337,7 @@ def _report_trend(
     from aqueduct.config import ConfigError, load_config
 
     try:
-        _resolve_and_load_env(
-            env_file, Path(config_path) if config_path else None, cli_env=cli_env
-        )
+        _resolve_and_load_env(env_file, Path(config_path) if config_path else None, cli_env=cli_env)
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
@@ -322,6 +351,7 @@ def _report_trend(
 
     if since is None:
         from datetime import datetime, timedelta
+
         since = (datetime.now(tz=UTC) - timedelta(days=30)).isoformat()
 
     # Fetch the raw probe payloads (portable SQL — no `json_each`/`json_extract`,
@@ -370,21 +400,28 @@ def _report_trend(
                 "column": column,
                 "blueprint_id": blueprint_id,
                 "since": since,
-                "null_rate": [{"run_id": r[0], "captured_at": r[1], "null_rate": r[2]} for r in null_rows],
+                "null_rate": [
+                    {"run_id": r[0], "captured_at": r[1], "null_rate": r[2]} for r in null_rows
+                ],
                 "type": [{"run_id": r[0], "captured_at": r[1], "type": r[2]} for r in type_rows],
             },
             fmt="json",
         )
         return
 
-    click.echo(f"Quality trend — column: {column}"
-               + (f"  blueprint: {blueprint_id}" if blueprint_id else ""))
+    click.echo(
+        f"Quality trend — column: {column}"
+        + (f"  blueprint: {blueprint_id}" if blueprint_id else "")
+    )
     if null_rows:
         click.echo("\n  null-rate:")
         click.echo(f"    {'captured_at':<28} {'run_id':<20} null_rate")
         for rid, ts, nr in null_rows:
-            click.echo(f"    {ts:<28} {rid[:18]:<20} {nr:.4f}" if nr is not None else
-                       f"    {ts:<28} {rid[:18]:<20} (n/a)")
+            click.echo(
+                f"    {ts:<28} {rid[:18]:<20} {nr:.4f}"
+                if nr is not None
+                else f"    {ts:<28} {rid[:18]:<20} (n/a)"
+            )
     if type_rows:
         click.echo("\n  type history:")
         click.echo(f"    {'captured_at':<28} {'run_id':<20} type")
@@ -401,6 +438,7 @@ def _fmt_bytes(n: int | None) -> str:
     (``format_bytes``) so the run transcript's Handoff step lines format a
     byte count identically."""
     from aqueduct.cli.output import format_bytes as _format_bytes
+
     return _format_bytes(n)
 
 
@@ -447,13 +485,19 @@ def _render_run_html(
     res_rows = []
     for mr in module_results:
         st = mr.get("status", "")
-        cls = "ok" if st == ExecutionStatus.SUCCESS else ("skip" if st == ExecutionStatus.SKIPPED else "err")
+        cls = (
+            "ok"
+            if st == ExecutionStatus.SUCCESS
+            else ("skip" if st == ExecutionStatus.SKIPPED else "err")
+        )
         res_rows.append(
             f"<tr><td>{e(mr.get('module_id'))}</td>"
             f"<td><span class='badge {cls}'>{e(st)}</span></td>"
             f"<td>{e(mr.get('error') or '')}</td></tr>"
         )
-    results_html = "\n".join(res_rows) or "<tr><td colspan=3 class='muted'>no module results</td></tr>"
+    results_html = (
+        "\n".join(res_rows) or "<tr><td colspan=3 class='muted'>no module results</td></tr>"
+    )
 
     # Resource profile table (heaviest first; metrics_rows already ordered)
     total_dur = sum((r[3] or 0) for r in metrics_rows)
@@ -517,9 +561,7 @@ def _report_profile(
     from aqueduct.config import ConfigError, load_config
 
     try:
-        _resolve_and_load_env(
-            env_file, Path(config_path) if config_path else None, cli_env=cli_env
-        )
+        _resolve_and_load_env(env_file, Path(config_path) if config_path else None, cli_env=cli_env)
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
@@ -556,7 +598,14 @@ def _profile_run(run_id, cfg, store_dir, fmt) -> None:
         click.echo(f"No module_metrics for run {run_id!r}.")
         return
 
-    cols = ["module_id", "records_read", "bytes_read", "records_written", "bytes_written", "duration_ms"]
+    cols = [
+        "module_id",
+        "records_read",
+        "bytes_read",
+        "records_written",
+        "bytes_written",
+        "duration_ms",
+    ]
     records = [dict(zip(cols, r)) for r in rows]
     total_dur = sum((r["duration_ms"] or 0) for r in records)
     total_bw = sum((r["bytes_written"] or 0) for r in records)
@@ -575,6 +624,7 @@ def _profile_run(run_id, cfg, store_dir, fmt) -> None:
     if fmt == "csv":
         import csv as _csv
         import io
+
         buf = io.StringIO()
         w = _csv.writer(buf)
         w.writerow(cols + ["pct_duration"])
@@ -591,9 +641,13 @@ def _profile_run(run_id, cfg, store_dir, fmt) -> None:
         pct = (100.0 * (r["duration_ms"] or 0) / total_dur) if total_dur else 0.0
         dur = f"{r['duration_ms']}ms" if r["duration_ms"] is not None else "-"
         rows_out = "-" if r["records_written"] is None else f"{r['records_written']:,}"
-        click.echo(f"  {r['module_id']:<26}{dur:>10}{pct:>6.1f}%{rows_out:>12}{_fmt_bytes(r['bytes_written']):>11}")
+        click.echo(
+            f"  {r['module_id']:<26}{dur:>10}{pct:>6.1f}%{rows_out:>12}{_fmt_bytes(r['bytes_written']):>11}"
+        )
     click.echo(f"  {'-'*66}")
-    click.echo(f"  {'TOTAL':<26}{str(total_dur)+'ms':>10}{'100.0%':>7}{'':>12}{_fmt_bytes(total_bw):>11}")
+    click.echo(
+        f"  {'TOTAL':<26}{str(total_dur)+'ms':>10}{'100.0%':>7}{'':>12}{_fmt_bytes(total_bw):>11}"
+    )
 
 
 def _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt) -> None:
@@ -637,12 +691,16 @@ def _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt) -> None:
     for module_id, runs, avg_dur, max_dur in agg:
         ld = last_dur.get(module_id)
         regressed = bool(ld is not None and avg_dur and ld > 1.5 * avg_dur)
-        records.append({
-            "module_id": module_id, "runs": runs,
-            "avg_duration_ms": round(avg_dur, 1) if avg_dur is not None else None,
-            "max_duration_ms": max_dur, "last_duration_ms": ld,
-            "regressed": regressed,
-        })
+        records.append(
+            {
+                "module_id": module_id,
+                "runs": runs,
+                "avg_duration_ms": round(avg_dur, 1) if avg_dur is not None else None,
+                "max_duration_ms": max_dur,
+                "last_duration_ms": ld,
+                "regressed": regressed,
+            }
+        )
     records.sort(key=lambda r: (r["avg_duration_ms"] or 0), reverse=True)
 
     if fmt == "json":
@@ -658,9 +716,17 @@ def _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt) -> None:
     if fmt == "csv":
         import csv as _csv
         import io
+
         buf = io.StringIO()
         w = _csv.writer(buf)
-        cols = ["module_id", "runs", "avg_duration_ms", "max_duration_ms", "last_duration_ms", "regressed"]
+        cols = [
+            "module_id",
+            "runs",
+            "avg_duration_ms",
+            "max_duration_ms",
+            "last_duration_ms",
+            "regressed",
+        ]
         w.writerow(cols)
         for r in records:
             w.writerow([r[c] for c in cols])
@@ -680,22 +746,32 @@ def _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt) -> None:
 
 # ── aqueduct runs ─────────────────────────────────────────────────────────────
 
+
 @cli.command("runs")
-@click.option("--blueprint", default=None, metavar="PATH_OR_ID", help="Filter by blueprint file path or blueprint ID")
+@click.option(
+    "--blueprint",
+    default=None,
+    metavar="PATH_OR_ID",
+    help="Filter by blueprint file path or blueprint ID",
+)
 @click.option("--failed", is_flag=True, default=False, help="Show only failed runs")
 @click.option("--last", "limit", default=20, show_default=True, help="Max rows to show")
 @click.option("--store-dir", default=None, help="Store directory (default: .aqueduct)")
 @click.option("--config", "config_path", default=None, metavar="PATH", help="Path to aqueduct.yml")
 @click.option(
-    "--format", "out_format",
+    "--format",
+    "out_format",
     type=click.Choice(["text", "json"], case_sensitive=False),
-    default="text", show_default=True,
+    default="text",
+    show_default=True,
     help="Output format. `json` for machine-readable consumption.",
 )
 @click.option(
-    "--heal-coverage", is_flag=True, default=False,
+    "--heal-coverage",
+    is_flag=True,
+    default=False,
     help="Summarize healing_outcomes by resolution (llm / cached / "
-         "replayed) and report zero-token heal coverage instead of listing runs.",
+    "replayed) and report zero-token heal coverage instead of listing runs.",
 )
 @_env_options
 def runs(
@@ -712,9 +788,7 @@ def runs(
     """List recent blueprint runs."""
     from aqueduct.config import load_config
 
-    _resolve_and_load_env(
-        env_file, Path(config_path) if config_path else None, cli_env=cli_env
-    )
+    _resolve_and_load_env(env_file, Path(config_path) if config_path else None, cli_env=cli_env)
     cfg = load_config(Path(config_path) if config_path else None)
     _apply_warnings_from_cfg(cfg)
 
@@ -723,6 +797,7 @@ def runs(
         arg_path = Path(blueprint)
         if arg_path.suffix in (".yml", ".yaml") and arg_path.exists():
             from aqueduct.parser.parser import ParseError, parse
+
             try:
                 bp = parse(str(arg_path))
                 blueprint_id = bp.id
@@ -737,6 +812,7 @@ def runs(
     stores: list = []
     if cfg.stores.observability.backend == "postgres":
         from aqueduct.stores.base import get_stores
+
         stores = [get_stores(cfg).observability]
     else:
         # 2.0: duckdb path = routing base directory; per-blueprint files at
@@ -749,6 +825,7 @@ def runs(
             _base = Path(store_dir)
         else:
             from aqueduct.stores.read import _OBS_ROUTING_ROOT
+
             _base = Path(cfg.stores.observability.path or _OBS_ROUTING_ROOT)
         if blueprint_id:
             c = _base / blueprint_id / "observability.db"
@@ -766,6 +843,7 @@ def runs(
             click.echo("No runs found (no observability.db files discovered)")
             return
         from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+
         stores = [DuckDBObservabilityStore(c) for c in candidates]
 
     if heal_coverage:
@@ -809,7 +887,9 @@ def runs(
             click.echo(f"  heals recorded: {_total}")
             for _res in sorted(_by_resolution):
                 click.echo(f"    {_res:<10} {_by_resolution[_res]}")
-            click.echo(f"  zero-token coverage: {_coverage:.1%}  ({_zero_token}/{_total} heals needed no LLM call)")
+            click.echo(
+                f"  zero-token coverage: {_coverage:.1%}  ({_zero_token}/{_total} heals needed no LLM call)"
+            )
         return
 
     where_parts = []
@@ -863,16 +943,20 @@ def runs(
         click.echo("No runs found.")
         return
 
-    click.echo(f"  {'run_id':<38} {'blueprint':<30} {'status':<10} {'started':<22} {'failed_module'}")
+    click.echo(
+        f"  {'run_id':<38} {'blueprint':<30} {'status':<10} {'started':<22} {'failed_module'}"
+    )
     click.echo(f"  {'-'*38} {'-'*30} {'-'*10} {'-'*22} {'-'*20}")
     for run_id_val, bp_id, status, started_at, finished_at, first_failed in rows:
         icon = "✓" if status == ExecutionStatus.SUCCESS else ("↻" if status == "running" else "✗")
         failed_col = (first_failed or "") if status == ExecutionStatus.ERROR else ""
-        click.echo(f"  {icon} {run_id_val:<37} {bp_id:<30} {status:<10} {str(started_at)[:19]:<22} {failed_col}")
-
+        click.echo(
+            f"  {icon} {run_id_val:<37} {bp_id:<30} {status:<10} {str(started_at)[:19]:<22} {failed_col}"
+        )
 
 
 # ── aqueduct lineage ──────────────────────────────────────────────────────────
+
 
 @cli.command()
 @click.argument("blueprint_id_or_blueprint")
@@ -905,7 +989,7 @@ def runs(
     default=None,
     metavar="COLUMN",
     help="Trace one column source→output as a vertical type-annotated chain "
-         "(computed on demand from the blueprint; requires a blueprint file path).",
+    "(computed on demand from the blueprint; requires a blueprint file path).",
 )
 @click.option(
     "--types",
@@ -913,7 +997,7 @@ def runs(
     is_flag=True,
     default=False,
     help="With --chain: annotate each hop with the sqlglot-inferred SQL type "
-         "and mark type changes.",
+    "and mark type changes.",
 )
 @click.option(
     "--format",
@@ -944,14 +1028,13 @@ def lineage(
 
     # ── --chain: on-demand type-tracked trace, computed from the blueprint ──────
     if chain_column:
-        _lineage_chain(blueprint_id_or_blueprint, chain_column, show_types, fmt,
-                       config_path, env_file, cli_env)
+        _lineage_chain(
+            blueprint_id_or_blueprint, chain_column, show_types, fmt, config_path, env_file, cli_env
+        )
         return
 
     try:
-        _resolve_and_load_env(
-            env_file, Path(config_path) if config_path else None, cli_env=cli_env
-        )
+        _resolve_and_load_env(env_file, Path(config_path) if config_path else None, cli_env=cli_env)
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
@@ -963,6 +1046,7 @@ def lineage(
     if arg_path.suffix in (".yml", ".yaml") and arg_path.exists():
         try:
             from aqueduct.parser.parser import parse
+
             bp = parse(str(arg_path))
             blueprint_id = bp.id
         except Exception as exc:
@@ -1021,8 +1105,9 @@ def lineage(
     click.echo(f"  {'Channel':<25} {'Output Column':<25} {'Source Table':<25} Source Column")
     click.echo(f"  {'-'*25} {'-'*25} {'-'*25} {'-'*25}")
     for channel_id, output_column, source_table, source_column in rows:
-        click.echo(f"  {channel_id:<25} {output_column:<25} {source_table:<25} {source_column or ''}")
-
+        click.echo(
+            f"  {channel_id:<25} {output_column:<25} {source_table:<25} {source_column or ''}"
+        )
 
 
 def _lineage_chain(
@@ -1050,9 +1135,7 @@ def _lineage_chain(
     from aqueduct.parser.parser import ParseError, parse
 
     try:
-        _resolve_and_load_env(
-            env_file, Path(config_path) if config_path else None, cli_env=cli_env
-        )
+        _resolve_and_load_env(env_file, Path(config_path) if config_path else None, cli_env=cli_env)
     except Exception:
         pass  # env is best-effort for a pure compile
 
@@ -1100,10 +1183,13 @@ def _lineage_chain(
             type_note = f"  :: {h.output_type}{marker}"
             prev_type = h.output_type if h.output_type != "UNKNOWN" else prev_type
         click.echo(f"  ▸ {h.channel_id}.{h.output_column}{type_note}")
-        click.echo(f"{connector}    ← {h.source_table or '(source)'}.{h.source_column}  [{h.transform_op}]")
+        click.echo(
+            f"{connector}    ← {h.source_table or '(source)'}.{h.source_column}  [{h.transform_op}]"
+        )
 
 
 # ── aqueduct signal ───────────────────────────────────────────────────────────
+
 
 @cli.command()
 @click.argument("signal_id")
@@ -1169,9 +1255,7 @@ def signal(
     from aqueduct.surveyor.surveyor import _SIGNAL_OVERRIDES_DDL
 
     try:
-        _resolve_and_load_env(
-            env_file, Path(config_path) if config_path else None, cli_env=cli_env
-        )
+        _resolve_and_load_env(env_file, Path(config_path) if config_path else None, cli_env=cli_env)
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
@@ -1180,11 +1264,7 @@ def signal(
 
     # DuckDB routes per blueprint — without an id the override would land in
     # the `default/` store no run ever reads. (Postgres: one schema, no routing.)
-    if (
-        cfg.stores.observability.backend == "duckdb"
-        and not blueprint_id
-        and not store_dir
-    ):
+    if cfg.stores.observability.backend == "duckdb" and not blueprint_id and not store_dir:
         _error(
             "signal: --blueprint <id> is required with the duckdb backend "
             "(overrides live in the blueprint's routed store)"
@@ -1227,7 +1307,9 @@ def signal(
         if passed:
             # Clear override — delete row entirely
             cur.execute("DELETE FROM signal_overrides WHERE signal_id = ?", [signal_id])
-            click.echo(f"✓ signal {signal_id!r}: override cleared — gate resumes normal Probe evaluation")
+            click.echo(
+                f"✓ signal {signal_id!r}: override cleared — gate resumes normal Probe evaluation"
+            )
         else:
             cur.execute(
                 """
@@ -1241,13 +1323,15 @@ def signal(
                 [signal_id, False, error_msg, now],
             )
             msg_note = f"  reason: {error_msg}" if error_msg else ""
-            click.echo(f"✓ signal {signal_id!r}: gate CLOSED — all future runs blocked at this Regulator")
+            click.echo(
+                f"✓ signal {signal_id!r}: gate CLOSED — all future runs blocked at this Regulator"
+            )
             if msg_note:
                 click.echo(msg_note)
 
 
-
 # ── aqueduct dashboard (Phase 68) ─────────────────────────────────────────────
+
 
 @cli.command()
 @click.option("--config", "config_path", default=None, help="Path to aqueduct.yml")
@@ -1256,7 +1340,9 @@ def signal(
     default=None,
     help="Observability store dir (default: scan .aqueduct/observability/*)",
 )
-@click.option("--port", default=8501, show_default=True, help="Local port for the Streamlit server.")
+@click.option(
+    "--port", default=8501, show_default=True, help="Local port for the Streamlit server."
+)
 @click.option("--no-browser", is_flag=True, default=False, help="Do not auto-open a browser.")
 def dashboard(
     config_path: str | None,
@@ -1296,9 +1382,16 @@ def dashboard(
         # secrets-resolver layout) shadow the stdlib `secrets` module for
         # every downstream import in the subprocess — including starlette's
         # `from secrets import token_hex` in recent streamlit releases.
-        sys.executable, "-P", "-m", "streamlit", "run", app_path,
-        "--server.port", str(port),
-        "--server.headless", "true" if no_browser else "false",
+        sys.executable,
+        "-P",
+        "-m",
+        "streamlit",
+        "run",
+        app_path,
+        "--server.port",
+        str(port),
+        "--server.headless",
+        "true" if no_browser else "false",
     ]
     try:
         sys.exit(subprocess.call(args, env=env))

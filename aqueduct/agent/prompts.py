@@ -301,7 +301,11 @@ def _build_root_cause_section(failure_ctx: FailureContext) -> str:
         if isinstance(root_exc, dict):
             rtype = root_exc.get("type") or "Unknown"
             rmsg = (root_exc.get("message") or "").strip()
-            lines.append(f"- **Root exception**: `{rtype}` — {rmsg}" if rmsg else f"- **Root exception**: `{rtype}`")
+            lines.append(
+                f"- **Root exception**: `{rtype}` — {rmsg}"
+                if rmsg
+                else f"- **Root exception**: `{rtype}`"
+            )
         return "\n".join(lines) + "\n"
 
     trace = failure_ctx.stack_trace
@@ -355,6 +359,7 @@ def _load_previous_patches(obs_store: Any, limit: int = _PATCH_HISTORY_MAX) -> l
         return []
     try:
         from aqueduct.patch import index as _ix
+
         with obs_store.connect() as cur:
             rows = _ix.recent_applied(cur, limit)
     except Exception:
@@ -363,11 +368,13 @@ def _load_previous_patches(obs_store: Any, limit: int = _PATCH_HISTORY_MAX) -> l
     patches: list[dict] = []
     for d in rows:
         ops = d.get("ops")
-        patches.append({
-            "patch_id": str(d.get("patch_id") or "?"),
-            "description": str(d.get("rationale") or ""),
-            "ops": list(ops) if isinstance(ops, list) else [],
-        })
+        patches.append(
+            {
+                "patch_id": str(d.get("patch_id") or "?"),
+                "description": str(d.get("rationale") or ""),
+                "ops": list(ops) if isinstance(ops, list) else [],
+            }
+        )
     return patches
 
 
@@ -385,10 +392,14 @@ def _build_provenance_section(provenance_json: str | None) -> str:
         logger.warning("Failed to parse provenance_json — LLM will see no provenance context")
         return ""
 
-    lines: list[str] = ["\n## Value provenance (where each config value originates in the Blueprint source)"]
+    lines: list[str] = [
+        "\n## Value provenance (where each config value originates in the Blueprint source)"
+    ]
     bp_path_raw = prov.get("blueprint_path", "?")
     bp_path_display = Path(bp_path_raw).name if bp_path_raw and bp_path_raw != "?" else "?"
-    lines.append(f"Blueprint: {bp_path_display}  (paths shown are for reference; always use relative paths in patch ops)")
+    lines.append(
+        f"Blueprint: {bp_path_display}  (paths shown are for reference; always use relative paths in patch ops)"
+    )
 
     failed_mod = prov.get("failed_module")
     if failed_mod:
@@ -439,10 +450,7 @@ def _build_provenance_section(provenance_json: str | None) -> str:
                     f"  ← env_ref ${{{env_var}}}  →  change the environment variable, do NOT patch the Blueprint"
                 )
             elif src == "tier1":
-                lines.append(
-                    f"  config.{key} = {resolved!r}"
-                    f"  ← @aq.* expression: {orig!r}"
-                )
+                lines.append(f"  config.{key} = {resolved!r}" f"  ← @aq.* expression: {orig!r}")
             else:
                 lines.append(
                     f"  config.{key} = {resolved!r}"
@@ -452,7 +460,9 @@ def _build_provenance_section(provenance_json: str | None) -> str:
     # Context block — helps LLM find the parent context key for arcade_inherited values
     ctx_block = prov.get("context") or {}
     if ctx_block:
-        lines.append("\n### Blueprint context values (all resolved — editable via replace_context_value)")
+        lines.append(
+            "\n### Blueprint context values (all resolved — editable via replace_context_value)"
+        )
         for key, vp in ctx_block.items():
             resolved = vp.get("resolved_value")
             src = vp.get("source_type", "?")
@@ -501,16 +511,22 @@ def _build_guardrails_section(guardrails: Any) -> str:
     if forbidden:
         lines.append(f"- forbidden ops (must NOT appear in operations[]): {', '.join(forbidden)}")
     if allowed_paths:
-        lines.append(f"- allowed file paths (operations may only target these — fnmatch patterns): {', '.join(allowed_paths)}")
+        lines.append(
+            f"- allowed file paths (operations may only target these — fnmatch patterns): {', '.join(allowed_paths)}"
+        )
     if heal_on:
         lines.append(f"- heal only on these error_types: {', '.join(heal_on)}")
     if never_heal:
-        lines.append(f"- never heal these error_types (priority over heal_on): {', '.join(never_heal)}")
+        lines.append(
+            f"- never heal these error_types (priority over heal_on): {', '.join(never_heal)}"
+        )
     lines.append("")
     return "\n".join(lines)
 
 
-def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path, guardrails: Any = None) -> str:
+def _build_user_prompt(
+    failure_ctx: FailureContext, patches_dir: Path, guardrails: Any = None
+) -> str:
     try:
         manifest = json.loads(failure_ctx.manifest_json)
     except Exception:
@@ -526,9 +542,10 @@ def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path, guardrail
     failed_config = json.dumps(failed_mod.get("config", {}) if failed_mod else {}, indent=2)
 
     # Module list summary
-    module_list = "\n".join(
-        f"  - {m['id']} ({m['type']}): {m.get('label', '')}" for m in modules
-    ) or "  (none)"
+    module_list = (
+        "\n".join(f"  - {m['id']} ({m['type']}): {m.get('label', '')}" for m in modules)
+        or "  (none)"
+    )
 
     # Provenance section (replaces raw Blueprint YAML dump)
     provenance_section = _build_provenance_section(getattr(failure_ctx, "provenance_json", None))
@@ -558,6 +575,7 @@ def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path, guardrail
         macros_defined: list[str] = []
         try:
             import yaml as _yaml
+
             _doc = _yaml.safe_load(raw_yaml) or {}
             _mac = _doc.get("macros") if isinstance(_doc, dict) else None
             if isinstance(_mac, dict):
@@ -615,7 +633,10 @@ def _build_coaching_section(failure_ctx: Any, obs_store: Any) -> str:
     try:
         sig_exact, sig_coarse = from_failure_context(failure_ctx)
         examples = find_coaching_examples(
-            obs_store, sig_exact.hash, sig_coarse.hash, sig_exact.error_class,
+            obs_store,
+            sig_exact.hash,
+            sig_coarse.hash,
+            sig_exact.error_class,
             blueprint_id=getattr(failure_ctx, "blueprint_id", ""),
         )
     except Exception:
@@ -687,8 +708,7 @@ def _render_engine_config_policy(engine: str) -> str:
 
     def _unavailable(why: str) -> str:
         return (
-            heading
-            + f"`set_engine_config` is NOT available for engine `{engine}` — {why}, "
+            heading + f"`set_engine_config` is NOT available for engine `{engine}` — {why}, "
             "so any engine-config write is refused before the patch is applied. Do "
             "NOT emit a `set_engine_config` operation; fix the failure with another "
             "op.\n"
@@ -709,7 +729,10 @@ def _render_engine_config_policy(engine: str) -> str:
         logger.warning(
             "engine %r ships an unloadable %s at %s — the healing prompt will "
             "declare set_engine_config unavailable for it",
-            engine, DECLARATION_FILENAME, path, exc_info=True,
+            engine,
+            DECLARATION_FILENAME,
+            path,
+            exc_info=True,
         )
         return _unavailable(f"its `{DECLARATION_FILENAME}` could not be loaded")
 
@@ -761,9 +784,7 @@ def _render_engine_config_policy(engine: str) -> str:
         deny_rows = []
         for d in allowlist.deny_entries:
             values = (
-                "all"
-                if d.deny_values is None
-                else ", ".join(f"`{v!r}`" for v in d.deny_values)
+                "all" if d.deny_values is None else ", ".join(f"`{v!r}`" for v in d.deny_values)
             )
             deny_rows.append(f"| `{d.pattern}` | {values} | {d.reason} |")
         lines += [
@@ -830,7 +851,8 @@ def _build_system_prompt(
         for union_key in ("oneOf", "anyOf"):
             if union_key in op_items:
                 op_items[union_key] = [
-                    ref for ref in op_items[union_key]
+                    ref
+                    for ref in op_items[union_key]
                     if not (isinstance(ref, dict) and "DeferToHumanOp" in str(ref.get("$ref", "")))
                 ]
         mapping = op_items.get("discriminator", {}).get("mapping")
@@ -880,9 +902,7 @@ def _build_system_prompt(
     if coaching and failure_ctx is not None:
         prev_section = _build_coaching_section(failure_ctx, obs_store)
         if prev_section and last_apply_error:
-            prev_section += (
-                f"\n\n**Last patch apply error (the previous fix failed for this reason — do not repeat it):**\n{last_apply_error}"
-            )
+            prev_section += f"\n\n**Last patch apply error (the previous fix failed for this reason — do not repeat it):**\n{last_apply_error}"
     if not prev_section:
         prev = _load_previous_patches(obs_store)
         if prev:
@@ -908,14 +928,21 @@ def _build_system_prompt(
             rules_content = rules_file.read_text(encoding="utf-8").strip()
             if rules_content:
                 if len(rules_content) > DEFAULT_MAX_TOKENS:
-                    rules_content = rules_content[:DEFAULT_MAX_TOKENS] + f"\n…(truncated at {DEFAULT_MAX_TOKENS} chars)"
-                    logger.warning(f"patches/rules.md exceeds {DEFAULT_MAX_TOKENS} chars — truncated")
+                    rules_content = (
+                        rules_content[:DEFAULT_MAX_TOKENS]
+                        + f"\n…(truncated at {DEFAULT_MAX_TOKENS} chars)"
+                    )
+                    logger.warning(
+                        f"patches/rules.md exceeds {DEFAULT_MAX_TOKENS} chars — truncated"
+                    )
                 ctx_parts.append(rules_content)
         except Exception:
             logger.debug("Could not read patches/rules.md at %s", rules_file, exc_info=True)
 
     if ctx_parts:
-        custom_context_section = "\n\n## Additional context (operator-supplied)\n" + "\n\n".join(ctx_parts)
+        custom_context_section = "\n\n## Additional context (operator-supplied)\n" + "\n\n".join(
+            ctx_parts
+        )
     else:
         custom_context_section = ""
 
@@ -969,7 +996,9 @@ def build_prompt(
     """
     return {
         "system": _build_system_prompt(
-            patches_dir, engine_prompt_context, blueprint_prompt_context,
+            patches_dir,
+            engine_prompt_context,
+            blueprint_prompt_context,
             last_apply_error=last_apply_error,
             allow_defer=allow_defer,
             failure_ctx=failure_ctx,

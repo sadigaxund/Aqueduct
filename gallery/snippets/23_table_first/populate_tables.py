@@ -16,6 +16,7 @@ regardless of which engine the run afterward actually uses:
 Purges stale warehouse/metastore/catalog state before creating either
 table, so re-running this script is always safe.
 """
+
 import logging
 import shutil
 from pathlib import Path
@@ -35,12 +36,13 @@ for d in ("metastore_db", "spark-warehouse", "derby.log", "demo.duckdb", "demo.d
     elif p.exists():
         p.unlink()
 
-spark = SparkSession.builder \
-    .master("local[1]") \
-    .appName("snippet-populate") \
-    .config("spark.sql.catalogImplementation", "hive") \
-    .config("spark.log.level", "WARN") \
+spark = (
+    SparkSession.builder.master("local[1]")
+    .appName("snippet-populate")
+    .config("spark.sql.catalogImplementation", "hive")
+    .config("spark.log.level", "WARN")
     .getOrCreate()
+)
 
 spark.range(10).toDF("id").createOrReplaceTempView("_tmp_demo")
 spark.sql("CREATE TABLE demo_table USING parquet AS SELECT id, id % 2 AS even FROM _tmp_demo")
@@ -50,6 +52,8 @@ spark.stop()
 print("Created demo_table in Derby-based Hive catalog")
 
 con = duckdb.connect("demo.duckdb")
-con.execute("CREATE OR REPLACE TABLE demo_table AS SELECT i AS id, i % 2 AS even FROM range(10) AS t(i)")
+con.execute(
+    "CREATE OR REPLACE TABLE demo_table AS SELECT i AS id, i % 2 AS even FROM range(10) AS t(i)"
+)
 con.close()
 print("Created demo_table in demo.duckdb")

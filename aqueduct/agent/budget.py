@@ -141,13 +141,17 @@ class AttemptRecord:
     """One row in the per-heal attempt log; persisted to ``heal_attempts``."""
 
     attempt_num: int
-    signature: ErrorSignature | None        # None when the attempt SUCCEEDED
+    signature: ErrorSignature | None  # None when the attempt SUCCEEDED
     tokens_in: int = 0
     tokens_out: int = 0
     latency_ms: int = 0
-    gate_that_rejected: str | None = None    # 'schema' | 'apply' | 'validate' | 'provider' | 'budget' | 'defer_rejected' | None on success
-    escalated: bool = False                   # was Task 87 escalation applied on this attempt?
-    model_cascade_position: int | None = None  # Phase 44: tier index (0-based) in multi-model cascade
+    gate_that_rejected: str | None = (
+        None  # 'schema' | 'apply' | 'validate' | 'provider' | 'budget' | 'defer_rejected' | None on success
+    )
+    escalated: bool = False  # was Task 87 escalation applied on this attempt?
+    model_cascade_position: int | None = (
+        None  # Phase 44: tier index (0-based) in multi-model cascade
+    )
     # Phase 75 — tool calls made by the model during THIS attempt's agentic
     # tool conversation (0 in oneshot mode, or when the endpoint degraded to
     # oneshot mid-heal). Persisted alongside the attempt so the diagnosis
@@ -188,7 +192,7 @@ class BudgetTracker:
     attempts: list[AttemptRecord] = field(default_factory=list)
     tokens_in_total: int = 0
     tokens_out_total: int = 0
-    escalated_once: bool = False             # one escalation per heal, never two
+    escalated_once: bool = False  # one escalation per heal, never two
     _current_attempt: int = 0
     _stop_reason: str | None = None
     # Phase 46 — seconds spent OUTSIDE the LLM conversation (validation

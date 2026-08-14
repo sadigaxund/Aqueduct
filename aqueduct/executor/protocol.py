@@ -623,20 +623,22 @@ def render_native_type(engine: str, spelling: str) -> str:
 # ...) are never touched by this mechanism; an engine that can't accept one
 # of THOSE has a real signature mismatch, not a missing optional capability,
 # and should fail loudly.
-OPTIONAL_EXECUTE_KWARGS: frozenset[str] = frozenset({
-    "observability_store",
-    "explain_capture",
-    "parallel",
-    "use_observe",
-    "sampling",
-    # Phase 81 step 3 — {handoff_module_id: spill_uri}, resolved by
-    # `aqueduct/executor/orchestrator.py`. Every registered engine's
-    # `execute()` that can run a Handoff module needs it; an engine with no
-    # Handoff support at all (there is none today — both shipped engines
-    # implement it) would declare it outside its `execute_kwargs` allowlist
-    # the same way any other optional capability kwarg works.
-    "handoff_spill_uris",
-})
+OPTIONAL_EXECUTE_KWARGS: frozenset[str] = frozenset(
+    {
+        "observability_store",
+        "explain_capture",
+        "parallel",
+        "use_observe",
+        "sampling",
+        # Phase 81 step 3 — {handoff_module_id: spill_uri}, resolved by
+        # `aqueduct/executor/orchestrator.py`. Every registered engine's
+        # `execute()` that can run a Handoff module needs it; an engine with no
+        # Handoff support at all (there is none today — both shipped engines
+        # implement it) would declare it outside its `execute_kwargs` allowlist
+        # the same way any other optional capability kwarg works.
+        "handoff_spill_uris",
+    }
+)
 
 
 def filter_execute_kwargs(

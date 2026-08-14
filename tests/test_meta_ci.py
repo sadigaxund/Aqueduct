@@ -251,9 +251,9 @@ def test_snippets_lanes_cover_every_registered_engine():
     engines = _registered_engines()
     wf = _workflow("version-matrix.yml")
     for job_name in ("snippets", "snippets-lts"):
-        matrix_engines = (
-            (wf["jobs"][job_name].get("strategy") or {}).get("matrix") or {}
-        ).get("engine", [])
+        matrix_engines = ((wf["jobs"][job_name].get("strategy") or {}).get("matrix") or {}).get(
+            "engine", []
+        )
         for engine in engines:
             assert engine in matrix_engines, (
                 f"engine {engine!r} is registered (aqueduct.engines entry point) "
@@ -315,7 +315,7 @@ def test_compat_lane_covers_every_registered_engine():
     run_script = _compat_run_tests_script()
     m = re.search(r'-m\s+"([^"]+)"', run_script)
     assert m, (
-        "compat job's pytest invocation has no `-m \"...\"` marker expression "
+        'compat job\'s pytest invocation has no `-m "..."` marker expression '
         "to check engine coverage against"
     )
     marker_expr = m.group(1)
@@ -372,7 +372,7 @@ def test_every_registered_engine_has_a_pre_merge_lane_in_test_suite_yml():
             "'refs/heads/main'` / workflow_dispatch (like `coverage`) does "
             "NOT count, because that only catches a break AFTER merge, and a "
             "lane that only NEGATES the engine's marker (`-m \"not "
-            f"{engine}\"`) does not count either. Add a lane shaped like the "
+            f'{engine}"`) does not count either. Add a lane shaped like the '
             "other `*-tests` jobs (copy `parser-tests`), gated on a `changes` "
             "path filter covering the engine's source + test directories — "
             "see AGENTS.md's 'Adding an engine' playbook."

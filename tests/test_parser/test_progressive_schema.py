@@ -137,8 +137,8 @@ def test_resolve_agent_connection_inherits_progressive(tmp_path):
     )
     bp = parse(bp_file)
     r2 = resolve_agent_connection(eng, bp.agent)
-    assert r2.progressive is False   # blueprint False wins over engine True
-    assert r2.max_chain == 6         # blueprint None inherits engine default
+    assert r2.progressive is False  # blueprint False wins over engine True
+    assert r2.max_chain == 6  # blueprint None inherits engine default
 
 
 def test_resolve_agent_connection_never_reads_connection_fields_from_blueprint(tmp_path):

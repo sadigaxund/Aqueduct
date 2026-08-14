@@ -9,6 +9,7 @@ Known gaps are encoded as ``xfail(strict=True)`` so they FAIL the build the
 moment they're fixed — forcing the marker's removal. That makes the remaining
 work a finite, self-updating list instead of surprise slivers.
 """
+
 from __future__ import annotations
 
 import json
@@ -45,8 +46,13 @@ _DDL = [
         payload JSON, captured_at TIMESTAMPTZ)""",
 ]
 
-_CONF_TABLES = ("run_records", "module_metrics", "column_lineage",
-                 "healing_outcomes", "probe_signals")
+_CONF_TABLES = (
+    "run_records",
+    "module_metrics",
+    "column_lineage",
+    "healing_outcomes",
+    "probe_signals",
+)
 
 # `report --trend` (aqueduct/cli/observability.py) defaults its lookback
 # window to `now() - 30 days` when `--since` isn't passed. A fixed calendar
@@ -68,7 +74,9 @@ _TS = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
             id="postgres",
             marks=[
                 pytest.mark.integration,
-                pytest.mark.skipif(not _pg_is_reachable(), reason="Postgres not reachable (set AQ_PG_DSN)"),
+                pytest.mark.skipif(
+                    not _pg_is_reachable(), reason="Postgres not reachable (set AQ_PG_DSN)"
+                ),
             ],
         ),
     ]
@@ -84,11 +92,11 @@ def seeded_cfg(request, tmp_path):
 
     cfg_file = tmp_path / "aqueduct.yml"
     cfg_file.write_text(
-        "aqueduct_config: \"1.0\"\n"
+        'aqueduct_config: "1.0"\n'
         "stores:\n"
         "  observability:\n"
         f"    backend: {backend}\n"
-        f"    path: \"{obs_path}\"\n"
+        f'    path: "{obs_path}"\n'
     )
 
     cfg = load_config(cfg_file)
@@ -107,8 +115,14 @@ def seeded_cfg(request, tmp_path):
         cur.execute(
             "INSERT INTO run_records (run_id, blueprint_id, status, started_at, finished_at, module_results) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            ["rc1", "conf_bp", "success", _TS, _TS,
-             json.dumps([{"module_id": "m1", "status": "success", "error": ""}])],
+            [
+                "rc1",
+                "conf_bp",
+                "success",
+                _TS,
+                _TS,
+                json.dumps([{"module_id": "m1", "status": "success", "error": ""}]),
+            ],
         )
         cur.execute(
             "INSERT INTO module_metrics (run_id, module_id, records_written, bytes_written, duration_ms, captured_at) "
@@ -147,6 +161,7 @@ def _run(cfg_file, *args):
 
 
 # ── read commands: must work on every relational backend ─────────────────────
+
 
 def test_report_run(seeded_cfg):
     cfg_file, _ = seeded_cfg
@@ -187,19 +202,22 @@ def test_report_trend(seeded_cfg):
 
 # ── fleet query layer: must produce identical results on every backend ────────
 
+
 def test_fleet_summary_conformance(seeded_cfg):
     from aqueduct.stores import queries as q
+
     cfg_file, _ = seeded_cfg
     cfg = load_config(cfg_file)
     summ = {s.blueprint_id: s for s in q.fleet_summary(cfg)}
     assert "conf_bp" in summ
     s = summ["conf_bp"]
     assert s.runs == 1 and s.successes == 1
-    assert s.heal_attempts == 1   # heal count via run_records join (no blueprint_id col)
+    assert s.heal_attempts == 1  # heal count via run_records join (no blueprint_id col)
 
 
 def test_runs_over_time_conformance(seeded_cfg):
     from aqueduct.stores import queries as q
+
     cfg_file, _ = seeded_cfg
     counts = q.runs_over_time(load_config(cfg_file))
     assert any(d.count >= 1 and d.status == "success" for d in counts)
@@ -207,10 +225,12 @@ def test_runs_over_time_conformance(seeded_cfg):
 
 def test_failure_categories_conformance(seeded_cfg):
     from aqueduct.stores import queries as q
+
     dist = q.failure_categories(load_config(seeded_cfg[0]))
     assert dist.get("SchemaError") == 1
 
 
 def test_heal_coverage_conformance(seeded_cfg):
     from aqueduct.stores import queries as q
+
     assert q.heal_coverage(load_config(seeded_cfg[0])).get("llm") == 1

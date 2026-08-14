@@ -152,24 +152,27 @@ class TestRuntimeWarningRollup:
 
     def test_collapsed_header_and_module_ids(self, capsys, monkeypatch):
         from aqueduct.cli import style
+
         monkeypatch.setattr(style, "_color_enabled", lambda: False)
         style.emit_warning_pairs(self._pairs(), label="runtime:", verbose=False, err=False)
         out = capsys.readouterr().out
         assert "⚠ runtime: 2 warnings" in out
-        assert "-v for full text" in out           # collapsed affordance
+        assert "-v for full text" in out  # collapsed affordance
         assert "[runtime_assert]" in out
-        assert "quality_gate" in out and "distinct_scan" in out   # module ids present
+        assert "quality_gate" in out and "distinct_scan" in out  # module ids present
 
     def test_verbose_shows_full_message(self, capsys, monkeypatch):
         from aqueduct.cli import style
+
         monkeypatch.setattr(style, "_color_enabled", lambda: False)
         style.emit_warning_pairs(self._pairs(), label="runtime:", verbose=True, err=False)
         out = capsys.readouterr().out
-        assert "expected >= 100000" in out          # full body, not truncated
-        assert "-v for full text" not in out        # no collapse hint when verbose
+        assert "expected >= 100000" in out  # full body, not truncated
+        assert "-v for full text" not in out  # no collapse hint when verbose
 
     def test_empty_prints_nothing(self, capsys):
         from aqueduct.cli import style
+
         style.emit_warning_pairs([], label="runtime:", err=False)
         assert capsys.readouterr().out == ""
 
@@ -177,15 +180,21 @@ class TestRuntimeWarningRollup:
         """The run.py aggregation: (rule_id, '<module>: <msg>') across module_results."""
         from aqueduct.cli import style
         from aqueduct.executor.models import ModuleResult
+
         monkeypatch.setattr(style, "_color_enabled", lambda: False)
         module_results = (
-            ModuleResult(module_id="m1", status="success",
-                         warnings=(("runtime_assert", "min_rows got 1"),)),
-            ModuleResult(module_id="m2", status="success",
-                         warnings=(("runtime_probe_signal_error", "signal failed"),)),
+            ModuleResult(
+                module_id="m1", status="success", warnings=(("runtime_assert", "min_rows got 1"),)
+            ),
+            ModuleResult(
+                module_id="m2",
+                status="success",
+                warnings=(("runtime_probe_signal_error", "signal failed"),),
+            ),
         )
-        pairs = [(rid, f"{mr.module_id}: {msg}")
-                 for mr in module_results for rid, msg in mr.warnings]
+        pairs = [
+            (rid, f"{mr.module_id}: {msg}") for mr in module_results for rid, msg in mr.warnings
+        ]
         style.emit_warning_pairs(pairs, label="runtime:", verbose=True, err=False)
         out = capsys.readouterr().out
         assert "⚠ runtime: 2 warnings" in out
@@ -197,6 +206,7 @@ class TestEmitInfo:
 
     def test_prints_the_message_to_stdout(self, capsys):
         from aqueduct.cli import output
+
         output.emit_info("perf vs pre-patch baseline: 3.2x")
         out = capsys.readouterr().out
         assert "perf vs pre-patch baseline: 3.2x" in out
@@ -208,6 +218,7 @@ class TestEmitInfo:
         note that uses this deliberately makes no verdict at all.
         """
         from aqueduct.cli import output
+
         output.emit_info("observed 3.2x, reported not judged")
         captured = capsys.readouterr()
         assert "⚠" not in captured.out

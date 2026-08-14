@@ -63,7 +63,9 @@ def resolve_budget(
     if pydantic_budget is not None:
         same_err = int(pydantic_budget.same_error_consecutive)
         same_sig = int(pydantic_budget.same_signature_overall)
-        if same_sig < same_err and "same_signature_overall" not in getattr(pydantic_budget, "model_fields_set", set()):
+        if same_sig < same_err and "same_signature_overall" not in getattr(
+            pydantic_budget, "model_fields_set", set()
+        ):
             same_sig = same_err
 
         return BudgetConfig(

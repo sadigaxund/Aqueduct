@@ -102,7 +102,7 @@ class TestLintCliText:
         bp = tmp_path / "bp.yml"
         bp.write_text(
             BP_HAS_FINDINGS.replace(
-                'name: Lint Findings\n',
+                "name: Lint Findings\n",
                 'name: Lint Findings\nwarnings:\n  suppress: ["AQ-LINT002"]\n',
             )
         )
@@ -117,7 +117,7 @@ class TestLintCliText:
         bp = tmp_path / "bp.yml"
         bp.write_text(
             BP_HAS_FINDINGS.replace(
-                'name: Lint Findings\n',
+                "name: Lint Findings\n",
                 'name: Lint Findings\nwarnings:\n  suppress: ["*"]\n',
             )
         )

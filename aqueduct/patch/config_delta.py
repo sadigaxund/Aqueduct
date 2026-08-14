@@ -305,9 +305,7 @@ def run_engine_config_delta_gate(
         for engine, keys in sorted(write_targets.items()):
             for key in keys:
                 current = (before_effective.get(engine) or {}).get(key, ABSENT)
-                already.append(
-                    f"engine {engine!r} key {key!r} already resolves to {current!r}"
-                )
+                already.append(f"engine {engine!r} key {key!r} already resolves to {current!r}")
         raise PatchError(
             "set_engine_config write has no effect: the patch writes "
             f"{written}, but the effective session config is identical before "

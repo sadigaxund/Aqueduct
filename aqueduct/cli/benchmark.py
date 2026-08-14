@@ -4,6 +4,7 @@ Extracted verbatim from aqueduct/cli/__init__.py — no behaviour change. The
 click group + shared helpers are imported from the package; the commands
 register onto `cli` when this module is imported at the bottom of __init__.
 """
+
 from __future__ import annotations
 
 import sys
@@ -22,6 +23,7 @@ from aqueduct.cli.output import emit
 from aqueduct.cli.style import error as _error
 
 # ── aqueduct benchmark ────────────────────────────────────────────────────────
+
 
 @cli.command()
 @click.argument(
@@ -73,13 +75,15 @@ from aqueduct.cli.style import error as _error
     help="Max concurrent LLM calls. Default 1 (serial); set >1 to parallelize scenario×model pairs.",
 )
 @click.option(
-    "-s", "--set", "set_items",
+    "-s",
+    "--set",
+    "set_items",
     multiple=True,
     metavar="PATH=VALUE",
     help="Override an aqueduct.yml value for this run only (repeatable, "
-         "in-memory). Dotted path — e.g. --set agent.provider=openai_compat "
-         "--set agent.base_url=http://h:11434/v1 --set agent.timeout=600, "
-         "--set stores.benchmark.persist=false / .gate_on_regression=true / .path=…",
+    "in-memory). Dotted path — e.g. --set agent.provider=openai_compat "
+    "--set agent.base_url=http://h:11434/v1 --set agent.timeout=600, "
+    "--set stores.benchmark.persist=false / .gate_on_regression=true / .path=…",
 )
 @_env_options
 def benchmark(
@@ -132,6 +136,7 @@ def benchmark(
     # ── -s/--set overrides (config-only; no blueprint in benchmark) ────────────
     if set_items:
         from aqueduct.overrides import OverrideError, apply_to_model, route_overrides
+
         try:
             _cfg_set_nested, _ = route_overrides(set_items, allow_blueprint=False)
             cfg = apply_to_model(cfg, _cfg_set_nested)
@@ -172,7 +177,8 @@ def benchmark(
     # Count scenarios up-front for the banner. Cheap glob — load_scenario
     # runs again inside run_benchmark, but we only need the count here.
     _scn_count = (
-        1 if Path(scenarios_dir).is_file()
+        1
+        if Path(scenarios_dir).is_file()
         else len(list(Path(scenarios_dir).glob("**/*.aqscenario.yml")))
     )
     _pair_count = _scn_count * len(model_list)
@@ -181,6 +187,7 @@ def benchmark(
     # the same engine config block enforces parity — divergence would
     # silently invalidate the leaderboard.
     from aqueduct.agent import resolve_budget as _resolve_budget
+
     _budget = _resolve_budget(
         getattr(cfg.agent, "budget", None),
         max_reprompts=resolved_max_reprompts,
@@ -248,10 +255,7 @@ def benchmark(
                     "violated_guardrails": r.violated_guardrails,
                     "failures": r.failures,
                     "soft_failures": r.soft_failures,
-                    "patch": (
-                        r.patch.model_dump(mode="json")
-                        if r.patch is not None else None
-                    ),
+                    "patch": (r.patch.model_dump(mode="json") if r.patch is not None else None),
                 }
         emit(output, fmt="json")
     else:
@@ -263,14 +267,9 @@ def benchmark(
         if not sys.stdout.isatty():
             click.echo(_table, err=True)
 
-    total = sum(
-        1 for model_results in results.values()
-        for r in model_results.values()
-    )
+    total = sum(1 for model_results in results.values() for r in model_results.values())
     passed = sum(
-        1 for model_results in results.values()
-        for r in model_results.values()
-        if r.passed
+        1 for model_results in results.values() for r in model_results.values() if r.passed
     )
     failed = total - passed
     if failed and fmt != "json":
@@ -289,6 +288,7 @@ def benchmark(
         has_regressions,
         persist_results,
     )
+
     bench_cfg = cfg.stores.benchmark
     _persist = bench_cfg.persist
     _gate = bench_cfg.gate_on_regression
@@ -316,7 +316,9 @@ def benchmark(
                                 "scenario_id": e.scenario_id,
                                 "model": e.model,
                                 "baseline_prompt_mismatch": e.baseline_prompt_mismatch,
-                                "baseline_recorded_at": e.baseline.recorded_at if e.baseline else None,
+                                "baseline_recorded_at": (
+                                    e.baseline.recorded_at if e.baseline else None
+                                ),
                                 "regressions": list(e.regressions),
                                 "improvements": list(e.improvements),
                             }
@@ -421,8 +423,10 @@ def benchmark_diff_cmd(
             _error(f"config error: {exc}")
             sys.exit(exit_codes.CONFIG_ERROR)
         if _bs.backend != "duckdb":
-            _error(f"benchmark-diff supports duckdb benchmark stores only "
-                   f"(stores.benchmark.backend={_bs.backend!r}); use --store-path for a duckdb file")
+            _error(
+                f"benchmark-diff supports duckdb benchmark stores only "
+                f"(stores.benchmark.backend={_bs.backend!r}); use --store-path for a duckdb file"
+            )
             sys.exit(exit_codes.USAGE_ERROR)
         store_path = Path(_bs.location)
     if not store_path.exists():
@@ -462,14 +466,21 @@ def benchmark_diff_cmd(
                 continue
             current = _row_from_record(rec)
             baseline, prompt_mismatch = _fetch_baseline(
-                con, sid, model, current.prompt_version, current.recorded_at,
+                con,
+                sid,
+                model,
+                current.prompt_version,
+                current.recorded_at,
             )
             if baseline is None:
                 entries.append(DiffEntry(sid, model, None, current, False, (), ()))
                 continue
             from aqueduct.surveyor.benchmark_store import _compare
+
             regs, imps = _compare(baseline, current)
-            entries.append(DiffEntry(sid, model, baseline, current, prompt_mismatch, tuple(regs), tuple(imps)))
+            entries.append(
+                DiffEntry(sid, model, baseline, current, prompt_mismatch, tuple(regs), tuple(imps))
+            )
     finally:
         con.close()
 
@@ -483,11 +494,13 @@ def benchmark_diff_cmd(
                         "baseline_prompt_mismatch": e.baseline_prompt_mismatch,
                         "baseline_recorded_at": e.baseline.recorded_at if e.baseline else None,
                         "regressions": list(e.regressions),
-                    "improvements": list(e.improvements),
-                }
-                for e in entries
-            ],
-        }, fmt="json")
+                        "improvements": list(e.improvements),
+                    }
+                    for e in entries
+                ],
+            },
+            fmt="json",
+        )
     else:
         click.echo(format_diff_table(entries))
 
@@ -512,14 +525,17 @@ def benchmark_diff_cmd(
     "`.aqueduct/benchmark.duckdb`.",
 )
 @click.option(
-    "-s", "--set", "set_items",
+    "-s",
+    "--set",
+    "set_items",
     multiple=True,
     metavar="PATH=VALUE",
     help="Override an aqueduct.yml value (e.g. --set stores.benchmark.backend=postgres "
-         "--set stores.benchmark.path=postgresql://h/db).",
+    "--set stores.benchmark.path=postgresql://h/db).",
 )
 @click.option(
-    "--format", "fmt",
+    "--format",
+    "fmt",
     type=click.Choice(["table", "json"]),
     default="table",
     show_default=True,
@@ -547,9 +563,7 @@ def benchmark_stats_cmd(
         format_stats,
     )
 
-    _resolve_and_load_env(
-        env_file, Path(config_path) if config_path else None, cli_env=cli_env
-    )
+    _resolve_and_load_env(env_file, Path(config_path) if config_path else None, cli_env=cli_env)
     try:
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
@@ -559,6 +573,7 @@ def benchmark_stats_cmd(
 
     if set_items:
         from aqueduct.overrides import OverrideError, apply_to_model, route_overrides
+
         try:
             _cfg_set_nested, _ = route_overrides(set_items, allow_blueprint=False)
             cfg = apply_to_model(cfg, _cfg_set_nested)

@@ -296,9 +296,7 @@ def patch_preview(
                 "status": config_delta_res.status,
                 "detail": config_delta_res.detail,
                 "delta": config_delta_res.delta,
-                "write_targets": {
-                    k: list(v) for k, v in config_delta_res.write_targets.items()
-                },
+                "write_targets": {k: list(v) for k, v in config_delta_res.write_targets.items()},
             },
         }
         if sandbox_res is not None:
@@ -388,9 +386,7 @@ def patch_preview(
     click.echo(f"  detail: {config_delta_res.detail}")
     for _eng, _keys in sorted(config_delta_res.delta.items()):
         for _key, _ba in sorted(_keys.items()):
-            click.echo(
-                f"    {_eng}.{_key}: {_ba['before']!r} → {_ba['after']!r}"
-            )
+            click.echo(f"    {_eng}.{_key}: {_ba['before']!r} → {_ba['after']!r}")
 
     if sandbox_res is not None:
         click.echo()
@@ -538,9 +534,7 @@ def patch_policy(engine_name: str | None, out_format: str) -> None:
         return
 
     for r in reports:
-        shape_label = (
-            "free-form conf bag" if r["shape"] == "free_form_conf_bag" else "typed fields"
-        )
+        shape_label = "free-form conf bag" if r["shape"] == "free_form_conf_bag" else "typed fields"
         click.echo(f"Engine: {r['engine']}  ({shape_label})")
 
         click.echo("  Allowed keys:")
@@ -873,9 +867,7 @@ def patch_revert(
         operations = _applied_patch_operations(
             patches_root, config_path, env_file, cli_env, patch_id
         )
-        plan = plan_revert(
-            cfg=cfg, blueprint=bp_raw, patch_id=patch_id, operations=operations
-        )
+        plan = plan_revert(cfg=cfg, blueprint=bp_raw, patch_id=patch_id, operations=operations)
     except RevertError as exc:
         style.error(str(exc))
         sys.exit(exit_codes.DATA_OR_RUNTIME)
@@ -933,9 +925,7 @@ def patch_revert(
         click.echo(f"  {r.action:<6} {r.engine}  {r.key}: {r.current!r} → {r.target!r}")
     click.echo(f"  blueprint  → {blueprint_path}")
     click.echo(f"  backup     → {backup_path}")
-    style.info(
-        f"  healed_by record kept, stamped reverted_at: {reverted_at}"
-    )
+    style.info(f"  healed_by record kept, stamped reverted_at: {reverted_at}")
 
 
 @patch.command("import")
