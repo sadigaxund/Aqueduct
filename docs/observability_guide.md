@@ -194,16 +194,41 @@ budget axis tripped before a valid patch landed), the CLI synthesises one
 One row per gate the patch went through. `gate` vocabulary: `engine_config`,
 `lineage`, `sandbox`, `explain` (guardrail rejections — `forbidden_ops`,
 `allowed_paths`, the `set_engine_config` allowlist — are recorded in
-`heal_attempts`, not here). `status` is `pass` | `fail` | `warn` | `skip`
-(`skip` when
-`sandbox_mode: off` synthesises a pass-through row) | `not_applicable`
-(`lineage` gate — the patch's operations touch zero modules, e.g. a
-`set_engine_config` op, which carries no module reference for the lineage
-gate's column-impact diff to run against. Distinct from `pass`: `pass`
-means the gate checked column consumers and found nothing broken,
-`not_applicable` means there was nothing for the gate to check at all.
-Informational — it does not block the patch, same as `skip`. `detail`
-carries the reason, e.g. "no module-lineage surface for this patch's ops").
+`heal_attempts`, not here). `status` is `pass` | `fail` | `warn` |
+`not_applicable` | `unavailable`.
+
+The three verdicts (`pass`, `warn`, `fail`) mean the gate ran. The other two
+mean it did not, and they are **opposite facts** — the question is whether a
+check was *owed*:
+
+- **`not_applicable`** — no check was owed. Either the patch has no surface
+  this gate looks at (the `lineage` gate against a `set_engine_config` op,
+  which carries no module reference for a column-impact diff; the
+  `engine_config` gate against a pipeline-only patch), or the operator
+  declared none is owed here (`agent.sandbox_mode: off`, itself gated on
+  `danger.allow_skip_sandbox`). Informational, never blocking. Distinct from
+  `pass`: `pass` means the gate looked and found nothing wrong,
+  `not_applicable` means there was nothing to look at.
+- **`unavailable`** — a check *was* owed and the environment prevented it.
+  The target engine's dependencies are not installed, its session would not
+  start, the Blueprint is polyglot and the sandbox replays only one engine,
+  or plan capture does not exist on this session. **Nothing about the patch
+  was verified.** For the `sandbox` gate this **blocks auto-apply** and
+  requires a human; for `explain` (warn-only by design) it does not.
+
+`detail` carries the reason in both cases, e.g. "no module-lineage surface
+for this patch's ops", or "sandbox replay did not run — engine 'spark' would
+not start (…); this patch was NOT replayed".
+
+> **Changed in 2.1.0 (BREAKING).** The `sandbox` and `explain` gates
+> previously wrote `skip` for *both* of the above, so a patch that was never
+> verified was indistinguishable from one that needed no verification, and
+> auto-approval accepted both. `skip` is no longer written. Rows recorded
+> before the split keep the old value and are **not** migrated — a `skip` row
+> is genuinely ambiguous after the fact, and rewriting it would invent a
+> distinction the data never carried. Treat pre-2.1.0 `skip` rows as
+> "unknown which", and filter on `finished_at` if a query needs the new
+> precision.
 
 The `engine_config` gate is the mirror image of that pair: it reports
 `not_applicable` for the patches `lineage` reports `pass` on (a
@@ -727,7 +752,7 @@ columns or aggregation tables:
 | `failure_categories` | `dict[str, int]` | Count of failures grouped by `error_class` |
 | `heal_coverage` | `dict[str, int]` | Heals resolved by the signature memory cache (`memory`) vs the LLM (`agent`), per blueprint |
 | `blueprint_history` | `list[BlueprintHistoryEvent]` | One blueprint's store-side remediation timeline (heal run starts, patch apply/reject, outcomes), `aqueduct blueprint history` merges this with `git_blueprint_commits` for the full picture |
-| `gate_rejection_rates` | `dict[str, int]` | Count of `patch_simulation` rows with `status = 'fail'`, per `gate` (`engine_config`/`lineage`/`sandbox`/`explain`). `warn`, `skip`, and `not_applicable` are not rejections — see the function's docstring for why. Falls back to `heal_attempts.gate_that_rejected` counts when `patch_simulation` is unavailable |
+| `gate_rejection_rates` | `dict[str, int]` | Count of `patch_simulation` rows with `status = 'fail'`, per `gate` (`engine_config`/`lineage`/`sandbox`/`explain`). `warn`, `not_applicable` and `unavailable` are not rejections — see the function's docstring for why. Note `unavailable` is not a rejection but *is* blocking for the `sandbox` gate, so a rising `unavailable` count means heals are stalling for humans without any patch being judged wrong; count it separately rather than reading it as health. Falls back to `heal_attempts.gate_that_rejected` counts when `patch_simulation` is unavailable |
 
 DuckDB: the functions iterate discovered per‑pipeline files. Postgres: a single
 schema‑scoped query. Both backends return the same shape.

@@ -35,6 +35,7 @@ from aqueduct.executor.protocol import (
     call_execute,
     get_protocol,
 )
+from aqueduct.patch.gate_status import sandbox_gate_permits_auto_apply
 from aqueduct.patch.preview import run_sandbox_gate
 from aqueduct.warnings import AqueductWarning
 
@@ -84,16 +85,23 @@ def test_duckdb_sandbox_gate_actually_executes_on_duckdb(_orders_csv, tmp_path):
     )
     assert result.status == "pass"
     assert result.sample_rows == 2
+    # Positive control for the three `not ...permits_auto_apply` assertions
+    # below: without this, they would also hold if the helper always returned
+    # False, and would prove nothing about the split.
+    assert sandbox_gate_permits_auto_apply(result)
 
 
-def test_sandbox_gate_skips_a_polyglot_blueprint_naming_its_islands(tmp_path):
+def test_sandbox_gate_unavailable_on_a_polyglot_blueprint_naming_its_islands(tmp_path):
     """A Blueprint compiling to more than one island (a spark module handing
     off to a duckdb module) must not be sandbox-replayed against only ONE of
     its engines — that would look like real pre-apply validation while
-    covering nothing about the rest. The gate returns `skip` (not `fail` —
-    the patch still applies, same as a missing engine dependency), naming
-    the island count and engines, WITHOUT ever building a session for either
-    engine (this is checked right after compile, before session_factory)."""
+    covering nothing about the rest. The gate returns `unavailable` (not
+    `fail` — the patch is not wrong, it is unverified), naming the island
+    count and engines, WITHOUT ever building a session for either engine
+    (this is checked right after compile, before session_factory).
+
+    `unavailable`, not `not_applicable`: a replay WAS owed here and the
+    environment prevented it, so it must block auto-apply."""
     bp = {
         "aqueduct": "1.0",
         "id": "bp.polyglot",
@@ -125,7 +133,8 @@ def test_sandbox_gate_skips_a_polyglot_blueprint_naming_its_islands(tmp_path):
             engine="spark",
             cfg=AqueductConfig(),
         )
-    assert result.status == "skip"
+    assert result.status == "unavailable"
+    assert not sandbox_gate_permits_auto_apply(result)
     assert "polyglot" in result.detail
     assert "2 islands" in result.detail
     assert "spark" in result.detail and "duckdb" in result.detail
@@ -135,9 +144,9 @@ def test_sandbox_gate_skips_a_polyglot_blueprint_naming_its_islands(tmp_path):
     mock_get_protocol.return_value.session_factory.assert_not_called()
 
 
-def test_missing_engine_skip_names_the_actual_engine(_orders_csv, tmp_path):
-    """When the target engine's session factory fails, the skip detail must
-    name the REAL target engine (duckdb), not Spark."""
+def test_missing_engine_unavailable_names_the_actual_engine(_orders_csv, tmp_path):
+    """When the target engine's session factory fails, the `unavailable`
+    detail must name the REAL target engine (duckdb), not Spark."""
     bp = _csv_blueprint(_orders_csv)
     with patch("duckdb.connect") as mock_connect:
         mock_connect.side_effect = Exception("duckdb down")
@@ -149,14 +158,16 @@ def test_missing_engine_skip_names_the_actual_engine(_orders_csv, tmp_path):
             engine="duckdb",
             cfg=AqueductConfig(),
         )
-    assert result.status == "skip"
+    assert result.status == "unavailable"
+    assert not sandbox_gate_permits_auto_apply(result)
     assert "duckdb" in result.detail
     assert "Spark" not in result.detail
 
 
-def test_sandbox_gate_unknown_engine_skips_naming_it():
-    """A misspelled/unregistered engine is a clean `skip`, not a crash — and
-    the detail names the requested (bogus) engine, not a Spark default."""
+def test_sandbox_gate_unknown_engine_unavailable_naming_it():
+    """A misspelled/unregistered engine is a clean `unavailable`, not a crash
+    — and the detail names the requested (bogus) engine, not a Spark
+    default."""
     result = run_sandbox_gate(
         {"aqueduct": "1.0", "id": "x", "name": "x", "modules": [], "edges": []},
         blueprint_path=None,
@@ -165,7 +176,8 @@ def test_sandbox_gate_unknown_engine_skips_naming_it():
         engine="bogus-engine",
         cfg=AqueductConfig(),
     )
-    assert result.status == "skip"
+    assert result.status == "unavailable"
+    assert not sandbox_gate_permits_auto_apply(result)
     assert "bogus-engine" in result.detail
 
 

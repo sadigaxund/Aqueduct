@@ -1285,19 +1285,28 @@ def gate_rejection_rates(cfg: Any, store_dir: str | None = None) -> dict[str, in
     Counts patch_simulation rows with status = 'fail' — the only status this
     module's gates ever write that unambiguously means "this patch was
     turned back." The full status vocabulary a gate can write is `pass` |
-    `warn` | `fail` | `skip` | `not_applicable` (see
-    `Surveyor.record_patch_simulation`); `fail` is deliberately the sole
-    value counted here:
+    `warn` | `fail` | `not_applicable` | `unavailable` (see
+    `aqueduct/patch/gate_status.py` and `Surveyor.record_patch_simulation`);
+    `fail` is deliberately the sole value counted here:
 
     - `warn` is NOT a rejection: the explain gate is warn-only unless
       `agent.block_on_explain_regression` is set (a per-run config knob not
       captured in this row), and a lineage `warn` never blocks at all.
-    - `skip` is explicitly acceptance, not rejection — the caller's own gate
-      check treats it that way (`gates_passed = sandbox_res.status in
-      ("pass", "skip")` in `cli/__init__.py::_run_patch_gates_inline`).
-    - `not_applicable` (the lineage and engine_config gates) means the gate
-      had nothing to check — informational, never blocking, and never a
-      rejection.
+    - `not_applicable` means no check was OWED — the patch has no surface
+      this gate looks at, or the operator declared none is owed
+      (`sandbox_mode: off`). Informational, never blocking.
+    - `unavailable` means a check WAS owed and the environment prevented it.
+      It is not a rejection either — no patch was judged wrong — but for the
+      sandbox gate it DOES block auto-apply
+      (`gate_status.sandbox_gate_permits_auto_apply`). A rising `unavailable`
+      count therefore means heals are stalling on missing engines rather than
+      on bad patches, which is an environment problem, not a model one; count
+      it separately instead of reading its absence from this dict as health.
+
+    ⚠ Rows written before 2.1.0 may carry `skip`, the single word that used
+    to cover both of the last two. It is not migrated and cannot be — the
+    distinction was never recorded — so a pre-2.1.0 `skip` row means "one of
+    those two, unknown which".
 
     The `engine_config` gate is the one whose `fail` rows are written for
     the audit trail alone: its refusal is enforced at apply time by

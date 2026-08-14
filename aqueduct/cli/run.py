@@ -1642,13 +1642,13 @@ def run(
         # scope conditions (approval mode, cascade) never change mid-run, so
         # repeating the warning every heal iteration would be noise.
         _progressive_scope_warned = False
-        # One-shot flag for the polyglot sandbox-skip notice — the same
-        # patch/candidate can pass through the gate pyramid several times in
-        # one run (heal-cache replay validation, deep_loop's in-context
-        # validate_cb, the final multi-patch commit check); the underlying
-        # reason (this Blueprint has >1 island) never changes mid-run, so
-        # only the first occurrence needs to say so.
-        _polyglot_sandbox_skip_warned = False
+        # One-shot flag for the polyglot sandbox-unavailable notice — the
+        # same patch/candidate can pass through the gate pyramid several
+        # times in one run (heal-cache replay validation, deep_loop's
+        # in-context validate_cb, the final multi-patch commit check); the
+        # underlying reason (this Blueprint has >1 island) never changes
+        # mid-run, so only the first occurrence needs to say so.
+        _polyglot_sandbox_unavailable_warned = False
 
         def _fire_heal_hook(event: str, *, iter_run_id: str, hook_status: str, ctx) -> None:
             """Fire `hooks.on_patch_pending` / `hooks.on_healed` — mid-run
@@ -1884,28 +1884,34 @@ def run(
                         _kid, _kid.module_id.split("__", 1)[1], _w - _CHILD_PAD, _lead, "       ↳ "
                     )
 
-        def _announce_polyglot_sandbox_skip(_gate_result) -> None:
-            """A patch just applied to a polyglot Blueprint without a sandbox
-            replay (Gate 3 refuses to validate a multi-engine Manifest in
-            v1 — see ``patch/preview.py::run_sandbox_gate``, which returns
-            this `skip` instead of validating against only one of the
-            Blueprint's engines). Printed at the moment the patch is
-            applied, not only recorded to `patch_simulation` — a user who
-            has internalised "patches are sandbox-replayed before they
-            touch my Blueprint" needs to be told when that guarantee does
-            not hold this time. Single-engine runs never reach this (only
-            ever `manifest.islands` == 1), so this is additive, not a
-            change to today's skip handling. One-shot per run — see
-            `_polyglot_sandbox_skip_warned` above.
+        def _announce_polyglot_sandbox_unavailable(_gate_result) -> None:
+            """Gate 3 could not replay a patch against this polyglot
+            Blueprint (it replays through ONE engine's session and would
+            leave every other island unchecked — see
+            ``patch/preview.py::run_sandbox_gate``). Printed at the moment
+            it happens, not only recorded to `patch_simulation`, because a
+            user who has internalised "patches are sandbox-replayed before
+            they touch my Blueprint" needs to be told the guarantee did not
+            hold. Single-engine runs never reach this (only ever
+            `manifest.islands` == 1).
+
+            The status this reacts to used to be `skip` and was treated as
+            acceptance: the patch applied anyway, and this notice was the
+            only trace. It is now `unavailable` and BLOCKS auto-apply, so
+            the line below announces a patch that stopped, not one that
+            went through — the caller prints the stop itself. One-shot per
+            run: see `_polyglot_sandbox_unavailable_warned` above.
             """
-            nonlocal _polyglot_sandbox_skip_warned
+            nonlocal _polyglot_sandbox_unavailable_warned
+            from aqueduct.patch.gate_status import GateStatus as _GateStatus
+
             if (
-                not _polyglot_sandbox_skip_warned
+                not _polyglot_sandbox_unavailable_warned
                 and len(manifest.islands) > 1
                 and _gate_result is not None
-                and _gate_result.status == "skip"
+                and _gate_result.status == _GateStatus.UNAVAILABLE
             ):
-                _polyglot_sandbox_skip_warned = True
+                _polyglot_sandbox_unavailable_warned = True
                 from aqueduct.cli.style import warn as _style_warn
 
                 _style_warn(_gate_result.detail)
@@ -2319,7 +2325,7 @@ def run(
                                 warnings_suppress=cfg.warnings.suppress,
                                 timezone=cfg.timezone,
                             )
-                            _announce_polyglot_sandbox_skip(_rg3)
+                            _announce_polyglot_sandbox_unavailable(_rg3)
                             if _rg3 is not None and not _rg3_passed:
                                 _replay_ok = False
                                 click.echo(
@@ -2602,7 +2608,7 @@ def run(
                             warnings_suppress=cfg.warnings.suppress,
                             timezone=cfg.timezone,
                         )
-                        _announce_polyglot_sandbox_skip(_g3)
+                        _announce_polyglot_sandbox_unavailable(_g3)
                         failures: list[str] = []
                         if _g2 is not None and _g2.status == "fail":
                             failures.append(
@@ -3312,7 +3318,7 @@ def run(
                         warnings_suppress=cfg.warnings.suppress,
                         timezone=cfg.timezone,
                     )
-                    _announce_polyglot_sandbox_skip(_g3)
+                    _announce_polyglot_sandbox_unavailable(_g3)
                 _block_on_g4 = (
                     manifest.agent.block_on_explain_regression
                     if manifest.agent.block_on_explain_regression is not None

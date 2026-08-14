@@ -10,6 +10,7 @@ import pytest
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 from aqueduct.config import AqueductConfig
+from aqueduct.patch.gate_status import sandbox_gate_permits_auto_apply
 from aqueduct.patch.preview import run_sandbox_gate
 
 try:
@@ -347,11 +348,11 @@ def test_gate3_temp_file_unlinked(spark, sample_data, tmp_path):
     assert not (tmp_path / "mock.yml").exists()
 
 
-def test_gate3_spark_unavailable_skips(tmp_path):
+def test_gate3_reports_unavailable_when_the_engine_will_not_start(tmp_path):
     # Mock make_spark_session (Spark's ExecutorProtocol.make_session) to raise —
     # the sandbox gate resolves the session THROUGH the protocol registry
     # (Phase 79), so patching Spark's own session constructor is still the
-    # right seam for a Spark-target skip.
+    # right seam for a Spark-target replay that cannot happen.
     with patch("aqueduct.executor.spark.session.make_spark_session") as mock_make:
         mock_make.side_effect = Exception("Spark down")
         bp = {
@@ -377,8 +378,15 @@ def test_gate3_spark_unavailable_skips(tmp_path):
             cfg=AqueductConfig(),
             spark_session=None,  # Force it to call the engine's session factory
         )
-        assert result.status == "skip"
-        assert "could not start engine 'spark': Spark down" in result.detail
+        # `unavailable`, not `not_applicable`: a replay was owed and the
+        # environment prevented it, so this must block auto-apply.
+        assert result.status == "unavailable"
+        assert not sandbox_gate_permits_auto_apply(result)
+        # The detail must name the engine, the underlying cause, and — the
+        # part that used to be missing — that nothing was verified.
+        assert "spark" in result.detail
+        assert "Spark down" in result.detail
+        assert "NOT replayed" in result.detail
 
 
 def test_ingress_limit_after_filter(spark, sample_data):

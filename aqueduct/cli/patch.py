@@ -181,6 +181,7 @@ def patch_preview(
         load_patch_spec,
     )
     from aqueduct.patch.explain_gate import run_explain_gate
+    from aqueduct.patch.gate_status import GateStatus, sandbox_gate_permits_auto_apply
     from aqueduct.patch.preview import (
         render_unified_diff,
         run_lineage_gate,
@@ -317,12 +318,15 @@ def patch_preview(
                 "regressions": [r.__dict__ for r in explain_res.regressions],
             }
         emit(report, fmt="json")
+        # Same predicate the heal loop's auto-apply decision uses
+        # (`patch/gate_status.py`), not a second hand-written status list:
+        # a CI job reading this exit code and the loop that applies without
+        # a human must not disagree about what "validated" means. So an
+        # `unavailable` sandbox result exits non-zero here too — the review
+        # this command exists to support could not be given a replay.
         sys.exit(
             exit_codes.SUCCESS
-            if lineage_res.status != "fail"
-            and (
-                sandbox_res is None or sandbox_res.status == "pass" or sandbox_res.status == "skip"
-            )
+            if lineage_res.status != "fail" and sandbox_gate_permits_auto_apply(sandbox_res)
             else exit_codes.DATA_OR_RUNTIME
         )
 
@@ -338,15 +342,21 @@ def patch_preview(
         from aqueduct.cli.style import warn as _w
 
         label = f"status: {status}"
-        if status == "pass":
+        if status == GateStatus.PASS:
             _s(f"  {label}")
-        elif status == "fail":
+        elif status == GateStatus.FAIL:
             _e(f"  {label}", err=False)
-        elif status == "warn":
+        elif status == GateStatus.WARN:
             _w(f"  {label}", err=False)
-        elif status == "not_applicable":
-            # Informational only — never an alarm, never a block (same
-            # non-blocking treatment `skip` already gets below).
+        elif status == GateStatus.UNAVAILABLE:
+            # A check was owed and did not happen — nothing is known to be
+            # wrong with the patch, but nothing is known to be right
+            # either. `warn` (whole-line ⚠), not `info`: it blocks
+            # auto-apply, so it must not read like the dim, purely
+            # informational `not_applicable` line one gate above it.
+            _w(f"  {label}", err=False)
+        elif status == GateStatus.NOT_APPLICABLE:
+            # Informational only — nothing was owed, nothing blocks.
             _i(f"  {label}")
         else:
             _i(f"  {label}")
@@ -387,6 +397,14 @@ def patch_preview(
         click.echo(_dim("── Sandbox gate (replay) ─────────────────────────────────────"))
         _gate_status_line(sandbox_res.status)
         click.echo(f"  detail:      {sandbox_res.detail}")
+        if sandbox_res.status == GateStatus.UNAVAILABLE:
+            # State the consequence, not only the fact: this is the status
+            # that stops the patch, and a reviewer reading a gate block
+            # should not have to infer that from the word.
+            click.echo(
+                "  effect:      this patch is NOT eligible for automatic "
+                "application — a human must decide"
+            )
         if sandbox_res.sample_rows is not None:
             click.echo(f"  sample_rows: {sandbox_res.sample_rows}")
         click.echo(f"  duration:    {sandbox_res.duration_ms} ms")
@@ -411,9 +429,12 @@ def patch_preview(
         click.echo(f"  duration: {explain_res.duration_ms} ms")
 
     exit_code = exit_codes.SUCCESS
-    if lineage_res.status == "fail":
+    if lineage_res.status == GateStatus.FAIL:
         exit_code = exit_codes.DATA_OR_RUNTIME
-    if sandbox_res is not None and sandbox_res.status == "fail":
+    # The same predicate as the `--format json` branch above, so text and
+    # json modes cannot disagree about whether this patch is reviewable as
+    # validated.
+    if not sandbox_gate_permits_auto_apply(sandbox_res):
         exit_code = exit_codes.DATA_OR_RUNTIME
     sys.exit(exit_code)
 

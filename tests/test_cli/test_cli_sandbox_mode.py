@@ -199,7 +199,11 @@ def test_run_patch_gates_inline_off(tmp_path):
             sandbox_mode="off",
         )
 
-    assert g3.status == "skip"
+    # `not_applicable`, NOT `unavailable`: the operator declared that no
+    # sandbox check is owed here (`agent.sandbox_mode: off`, itself gated on
+    # `danger.allow_skip_sandbox`). Nothing prevented a check that was owed,
+    # so this must stay non-blocking — `passed is True` below is the point.
+    assert g3.status == "not_applicable"
     assert "sandbox_mode=off" in g3.detail
     assert passed is True
 

@@ -27,6 +27,7 @@ from typing import Any
 
 from aqueduct.compiler.lineage import _extract_sql_lineage
 from aqueduct.parser.models import ModuleType
+from aqueduct.patch.gate_status import GateStatus
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,12 @@ class LineageWarning:
 
 @dataclass
 class LineageGateResult:
-    status: str = "pass"  # "pass" | "warn" | "fail" | "not_applicable"
+    # See `aqueduct/patch/gate_status.py` for the vocabulary all four gates
+    # share: "pass" | "warn" | "fail" | "not_applicable". This gate has no
+    # `unavailable` path — its analysis is pure sqlglot over the two
+    # Blueprint dicts it is handed, with no engine, session or store that
+    # could be missing.
+    status: str = GateStatus.PASS
     warnings: list[LineageWarning] = field(default_factory=list)
     touched_modules: list[str] = field(default_factory=list)
     duration_ms: int = 0
@@ -64,7 +70,13 @@ class LineageGateResult:
 
 @dataclass
 class SandboxGateResult:
-    status: str  # "pass" | "fail" | "skip"
+    # "pass" | "fail" | "not_applicable" | "unavailable" — see
+    # `aqueduct/patch/gate_status.py`. `not_applicable` means no replay was
+    # owed; `unavailable` means one was owed and the environment prevented
+    # it, and is the one status here that BLOCKS auto-apply
+    # (`sandbox_gate_permits_auto_apply`). This gate has no `warn`: a replay
+    # either ran, or did not.
+    status: str
     detail: str
     sample_rows: int | None = None
     duration_ms: int = 0
@@ -209,7 +221,7 @@ def run_lineage_gate(
         # whose ops carry no module reference has no lineage surface for
         # this gate to check at all, so it must not be indistinguishable
         # from "checked and clean".
-        result.status = "not_applicable"
+        result.status = GateStatus.NOT_APPLICABLE
         result.detail = "no module-lineage surface for this patch's ops"
         result.duration_ms = int((time.monotonic() - t0) * 1000)
         return result
@@ -245,7 +257,7 @@ def run_lineage_gate(
                 )
 
     if result.warnings:
-        result.status = "warn"
+        result.status = GateStatus.WARN
     result.duration_ms = int((time.monotonic() - t0) * 1000)
     return result
 
@@ -392,12 +404,31 @@ def run_sandbox_gate(
     patch, and unchanged for any caller that hasn't been updated to pass
     this new, optional parameter.
 
-    Status:
-      `pass`  manifest compiled and executed without raising
-      `fail`  parse/compile error or executor surfaced a module failure
-      `skip`  the target engine's dependencies/session are unavailable (no
-              session passed and the engine's own session factory raised —
-              the ``skip`` detail names the ACTUAL target engine, not Spark)
+    Status (the shared vocabulary — ``aqueduct/patch/gate_status.py``):
+      ``pass``            manifest compiled and executed without raising
+      ``fail``            parse/compile error, or the executor surfaced a
+                          module failure — the patch itself is refused
+      ``unavailable``     a replay was OWED and the environment prevented
+                          it: the sandbox's own imports failed, the target
+                          engine is not registered, its session would not
+                          start (the detail names the ACTUAL target engine,
+                          never Spark), or the Blueprint is polyglot and a
+                          single-engine replay would cover only one of its
+                          engines. **Nothing about this patch was
+                          verified**, so it BLOCKS auto-apply
+                          (``sandbox_gate_permits_auto_apply``) and the
+                          patch waits for a human.
+      ``not_applicable``  no replay was owed. This gate never returns it
+                          itself — a config-only patch still gets a real
+                          replay here (see ``patch_spec`` above) — but
+                          ``cli/__init__.py`` synthesises one for
+                          ``agent.sandbox_mode: off``, where the operator
+                          declared the check unowed.
+
+    ``unavailable`` and ``not_applicable`` were both spelled ``skip`` until
+    the split: "I could not check this" and "there was nothing to check"
+    are opposite facts, and reporting them with one word let a patch that
+    was never replayed auto-apply as though it had been.
     """
     t0 = time.monotonic()
     egress_targets: list[dict[str, Any]] = []
@@ -416,8 +447,11 @@ def run_sandbox_gate(
         from aqueduct.parser.parser import ParseError, parse_dict
     except Exception as exc:  # pragma: no cover
         return SandboxGateResult(
-            status="skip",
-            detail=f"sandbox dependencies missing: {exc}",
+            status=GateStatus.UNAVAILABLE,
+            detail=(
+                f"sandbox replay did not run — its own dependencies failed to "
+                f"import ({exc}); this patch was NOT replayed"
+            ),
             duration_ms=int((time.monotonic() - t0) * 1000),
         )
 
@@ -425,8 +459,11 @@ def run_sandbox_gate(
         protocol = get_protocol(engine)
     except Exception as exc:
         return SandboxGateResult(
-            status="skip",
-            detail=f"sandbox could not resolve engine {engine!r}: {exc}",
+            status=GateStatus.UNAVAILABLE,
+            detail=(
+                f"sandbox replay did not run — engine {engine!r} could not be "
+                f"resolved ({exc}); this patch was NOT replayed"
+            ),
             duration_ms=int((time.monotonic() - t0) * 1000),
         )
 
@@ -447,7 +484,7 @@ def run_sandbox_gate(
             )
         except ParseError as exc:
             return SandboxGateResult(
-                status="fail",
+                status=GateStatus.FAIL,
                 detail=f"patched Blueprint failed to parse: {exc}",
                 duration_ms=int((time.monotonic() - t0) * 1000),
             )
@@ -456,7 +493,7 @@ def run_sandbox_gate(
             manifest = compiler_compile(bp, blueprint_path=_bp_orig, engine=engine)
         except CompileError as exc:
             return SandboxGateResult(
-                status="fail",
+                status=GateStatus.FAIL,
                 detail=f"patched Blueprint failed to compile: {exc}",
                 duration_ms=int((time.monotonic() - t0) * 1000),
             )
@@ -467,22 +504,22 @@ def run_sandbox_gate(
         # Blueprint against only ONE of its engines, which is a worse outcome
         # than no replay at all: it would look like a real pre-apply
         # validation while actually checking nothing about the islands on
-        # any other engine. `skip` (not `fail`) — same status a missing
-        # engine dependency already produces above, so a caller's existing
-        # `status in ("pass", "skip")` gate treatment doesn't need a new
-        # branch, and the patch still applies, just without this gate's
-        # cover. Callers surface this loudly (`aqueduct/cli/run.py` prints
-        # the detail at the moment the patch is applied) rather than letting
-        # reduced validation pass unremarked.
+        # any other engine. `unavailable`, not `fail`: nothing is known to
+        # be wrong with the patch — the gate simply cannot cover this
+        # Blueprint's shape. It is also NOT `not_applicable`: a replay was
+        # owed here and did not happen, so the patch stops for a human
+        # instead of being applied on the strength of a check that never
+        # ran (until the split this was `skip`, which callers read as
+        # acceptance and applied straight through).
         if len(manifest.islands) > 1:
             _island_engines = ", ".join(sorted({isl.engine for isl in manifest.islands}))
             return SandboxGateResult(
-                status="skip",
+                status=GateStatus.UNAVAILABLE,
                 detail=(
-                    f"sandbox replay skipped — polyglot Blueprint "
-                    f"({len(manifest.islands)} islands: {_island_engines}) is not yet "
-                    "supported by the sandbox gate; patch applied without pre-apply "
-                    "validation"
+                    f"sandbox replay did not run — polyglot Blueprint "
+                    f"({len(manifest.islands)} islands: {_island_engines}); this gate "
+                    "replays through ONE engine's session and would leave every other "
+                    "island unchecked. This patch was NOT replayed"
                 ),
                 duration_ms=int((time.monotonic() - t0) * 1000),
             )
@@ -529,8 +566,11 @@ def run_sandbox_gate(
                 )
             except Exception as exc:
                 return SandboxGateResult(
-                    status="skip",
-                    detail=f"sandbox could not start engine {engine!r}: {exc}",
+                    status=GateStatus.UNAVAILABLE,
+                    detail=(
+                        f"sandbox replay did not run — engine {engine!r} would not "
+                        f"start ({exc}); this patch was NOT replayed"
+                    ),
                     egress_targets=egress_targets,
                     duration_ms=int((time.monotonic() - t0) * 1000),
                 )
@@ -564,7 +604,7 @@ def run_sandbox_gate(
                 )
             except AqueductError as exc:
                 return SandboxGateResult(
-                    status="fail",
+                    status=GateStatus.FAIL,
                     detail=f"sandbox execution raised: {exc}",
                     sample_rows=sample_rows if sample_rows > 0 else None,
                     egress_targets=egress_targets,
@@ -577,7 +617,7 @@ def run_sandbox_gate(
                     None,
                 )
                 return SandboxGateResult(
-                    status="fail",
+                    status=GateStatus.FAIL,
                     detail=(
                         f"sandbox run ended with status={result.status!r}"
                         + (
@@ -606,7 +646,7 @@ def run_sandbox_gate(
                     f"row(s) per Ingress; {len(egress_targets)} Egress module(s) skipped"
                 )
             return SandboxGateResult(
-                status="pass",
+                status=GateStatus.PASS,
                 detail=pass_detail,
                 sample_rows=sample_rows if sample_rows > 0 else None,
                 egress_targets=egress_targets,

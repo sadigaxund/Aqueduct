@@ -58,10 +58,13 @@ def test_capture_plan_snapshot_available_when_plan_present():
     assert snap["exchange_count"] >= 1
 
 
-def test_run_explain_gate_skip_when_all_plans_unavailable():
+def test_run_explain_gate_unavailable_when_all_plans_unavailable():
     """If every touched module's plan capture failed, the gate must report
-    skip — not compare all-zero counts against a real baseline (which used
-    to read as a false 'lost broadcast hint' regression)."""
+    `unavailable` — a comparison WAS owed and could not be made. It must not
+    compare all-zero counts against a real baseline (which used to read as a
+    false 'lost broadcast hint' regression), and it must not say
+    `not_applicable`, which is reserved for "no check was owed" (this gate's
+    no-baseline path)."""
     baseline = {
         "m1": {
             "exchange_count": 2,
@@ -80,8 +83,18 @@ def test_run_explain_gate_skip_when_all_plans_unavailable():
         },
     }
     result = run_explain_gate(baseline, after, touched_modules=["m1"])
-    assert result.status == "skip"
+    assert result.status == "unavailable"
+    assert result.status != "not_applicable"  # opposite fact, see docstring
     assert "unavailable" in result.detail
+    assert result.regressions == []
+
+
+def test_run_explain_gate_no_baseline_is_not_applicable_not_unavailable():
+    """No baseline row is the OTHER non-verdict fact: nothing was owed,
+    because there is no "before" for the comparison to be about. It must not
+    borrow `unavailable`, which claims a check was owed and prevented."""
+    result = run_explain_gate({}, {"m1": {"exchange_count": 1}}, touched_modules=["m1"])
+    assert result.status == "not_applicable"
     assert result.regressions == []
 
 

@@ -22,6 +22,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from aqueduct.patch.gate_status import GateStatus
+
 logger = logging.getLogger(__name__)
 
 
@@ -38,7 +40,12 @@ class ExplainRegression:
 
 @dataclass
 class ExplainGateResult:
-    status: str = "pass"   # "pass" | "warn" | "fail" | "skip"
+    # "pass" | "warn" | "fail" | "not_applicable" | "unavailable" — the
+    # shared vocabulary in `aqueduct/patch/gate_status.py`. Both of this
+    # gate's non-verdict paths used to be `skip`; they are opposite facts
+    # (no baseline exists yet vs. this session cannot produce plans at all)
+    # and now say so.
+    status: str = GateStatus.PASS
     regressions: list[ExplainRegression] = field(default_factory=list)
     detail: str = ""
     duration_ms: int = 0
@@ -117,16 +124,33 @@ def run_explain_gate(
                              Default = all modules present in both maps.
 
     Status:
-      `pass`  no regression on any compared module
-      `warn`  at least one metric increased (exchange/udf) or broadcast lost
-      `skip`  no baseline rows present — first run after Phase 29b deploy,
-              caller should not block on this.
+      ``pass``            no regression on any compared module
+      ``warn``            at least one metric increased (exchange/udf) or
+                          broadcast lost
+      ``not_applicable``  no baseline rows present — the blueprint has no
+                          recorded pre-patch plan yet, so there is no
+                          "before" for this comparison to be about. Nothing
+                          was owed; never blocks.
+      ``unavailable``     a comparison WAS owed and could not be made: plan
+                          capture does not work on this session (Spark
+                          Connect has no ``_jdf``), so every touched
+                          module's post-patch plan is missing. Reported
+                          honestly instead of comparing all-zero counts
+                          against a real baseline, which would read as a
+                          false regression.
+
+    This gate stays warn-only: ``agent.block_on_explain_regression`` blocks
+    on ``warn`` and nothing else, so an ``unavailable`` here does not stop a
+    patch the way Gate 3's does. Gate 3 is the gate that proves the patch
+    runs at all; Gate 4 compares a shape against a baseline, and treating
+    "no plan capture on this session" as a block would refuse every heal on
+    Spark Connect for a diagnostic that is advisory by design.
     """
     t0 = time.monotonic()
     result = ExplainGateResult()
 
     if not baseline_by_module:
-        result.status = "skip"
+        result.status = GateStatus.NOT_APPLICABLE
         result.detail = "no pre-patch explain_snapshot rows; baseline not yet established"
         result.duration_ms = int((time.monotonic() - t0) * 1000)
         return result
@@ -180,10 +204,13 @@ def run_explain_gate(
         # `_jdf` doesn't exist there) — comparing all-zero "after" counts
         # against a real baseline would read as a false regression. Report
         # unavailability honestly instead of comparing zeros.
-        result.status = "skip"
-        result.detail = "plan capture unavailable on this session — gate skipped"
+        result.status = GateStatus.UNAVAILABLE
+        result.detail = (
+            "plan capture is unavailable on this session — no post-patch plan "
+            "was obtained for any touched module, so no comparison was made"
+        )
     elif result.regressions:
-        result.status = "warn"
+        result.status = GateStatus.WARN
         result.detail = f"{len(result.regressions)} plan regression(s) detected"
     else:
         result.detail = f"no plan regression across {compared} module(s)"

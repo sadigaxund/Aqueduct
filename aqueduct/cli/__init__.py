@@ -579,10 +579,18 @@ def _run_patch_gates_inline(  # noqa: F811
     `heal_attempts` rows, per `docs/observability_guide.md`).
 
     Returns (lineage_res, sandbox_res, explain_res, gates_passed).
-    gates_passed is True when the sandbox gate passes (or is skipped — the
-    target engine's dependencies are unavailable / no patch impact) AND the
-    explain gate does not hard-block (explain is warn-only by default; only
-    blocks when `agent.block_on_explain_regression` is True).
+    ``gates_passed`` is decided by ONE predicate,
+    ``patch/gate_status.py::sandbox_gate_permits_auto_apply`` — the sandbox
+    gate must have replayed the patch (`pass`) or have been owed no replay
+    at all (`not_applicable`, i.e. `agent.sandbox_mode: off`). An
+    ``unavailable`` sandbox result BLOCKS: the target engine's dependencies
+    are missing, its session would not start, or the Blueprint is polyglot,
+    so nothing about this patch was verified and a human decides. That
+    status used to be spelled `skip` and was accepted here, which let a
+    never-replayed patch auto-apply as though it had been replayed. The
+    explain gate does not hard-block from here (it is warn-only unless
+    `agent.block_on_explain_regression` is True, which the CALLER checks —
+    see `cli/run.py`).
 
     ``engine`` is REQUIRED — passed straight through to
     ``run_sandbox_gate(engine=...)`` (Phase 79) so the sandbox replay runs
@@ -644,13 +652,24 @@ def _run_patch_gates_inline(  # noqa: F811
     # 1.1.0 — sandbox_mode controls replay fidelity:
     #   sample   → sample_rows rows per Ingress, no Egress (default)
     #   preflight → full dataset, no Egress (slow, conclusive)
-    #   off       → skip the gate entirely (synthetic pass)
+    #   off       → the gate is owed nothing (synthetic `not_applicable`)
     if sandbox_mode == "off":
+        from aqueduct.patch.gate_status import GateStatus as _GS
         from aqueduct.patch.preview import SandboxGateResult as _SBR
 
+        # `not_applicable`, NOT `unavailable`: nothing prevented this
+        # replay — an operator declared it unowed, behind a danger flag
+        # (`agent.sandbox_mode: off` is refused unless
+        # `danger.allow_skip_sandbox: true`) that already prints its own
+        # startup warning. Blocking here would make that setting refuse
+        # every heal it was set to allow. The partition the two words
+        # encode is "was a check OWED", not "did a check happen".
         sandbox_res = _SBR(
-            status="skip",
-            detail="sandbox_mode=off (danger.allow_skip_sandbox=true)",
+            status=_GS.NOT_APPLICABLE,
+            detail=(
+                "no sandbox replay was owed — sandbox_mode=off "
+                "(danger.allow_skip_sandbox=true); this patch was NOT replayed"
+            ),
             sample_rows=0,
             duration_ms=0,
         )
@@ -707,7 +726,9 @@ def _run_patch_gates_inline(  # noqa: F811
     except Exception:
         logger.warning("record_patch_simulation (explain) failed", exc_info=True)
 
-    gates_passed = sandbox_res.status in ("pass", "skip")
+    from aqueduct.patch.gate_status import sandbox_gate_permits_auto_apply
+
+    gates_passed = sandbox_gate_permits_auto_apply(sandbox_res)
     return lineage_res, sandbox_res, explain_res, gates_passed
 
 

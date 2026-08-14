@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.62: Reference Document**
+**Version 2.63: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -1040,11 +1040,11 @@ Before a patch touches the Blueprint, four numbered gates plus an unnumbered com
 2. *Compile-check* (unnumbered): the patched dict must re-parse into a valid Blueprint. Runs immediately after Gate 1.
 3. **Gate 2, lineage**: column-level diff catches broken references before the engine sees them
 4. **Gate 3, sandbox**: sampled or full replay catches "parsed but produces nothing"
-5. **Gate 4, plan regression**: conditional: skipped until a baseline `explain_snapshot` exists for the blueprint, then warns (or blocks, with `agent.block_on_explain_regression: true`) on a worse post-patch Spark plan
+5. **Gate 4, plan regression**: conditional: `not_applicable` until a baseline `explain_snapshot` exists for the blueprint, then warns (or blocks, with `agent.block_on_explain_regression: true`) on a worse post-patch Spark plan. If a baseline exists but plan capture does not work on this session (Spark Connect has no `_jdf`), it reports `unavailable` rather than comparing all-zero counts against a real baseline — which used to read as a false regression. Unlike Gate 3, an `unavailable` here does **not** block: Gate 4 is advisory by design, and blocking on it would refuse every heal on Spark Connect
 
 §8.7 below describes the same sequence in full detail. If the two ever disagree, the code wins: `_check_guardrails` is Gate 1, `run_lineage_gate` is Gate 2, `run_sandbox_gate` is Gate 3, `run_explain_gate` is Gate 4.
 
-**Sandbox gate on a polyglot Blueprint (2.37).** The sandbox gate replays through one target engine's own `ExecutorProtocol` — a single session, a single engine. Against a Blueprint compiled to more than one island (§4.3's cross-engine handoff, §10.9), that shape can only ever validate ONE of the Blueprint's engines, which would look like a real pre-apply check while actually covering nothing about the rest. So it does not attempt a partial or single-engine-shaped replay: it returns `skip` immediately, the patch still applies (a `skip`, like a missing engine dependency, does not block), and the run prints the reason at the moment the patch is applied — not only into `patch_simulation` — because a user who expects every patch to be sandbox-replayed before it touches their Blueprint needs to be told this one wasn't. `--sandbox`'s whole-Blueprint dry-run refuses a polyglot Manifest outright for the same reason (`CONFIG_ERROR`), the same way it already refuses a non-Spark `deployment.engine`. A genuine multi-session polyglot replay is future work, not this release.
+**Sandbox gate on a polyglot Blueprint (2.37).** The sandbox gate replays through one target engine's own `ExecutorProtocol` — a single session, a single engine. Against a Blueprint compiled to more than one island (§4.3's cross-engine handoff, §10.9), that shape can only ever validate ONE of the Blueprint's engines, which would look like a real pre-apply check while actually covering nothing about the rest. So it does not attempt a partial or single-engine-shaped replay: it returns `unavailable` immediately, and **that blocks auto-apply** (2.63) — like a missing engine dependency, this is a replay that was owed and could not happen, so the patch stops for a human rather than going through unverified. The run prints the reason at the moment it happens — not only into `patch_simulation` — because a user who expects every patch to be sandbox-replayed before it touches their Blueprint needs to be told this one wasn't. `--sandbox`'s whole-Blueprint dry-run refuses a polyglot Manifest outright for the same reason (`CONFIG_ERROR`), the same way it already refuses a non-Spark `deployment.engine`. A genuine multi-session polyglot replay is future work, not this release.
 
 ### 7. Confirm and write
 
