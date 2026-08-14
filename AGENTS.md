@@ -721,6 +721,36 @@ which makes the correct thing the easy thing — and one line in this file. Hard
 in tests are allowed; do not rebuild the lint. Prefer a fixture or a type that makes the
 bug unrepresentable over a checker that hunts for it after the fact.
 
+### A number core cannot derive is a number core must not state
+No invented defaults, bounds, thresholds, or magnitudes. If a value cannot be derived from the
+host, the schema, a vendor's own documented contract, or a measurement someone actually took,
+it does not ship — not as a constant, not as a default, not as a range.
+
+Two shipped examples of the mistake and its fix:
+
+- The engine-config allowlist shipped `range: ["128m", "64g"]` on `spark.executor.memory` and
+  `["128MB", "256GB"]` on DuckDB's `memory_limit`. Both were guesses. They simultaneously
+  **blocked a legitimate 96g heal on a large cluster and admitted an absurd 64g one on a
+  laptop** — the bound was wrong in both directions because the right value is a property of
+  the deployment, which core cannot see. Deleted; the `range:`/`enum:` mechanism stays in the
+  loader for a future operator-narrowing surface, and core simply ships none. A bound the
+  *operator* states is fine; a bound *core* invents is not.
+- Perf-regression attribution had to decide when "slower" is a regression. No measurement
+  justified any ratio, so **no threshold ships and no verdict is rendered**: the mechanism
+  records the observed ratio with a status vocabulary of `observed`/`not_applicable` — never
+  `pass`, never `fail` — and says in words that Aqueduct sets no threshold.
+
+**A user-settable knob with no default is NOT the escape hatch.** It does not avoid inventing
+the number, it relocates the invention to someone with no more evidence than you had, while
+adding a config field, its `engine_scoped` tag, capability leaves on every engine, and docs —
+permanent carrying cost for an unmeasured hazard. Ship the measurement first. Once real data
+exists (e.g. enough observations to see a pipeline's normal variance), a threshold derived
+*from* that data is defensible, and only then does a knob have a real number behind its
+default.
+
+When a number is genuinely load-bearing and genuinely underivable, the honest move is to
+record the quantity and refuse the judgement, not to guess and call it a default.
+
 ### Import ordering
 `from __future__ import annotations` must be the first import in every file (after the module docstring). An import placed above it raises `SyntaxError` whenever bytecode cache is cold — it passes CI (warm cache) and fails in production. Ruff I002 enforces this; the pre-commit hook catches it locally, CI catches it on push.
 
