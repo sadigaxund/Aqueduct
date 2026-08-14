@@ -414,6 +414,59 @@ def test_sweep_reclaims_a_kept_failure_once_a_later_run_succeeded(tmp_path, obs_
     assert any("run_failed" in d for d in deleted)
 
 
+def test_sweep_reclaims_even_the_MOST_RECENT_failure_after_a_later_success(tmp_path, obs_store):
+    """The accepted trade-off, pinned as behaviour.
+
+    A pipeline fails Monday, an operator is still investigating Tuesday, and an
+    unrelated scheduled run succeeds Monday night. The spill goes. That outcome
+    is DECIDED and accepted: no most-recent-failure exemption, no opt-out knob.
+    The hazard is unmeasured, and every surface an operator debugs from — the
+    `run_records` row, the `failure_contexts` row, the stack trace — is a store
+    record the sweep never touches. A handoff spill is an intermediate parquet
+    materialisation, so losing it costs a rerun, not a diagnosis.
+
+    The scenario is two failures of ONE blueprint at different ages plus one
+    later success. If an exemption for "the failure most likely under
+    investigation" were ever added, `run_failed_recent` would survive and this
+    goes red naming it.
+    """
+    root = tmp_path / "handoff"
+    _make_spill(root, "hash1", "run_failed_old")
+    _make_spill(root, "hash1", "run_failed_recent")
+    _insert_run(obs_store, "run_failed_old", "error", finished=True, minutes_ago=30)
+    _insert_run(obs_store, "run_failed_recent", "error", finished=True, minutes_ago=10)
+    _insert_run(obs_store, "run_later_ok", "success", finished=True, minutes_ago=2)
+
+    deleted = sweep_orphan_spills(
+        str(root), current_run_id="run_current", keep_on_failure=True, obs_store=obs_store
+    )
+
+    assert not (root / "hash1" / "run_failed_recent").exists()
+    assert not (root / "hash1" / "run_failed_old").exists()
+    # Both run dirs plus the hash dir they emptied.
+    assert len(deleted) == 3
+
+
+def test_sweep_keeps_BOTH_failures_when_no_later_success_exists(tmp_path, obs_store):
+    """Positive control for the test above: the identical two-failure fixture
+    with the success row removed. Without this, that test would pass just as
+    happily against a sweep that reclaimed every kept failure unconditionally —
+    which is the opposite of the rule, not evidence for it."""
+    root = tmp_path / "handoff"
+    _make_spill(root, "hash1", "run_failed_old")
+    _make_spill(root, "hash1", "run_failed_recent")
+    _insert_run(obs_store, "run_failed_old", "error", finished=True, minutes_ago=30)
+    _insert_run(obs_store, "run_failed_recent", "error", finished=True, minutes_ago=10)
+
+    deleted = sweep_orphan_spills(
+        str(root), current_run_id="run_current", keep_on_failure=True, obs_store=obs_store
+    )
+
+    assert (root / "hash1" / "run_failed_recent").exists()
+    assert (root / "hash1" / "run_failed_old").exists()
+    assert deleted == []
+
+
 def test_sweep_keeps_a_kept_failure_when_the_only_success_came_BEFORE_it(tmp_path, obs_store):
     """Positive control on the ordering half of the rule: a success that
     finished EARLIER than the failure resolves nothing. Same two rows as the

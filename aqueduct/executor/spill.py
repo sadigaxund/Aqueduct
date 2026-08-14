@@ -408,18 +408,26 @@ def sweep_orphan_spills(
     hash directory doesn't linger as an empty shell forever.
 
     Two consequences of the release rule, both stated rather than papered
-    over:
+    over. One is still open; the other is decided.
 
-    * A blueprint that fails and is never run again keeps its spill
-      forever. Nothing here can reclaim it, because nothing here ever
+    * STILL OPEN — a blueprint that fails and is never run again keeps its
+      spill forever. Nothing here can reclaim it, because nothing here ever
       runs again for that blueprint. Closing that gap needs an explicit
       operator-invoked command, not a clock.
-    * A failure being actively debugged loses its spill if an unrelated
-      scheduled run of the same blueprint succeeds in the meantime. Whether
-      that should be prevented (by exempting the most recent failure per
-      blueprint, by an opt-out, or not at all) is an OPEN QUESTION with no
-      decision taken — this function implements plain release-on-success
-      and does not pretend to answer it.
+    * ACCEPTED — a failure being actively debugged loses its spill if an
+      unrelated scheduled run of the same blueprint succeeds in the
+      meantime. No protection is built: not a most-recent-failure
+      exemption, not an opt-out knob. The hazard is unmeasured, and the
+      surfaces an operator actually debugs from all survive the sweep
+      untouched — ``run_records``, ``failure_contexts``, and the stack
+      trace are store rows, not spill directories. A handoff spill is an
+      intermediate parquet materialisation of one island's output; losing
+      it costs a rerun, not a diagnosis. Building an exemption would add a
+      permanent carrying cost (a second retention rule here, or a config
+      field with its ``engine_scoped`` tag and a capability leaf on every
+      engine) to guard a cost nobody has measured. This function implements
+      plain release-on-success, and that is the answer, not a placeholder
+      for one.
 
     Returns the list of deleted directory paths (best-effort; a remote root
     with no fsspec returns ``[]`` and the caller is expected to have already
