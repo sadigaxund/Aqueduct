@@ -488,6 +488,60 @@ def _write_patch_to_blueprint(
         return None
 
 
+def _record_engine_config_simulation(  # noqa: F811
+    *,
+    patch,  # noqa: F811
+    surveyor,
+    cfg,
+    blueprint_before,
+    blueprint_after,
+    iteration_run_id: str | None,
+    blueprint_id: str | None,
+) -> None:
+    """Write the engine-config delta gate's verdict to ``patch_simulation``.
+
+    Audit only — never raises, never blocks. The refusal this records as
+    ``fail`` is ENFORCED by ``_check_guardrails`` on every apply path; this
+    is the row that makes it countable
+    (``stores/queries.py::gate_rejection_rates``).
+
+    ``duration_ms`` is measured here rather than carried on
+    ``EngineConfigDeltaResult`` because the refusal path has no result
+    object at all — an exception cannot carry the field, so the only place
+    both outcomes can be timed the same way is the call site.
+    """
+    import time as _time
+
+    from aqueduct.patch.apply import PatchError
+    from aqueduct.patch.config_delta import run_engine_config_delta_gate
+
+    _t0 = _time.monotonic()
+    try:
+        try:
+            _res = run_engine_config_delta_gate(
+                cfg=cfg,
+                blueprint_before=blueprint_before,
+                patch_spec=patch,
+                blueprint_after=blueprint_after,
+            )
+            _status, _detail = _res.status, _res.detail
+        except PatchError as exc:
+            # Only ONE check ran above, so this is the effective-config
+            # no-op refusal by construction — no message matching needed.
+            _status, _detail = "fail", str(exc)
+        surveyor.record_patch_simulation(
+            patch_id=patch.patch_id,
+            gate="engine_config",
+            status=_status,
+            detail=_detail or None,
+            duration_ms=int((_time.monotonic() - _t0) * 1000),
+            run_id=iteration_run_id,
+            blueprint_id=blueprint_id,
+        )
+    except Exception:
+        logger.warning("record_patch_simulation (engine_config) failed", exc_info=True)
+
+
 def _run_patch_gates_inline(  # noqa: F811
     *,
     patch,  # noqa: F811
@@ -506,6 +560,23 @@ def _run_patch_gates_inline(  # noqa: F811
     timezone: str | None = None,
 ):
     """Phase 29a/b — run the lineage, sandbox, and explain gates inline.
+
+    Also PERSISTS the engine-config delta gate's verdict (Gate 1's efficacy
+    half, ``aqueduct/patch/config_delta.py``) as a fourth
+    ``patch_simulation`` row. That gate is ENFORCED elsewhere — inside
+    ``_check_guardrails``, on every apply path — and this function does not
+    enforce it: ``gates_passed`` is unchanged, nothing here can refuse a
+    patch, and the returned tuple keeps its three-gate shape. What was
+    missing was the audit trail: `patch_simulation` is the fleet-level
+    record of what each gate decided (`stores/queries.py::
+    gate_rejection_rates` reads it), and a gate that never writes a row is
+    invisible there — it looks like a gate that never rejects anything.
+    Evaluating it HERE, rather than passing a result down from the
+    enforcing call site, is what makes a `fail` row identifiable without
+    matching on message text: this call sees only the delta gate, so any
+    ``PatchError`` it raises is by construction the delta refusal, never a
+    `forbidden_ops` / `allowed_paths` / allowlist rejection (those are
+    `heal_attempts` rows, per `docs/observability_guide.md`).
 
     Returns (lineage_res, sandbox_res, explain_res, gates_passed).
     gates_passed is True when the sandbox gate passes (or is skipped — the
@@ -535,6 +606,16 @@ def _run_patch_gates_inline(  # noqa: F811
         bp_after = apply_patch_to_dict(bp_raw, patch)
     except Exception:
         return None, None, None, False
+
+    _record_engine_config_simulation(
+        patch=patch,
+        surveyor=surveyor,
+        cfg=cfg,
+        blueprint_before=bp_raw,
+        blueprint_after=bp_after,
+        iteration_run_id=iteration_run_id,
+        blueprint_id=blueprint_id,
+    )
 
     lineage_res = run_lineage_gate(bp_raw, bp_after, patch)
     try:

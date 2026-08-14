@@ -204,6 +204,10 @@ engine:
 # never judged: Aqueduct sets no regression threshold — see
 # docs/specs.md §8.14). It never affects the compiled Manifest and does not
 # need to be edited by hand; if you see it in a Blueprint, leave it alone.
+#
+# `aqueduct patch revert <patch_id> --blueprint <this file>` undoes one such
+# patch's engine-config writes and stamps its record `reverted_at:`; the
+# record stays, so the heal remains in the history after being undone.
 
 # healed_by: [...]
 

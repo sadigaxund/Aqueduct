@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.61: Reference Document**
+**Version 2.62: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -1479,6 +1479,7 @@ healed_by:
     classification: engine_shaped   # dialect_neutral | engine_shaped
     applied_at: "2026-07-18T00:00:00Z"
     validated_on: []          # engines a GREEN run has validated this patch on since
+    reverted_at: null         # set by `aqueduct patch revert`; absent on a live record
     engine_config_delta:      # absent unless the patch changed effective engine config (§8.5)
       duckdb:
         memory_limit:
@@ -1573,6 +1574,56 @@ limitation (co-applied patches, changed input volume, the standing fact
 that wall-clock time has many causes) is written into the note's `caveats`,
 which travel with it into the Blueprint. See
 `aqueduct/patch/perf_attribution.py`.
+
+**Undoing a heal (`aqueduct patch revert`).** A healed patch persists into
+the Blueprint and every later run inherits it, including runs long past the
+failure it was written for. `aqueduct patch revert <patch_id> --blueprint
+<file>` undoes one applied patch's engine-config writes in place: each
+`engine.<name>` key the patch wrote goes back to the value its
+`engine_config_delta` captured, and the `healed_by` record is stamped
+`reverted_at:` rather than deleted. Keeping the record is the point: deleting
+it would erase the fact that a heal ever happened, and leaving it unmarked
+would make it describe a Blueprint that no longer carries its change. Every
+consumer reads the stamp, so a reverted record stops raising the cross-engine
+warning above and stops collecting `validated_on` / `perf_observations`
+entries.
+
+Only engine-config writes are revertible, because they are the only change
+for which a prior value is recorded anywhere: `set_module_config_key` and its
+siblings store the new value alone, so a module patch has no inverse to
+compute. A revert is therefore not itself a patch, and the PatchSpec grammar
+gains no op for it (the inverse of a write whose prior state was "absent" is
+a key deletion, which no op expresses).
+
+The command refuses, naming the reason and writing nothing, when: the patch
+also carries a non-config operation (undoing half of it would leave a
+Blueprint matching no state that ever ran); a later, not-itself-reverted
+patch wrote one of the same keys (revert in reverse order, or use `patch
+rollback`); the value has been edited since the patch was applied; the patch
+id matches zero or more than one record; or the computed restore cannot be
+shown to reproduce the recorded pre-patch effective config exactly. That last
+check is mechanical rather than argued: the plan is applied to a copy and
+re-resolved through the same function Gate 1 measured the delta with, and any
+key that lands anywhere other than its recorded prior value — or any key the
+patch never wrote that moves at all — aborts the revert.
+
+`aqueduct patch rollback <blueprint> --to <patch_id>` remains the whole-file
+counterpart: it restores the Blueprint from git history, undoing everything
+in that commit, and is the documented fallback for every case `revert`
+refuses.
+
+**Surfacing healed config keys (`aqueduct doctor`).** For a Blueprint target,
+doctor emits one `healed-config:<patch_id>` row per `healed_by` record that
+carries an `engine_config_delta`: what was changed and when, whether a green
+run has validated it, the perf notes' observed ratios verbatim, and the
+`patch revert` command that undoes it. It states **no staleness threshold** —
+"healed more than N days ago" is a number nothing supports, since an
+hour-old heal on a monthly pipeline is older in every sense that matters than
+a year-old one on an hourly pipeline. The one condition that escalates to a
+warning is an equality, not a threshold: the value the record says the patch
+wrote is no longer what the effective config resolves to, so the record's
+perf attribution no longer describes the live configuration and `patch
+revert` will refuse it.
 
 **Sandbox requirement.** Progressive healing refuses to run with
 `agent.sandbox_mode: off`: a `ConfigError` at heal-start with an

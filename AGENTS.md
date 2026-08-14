@@ -345,6 +345,7 @@ their original modules.
 | `preview.py` | Lineage gate (Gate 2) + sandbox gate (Gate 3): diff column impact, sandbox replay |
 | `explain_gate.py` | Plan regression gate (Gate 4): compare Exchange/Broadcast counts before vs after |
 | `ci.py` | CI kit for `approval: ci` — `on_patch_pending` webhook payload schema (`CI_WEBHOOK_REQUIRED_KEYS`) + payload validation. Serverless: a user-owned CI workflow receives the webhook and calls `aqueduct patch import` (see `docs/templates/ci-heal-workflow.yml`) |
+| `revert.py` | The undo path for an applied heal patch (`aqueduct patch revert`): plans, VERIFIES and applies the restoration of the engine-config keys one `healed_by` record's `engine_config_delta` captured, then stamps that record `reverted_at:` rather than deleting it. Refuses (`RevertError`, a direct `AqueductError` — never a `PatchError`, which means a different thing) every case where the result would not reproduce a state the Blueprint actually had: a patch carrying any non-`set_engine_config` op, a key a later non-reverted patch overwrote, a value edited since, an ambiguous/absent/already-reverted record, or a plan whose re-resolved effective config does not land exactly on the recorded prior values. Adds NO patch op — the grammar stays closed; a restore-to-value goes through the real `SetEngineConfigOp` dispatch and a restore-to-absent is a key deletion no op expresses, which is itself the reason a revert is a Blueprint rewrite rather than a patch |
 | `provenance.py` | Phase 79 — classifies each `patch.grammar` op as `dialect_neutral` or `engine_shaped` ONCE, in core, so every consumer (heal-cache replay, cross-engine recompile) can tell whether a patch generated while healing one engine's run may carry that engine's SQL dialect/cast syntax/format options and could be wrong if reused against a different engine |
 | `__init__.py` | Module description only |
 
@@ -391,7 +392,7 @@ The CLI command lives in `aqueduct/cli/drift.py`.
 
 | Module | What it owns |
 |--------|--------------|
-| `__init__.py` | Spark/network cluster + blueprint-source checks + `run_doctor`; also `check_handoff_engine_access` (Phase 81/82 — per-registered-engine round-trip probe at `handoff.root`; its Spark branch is the 4th lazy-`pyspark`-import site, kept here for the same reason as the other three) |
+| `__init__.py` | Spark/network cluster + blueprint-source checks + `run_doctor`; also `check_healed_engine_config` (one row per `healed_by` record carrying an `engine_config_delta` — reports the recorded facts and the `patch revert` command, states NO staleness threshold, and warns only on the derivable equality failure "the recorded value is no longer what resolves") and `check_handoff_engine_access` (Phase 81/82 — per-registered-engine round-trip probe at `handoff.root`; its Spark branch is the 4th lazy-`pyspark`-import site, kept here for the same reason as the other three) |
 | `base.py` | `CheckResult` dataclass |
 | `checks_io.py` | Leaf connectivity checks: config, depot, observability, webhook, agent, secrets, store-backend, aqtest, aqscenario, capabilities (Phase 78 — version-constrained capability check, see `aqueduct/executor/capabilities.py`), `check_handoff_free_space` (Phase 81/82 — free disk space at `handoff.root`, pure `os`/`shutil`, no engine dependency) |
 
@@ -502,7 +503,7 @@ keep working. Command families live in submodules:
 | `run.py` | `run` (+ `--sandbox`), `compile` |
 | `heal.py` | `heal` |
 | `drift.py` | `drift` — proactive schema-drift check + pre-emptive heal (the reactive arm's counterpart); domain logic lives in `aqueduct/drift/` |
-| `patch.py` | `patch` group: preview/apply/reject/commit/discard/list/log/rollback |
+| `patch.py` | `patch` group: preview/policy/apply/revert/import/reject/pull/commit/discard/list/log/rollback (`revert` = in-place undo of one patch's engine-config writes, `rollback` = git whole-file restore — see `aqueduct/patch/revert.py`) |
 | `observability.py` | `report`, `runs`, `lineage`, `signal` |
 | `benchmark.py` | `benchmark`, `benchmark-diff`, `benchmark-stats` |
 | `diagnostics.py` | `validate`, `lint`, `schema`, `doctor` |

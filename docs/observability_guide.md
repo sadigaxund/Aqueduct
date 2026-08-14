@@ -191,17 +191,32 @@ budget axis tripped before a valid patch landed), the CLI synthesises one
 
 #### `patch_simulation`
 
-One row per gate the patch went through. `gate` vocabulary: `lineage`,
-`sandbox`, `explain` (guardrail rejections are recorded in `heal_attempts`,
-not here). `status` is `pass` | `fail` | `warn` | `skip` (`skip` when
+One row per gate the patch went through. `gate` vocabulary: `engine_config`,
+`lineage`, `sandbox`, `explain` (guardrail rejections — `forbidden_ops`,
+`allowed_paths`, the `set_engine_config` allowlist — are recorded in
+`heal_attempts`, not here). `status` is `pass` | `fail` | `warn` | `skip`
+(`skip` when
 `sandbox_mode: off` synthesises a pass-through row) | `not_applicable`
-(`lineage` gate only — the patch's operations touch zero modules, e.g. a
+(`lineage` gate — the patch's operations touch zero modules, e.g. a
 `set_engine_config` op, which carries no module reference for the lineage
 gate's column-impact diff to run against. Distinct from `pass`: `pass`
 means the gate checked column consumers and found nothing broken,
 `not_applicable` means there was nothing for the gate to check at all.
 Informational — it does not block the patch, same as `skip`. `detail`
 carries the reason, e.g. "no module-lineage surface for this patch's ops").
+
+The `engine_config` gate is the mirror image of that pair: it reports
+`not_applicable` for the patches `lineage` reports `pass` on (a
+pipeline-only patch writes no engine config, so there is nothing for it to
+compare) and `pass` when the patch's write really does change the effective
+session config the target engine will run with (`aqueduct.yml`'s
+`engine.<name>` block merged under the Blueprint's own — see
+`docs/specs.md` §8.5). Its `fail` is a `set_engine_config` write whose
+effective before/after are identical: a clean apply that changes nothing an
+engine can see. That row is written for the record only — the refusal
+itself is enforced at apply time, so a `fail` here is always accompanied by
+a patch that never reached the Blueprint.
+
 For the SAME zero-module patches, the `sandbox` gate still runs and can
 still report `pass` on a clean replay, but its `detail` says so honestly
 rather than reading as a validated fix: the session built and the sample
@@ -712,7 +727,7 @@ columns or aggregation tables:
 | `failure_categories` | `dict[str, int]` | Count of failures grouped by `error_class` |
 | `heal_coverage` | `dict[str, int]` | Heals resolved by the signature memory cache (`memory`) vs the LLM (`agent`), per blueprint |
 | `blueprint_history` | `list[BlueprintHistoryEvent]` | One blueprint's store-side remediation timeline (heal run starts, patch apply/reject, outcomes), `aqueduct blueprint history` merges this with `git_blueprint_commits` for the full picture |
-| `gate_rejection_rates` | `dict[str, int]` | Count of `patch_simulation` rows with `status = 'fail'`, per `gate` (`lineage`/`sandbox`/`explain`). `warn`, `skip`, and `not_applicable` are not rejections — see the function's docstring for why. Falls back to `heal_attempts.gate_that_rejected` counts when `patch_simulation` is unavailable |
+| `gate_rejection_rates` | `dict[str, int]` | Count of `patch_simulation` rows with `status = 'fail'`, per `gate` (`engine_config`/`lineage`/`sandbox`/`explain`). `warn`, `skip`, and `not_applicable` are not rejections — see the function's docstring for why. Falls back to `heal_attempts.gate_that_rejected` counts when `patch_simulation` is unavailable |
 
 DuckDB: the functions iterate discovered per‑pipeline files. Postgres: a single
 schema‑scoped query. Both backends return the same shape.

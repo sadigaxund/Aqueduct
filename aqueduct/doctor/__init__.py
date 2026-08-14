@@ -68,6 +68,7 @@ __all__ = [
     "check_cloudpickle_compat",
     "check_handoff_engine_access",
     "check_handoff_free_space",
+    "check_healed_engine_config",
     "check_java",
     "check_config",
     "check_depot",
@@ -1114,6 +1115,142 @@ def check_hooks(blueprint_path: Path) -> CheckResult:
     return CheckResult("hooks", "ok", "no cycles; all blueprint targets exist", _ms(t))
 
 
+def check_healed_engine_config(blueprint_path: Path, cfg: Any) -> list[CheckResult]:
+    """Report every engine-config key a heal patch left in this Blueprint.
+
+    A healed `set_engine_config` write persists into the Blueprint and every
+    later run inherits it, including the ones that outlive the failure it was
+    written for. This check makes those keys visible with the evidence
+    Aqueduct actually recorded about them, one row per `healed_by` record
+    carrying an `engine_config_delta`.
+
+    **It states no staleness threshold, because none can be derived.** "Healed
+    more than N days ago" and "more than N runs ago" are both numbers nothing
+    in the host, the schema, or any measurement supports — an hour-old heal on
+    a pipeline that runs monthly is older, in every sense that matters, than a
+    year-old one on a pipeline that runs hourly. So the row carries facts: what
+    was changed and when, whether a green run has validated it, and what the
+    perf notes measured (the ratio verbatim, never a verdict — Aqueduct sets no
+    regression threshold; see `aqueduct/patch/perf_attribution.py`). A human
+    reads the numbers and decides.
+
+    The ONE condition that does escalate to `warn` is not a threshold but an
+    equality: the value the record says the patch wrote is no longer what the
+    effective session config resolves to. That is checkable exactly — a later
+    patch or a hand edit superseded it — and it has concrete consequences: the
+    record's perf attribution no longer describes the live configuration, and
+    `aqueduct patch revert` will refuse the record for the same reason.
+
+    Returns `[]` for a Blueprint with no healed engine-config keys (the same
+    "nothing to say" shape as `check_cascade_tiers` with no tiers).
+    """
+    t0 = time.monotonic()
+    try:
+        import yaml
+        raw = yaml.safe_load(Path(blueprint_path).read_text(encoding="utf-8")) or {}
+    except Exception:
+        return []
+    records = [
+        (idx, rec)
+        for idx, rec in enumerate(raw.get("healed_by") or [])
+        if isinstance(rec, dict) and rec.get("engine_config_delta")
+    ]
+    if not records:
+        return []
+
+    from aqueduct.executor.session_config import resolve_effective_engine_configs
+    from aqueduct.patch.config_delta import (
+        ABSENT,
+        blueprint_engine_layers,
+        canonical_config_value,
+    )
+
+    try:
+        effective = resolve_effective_engine_configs(cfg, blueprint_engine_layers(raw))
+    except Exception as exc:  # noqa: BLE001 — doctor checks never raise
+        return [CheckResult(
+            "healed-config", "warn",
+            f"{len(records)} healed engine-config record(s) present, but the "
+            f"effective engine config could not be resolved: {exc}",
+            _ms(t0), group="agent",
+        )]
+
+    results: list[CheckResult] = []
+    for _idx, rec in records:
+        t = time.monotonic()
+        patch_id = str(rec.get("patch_id") or "?")
+        name = f"healed-config:{patch_id}"
+        delta = rec.get("engine_config_delta") or {}
+        wrote = [
+            f"{engine} {key} {(ba or {}).get('before')!r}→{(ba or {}).get('after')!r}"
+            for engine in sorted(delta)
+            for key, ba in sorted((delta[engine] or {}).items())
+        ]
+
+        if rec.get("reverted_at"):
+            results.append(CheckResult(
+                name, "ok",
+                f"reverted at {rec['reverted_at']} — {', '.join(wrote)} is no "
+                "longer in this Blueprint (record kept as history)",
+                _ms(t), group="agent",
+            ))
+            continue
+
+        superseded = []
+        for engine in sorted(delta):
+            for key, ba in sorted((delta[engine] or {}).items()):
+                recorded_after = (ba or {}).get("after")
+                current = (effective.get(engine) or {}).get(key, ABSENT)
+                if canonical_config_value(current) != canonical_config_value(recorded_after):
+                    superseded.append(
+                        f"{engine} {key} now resolves to "
+                        f"{None if current is ABSENT else current!r}, not the "
+                        f"{recorded_after!r} this patch wrote"
+                    )
+
+        facts = [f"applied {rec.get('applied_at')} on engine {rec.get('engine')!r}"]
+        facts.append("wrote " + ", ".join(wrote))
+        validated = list(rec.get("validated_on") or [])
+        facts.append(
+            f"green-run validated on {validated}" if validated
+            else "no green run has validated it yet"
+        )
+        for obs in rec.get("perf_observations") or []:
+            if not isinstance(obs, dict):
+                continue
+            ratio = obs.get("duration_ratio")
+            if obs.get("status") == "observed" and ratio is not None:
+                facts.append(
+                    f"perf on {obs.get('engine')!r}: {ratio}x the pre-patch "
+                    "baseline duration (Aqueduct sets no threshold — judge it "
+                    "against this pipeline's SLA)"
+                )
+            else:
+                facts.append(
+                    f"perf on {obs.get('engine')!r}: {obs.get('status')} "
+                    f"({obs.get('detail')})"
+                )
+
+        if superseded:
+            results.append(CheckResult(
+                name, "warn",
+                "; ".join(superseded)
+                + " — this record no longer describes the live config, so its "
+                "perf attribution does not either and `aqueduct patch revert` "
+                "will refuse it. " + "; ".join(facts),
+                _ms(t), group="agent",
+            ))
+        else:
+            results.append(CheckResult(
+                name, "ok",
+                "; ".join(facts)
+                + ". Undo with: aqueduct patch revert "
+                + f"{patch_id} --blueprint {blueprint_path}",
+                _ms(t), group="agent",
+            ))
+    return results
+
+
 def check_blueprint_sources(
     blueprint_path: Path,
     _context_override: dict[str, Any] | None = None,
@@ -1620,6 +1757,11 @@ def run_doctor(
     # AQUEDUCT_HOOK_CHAIN guard in cli/hooks.py.
     if blueprint_path is not None:
         results.append(check_hooks(blueprint_path))
+        # Healed engine-config keys this Blueprint carries. Pure YAML +
+        # config resolution (no engine, no session), so it belongs on the
+        # single unconditional blueprint branch rather than duplicated into
+        # both arms of the skip_spark split below.
+        results.extend(check_healed_engine_config(blueprint_path, cfg))
 
     # Webhook (if configured)
     wh = cfg.webhooks.on_failure

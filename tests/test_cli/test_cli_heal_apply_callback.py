@@ -62,25 +62,20 @@ edges: []
 
     # Print calls if it fails
     print("CALLS:", mock_surveyor.record_patch_simulation.call_args_list)
-    assert mock_surveyor.record_patch_simulation.call_count == 3
+    assert mock_surveyor.record_patch_simulation.call_count == 4
 
-    # Verify the first call is gate="lineage" and run_id="iter-run-123"
-    first_call = mock_surveyor.record_patch_simulation.call_args_list[0]
-    assert first_call[1]["gate"] == "lineage"
-    assert first_call[1]["run_id"] == "iter-run-123"
-    assert first_call[1]["blueprint_id"] == "test_bp"
+    # Every gate row carries the same run/blueprint attribution.
+    for call in mock_surveyor.record_patch_simulation.call_args_list:
+        assert call[1]["run_id"] == "iter-run-123"
+        assert call[1]["blueprint_id"] == "test_bp"
 
-    # Verify the second call is gate="sandbox" and run_id="iter-run-123"
-    second_call = mock_surveyor.record_patch_simulation.call_args_list[1]
-    assert second_call[1]["gate"] == "sandbox"
-    assert second_call[1]["run_id"] == "iter-run-123"
-    assert second_call[1]["blueprint_id"] == "test_bp"
+    gates = [c[1]["gate"] for c in mock_surveyor.record_patch_simulation.call_args_list]
+    assert gates == ["engine_config", "lineage", "sandbox", "explain"]
 
-    # Verify the third call is gate="explain" and run_id="iter-run-123"
-    third_call = mock_surveyor.record_patch_simulation.call_args_list[2]
-    assert third_call[1]["gate"] == "explain"
-    assert third_call[1]["run_id"] == "iter-run-123"
-    assert third_call[1]["blueprint_id"] == "test_bp"
+    # This patch touches a module, not engine config, so the engine-config
+    # gate has nothing to compare — `not_applicable`, never `pass`.
+    engine_config_call = mock_surveyor.record_patch_simulation.call_args_list[0]
+    assert engine_config_call[1]["status"] == "not_applicable"
 
 
 @patch("aqueduct.agent.generate_agent_patch")

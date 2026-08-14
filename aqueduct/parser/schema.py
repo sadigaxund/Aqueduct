@@ -1114,6 +1114,15 @@ class HealedByRecordSchema(BaseModel):
     # verdict: Aqueduct sets no regression threshold.
     perf_baseline: dict[str, Any] = Field(default_factory=dict)
     perf_observations: list[dict[str, Any]] = Field(default_factory=list)
+    # ISO-8601 timestamp set by `aqueduct patch revert` (aqueduct/patch/
+    # revert.py) when this patch's engine-config writes were undone. The
+    # record is ANNOTATED rather than deleted: deleting it would erase the
+    # fact that a heal ever happened, and leaving it unmarked would make it
+    # describe a Blueprint that no longer carries its change. Every consumer
+    # of the block reads it — the cross-engine compile gate skips a reverted
+    # record, and the green-run stamps stop appending `validated_on` /
+    # `perf_observations` entries to it. Absent on a live record.
+    reverted_at: str | None = None
 
 
 class BlueprintSchema(BaseModel):

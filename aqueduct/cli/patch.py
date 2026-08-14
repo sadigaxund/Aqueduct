@@ -7,6 +7,7 @@ commands register onto `cli` when imported at the bottom of __init__.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -730,6 +731,190 @@ def patch_apply(
     click.echo(f"  archived   → {result.archive_path}")
     click.echo(f"  operations   {result.operations_applied} applied")
     click.echo(f"  commit with: aqueduct patch commit --blueprint {blueprint}")
+
+
+def _applied_patch_operations(
+    patches_root, config_path, env_file, cli_env, patch_id: str
+) -> list | None:
+    """Operations of the APPLIED patch body carrying *patch_id*, or None.
+
+    The body is what proves a patch wrote nothing but engine config
+    (``aqueduct/patch/revert.py::_require_config_only``); the ``healed_by``
+    record alone cannot tell a config-only patch from a mixed one. None means
+    "no such applied body", which the planner turns into its own refusal.
+    """
+    from aqueduct.patch.revert import RevertError
+
+    ps = _patch_store_from(patches_root, config_path, env_file, cli_env)
+    if ps is None:
+        return None
+    matches = [
+        payload
+        for _key, _mtime, payload in ps.iter_payloads("applied")
+        if str(payload.get("patch_id") or "") == patch_id
+    ]
+    if not matches:
+        return None
+    if len(matches) > 1:
+        raise RevertError(
+            f"cannot revert patch {patch_id!r}: {len(matches)} applied patch "
+            f"bodies in {ps.location_label} carry that id, so which operations "
+            "were applied is ambiguous. Aqueduct will not guess."
+        )
+    return list(matches[0].get("operations") or [])
+
+
+@patch.command("revert")
+@click.argument("patch_id")
+@click.option(
+    "--blueprint",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Blueprint YAML carrying the healed_by record to revert",
+)
+@click.option(
+    "--patches-dir",
+    default=None,
+    help="Root directory for patch lifecycle subdirs (default: <blueprint-dir>/patches)",
+)
+@click.option(
+    "--config",
+    "config_path",
+    default=None,
+    help="Path to aqueduct.yml — the engine.<name> layer the effective config resolves against.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Plan and verify the revert, print what it would change, write nothing.",
+)
+@click.option(
+    "--format",
+    "out_format",
+    type=click.Choice(["text", "json"], case_sensitive=False),
+    default="text",
+    show_default=True,
+    help="Output format. `text` (default) renders the restore list. `json` emits the plan.",
+)
+@_env_options
+def patch_revert(
+    patch_id: str,
+    blueprint: str,
+    patches_dir: str | None,
+    config_path: str | None,
+    dry_run: bool,
+    out_format: str,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
+) -> None:
+    """Undo an applied heal patch's engine-config writes.
+
+    Restores every `engine.<name>` key the patch wrote to the value the
+    `healed_by:` record captured before it was applied, and stamps that
+    record `reverted_at:` — the record is kept, so the history of the heal
+    survives its undo.
+
+    Only engine-config writes can be reverted: they are the only change for
+    which Aqueduct records a prior value. A patch that also touched a module,
+    an edge or a SQL body is REFUSED by name rather than half-undone; so is
+    one whose keys a later patch overwrote, or whose values have been edited
+    since. For those, `aqueduct patch rollback --to <patch_id>` restores the
+    whole file from git history.
+    """
+    from datetime import UTC, datetime
+    from pathlib import Path as _Path
+
+    from aqueduct.config import ConfigError, load_config
+    from aqueduct.parser.parser import ParseError, parse
+    from aqueduct.patch.apply import _yaml_dump, _yaml_load
+    from aqueduct.patch.revert import RevertError, apply_revert, plan_revert
+
+    blueprint_path = _Path(blueprint)
+    patches_root = (
+        _Path(patches_dir) if patches_dir else _patches_root_from_blueprint(blueprint_path)
+    )
+
+    try:
+        _resolve_and_load_env(
+            env_file,
+            _Path(config_path) if config_path else blueprint_path,
+            cli_env=cli_env,
+        )
+        cfg = load_config(_Path(config_path) if config_path else None)
+        _apply_warnings_from_cfg(cfg)
+    except ConfigError as exc:
+        style.error(f"config error: {exc}")
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    bp_raw = _yaml_load(blueprint_path)
+    try:
+        operations = _applied_patch_operations(
+            patches_root, config_path, env_file, cli_env, patch_id
+        )
+        plan = plan_revert(
+            cfg=cfg, blueprint=bp_raw, patch_id=patch_id, operations=operations
+        )
+    except RevertError as exc:
+        style.error(str(exc))
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+    if dry_run:
+        if out_format.lower() == "json":
+            emit({**plan.to_dict(), "dry_run": True}, fmt="json")
+            return
+        click.echo(f"Revert plan for patch {plan.patch_id}  (nothing written)")
+        for r in plan.restores:
+            click.echo(f"  {r.action:<6} {r.engine}  {r.key}: {r.current!r} → {r.target!r}")
+        return
+
+    reverted_at = datetime.now(tz=UTC).isoformat()
+    reverted = apply_revert(bp_raw, plan, reverted_at=reverted_at)
+
+    # Same order as `patch apply`: verify the document parses BEFORE it
+    # replaces the live file, then back the original up, then swap.
+    tmp_verify = blueprint_path.with_suffix(".revert_verify.tmp.yml")
+    try:
+        _yaml_dump(reverted, tmp_verify)
+        parse(str(tmp_verify))
+    except ParseError as exc:
+        tmp_verify.unlink(missing_ok=True)
+        style.error(f"reverted Blueprint does not parse — nothing written:\n{exc}")
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+    except Exception as exc:
+        tmp_verify.unlink(missing_ok=True)
+        style.error(f"unexpected error verifying the reverted Blueprint: {exc}")
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+    backup_dir = patches_root / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
+    backup_path = backup_dir / f"revert_{plan.patch_id}_{ts}_{blueprint_path.name}"
+    import shutil
+
+    shutil.copy2(blueprint_path, backup_path)
+    os.replace(tmp_verify, blueprint_path)
+
+    if out_format.lower() == "json":
+        emit(
+            {
+                **plan.to_dict(),
+                "reverted_at": reverted_at,
+                "blueprint_path": str(blueprint_path),
+                "backup_path": str(backup_path),
+            },
+            fmt="json",
+        )
+        return
+
+    style.success(f"patch reverted  id={plan.patch_id}")
+    for r in plan.restores:
+        click.echo(f"  {r.action:<6} {r.engine}  {r.key}: {r.current!r} → {r.target!r}")
+    click.echo(f"  blueprint  → {blueprint_path}")
+    click.echo(f"  backup     → {backup_path}")
+    style.info(
+        f"  healed_by record kept, stamped reverted_at: {reverted_at}"
+    )
 
 
 @patch.command("import")

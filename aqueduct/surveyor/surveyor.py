@@ -765,10 +765,13 @@ class Surveyor:
 
         Args:
             patch_id:     PatchSpec identifier — matches `patches/applied/{id}.json`.
-            gate:         `"lineage"` (lineage) or `"sandbox"` (sandbox replay).
+            gate:         `"engine_config"` (effective session-config delta),
+                          `"lineage"`, `"sandbox"` (sandbox replay), or
+                          `"explain"`.
             status:       `"pass"` | `"fail"` | `"warn"` | `"skip"` |
-                          `"not_applicable"` (lineage gate only — the patch's
-                          ops touch zero modules, so the gate has no signal;
+                          `"not_applicable"` (lineage and engine_config
+                          gates — the patch has nothing for that gate to
+                          look at, so the gate has no signal;
                           informational, never blocking).
             detail:       Free-text reason — failing rule, missing column, etc.
             sample_rows:  Rows processed in the sandbox replay (NULL for gate2).

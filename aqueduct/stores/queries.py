@@ -1295,9 +1295,14 @@ def gate_rejection_rates(cfg: Any, store_dir: str | None = None) -> dict[str, in
     - `skip` is explicitly acceptance, not rejection — the caller's own gate
       check treats it that way (`gates_passed = sandbox_res.status in
       ("pass", "skip")` in `cli/__init__.py::_run_patch_gates_inline`).
-    - `not_applicable` (lineage gate only, since the cross-engine
-      remediation) means the gate had nothing to check — informational,
-      never blocking, and never a rejection.
+    - `not_applicable` (the lineage and engine_config gates) means the gate
+      had nothing to check — informational, never blocking, and never a
+      rejection.
+
+    The `engine_config` gate is the one whose `fail` rows are written for
+    the audit trail alone: its refusal is enforced at apply time by
+    `patch/apply.py::_check_guardrails`, so a counted rejection here always
+    corresponds to a patch that never reached a Blueprint.
 
     Falls back to `heal_attempts.gate_that_rejected` (COUNT per gate) when
     the `patch_simulation` table is unavailable (e.g. an older store).

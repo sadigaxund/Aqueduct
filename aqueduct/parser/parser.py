@@ -95,6 +95,7 @@ def _healed_by_entry(r) -> HealedByRecord:
         engine_config_delta={k: dict(v) for k, v in (r.engine_config_delta or {}).items()},
         perf_baseline=dict(r.perf_baseline or {}),
         perf_observations=tuple(dict(o) for o in (r.perf_observations or ())),
+        reverted_at=r.reverted_at,
     )
 
 

@@ -324,6 +324,10 @@ class HealedByRecord:
     # diagnostics: nothing in the compiler or any engine reads them.
     perf_baseline: dict[str, Any] = field(default_factory=dict)
     perf_observations: tuple[dict[str, Any], ...] = ()
+    # Set by `aqueduct patch revert` — see HealedByRecordSchema's comment.
+    # A reverted record documents a heal that no longer applies: the
+    # cross-engine gate skips it and the green-run stamps leave it alone.
+    reverted_at: str | None = None
 
 
 @dataclass(frozen=True)

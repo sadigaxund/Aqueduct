@@ -427,6 +427,13 @@ def check_cross_engine_heal(blueprint: Any, engine: str) -> list[CrossEngineHeal
     """
     problems: list[CrossEngineHealProblem] = []
     for rec in getattr(blueprint, "healed_by", ()) or ():
+        # A reverted record's change is no longer in the Blueprint (`aqueduct
+        # patch revert` removed the engine-config writes it documents and
+        # stamped `reverted_at`), so there is no dialect content left here to
+        # be wrong on another engine. The record is kept for history; warning
+        # about it would report a risk the file no longer carries.
+        if getattr(rec, "reverted_at", None):
+            continue
         if getattr(rec, "classification", None) != "engine_shaped":
             continue
         origin = getattr(rec, "engine", None)

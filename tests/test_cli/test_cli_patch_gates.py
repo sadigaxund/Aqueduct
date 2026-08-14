@@ -66,10 +66,17 @@ edges: []
     assert passed is True  # sandbox passed
 
     # Check recordings
-    # 1. lineage
-    # 2. sandbox
-    # 3. explain
-    assert mock_surveyor.record_patch_simulation.call_count == 3
+    # 1. engine_config
+    # 2. lineage
+    # 3. sandbox
+    # 4. explain
+    assert mock_surveyor.record_patch_simulation.call_count == 4
+    assert [c.kwargs["gate"] for c in mock_surveyor.record_patch_simulation.call_args_list] == [
+        "engine_config",
+        "lineage",
+        "sandbox",
+        "explain",
+    ]
 
     # Check the explain gate call specifically
     calls = mock_surveyor.record_patch_simulation.call_args_list

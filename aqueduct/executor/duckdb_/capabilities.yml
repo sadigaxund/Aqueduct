@@ -962,3 +962,10 @@ leaves:
       Warn-only perf-attribution provenance — recorded by core from run_records
       wall-clock time, no engine executes it. Reports an observed ratio only;
       Aqueduct sets no regression threshold and the note never blocks a run.
+  healed_by.field.reverted_at:
+    support: supported
+    hint: >-
+      Revert provenance — stamped by `aqueduct patch revert` and read only by
+      core (the cross-engine compile gate and the green-run stamps in
+      patch/apply.py). The DuckDB executor never reads it; the keys a revert
+      removes leave the resolved session config before `_make_session` runs.

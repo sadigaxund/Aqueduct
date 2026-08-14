@@ -197,6 +197,12 @@ def stamp_validated_engine(blueprint_path: Path, engine: str) -> bool:
             return False
         changed = False
         for rec in healed_by:
+            # A reverted record's change is no longer in this Blueprint, so a
+            # green run validates nothing about it — appending an engine here
+            # would claim the patch had been proven on that engine while its
+            # content sits outside the file (`aqueduct/patch/revert.py`).
+            if rec.get("reverted_at"):
+                continue
             validated = rec.get("validated_on")
             if validated is None:
                 rec["validated_on"] = _to_ruamel([engine])
@@ -261,6 +267,11 @@ def stamp_perf_observation(
         written: list[dict[str, Any]] = []
         changed = False
         for rec in healed_by:
+            # Same reason `stamp_validated_engine` skips it: this run's
+            # duration says nothing about a patch whose change was reverted
+            # out of the Blueprint before the run started.
+            if rec.get("reverted_at"):
+                continue
             existing = rec.get("perf_observations")
             already = {
                 o.get("engine")
@@ -279,6 +290,9 @@ def stamp_perf_observation(
             co_applied = sum(
                 1 for other in healed_by
                 if str(other.get("applied_at") or "") >= applied_at
+                # A reverted patch's change is not in the Blueprint this run
+                # executed, so it shares none of this run's duration.
+                and not other.get("reverted_at")
             ) or 1
             observation = compare_perf(
                 baseline=baseline_dict,

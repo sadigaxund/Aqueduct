@@ -58,8 +58,10 @@ from aqueduct.executor.session_config import resolve_effective_engine_configs
 from aqueduct.parser.schema import EngineBlockSchema
 
 __all__ = [
+    "ABSENT",
     "EngineConfigDeltaResult",
     "blueprint_engine_layers",
+    "canonical_config_value",
     "engine_config_write_targets",
     "run_engine_config_delta_gate",
 ]
@@ -206,7 +208,7 @@ def engine_config_write_targets(
     return {engine: tuple(keys) for engine, keys in written.items() if keys}
 
 
-def _canonical(value: Any) -> Any:
+def canonical_config_value(value: Any) -> Any:
     """Compare engine-config values the way an engine session sees them.
 
     Every engine-config value ends up as a string on the session (Spark's
@@ -216,6 +218,10 @@ def _canonical(value: Any) -> Any:
     real delta and let the no-op through, which is the failure this gate
     exists to catch. ``ABSENT`` stays itself so "key not present" never
     collapses into the string form of any value.
+
+    Public because ``aqueduct/patch/revert.py`` has to answer the SAME
+    question in the opposite direction ("is the key still at the value this
+    patch wrote?"), and two copies of this rule would drift.
     """
     if value is ABSENT:
         return ABSENT
@@ -234,7 +240,7 @@ def _diff_effective(
         for key in sorted(set(b) | set(a)):
             bv = b.get(key, ABSENT)
             av = a.get(key, ABSENT)
-            if _canonical(bv) == _canonical(av):
+            if canonical_config_value(bv) == canonical_config_value(av):
                 continue
             per_key[key] = {
                 "before": None if bv is ABSENT else bv,

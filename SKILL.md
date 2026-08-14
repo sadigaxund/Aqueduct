@@ -124,6 +124,10 @@ compares to the last green run before the patch — reported, never judged:
 Aqueduct sets no regression threshold). Purely compiler-consumed metadata
 — no engine executes it, and it never affects the compiled Manifest. See
 docs/specs.md §8.14 for the cross-engine heal-patch gate it feeds.
+`aqueduct patch revert <patch_id>` undoes one record's engine-config writes
+and stamps it `reverted_at:` — the record is kept, and every consumer of the
+block (the cross-engine gate, the green-run `validated_on` /
+`perf_observations` stamps) skips a reverted one.
 
 **Linear-edge sugar:** omit `edges:` entirely and the compiler chains modules in
 declaration order — BUT only if every module is single-in/single-out (Ingress,
