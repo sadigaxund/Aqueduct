@@ -7,6 +7,9 @@ description: >
   `coalesce: 1` to reduce output to a single file.
 blueprint: blueprints/10_small_files.yml
 
+# The fix is a Blueprint edit — a module's config, not an engine knob.
+domains: [pipeline]
+
 inject_failure:
   module: out_events
   error_message: |

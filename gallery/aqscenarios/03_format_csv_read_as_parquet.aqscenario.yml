@@ -5,6 +5,9 @@ description: >
   Ingress users_raw declares format: parquet but the file at the path is actually CSV.
 blueprint: blueprints/03_format_csv_read_as_parquet.yml
 
+# The fix is a Blueprint edit — a module's config, not an engine knob.
+domains: [pipeline]
+
 inject_failure:
   module: users_raw
   error_message: |

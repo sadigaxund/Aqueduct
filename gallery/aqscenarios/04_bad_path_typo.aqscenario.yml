@@ -5,6 +5,9 @@ description: >
   events_raw path has a typo (data/input/events_raw.csv); the real file is data/input/events.csv.
 blueprint: blueprints/04_bad_path_typo.yml
 
+# The fix is a Blueprint edit — a module's config, not an engine knob.
+domains: [pipeline]
+
 inject_failure:
   module: events_raw
   error_message: |

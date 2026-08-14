@@ -9,6 +9,9 @@ description: >
   is correctly rejected by the same _check_guardrails code production runs.
 blueprint: blueprints/06_guardrail_forbidden_op.yml
 
+# The fix is a Blueprint edit — a module's config, not an engine knob.
+domains: [pipeline]
+
 inject_failure:
   module: clean_events
   error_message: |

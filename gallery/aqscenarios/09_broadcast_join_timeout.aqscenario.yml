@@ -4,9 +4,14 @@ id: broadcast_join_timeout
 description: >
   Channel joins two tables and hints a broadcast on the large
   table (orders). The broadcast fails because the table exceeds the
-  threshold. The agent must remove the broadcast hint or adjust
-  spark.sql.autoBroadcastJoinThreshold.
+  threshold. Two fixes are legitimate — remove the broadcast hint, or adjust
+  spark.sql.autoBroadcastJoinThreshold — but only the second is gradeable
+  here; see the expectation block.
 blueprint: blueprints/09_broadcast_join_timeout.yml
+
+# Only the config route, deliberately — see the expectation below for why the
+# hint-removal route cannot be declared here honestly.
+domains: [engine_config]
 
 inject_failure:
   module: join_enriched
@@ -30,11 +35,29 @@ inject_failure:
       type: org.apache.spark.SparkException
       message: "Cannot broadcast the table that is larger than 8GB: 12.4 GB"
 
+# This block used to read `config_contains: {query: ""}` — an empty-string
+# substring against a Channel that already HAS a `query`, so it asserted only
+# that a key which was never absent is still present. Scenario 07 had the same
+# defect in a different spelling; both passed for every patch ever generated.
+#
+# ⚠ KNOWN LIMITATION, and the reason this scenario grades ONE of the two
+# legitimate fixes. The error text names both: raise/disable the broadcast
+# threshold, or delete the `/*+ BROADCAST(...) */` hint from the query. The
+# effect grammar has no NEGATIVE matcher — `config_contains` asks whether a
+# substring is present and there is no way to ask whether one is GONE — so the
+# hint-removal route cannot be expressed at all, and a model that takes it
+# fails this scenario. Owner-ruled 2026-08-15: ship the gradeable half rather
+# than extend the grammar before the tag. Declaring `domains: [pipeline]` too
+# would claim coverage this file does not have.
+#
+# `engine_config_changed` rather than a pinned value: -1 (disable) and a raised
+# byte threshold are both correct, and which one is right depends on the
+# cluster. Gate 1 refuses a write whose effective config is identical before
+# and after, so "the key moved" cannot be satisfied by rewriting what is there.
 expected_patch:
   effect:
-    module: join_enriched
-    config_contains:
-      query: ""
+    engine_config_changed:
+      spark: [spark.sql.autoBroadcastJoinThreshold]
 
 assertions:
   - patch_is_valid: true

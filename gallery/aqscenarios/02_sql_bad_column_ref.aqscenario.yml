@@ -5,6 +5,9 @@ description: >
   clean_users selects a column `signup_date` that does not exist in users_raw — the column is `signup_ts`.
 blueprint: blueprints/02_sql_bad_column_ref.yml
 
+# The fix is a Blueprint edit — a module's config, not an engine knob.
+domains: [pipeline]
+
 inject_failure:
   module: clean_users
   error_message: |

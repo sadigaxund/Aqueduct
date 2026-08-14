@@ -1151,6 +1151,95 @@ _GALLERY_DIR = Path(__file__).parents[2] / "gallery" / "aqscenarios"
 
 
 class TestGalleryScenarios:
+    def test_every_gallery_scenario_declares_its_domains(self):
+        """A shipped scenario that declares no ``domains:`` is excluded by
+        EVERY ``--domain`` filter.
+
+        The exclusion is right for a third-party file — a scenario stating no
+        domain cannot truthfully be claimed to be in one — but for our own
+        gallery it means the flag selects a suite smaller than the one that
+        exists. When ``--domain`` shipped, nine of fourteen gallery scenarios
+        were undeclared, so ``--domain pipeline`` selected ONE of the nine
+        pipeline scenarios. Nothing failed; the suite just quietly shrank.
+        """
+        undeclared = sorted(
+            p.name for p in _GALLERY_DIR.glob("*.aqscenario.yml") if not load_scenario(p).domains
+        )
+        assert undeclared == [], (
+            f"gallery scenarios declaring no `domains:`: {undeclared}. Each is "
+            "silently dropped from every `aqueduct benchmark --domain` run. Add "
+            "the domain(s) its FIX belongs to — the domain is a property of the "
+            "fix, not of the failure, so a scenario with two legitimate fixes "
+            "declares both (see 07)."
+        )
+
+    def test_no_gallery_scenario_expects_a_key_it_already_has(self):
+        """``config_contains: {key: ""}`` on a key the Blueprint ALREADY has
+        asserts nothing.
+
+        Every string is a superstring of ``""``, so the check reduces to "the
+        key is present". Whether that is vacuous depends on the pre-patch
+        Blueprint, which is why this reads it rather than banning the spelling
+        outright: scenario 10 expects ``coalesce: ""`` on an Egress that has
+        no ``coalesce``, so "present afterwards" is a real (if weak) claim
+        about the fix. Scenarios 07 and 09 expected an empty substring on a
+        ``query`` their Channel was already built with — an expectation
+        satisfied by any patch whatsoever, including one that changed nothing.
+        Both shipped that way for months. Same family as
+        ``test_no_zero_assertion_tests``: a check that cannot fail.
+        """
+        offenders: list[str] = []
+        #: (scenario, module) pairs the walker actually resolved to a real
+        #: pre-patch config. Without this, a Blueprint path that stopped
+        #: resolving would leave every `module in _configs` test false and the
+        #: whole check would pass by inspecting nothing.
+        inspected: list[tuple[str, str]] = []
+
+        for path in sorted(_GALLERY_DIR.glob("*.aqscenario.yml")):
+            from aqueduct.patch.apply import _yaml_load
+
+            scenario = load_scenario(path)
+            blueprint = _yaml_load(path.parent / scenario.blueprint)
+            configs = {
+                m.get("id"): (m.get("config") or {})
+                for m in (blueprint.get("modules") or [])
+                if isinstance(m, dict)
+            }
+
+            def walk(node, where: str, _configs=configs) -> None:
+                if isinstance(node, dict):
+                    contains = node.get("config_contains")
+                    if isinstance(contains, dict) and node.get("module") in _configs:
+                        before = _configs[node["module"]]
+                        inspected.append((where.split(".")[0], node["module"]))
+                        offenders.extend(
+                            f"{where}.config_contains.{k} (module {node['module']!r} "
+                            f"already has {k!r})"
+                            for k, v in contains.items()
+                            if v == "" and k in before
+                        )
+                    for key, value in node.items():
+                        walk(value, f"{where}.{key}")
+                elif isinstance(node, list):
+                    for i, item in enumerate(node):
+                        walk(item, f"{where}[{i}]")
+
+            walk((scenario.expected_patch or {}).get("effect"), path.name)
+
+        assert len(inspected) >= 5, (
+            "the check inspected almost nothing — it resolved only "
+            f"{inspected}. Either the gallery stopped using module-scoped "
+            "`config_contains` (then delete this test), or the Blueprint "
+            "lookup broke and a green run means nothing."
+        )
+        assert offenders == [], (
+            f"vacuous expectations: {offenders}. Each passes for every patch, "
+            "because the key was present before the patch too. Assert the value "
+            "the fix must produce, or — when the right value depends on the "
+            "deployment — use `engine_config_changed`, which asserts the key "
+            "MOVED without pinning what to."
+        )
+
     def test_all_five_scenarios_parse_successfully(self):
         """All gallery scenarios 01-05 load successfully with the new effect: syntax."""
         for n in range(1, 6):

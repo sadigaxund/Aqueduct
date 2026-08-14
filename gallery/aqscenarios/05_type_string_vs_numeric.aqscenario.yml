@@ -5,6 +5,9 @@ description: >
   clean_events does SUM(event_id), but event_id is read from CSV as STRING — the numeric aggregate fails.
 blueprint: blueprints/05_type_string_vs_numeric.yml
 
+# The fix is a Blueprint edit — a module's config, not an engine knob.
+domains: [pipeline]
+
 inject_failure:
   module: clean_events
   error_message: |

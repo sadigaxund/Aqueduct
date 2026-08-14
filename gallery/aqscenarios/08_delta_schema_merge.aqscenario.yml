@@ -8,6 +8,9 @@ description: >
   mergeSchema: true in the Ingress options.
 blueprint: blueprints/08_delta_schema_merge.yml
 
+# The fix is a Blueprint edit — a module's config, not an engine knob.
+domains: [pipeline]
+
 inject_failure:
   module: orders_raw
   error_message: |

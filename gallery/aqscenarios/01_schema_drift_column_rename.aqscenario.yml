@@ -5,6 +5,9 @@ description: >
   Upstream renamed event_ts to event_time, causing downstream clean_events to fail to resolve the column.
 blueprint: blueprints/pipeline.yml
 
+# The fix is a Blueprint edit — a module's config, not an engine knob.
+domains: [pipeline]
+
 inject_failure:
   module: clean_events
   error_message: |
