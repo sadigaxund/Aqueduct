@@ -873,7 +873,11 @@ def check_aqscenario(aqscenario_path: Path) -> list[CheckResult]:
     # block stating no expectation is an error, so anything reaching here is
     # well formed and only needs summarising.
     effect = (sc.expected_patch or {}).get("effect") or {}
-    graded = sorted(k for k in effect if k != "config_contains") if isinstance(effect, dict) else []
+    # `config_contains`/`config_not_contains` are MODIFIERS of `module:`, not
+    # expectations in their own right (the loader refuses either without one),
+    # so listing them beside `module` would double-count a single claim.
+    _modifiers = {"config_contains", "config_not_contains"}
+    graded = sorted(k for k in effect if k not in _modifiers) if isinstance(effect, dict) else []
     note = f"  effect={graded}" if graded else "  effect=(none — assertions only)"
     if sc.domains:
         note += f"  domains={list(sc.domains)}"

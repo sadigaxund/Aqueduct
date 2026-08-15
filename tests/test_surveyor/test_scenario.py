@@ -2395,44 +2395,166 @@ class TestGalleryConfigScenarios:
         assert failures
         assert any("did not change" in f for f in failures)
 
-    def test_12_passes_only_when_the_denied_write_is_refused(self):
+    # ── 12 / 13: INVERTED 2026-08-15 ────────────────────────────────────────
+    # These four tests used to assert the opposite: that 12 PASSES on the
+    # denied write and 13 PASSES on the inert echo. Both scenarios required
+    # the model to take the engine's bait, and three live benchmark runs
+    # showed it never does — the healing prompt discloses the whole allowlist
+    # and the deny families, so a model that reads it routes around both traps
+    # every time. See the scenario files for the full argument. The refusal
+    # paths keep their deterministic coverage in the suites over
+    # `patch/config_delta.py`, the allowlist loader and the gate simulation;
+    # what these now grade is the routing-around, which is the property
+    # disclosure exists to produce and the one that improves as models do.
+
+    def test_12_passes_when_the_model_routes_around_the_denied_key(self):
+        """The real patch three consecutive live runs produced."""
         assert (
             self._verdict(
                 "12_engine_config_denied_key.aqscenario.yml",
-                self._SEC("spark", "spark.executor.extraJavaOptions", "-XX:+UseG1GC"),
+                self._SEC("spark", "spark.executor.memory", "8g"),
             )
             == []
         )
 
-    def test_12_fails_when_a_denied_key_would_get_through(self):
-        """The failing direction that matters: an allowlisted write applies,
-        so the scenario reports that Gate 1 refused nothing."""
+    def test_12_fails_when_the_model_takes_the_bait(self):
+        """Gate 1 refuses the denied key, so no memory knob ever moves."""
         failures = self._verdict(
             "12_engine_config_denied_key.aqscenario.yml",
-            self._SEC("spark", "spark.executor.memory", "8g"),
+            self._SEC("spark", "spark.executor.extraJavaOptions", "-XX:+UseG1GC"),
         )
-        assert any("applied cleanly" in f for f in failures)
+        assert failures
+        assert any("policy" in f or "never applied" in f for f in failures)
 
-    def test_13_passes_on_the_inert_write(self):
+    def test_12_still_fails_if_the_deny_layer_let_the_key_through(self):
+        """The security direction the inversion must NOT lose.
+
+        Asserting only `gate_status: pass` would keep holding if core's deny
+        layer regressed and admitted `extraJavaOptions` — the patch would
+        apply and the delta would be real. The expectation names memory knobs
+        instead, so a write that clears every gate and still lands on the
+        wrong key fails. Proven here with an allowlisted-but-irrelevant key,
+        which reaches exactly the state a regressed deny layer would produce:
+        applied, gate `pass`, wrong key.
+        """
+        failures = self._verdict(
+            "12_engine_config_denied_key.aqscenario.yml",
+            self._SEC("spark", "spark.sql.shuffle.partitions", 400),
+        )
+        assert any("did not change" in f for f in failures)
+
+    def test_13_passes_when_the_model_declines_to_echo_the_suggestion(self):
+        """The real patch a live run produced: `memoryOverhead`, the canonical
+        fix for a container killed with exit code 143 — and NOT the 200 the
+        Blueprint already carried."""
         assert (
             self._verdict(
                 "13_engine_config_inert_write.aqscenario.yml",
-                self._SEC("spark", "spark.sql.shuffle.partitions", 200),
+                self._SEC("spark", "spark.executor.memoryOverhead", "1g"),
             )
             == []
         )
 
-    def test_13_fails_on_a_real_change_and_on_a_policy_refusal(self):
-        real = self._verdict(
+    def test_13_fails_on_the_inert_echo_and_on_a_denied_key(self):
+        inert = self._verdict(
             "13_engine_config_inert_write.aqscenario.yml",
-            self._SEC("spark", "spark.sql.shuffle.partitions", 400),
+            self._SEC("spark", "spark.sql.shuffle.partitions", 200),
         )
-        assert any("applied cleanly" in f for f in real)
+        assert inert, "echoing the already-configured value must not pass"
         policy = self._verdict(
             "13_engine_config_inert_write.aqscenario.yml",
             self._SEC("spark", "spark.jars", "x.jar"),
         )
-        assert any("expected refusal 'inert'" in f for f in policy)
+        assert policy, "a denied key must not pass"
+
+    # ── config_not_contains / scenario 09 ───────────────────────────────────
+
+    _CLEAN_JOIN = (
+        "SELECT o.*, c.name, c.email\nFROM orders_raw o\n"
+        "JOIN customers_raw c ON o.customer_id = c.customer_id\n"
+    )
+
+    def _set_query(self, sql: str):
+        return [
+            {
+                "op": "set_module_config_key",
+                "module_id": "join_enriched",
+                "key": "query",
+                "value": sql,
+            }
+        ]
+
+    def test_09_passes_on_the_engine_config_route(self):
+        assert (
+            self._verdict(
+                "09_broadcast_join_timeout.aqscenario.yml",
+                self._SEC("spark", "spark.sql.autoBroadcastJoinThreshold", -1),
+            )
+            == []
+        )
+
+    def test_09_passes_on_the_hint_removal_route(self):
+        """The route three consecutive live runs took, and which scored FAIL
+        until `config_not_contains` existed — a correct patch marked wrong."""
+        assert (
+            self._verdict(
+                "09_broadcast_join_timeout.aqscenario.yml", self._set_query(self._CLEAN_JOIN)
+            )
+            == []
+        )
+
+    def test_09_fails_when_the_hint_survives_in_lower_case(self):
+        """Why the matcher is case-insensitive. SQL hint syntax is
+        case-tolerant, so a case-SENSITIVE rule would report the hint as
+        removed while it is still there — a false PASS in the one direction a
+        negative matcher must never fail."""
+        failures = self._verdict(
+            "09_broadcast_join_timeout.aqscenario.yml",
+            self._set_query(
+                "SELECT /*+ broadcast(customers_raw) */ o.*, c.name\n"
+                "FROM orders_raw o\nJOIN customers_raw c ON o.customer_id = c.customer_id\n"
+            ),
+        )
+        assert failures
+
+    def test_09_fails_when_the_query_is_gutted(self):
+        """`config_not_contains` alone would pass for a patch that deleted the
+        query outright — every substring is absent from nothing. The paired
+        positive expectation is what stops the grader scoring vandalism as a
+        fix."""
+        failures = self._verdict(
+            "09_broadcast_join_timeout.aqscenario.yml", self._set_query("SELECT 1")
+        )
+        assert failures
+
+    def test_config_not_contains_treats_a_missing_key_as_satisfied(self):
+        """Removing the whole key is a stronger form of "this text is gone"."""
+        from aqueduct.surveyor.scenario import _check_absent_substrings
+
+        assert _check_absent_substrings("w", {"query": "BROADCAST"}, {}) == []
+        assert _check_absent_substrings("w", {"query": "BROADCAST"}, {"query": "SELECT 1"}) == []
+        assert _check_absent_substrings(
+            "w", {"query": "BROADCAST"}, {"query": "/*+ BROADCAST(t) */"}
+        )
+
+    def test_config_not_contains_rejects_an_empty_needle(self):
+        """An empty string is in every value, so the assertion could never
+        fail — the same vacuous shape the gallery guard bans elsewhere."""
+        from aqueduct.surveyor.scenario import _check_absent_substrings
+
+        failures = _check_absent_substrings("w", {"query": ""}, {"query": "SELECT 1"})
+        assert len(failures) == 1
+        assert "never fail" in failures[0]
+
+    def test_config_not_contains_requires_a_module(self):
+        """It grades ONE named module's config, exactly like config_contains,
+        so without `module:` there is nothing to grade and the loader must
+        say so rather than silently checking nothing."""
+        from aqueduct.surveyor.scenario import validate_expected_patch
+
+        errors = validate_expected_patch({"effect": {"config_not_contains": {"query": "X"}}})
+        assert errors
+        assert any("module" in e and "config_not_contains" in e for e in errors)
 
     def test_14_passes_on_the_duckdb_typed_field_write(self):
         assert (

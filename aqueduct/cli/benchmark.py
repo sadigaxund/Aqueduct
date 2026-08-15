@@ -232,12 +232,20 @@ def benchmark(
     # pair_count × budget.max_reprompts (every pair burns the full reprompt
     # budget). Use "floor/ceiling" instead of "min/max" so it can't be
     # misread as minutes next to a duration.
+    #
+    # `max_reprompts` is not the only axis that can end a pair, and the
+    # ceiling read as a promise: a suite advertised at "18 ceiling" delivered
+    # exactly one call per pair when a single slow call ate the whole
+    # `max_seconds` budget. Naming the seconds axis here says the ceiling is a
+    # ceiling, not a plan — no new knob, no default changed, just the budget
+    # value already resolved two lines above.
     _floor_calls = _pair_count
     _ceiling_calls = _pair_count * _budget.max_reprompts
     click.echo(
         f"[benchmark] {_scn_count} scenarios × {len(model_list)} models = "
         f"{_pair_count} pairs · LLM calls: {_floor_calls} floor / "
-        f"{_ceiling_calls} ceiling (max_reprompts={_budget.max_reprompts})",
+        f"{_ceiling_calls} ceiling (max_reprompts={_budget.max_reprompts}; "
+        f"a pair also stops at agent.budget.max_seconds={_budget.max_seconds:g}s)",
         err=True,
     )
     try:
@@ -283,6 +291,21 @@ def benchmark(
                     "confidence": r.confidence,
                     "duration_seconds": r.duration_seconds,
                     "attempts_to_parse": r.attempts_to_parse,
+                    # WHICH axis ended the heal (BudgetConfig vocabulary —
+                    # see agent/budget.py). Without it, a run OUR OWN budget
+                    # terminated (`budget_seconds_exceeded`: one slow call ate
+                    # `agent.budget.max_seconds`, so no reprompt was possible)
+                    # is indistinguishable from a model that could not produce
+                    # a patch in the attempts it was given — the same
+                    # harness-stop-rendered-as-model-failure shape as an empty
+                    # LLM response. `run_scenario` has always populated
+                    # `ScenarioResult.stop_reason` and `benchmark_store`
+                    # persists it; this hand-built dict was the only place it
+                    # was dropped, so the one output users read said `None` for
+                    # every pair, PASS and FAIL alike. `str(...)` because
+                    # `StopReason` is a `StrEnum` — emitted as a bare string,
+                    # never an enum repr. None stays None: no invented axis.
+                    "stop_reason": (str(r.stop_reason) if r.stop_reason is not None else None),
                     "reprompt_errors": r.reprompt_errors,
                     "root_cause_match": r.root_cause_match,
                     "category_match": r.category_match,

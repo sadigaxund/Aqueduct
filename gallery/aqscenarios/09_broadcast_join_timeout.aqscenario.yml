@@ -9,9 +9,9 @@ description: >
   here; see the expectation block.
 blueprint: blueprints/09_broadcast_join_timeout.yml
 
-# Only the config route, deliberately — see the expectation below for why the
-# hint-removal route cannot be declared here honestly.
-domains: [engine_config]
+# Both, like scenario 07: the error text names two legitimate fixes and the
+# domain is a property of the FIX, not of the failure.
+domains: [engine_config, pipeline]
 
 inject_failure:
   module: join_enriched
@@ -40,15 +40,13 @@ inject_failure:
 # that a key which was never absent is still present. Scenario 07 had the same
 # defect in a different spelling; both passed for every patch ever generated.
 #
-# ⚠ KNOWN LIMITATION, and the reason this scenario grades ONE of the two
-# legitimate fixes. The error text names both: raise/disable the broadcast
-# threshold, or delete the `/*+ BROADCAST(...) */` hint from the query. The
-# effect grammar has no NEGATIVE matcher — `config_contains` asks whether a
-# substring is present and there is no way to ask whether one is GONE — so the
-# hint-removal route cannot be expressed at all, and a model that takes it
-# fails this scenario. Owner-ruled 2026-08-15: ship the gradeable half rather
-# than extend the grammar before the tag. Declaring `domains: [pipeline]` too
-# would claim coverage this file does not have.
+# The error text names two legitimate fixes and this grades both. It briefly
+# graded only the config route, because the grammar had no way to say "the hint
+# is GONE" — every matcher asked whether a substring was PRESENT. Three live
+# benchmark runs then took the hint-removal route three times out of three,
+# produced a correct patch each time, and were scored FAIL. A benchmark that
+# fails the answer a model actually gives is worse than one that is merely
+# incomplete, so `config_not_contains` was added rather than shipping that.
 #
 # `engine_config_changed` rather than a pinned value: -1 (disable) and a raised
 # byte threshold are both correct, and which one is right depends on the
@@ -56,8 +54,20 @@ inject_failure:
 # and after, so "the key moved" cannot be satisfied by rewriting what is there.
 expected_patch:
   effect:
-    engine_config_changed:
-      spark: [spark.sql.autoBroadcastJoinThreshold]
+    any_of:
+      - engine_config_changed:
+          spark: [spark.sql.autoBroadcastJoinThreshold]
+      # The hint is gone AND the join survived. `config_not_contains` alone
+      # would pass for a patch that deleted the whole query, so the positive
+      # half is what keeps this from grading vandalism as a fix. A table name
+      # rather than a SQL fragment: `config_contains` normalises SQL-typed
+      # keys through sqlglot, and a fragment that is not parseable on its own
+      # (`JOIN customers_raw`) normalises to something that no longer matches.
+      - module: join_enriched
+        config_not_contains:
+          query: "BROADCAST"
+        config_contains:
+          query: "customers_raw"
 
 assertions:
   - patch_is_valid: true

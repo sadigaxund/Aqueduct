@@ -338,6 +338,18 @@ patch applied) and `engine_config_gate` (Gate 1's status, or `null` when that
 gate never ran). Without them a failed pair reads only as `patch_applies:
 false`, which covers four causes with four different fixes.
 
+Every pair also carries `stop_reason` — which axis ended the heal, from the
+`agent.budget` vocabulary in `aqueduct/agent/budget.py` (`solved`,
+`exhausted_attempts`, `budget_seconds_exceeded`, `budget_tokens_exceeded`,
+`stuck_signature`, `progress_stalled`, `api_error`, `deferred`; `null` only
+when no reason was recorded). It is the difference between "the model could
+not do it in the attempts it was given" and "our own budget stopped it": a
+pair that shows `attempts_to_parse: 1` with
+`stop_reason: budget_seconds_exceeded` was cut off by
+`agent.budget.max_seconds`, not out-argued — the `--format table` view cannot
+express that, and the LLM-call ceiling in the run banner is a ceiling, not a
+promise.
+
 The benchmark store backend is configured under `stores.benchmark` in `aqueduct.yml` (`backend: duckdb\|postgres`, `path`, `persist`, `gate_on_regression`), Postgres rows live in the `benchmark` schema. Override any of these per-run with `--set stores.benchmark.*`.
 
 **Key flags for `benchmark-stats`:**

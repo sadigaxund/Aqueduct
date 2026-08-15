@@ -7,11 +7,10 @@ description: >
   writes the value that already resolves: allowlist-clean, schema-valid,
   applies without complaint, and changes nothing any engine would see.
 
-  This scenario PASSES when that write is REFUSED as inert. The distinction
-  from scenario 12 is the whole point: a policy refusal needs a different KEY,
-  an inert write needs a different VALUE, and a benchmark that reported both
-  as "did not apply" would be unable to tell a blocked security violation from
-  a wasted heal attempt.
+  This scenario PASSES when the model declines to echo it and heals with a key
+  that actually moves. The distinction from scenario 12 survives the inversion:
+  there the trap is a forbidden KEY, here it is a useless VALUE, and the two
+  need different fixes — a different key, or a different value.
 blueprint: blueprints/13_engine_config_inert_write.yml
 
 domains: [engine_config]
@@ -36,15 +35,34 @@ inject_failure:
       type: org.apache.spark.SparkException
       message: "Container killed on request. Exit code is 143"
 
-# No `expected_patch:`. An inert write is refused, so no post-patch Blueprint
-# exists to grade an effect against.
+# ⚠ INVERTED 2026-08-15, for the same reason as scenario 12 and on the same
+# evidence — see that file for the full argument. This used to assert
+# `patch_applies: false` + `patch_refused: inert` + `gate_status: fail`, which
+# required the model to ECHO the engine's recommendation back at a Blueprint
+# that already carried it. It did not: shown this failure, the model proposed
+# `spark.executor.memoryOverhead`, which is the canonical fix for a container
+# killed with exit code 143 (a YARN physical-memory kill), and deliberately did
+# not restate the 200 that was already configured.
+#
+# The inert refusal keeps its deterministic coverage in the suites over
+# `patch/config_delta.py` — `EngineConfigInertError` is raised there by a
+# write-target probe, not sampled from a model's behaviour.
+#
+# `gate_status: pass` is doing real work here rather than restating
+# `patch_applies`. The delta gate is precisely what an inert write fails, so a
+# model that DID echo 200 would apply-and-refuse with `fail`, and a model that
+# wrote some other key at its existing value would too. Requiring `pass` is
+# requiring a write that changes what the engine sees.
+expected_patch:
+  effect:
+    any_of:
+      - engine_config_changed:
+          spark: [spark.executor.memoryOverhead]
+      - engine_config_changed:
+          spark: [spark.executor.memory]
 
 assertions:
   - patch_is_valid: true
-  - patch_applies: false
-  - patch_refused: inert
-  # Unlike the denied-key scenario, the delta gate DID run here — the write
-  # cleared the allowlist and was then measured against the effective session
-  # config. It has a real verdict, and `fail` is it.
-  - gate_status: {engine_config: fail}
+  - patch_applies: true
+  - gate_status: {engine_config: pass}
   - root_cause_contains: ["shuffle", "partitions", "skew"]

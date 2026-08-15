@@ -67,6 +67,10 @@ expected_patch:
       header: true             # bool / number: strict typed equality
       path: "data/orders"      # other strings: raw substring
 
+    # 1b. …and text the fix must REMOVE (needs `module:` like config_contains)
+    config_not_contains:
+      query: "BROADCAST"       # case-insensitive, raw (not SQL-normalised)
+
     # 2. SOME module matches (the fix inserts a module whose id the scenario
     #    cannot know in advance)
     modules_contain:
@@ -100,6 +104,21 @@ Engine-config VALUES compare by equality on the canonical (string) form, not
 by substring the way `config_contains` does. Every engine-config value reaches
 the session as a string, so `200` and `"200"` are the same setting, while a
 substring rule would let an actual of `1200` satisfy an expected `200`.
+
+`config_not_contains` is the only negative matcher, and it exists because a
+whole class of pipeline fixes is a REMOVAL — delete a join hint, drop a bad
+reader option — which no positive matcher can express. Two rules differ from
+`config_contains` on purpose: the comparison is **case-insensitive**, because
+`/*+ broadcast(t) */` is the same hint as `/*+ BROADCAST(t) */` and a
+case-sensitive rule would report a hint as removed while it is still there;
+and it is **raw**, not SQL-normalised, because the normaliser may drop a
+comment-borne hint while parsing and would delete the very text being looked
+for. A key missing from the config entirely satisfies it — removing the whole
+key is a stronger form of the same claim.
+
+Pair it with a positive expectation. `config_not_contains` alone passes for a
+patch that deleted the value outright, so scenario 09 asserts the hint is gone
+**and** that the joined table is still named.
 
 An effect that could not be graded FAILS. If the patch never applied — a
 malformed patch, a guardrail violation, a Gate 1 refusal — there is no

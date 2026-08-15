@@ -1157,7 +1157,25 @@ class _AqueductCLIGroup(click.Group):
     def invoke(self, ctx: click.Context) -> Any:
         try:
             return super().invoke(ctx)
-        except (SystemExit, KeyboardInterrupt, click.exceptions.Abort, click.ClickException):
+        except (
+            SystemExit,
+            KeyboardInterrupt,
+            click.exceptions.Abort,
+            click.ClickException,
+            # `click.exceptions.Exit` is NOT a SystemExit — its MRO is
+            # Exit -> RuntimeError -> Exception — and it is click's normal,
+            # SUCCESSFUL exit signal, raised by `ctx.exit(code)` and by the
+            # `--help` / eager-param machinery. So a broad `except Exception`
+            # in an `invoke` override captures clean exits, not just failures:
+            # every subcommand `--help` and the bare `aqueduct` banner reported
+            # `✗ unexpected error: 0` and exit 2, where the `0` was
+            # `str(Exit(0))` — the code the command ASKED for, rendered as
+            # error text. (`aqueduct --help`/`--version` looked fine only
+            # because click resolves the ROOT group's eager params before
+            # entering `Group.invoke` at all.) Re-raise so the requested code
+            # survives — this is a control-flow signal, never an error.
+            click.exceptions.Exit,
+        ):
             raise
         except Exception as exc:  # noqa: BLE001 — last-resort net, see class docstring
             from aqueduct import exit_codes as _exit_codes

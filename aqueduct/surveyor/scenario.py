@@ -171,6 +171,7 @@ _EFFECT_KEYS = frozenset(
     {
         "module",
         "config_contains",
+        "config_not_contains",
         "modules_contain",
         "engine_config",
         "engine_config_changed",
@@ -661,11 +662,12 @@ def _validate_effect(effect: Any, where: str) -> list[str]:
     if unknown:
         return [f"{where}: unknown key(s) {unknown}. Known keys: {sorted(_EFFECT_KEYS)}."]
 
-    if "config_contains" in effect and not effect.get("module"):
-        return [
-            f"{where}: 'module' is required when 'config_contains' is given "
-            "(config_contains grades one named module's config)"
-        ]
+    for modifier in ("config_contains", "config_not_contains"):
+        if modifier in effect and not effect.get("module"):
+            return [
+                f"{where}: 'module' is required when '{modifier}' is given "
+                f"({modifier} grades one named module's config)"
+            ]
 
     if not (_EFFECT_EXPECTATION_KEYS & set(effect)):
         return [
@@ -675,7 +677,7 @@ def _validate_effect(effect: Any, where: str) -> list[str]:
         ]
 
     errors: list[str] = []
-    for key in ("config_contains", "engine_config", "modules_contain"):
+    for key in ("config_contains", "config_not_contains", "engine_config", "modules_contain"):
         value = effect.get(key)
         if value is not None and not isinstance(value, dict):
             errors.append(f"{where}.{key}: must be a mapping, got {type(value).__name__}")
@@ -706,6 +708,59 @@ def _validate_effect(effect: Any, where: str) -> list[str]:
                 errors.extend(_validate_effect(alt, f"{where}.any_of[{i}]"))
 
     return errors
+
+
+def _check_absent_substrings(
+    where: str,
+    forbidden: dict[str, Any],
+    actual_config: dict[str, Any],
+) -> list[str]:
+    """Assert a substring is GONE from a module-config value.
+
+    The grammar's only negative matcher, and it exists because a whole class
+    of pipeline fixes is a REMOVAL — delete a join hint, drop a bad reader
+    option — which every positive matcher is structurally unable to express.
+    Without it, scenario 09 (`broadcast_join_timeout`) could not grade its
+    hint-removal fix at all: three consecutive live benchmark runs took
+    exactly that route, produced a correct patch, and were scored FAIL,
+    because the scenario could only ask whether a substring was PRESENT.
+
+    Comparison is CASE-INSENSITIVE and raw, deliberately on both counts.
+    Case-insensitive because SQL hint syntax is case-tolerant — `/*+
+    broadcast(t) */` is the same hint as `/*+ BROADCAST(t) */`, and a
+    case-sensitive rule would report the hint as removed when it is still
+    there, which is a false PASS in the one direction a negative matcher must
+    never fail. Raw rather than SQL-normalised because sqlglot's normaliser
+    may legitimately drop or rewrite a comment-borne hint while parsing, so
+    normalising first would delete the very text this is looking for.
+
+    A key ABSENT from the actual config satisfies the assertion: the fix
+    removed the whole key rather than editing its value, which is a stronger
+    form of the same claim.
+    """
+    failures: list[str] = []
+    for key, substring in forbidden.items():
+        if not isinstance(substring, str):
+            failures.append(
+                f"{where}.{key}: must be a string to search for, got "
+                f"{type(substring).__name__} ({substring!r})"
+            )
+            continue
+        if not substring:
+            failures.append(
+                f"{where}.{key}: empty string — every value contains it, so "
+                "this assertion can never fail. Name the text the fix removes."
+            )
+            continue
+        actual_val = actual_config.get(key)
+        if actual_val is None:
+            continue
+        if substring.casefold() in str(actual_val).casefold():
+            failures.append(
+                f"{where}.{key}: {substring!r} is still present in the patched "
+                f"module config (value: {str(actual_val)[:200]!r})"
+            )
+    return failures
 
 
 def _compare_config_values(
@@ -852,6 +907,13 @@ def _grade_effect(
                     config_contains,
                     target.get("config") or {},
                     sql_aware=True,
+                )
+            )
+            failures.extend(
+                _check_absent_substrings(
+                    f"{where}.config_not_contains",
+                    effect.get("config_not_contains") or {},
+                    target.get("config") or {},
                 )
             )
 

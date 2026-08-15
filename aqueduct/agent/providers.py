@@ -606,6 +606,72 @@ def _openai_tools_payload(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+def _empty_openai_compat_content_error(
+    choice: dict[str, Any],
+    message: dict[str, Any],
+    payload: dict[str, Any],
+) -> str:
+    """Explain WHY an OpenAI-compatible response carried no answer text.
+
+    The old message ("the model may have refused the request, hit a content
+    filter, or been interrupted mid-generation") named none of the three
+    situations the response itself distinguishes, and they have DIFFERENT
+    fixes — so the user was sent to debug a prompt that was fine. Worse, an
+    empty STRING slipped past the guard entirely and reached the JSON parser,
+    which then reported ``Expecting value`` at line 1 column 1 with a blank
+    excerpt: a harness-side non-answer rendered as a model-side malformed-JSON
+    failure, burning a reprompt each time.
+
+    Read off the response, in priority order:
+
+    * ``finish_reason == "length"`` — TRUNCATED at the output-token limit. Not
+      a prompt problem and not a JSON problem; the model never finished
+      writing. This is the only branch that names a knob.
+    * ``message.reasoning_content`` non-empty with ``content`` empty — a
+      reasoning-only turn (deepseek-r1 / o-series through a compat gateway).
+      Reported, never parsed: the reasoning channel is not the answer channel,
+      and mining a patch out of it would be a behaviour change. (The streaming
+      path already routes this field to the 'thinking' channel; this path had
+      been ignoring it entirely.)
+    * neither — genuinely empty; keep the original refusal/filter wording.
+
+    ``finish_reason`` has no other reader in the codebase; this is its only
+    consumer, which is why it is inspected here rather than plumbed through.
+    """
+    finish_reason = choice.get("finish_reason")
+    reasoning = message.get("reasoning_content")
+    head = "LLM returned empty content from the non-streaming OpenAI-compatible endpoint"
+
+    if finish_reason == "length":
+        # Report the limit that was ACTUALLY SENT, not the ``max_tokens``
+        # argument: ``provider_options`` is merged into the payload AFTER
+        # ``max_tokens`` is set, so an override there wins, and naming the
+        # argument would point the user at a number the endpoint never saw.
+        return (
+            f"{head}: the response was TRUNCATED at the output-token limit "
+            f"(finish_reason='length'; the request sent "
+            f"max_tokens={payload.get('max_tokens')}). The model never finished "
+            f"writing — this is a token-budget problem, not a malformed-response "
+            f"problem, so re-prompting will not help. Raise the limit with "
+            f"-s agent.provider_options.max_tokens=N (provider_options merges into "
+            f"the request after max_tokens, so it overrides it)."
+        )
+
+    if reasoning:
+        return (
+            f"{head}: the model wrote {len(reasoning)} characters of "
+            f"reasoning_content and left content empty — a reasoning-only turn "
+            f"(deepseek-r1 / o-series via a compat gateway). Aqueduct reads the "
+            f"answer channel only, so nothing was parsed from it "
+            f"(finish_reason={finish_reason!r})."
+        )
+
+    return (
+        f"{head} (finish_reason={finish_reason!r}). The model may have refused the "
+        f"request, hit a content filter, or been interrupted mid-generation."
+    )
+
+
 def _call_openai_compat(
     messages: list[dict[str, Any]],
     model: str,
@@ -715,13 +781,15 @@ def _call_openai_compat(
             backoff_seconds=backoff_seconds,
         )
         data = response.json()
-    text = data["choices"][0]["message"].get("content")
-    if text is None:
-        raise AqueductError(
-            "LLM returned null/empty content from OpenAI-compatible endpoint. "
-            "The model may have refused the request, hit a content filter, "
-            "or been interrupted mid-generation."
-        )
+    _choice = data["choices"][0]
+    _message = _choice["message"]
+    text = _message.get("content")
+    # `is None` is not enough: the observed failure was `content: ""`, an empty
+    # STRING, which reached the JSON parser and was reported as the model's bad
+    # JSON. The streaming path below already guards with `if not text`; the two
+    # paths must not disagree about what an empty response is.
+    if text is None or not text.strip():
+        raise AqueductError(_empty_openai_compat_content_error(_choice, _message, payload))
     usage = data.get("usage") or {}
     return (
         text,
@@ -867,16 +935,17 @@ def _run_openai_tool_loop(
         ti_total += int(usage.get("prompt_tokens", 0) or 0)
         to_total += int(usage.get("completion_tokens", 0) or 0)
 
-        choice_msg = (data.get("choices") or [{}])[0].get("message") or {}
+        choice = (data.get("choices") or [{}])[0]
+        choice_msg = choice.get("message") or {}
         tool_calls = choice_msg.get("tool_calls") or []
         if not tool_calls:
             text = choice_msg.get("content")
-            if text is None:
-                raise AqueductError(
-                    "LLM returned null/empty content from OpenAI-compatible "
-                    "endpoint. The model may have refused the request, hit "
-                    "a content filter, or been interrupted mid-generation."
-                )
+            # Same empty-string / truncation / reasoning-only blindness as the
+            # oneshot path above — the tool loop's final turn is an ordinary
+            # completion, so it gets the identical guard and the identical
+            # explanation rather than a second, drifting copy.
+            if text is None or not text.strip():
+                raise AqueductError(_empty_openai_compat_content_error(choice, choice_msg, payload))
             if tool_state is not None and tool_state.supported is None:
                 tool_state.supported = True
             return text, ti_total, to_total
