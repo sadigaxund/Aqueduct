@@ -564,7 +564,21 @@ with DAG(
     )
 """
         )
-        db = DagBag(dag_folder=tmpdir, include_examples=False)
+        # `include_examples` stopped being a `DagBag.__init__` kwarg in newer
+        # Airflow, and nothing pins the version — `airflow = ">=2.7"` with no
+        # ceiling, so CI resolves whatever is current the day it runs. Branch
+        # on the SIGNATURE rather than on a version string: a version
+        # include-list would need editing every time Airflow moves, which is
+        # the drift shape this repo bans, and the kwarg is incidental to what
+        # this test asserts (that a DAG importing AqueductOperator parses).
+        # Loading a custom `dag_folder` does not pull Airflow's own example
+        # DAGs in either case, so the assertions below are unchanged.
+        import inspect
+
+        dagbag_kwargs = {}
+        if "include_examples" in inspect.signature(DagBag.__init__).parameters:
+            dagbag_kwargs["include_examples"] = False
+        db = DagBag(dag_folder=tmpdir, **dagbag_kwargs)
         assert len(db.import_errors) == 0, f"Import errors: {db.import_errors}"
         assert "test_aqueduct_dag" in db.dags
 

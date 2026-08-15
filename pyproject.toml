@@ -101,6 +101,13 @@ airflow = ["apache-airflow>=2.7"]
 schedulers = ["aqueduct-core[airflow]"]
 all = [
     "aqueduct-core[spark]",
+    # The OTHER engine. Omitting it made `[all]` a claim the package did not
+    # keep: `duckdb`/`sqlglot` are base deps, so DuckDB appeared to work, but
+    # the extra's real payload is numpy — which `conn.create_function()` needs
+    # unconditionally — so every DuckDB Python UDF raised `UDFError` on an
+    # `[all]` install. Caught by the release gate, which is the only job that
+    # installs `[all]`.
+    "aqueduct-core[duckdb]",
     "aqueduct-core[secrets]",
     "aqueduct-core[stores]",
     "aqueduct-core[schedulers]",
