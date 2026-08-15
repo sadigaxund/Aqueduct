@@ -220,6 +220,26 @@ jobs:
                   "full details there.*\n", encoding="utf-8",
               )
           PY
+      # A tag is a PRE-RELEASE unless it is a clean `X.Y.Z`. Classified by
+      # EXCLUSION, not by an include-list of suffixes: `rc`, `b`, `a`, `dev`
+      # and anything PEP 440 permits next all land on the safe side without
+      # this ever being edited again, and the failure direction is right —
+      # a misjudged tag is marked pre-release rather than silently taking
+      # the "Latest" badge.
+      #
+      # Without this the action defaults to `prerelease: false`, which is how
+      # `2.1.0rc1` was published as GitHub's "Latest" release, displacing the
+      # 2.0.5 badge, while PyPI correctly hid it (PEP 440 keeps it out of a
+      # plain `pip install`). The two surfaces disagreed, and the one a human
+      # reads first was the wrong one. Fixed by hand on that release.
+      - name: Classify the tag
+        id: tagkind
+        run: |
+          if [[ "${GITHUB_REF_NAME}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Create the GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -227,3 +247,4 @@ jobs:
           body_path: release_notes.md
           files: dist/*
           fail_on_unmatched_files: true
+          prerelease: ${{ steps.tagkind.outputs.prerelease }}
