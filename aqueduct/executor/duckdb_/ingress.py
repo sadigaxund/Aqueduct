@@ -1,13 +1,15 @@
 """Ingress reader — loads source data as a lazy DuckDB relation.
 
-Stage A scope: ``format: csv`` plus the two ungated formats every engine
-accepts without a capability leaf, ``parquet`` and ``json`` (see
-``aqueduct/executor/capability_leaves.py`` — only formats with a DEDICATED
-engine code path are curated leaves; parquet/json have none because they need
-no special-casing). Any other ``format`` value is rejected here with a clear
-message — it either has no DuckDB reader (jdbc, kafka, custom, delta, depot,
-all UNSUPPORTED leaves; the compiler already refuses these at compile time)
-or is simply not one of the three Stage A formats.
+Stage A scope: ``format: csv``, ``format: parquet``, ``format: json`` — all
+three are curated ``ingress.format.*`` capability leaves this engine marks
+``supported`` in ``capabilities.yml`` (F-9/F-12 remediation: ``json``/
+``parquet`` used to be left OUT of the curated set on the false theory that
+every engine accepts them without a leaf; ``iceberg`` is curated too but
+marked ``unsupported`` here — no Iceberg reader exists on this engine). Any
+other ``format`` value is rejected here with a clear message — it either has
+no DuckDB reader (jdbc, kafka, custom, delta, iceberg, depot, all
+UNSUPPORTED leaves; the compiler already refuses these at compile time) or is
+simply not one of the three Stage A formats.
 
 DuckDB's ``read_parquet`` / ``read_csv`` / ``read_json`` return a
 ``DuckDBPyRelation`` — LAZY, same as a Spark DataFrame: no query executes
@@ -36,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 # Formats with a dedicated DuckDB reader this stage. Kept in sync by hand with
 # the ingress.format.* capability leaves this engine marks `supported`
-# (csv) plus the two ungated formats (parquet, json) every engine accepts.
+# (parquet, csv, json).
 _SUPPORTED_FORMATS: frozenset[str] = frozenset({"parquet", "csv", "json"})
 
 

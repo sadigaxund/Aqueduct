@@ -71,6 +71,15 @@ def test_read_ingress_csv(duckdb_con, tmp_path):
     assert sorted(rel.columns) == ["a", "b"]
 
 
+def test_read_ingress_json(duckdb_con, tmp_path):
+    json_path = tmp_path / "src.json"
+    json_path.write_text('{"a": 1, "b": "x"}\n{"a": 2, "b": "y"}\n')
+    module = _module("ing", "Ingress", {"format": "json", "path": str(json_path)})
+    rel = read_ingress(module, duckdb_con)
+    assert sorted(rel.columns) == ["a", "b"]
+    assert len(rel.fetchall()) == 2
+
+
 def test_read_ingress_unsupported_format_raises(duckdb_con):
     module = _module("ing", "Ingress", {"format": "jdbc", "path": "whatever"})
     with pytest.raises(IngressError, match="not implemented"):
@@ -615,6 +624,35 @@ def test_write_egress_parquet_overwrite(duckdb_con, tmp_path):
     module = _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"})
     write_egress(rel, module, duckdb_con)
     assert duckdb_con.read_parquet(out_path).fetchall() == [(1,)]
+
+
+def test_write_egress_json_overwrite(duckdb_con, tmp_path):
+    rel = duckdb_con.sql("SELECT 1 AS a")
+    out_path = str(tmp_path / "out.json")
+    module = _module("eg", "Egress", {"format": "json", "path": out_path, "mode": "overwrite"})
+    write_egress(rel, module, duckdb_con)
+    assert duckdb_con.read_json(out_path).fetchall() == [(1,)]
+
+
+def test_write_egress_json_append_to_existing_target_unions_rows(duckdb_con, tmp_path):
+    """Regression (F-9): the append branch's reader used to be picked with
+    `"read_parquet" if fmt == "parquet" else "read_csv"` — a JSON append
+    would silently read the existing JSON file back AS CSV, a wrong-answer
+    bug rather than a crash. Assert the union actually contains both rows,
+    which only happens if the existing file is read back as JSON."""
+    out_path = str(tmp_path / "out.json")
+    first = duckdb_con.sql("SELECT 1 AS a")
+    write_egress(
+        first,
+        _module("eg", "Egress", {"format": "json", "path": out_path, "mode": "overwrite"}),
+        duckdb_con,
+    )
+
+    second = duckdb_con.sql("SELECT 2 AS a")
+    append_module = _module("eg", "Egress", {"format": "json", "path": out_path, "mode": "append"})
+    write_egress(second, append_module, duckdb_con)
+
+    assert sorted(r[0] for r in duckdb_con.read_json(out_path).fetchall()) == [1, 2]
 
 
 def test_write_egress_csv_explicit_header_option_not_duplicated(duckdb_con, tmp_path):

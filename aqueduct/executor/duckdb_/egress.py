@@ -1,14 +1,17 @@
 """Egress writer — persists a DuckDB relation via ``COPY ... TO``.
 
-Stage A scope: ``format: parquet`` / ``format: csv`` only (the two ungated
-formats, same as the Ingress reader — see that module's docstring). Write
-modes are limited to what ``COPY ... TO`` can express natively plus one
-emulated mode: DuckDB has no append semantics in a single ``COPY``
-statement, so ``overwrite`` / ``error`` / ``errorifexists`` / ``ignore`` are
-implemented directly; ``append`` is implemented as a non-atomic
-read-existing + ``UNION ALL BY NAME`` + rewrite (see the append branch below
-and its ``capabilities.yml`` hint); ``merge`` / ``overwrite_partitions`` are
-honestly UNSUPPORTED (see ``capabilities.yml``).
+Stage A scope: ``format: parquet`` / ``format: csv`` / ``format: json`` (the
+three formats DuckDB's ``COPY ... TO`` writes natively — see the Ingress
+reader's module docstring for the read-side symmetry). Write modes are
+limited to what ``COPY ... TO`` can express natively plus one emulated mode:
+DuckDB has no append semantics in a single ``COPY`` statement, so
+``overwrite`` / ``error`` / ``errorifexists`` / ``ignore`` are implemented
+directly; ``append`` is implemented as a non-atomic read-existing + ``UNION
+ALL BY NAME`` + rewrite (see the append branch below and its
+``capabilities.yml`` hint) — the reader used to load the existing file for
+that union is chosen per-format (``read_parquet``/``read_csv``/``read_json``),
+never assumed; ``merge`` / ``overwrite_partitions`` are honestly UNSUPPORTED
+(see ``capabilities.yml``).
 
 The ``COPY`` execution is the sanctioned DuckDB action in this layer —
 mirrors Spark egress's ``.save()`` being the one sanctioned action there.
@@ -59,7 +62,7 @@ from aqueduct.models import Module
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_FORMATS: frozenset[str] = frozenset({"parquet", "csv"})
+SUPPORTED_FORMATS: frozenset[str] = frozenset({"parquet", "csv", "json"})
 SUPPORTED_MODES: frozenset[str] = frozenset(
     {"overwrite", "error", "errorifexists", "ignore", "append"}
 )
@@ -190,7 +193,7 @@ def write_egress(
     try:
         write_rel_name = input_name
         if mode == "append" and exists:
-            reader = "read_parquet" if fmt == "parquet" else "read_csv"
+            reader = _reader_function(fmt)
             combined_name = "__egress_append__"
             try:
                 # Materialize the union of existing + new into a temp table BEFORE
@@ -259,7 +262,7 @@ def _enforce_on_new_columns(
             f"use one of {sorted(ON_NEW_COLUMNS_POLICIES)}"
         )
 
-    reader = "read_parquet" if fmt == "parquet" else "read_csv"
+    reader = _reader_function(fmt)
     try:
         existing_cols = set(con.sql(f"SELECT * FROM {reader}('{_escape(path)}') LIMIT 0").columns)
     except Exception as exc:
@@ -299,6 +302,20 @@ def _escape(path: str) -> str:
     return path.replace("'", "''")
 
 
+def _reader_function(fmt: str) -> str:
+    """Pick the DuckDB table-function reader that matches ``fmt`` exactly.
+
+    Correctness trap (F-9): a two-way ``"read_parquet" if fmt == "parquet"
+    else "read_csv"`` silently reads a JSON file AS CSV once ``json`` became
+    a writable format — a wrong-answer bug, not a crash. Every writable
+    format below MUST have its own reader; there is no "else" fallback."""
+    if fmt == "parquet":
+        return "read_parquet"
+    if fmt == "json":
+        return "read_json"
+    return "read_csv"
+
+
 def _copy_options(fmt: str, cfg: dict, partition_by: list[str] | None) -> str:
     # `options:` is a freeform passthrough (Blueprint parity with Spark's
     # writer options) — an author can legally set `options: {header: ...}`
@@ -315,6 +332,21 @@ def _copy_options(fmt: str, cfg: dict, partition_by: list[str] | None) -> str:
     if fmt == "csv" and "header" not in options_keys_lower:
         header = cfg.get("header", True)
         parts.append(f"HEADER {str(bool(header)).lower()}")
+    elif fmt == "json":
+        # JSON's COPY option vocabulary is disjoint from CSV's (no HEADER/
+        # DELIMITER — DuckDB rejects those on a JSON COPY) and from
+        # Parquet's (no per-column COMPRESSION-encoding knobs). DuckDB's own
+        # JSON-specific options are `ARRAY` (write a single JSON array
+        # instead of the default newline-delimited JSON objects) and
+        # `COMPRESSION` (shared with the other formats) — both already flow
+        # through as freeform `options:` passthrough below (measured against
+        # a real DuckDB connection: `COPY ... TO '<f>.json' (FORMAT JSON,
+        # ARRAY true)` / `(FORMAT JSON, COMPRESSION gzip)` both accept a
+        # quoted or bare value). No default is pinned here — DuckDB's own
+        # default (newline-delimited, uncompressed) is what an author gets
+        # absent an explicit `options:` override, same as csv's unset
+        # `header:` falling back to its own True default above.
+        pass
     if partition_by:
         cols = ", ".join(partition_by)
         parts.append(f"PARTITION_BY ({cols})")
@@ -442,7 +474,7 @@ def _register_as_table(
     convenience is unavailable, logged same as Spark's version.
     """
     try:
-        reader = "read_parquet" if fmt == "parquet" else "read_csv"
+        reader = _reader_function(fmt)
         con.execute(
             f"CREATE OR REPLACE VIEW {table_name} AS SELECT * FROM {reader}('{_escape(path)}')"
         )
