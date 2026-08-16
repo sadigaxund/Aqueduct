@@ -131,7 +131,7 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 | Spark 3.x (`pyspark==3.5.8`) | ⚠: tested via Legacy CI combo | ⚠: tested via Legacy CI combo | ❌ |
 | Delta Lake (`delta-spark>=4.0,<5.0` for Spark 4.x; `delta-spark==3.3.0` for Spark 3.5) | ✅ | ✅ | ⚠ |
 | Custom Python DataSource (`format: custom`) | ✅ | ✅ | ⚠ |
-| Iceberg / Hudi | planned | planned | planned |
+| Iceberg / Hudi (Spark, maintenance included) | ✅ | ✅ | ⚠ |
 
 ## Notes
 

@@ -4,6 +4,26 @@
 
 ---
 
+## Supported vendor boundary
+
+What Aqueduct supports in production, and what it does not.
+
+**In scope:**
+
+- **Airflow** as the scheduler shim (`AqueductOperator`, `AqueductPatchSensor`/`AqueductPatchTrigger`). See [Scheduling](#scheduling).
+- **JDBC, ingress only**, as a Spark passthrough to `DataFrameReader.format("jdbc")`, with a Postgres-only auth preflight in `aqueduct doctor --preflight`. There is no JDBC egress; see [Retry idempotency](#retry-idempotency-half-write-exposure-by-module).
+- **Postgres** as an observability/depot store backend (`stores.*.backend: postgres`).
+- **Delta, Iceberg, and Hudi** table format maintenance on Spark (`OPTIMIZE`/`VACUUM`/`ZORDER`, `expire_snapshots`, compaction/cleanup). See [Delta Lake operational notes](#delta-lake-operational-notes).
+
+**Out of scope:**
+
+- **Databricks remote-submit deployment.** Removed from this release; Databricks is no longer a supported `deployment.target`.
+- **Spark Connect** (`spark.remote(...)`). Several call sites depend on classic-session internals (`SparkContext`, `_jdf`) and degrade gracefully rather than working under a Connect session. Revisit if Connect becomes the default batch path; see the roadmap.
+- **MotherDuck.** No support, and no code trace, for MotherDuck-hosted DuckDB.
+- **Delta write on DuckDB.** DuckDB has no Delta writer; every Delta write leaf is `unsupported` on that engine. Implementable via `delta-rs`; see the roadmap for the deferred design.
+
+---
+
 ## Deployment environments
 
 Aqueduct supports three deployment environments, declared under the `deployment:` block in `aqueduct.yml`:
@@ -598,10 +618,11 @@ Without `OPTIMIZE`, incremental pipelines using `mode: append` or `mode: merge` 
 | `format: delta`, any mode | **Safe** | Delta commits are atomic: a failed write never leaves a partial commit visible to readers; a retry either fully lands or fully doesn't. |
 | `parquet` / `csv`, `mode: overwrite` | **Safe-ish** | A retry rewrites the entire target from scratch, so a half-written file from the failed attempt is simply overwritten. Not atomic mid-write (a concurrent reader could see a torn file), but idempotent across retries. |
 | `parquet` / `csv`, `mode: append` | **NOT SAFE** | The failed attempt may have already appended some files before failing. A retry appends again, the rows already written are duplicated, not replaced. This is what the compiler's [`delivery_append_retry_dupes`](spark_guide.md#delivery-append-retry-dupes) warning flags. |
-| `format: jdbc`, `mode: append` | **NOT SAFE** | Same failure mode as parquet/csv append: a partially committed batch of rows leaves duplicates on retry. JDBC has no cross-statement atomicity guarantee here. |
 | `mode: merge` (Delta `MERGE INTO`) | **Idempotent by construction** | A MERGE keyed on a stable match condition re-applies safely, matched rows update in place, unmatched rows insert once, regardless of how many times the same batch is retried. |
 
-**Guidance:** if a pipeline needs transactional, retry-safe appends, use Delta (`format: delta`, `mode: append` or `mode: merge`) rather than parquet/csv/JDBC append. If you must retry a parquet/csv/JDBC-append pipeline, prefer `max_attempts: 1` with orchestrator-level retry handling that can dedup downstream, or switch the sink to `mode: overwrite` for full-refresh outputs only (never on an incremental sink, it destroys history).
+JDBC is ingress-only in Aqueduct (a Spark `DataFrameReader.format("jdbc")` passthrough); there is no JDBC egress, so it has no row in this table.
+
+**Guidance:** if a pipeline needs transactional, retry-safe appends, use Delta (`format: delta`, `mode: append` or `mode: merge`) rather than parquet/csv append. If you must retry a parquet/csv-append pipeline, prefer `max_attempts: 1` with orchestrator-level retry handling that can dedup downstream, or switch the sink to `mode: overwrite` for full-refresh outputs only (never on an incremental sink, it destroys history).
 
 ---
 

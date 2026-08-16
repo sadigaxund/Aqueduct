@@ -111,14 +111,6 @@ The hub type vocabulary (`aqueduct/typehub.py`, see `docs/specs.md` §9) deliber
 
 ---
 
-## Iceberg / Hudi table formats
-
-Ingress and Egress currently support Parquet, Delta Lake, CSV, JSON, and JDBC. Apache Iceberg and Apache Hudi are planned as additional table formats, both fit the existing `format:` config surface without schema changes.
-
-**Status:** Planned, not started. Tracked in the compatibility matrix as "planned".
-
----
-
 ## Persist `model_cascade_position` to `heal_attempts`
 
 The multi-model cascade tags every in-memory `AttemptRecord` with its 0-based tier index, but the `heal_attempts` table does not yet have a column for it, per-tier heal analytics (e.g. "which tier actually solves things") currently require correlating `healing_outcomes.model` instead. Adding the column needs a DDL migration for existing observability stores.
@@ -150,3 +142,28 @@ A native Aqueduct workflow layer (a Blueprint of Blueprints) is a potential futu
 **Status: done (2.37).** `aqueduct/cli/run.py`'s healing loop now routes a >1-island Manifest through `run_polyglot()` (see specs.md §10.9's "Wired into `aqueduct run`"), including the run header naming every engine involved, per-module engine tags in the transcript and `report --format json`, and first-class Handoff-step rendering (bytes transferred + duration). `--from`/`--to` refuse a polyglot Manifest outright rather than attempting a partial cross-island selection — that remains future work if a real need for it shows up. Session reuse across heal iterations (today each retry rebuilds every island's session fresh) is a recorded, not-yet-built optimization, same framing as `run_polyglot()`'s existing same-engine-recurrence choice.
 
 Still deferred, tracked separately (not part of the CLI-wiring pass above): a fan-shape conformance matrix for constructs (Junction/Funnel modes) whose behavior is validated per-engine but not yet cross-checked when a fan spans a boundary, a `timezone:` config key for a cross-engine `timestamp_ntz` boundary, and a doctor free-space check at `handoff.root`.
+
+---
+
+## Spark Connect
+
+Out of the supported vendor boundary today; several call sites (channel probing, metrics, the explain gate, JAR-availability warnings, doctor) depend on classic-session internals such as `SparkContext` and `_jdf`, and degrade gracefully rather than working under a `spark.remote(...)` session. See [compatibility.md](compatibility.md#spark-connect) for the full list of affected call sites.
+
+**Status:** Deferred. Revisit if Spark Connect becomes the default batch path.
+
+---
+
+## DuckDB: Delta, JDBC ingress, and related deferred features
+
+DuckDB's capability declaration (`aqueduct/executor/duckdb_/capabilities.yml`) marks a cluster of leaves `unsupported` that are implementable, not architecturally blocked: Delta ingress and egress, JDBC ingress (JDBC has no egress leaf on either engine, see [compatibility.md](compatibility.md)), `egress.mode.overwrite_partitions`, and `feature.{delta_write, delta_time_travel, parallel_mode}`. Each has a concrete implementation path:
+
+- **Delta write on DuckDB**: implementable via [`delta-rs`](https://github.com/delta-io/delta-rs) (the Rust/Python Delta implementation used outside the JVM). Trigger for picking this up: real polyglot-pipeline demand for a Delta handoff into or out of a DuckDB island.
+- **Delta time travel on DuckDB**: same `delta-rs` bridge, reading the transaction log at a given version/timestamp.
+- **JDBC ingress on DuckDB**: implementable via DuckDB's `postgres_scanner` extension (`ATTACH ... (TYPE POSTGRES)`, the same wire protocol a `jdbc:postgresql://` target speaks), matching the Postgres-only vendor boundary elsewhere in this project.
+- **Delta ingress via remote paths**: implementable via DuckDB's `httpfs` extension.
+- **`egress.mode.overwrite_partitions`**: implementable, needs `COPY ... TO` with `PARTITION_BY` plus pruning the target partition directories before write.
+- **`feature.parallel_mode`**: implementable via a per-thread DuckDB cursor (`con.cursor()`) instead of the current single-connection, serial execution path — a single `DuckDBPyConnection` is not safe for concurrent queries from multiple threads.
+
+These were deliberately left out of the DuckDB engine's initial (Stage A) scope, not ruled out. Picking any of them up is a one-line verdict flip per leaf in `capabilities.yml` once a stage takes it on.
+
+**Status:** Deferred. No active work.

@@ -79,11 +79,12 @@
 #   Iceberg / Hudi / Kafka / custom DataSource / Databricks deployment: all
 #   Spark-specific, not applicable to DuckDB at all.
 #   Delta / JDBC / Depot ingress+egress, egress.mode.overwrite_partitions,
-#   feature.{delta_write,delta_time_travel,parallel_mode}: DEFERRED —
-#   implementable on DuckDB (delta-rs / postgres scanner / httpfs /
-#   per-thread cursor, see each leaf's hint) but deliberately left out of
-#   Stage A scope. Grouped in their own comment blocks below so the verdict
-#   flip is a one-line edit per leaf once a later stage picks one up.
+#   feature.{delta_write,delta_time_travel,parallel_mode}: DEFERRED, not
+#   architecturally blocked. See docs/roadmap.md "DuckDB: Delta, JDBC,
+#   Depot ingress/egress and related features" for the implementation path
+#   per leaf (delta-rs / postgres scanner / httpfs / per-thread cursor).
+#   Grouped in their own comment blocks below so the verdict flip is a
+#   one-line edit per leaf once a later stage picks one up.
 
 engine: duckdb
 
