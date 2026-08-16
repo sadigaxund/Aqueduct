@@ -107,9 +107,23 @@ class TestDuckDBPrecedence:
 
 
 class TestUnregisteredEngineOnConfig:
-    def test_engine_absent_from_cfg_engine_returns_empty_dict(self):
+    """F-5: an engine with no ``cfg.engine.<name>:`` block (a third-party BYO
+    engine that is not a field on the closed ``EngineConfig`` model) must
+    still get its Blueprint and ``--set`` layers — only layer 1
+    (``aqueduct.yml``) is unavailable to it."""
+
+    def test_engine_absent_from_cfg_engine_still_gets_blueprint_and_set_layers(self):
+        manifest = _manifest({"flink": {"some.key": "blueprint_val", "other.key": "kept"}})
+        cfg = AqueductConfig().with_cli_engine_overrides({"flink": {"some.key": "cli_val"}})
+        result = resolve_session_engine_config(cfg, "flink", manifest)
+        # --set wins over the Blueprint value for the key it names...
+        assert result["some.key"] == "cli_val"
+        # ...and an untouched Blueprint-only key survives the merge.
+        assert result["other.key"] == "kept"
+
+    def test_engine_absent_from_cfg_engine_and_no_overrides_returns_empty_dict(self):
         cfg = AqueductConfig()
-        manifest = _manifest({"flink": {"some.key": "value"}})
+        manifest = _manifest({})
         result = resolve_session_engine_config(cfg, "flink", manifest)
         assert result == {}
 

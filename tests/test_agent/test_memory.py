@@ -169,6 +169,42 @@ class TestFindReplayCandidate:
 
         assert find_replay_candidate(None, None, "abc", set()) is None
 
+    def test_newer_config_op_candidate_falls_back_to_an_older_sql_one(self, tmp_path):
+        """F-3: find_replay_candidate must not give up on the whole cache
+        just because the NEWEST matching row is a set_engine_config patch —
+        it should surface an older, non-config candidate instead."""
+        from unittest.mock import MagicMock
+
+        from aqueduct.agent.memory import find_replay_candidate
+
+        store = _make_store(tmp_path / "obs.db")
+        _stamp(
+            store,
+            patch_id="older-sql",
+            status="applied",
+            signature="abc123",
+            ops=json.dumps(["set_sql"]),
+            created_at="2020-01-01 00:00:00",
+        )
+        _stamp(
+            store,
+            patch_id="newer-config",
+            status="applied",
+            signature="abc123",
+            ops=json.dumps(["set_engine_config"]),
+            created_at="2025-01-01 00:00:00",
+        )
+        mock_patch_store = MagicMock()
+        mock_patch_store.get_json.return_value = {
+            "patch_id": "older-sql",
+            "operations": [{"op": "set_sql", "module_id": "m1", "sql": "select 1"}],
+        }
+        result = find_replay_candidate(
+            store, mock_patch_store, "abc123", {"older-sql", "newer-config"}
+        )
+        assert result is not None
+        assert result.patch_id == "older-sql"
+
 
 class TestFindCoachingExamples:
     def test_tier_1_exact_hash_picked_first(self, tmp_path):

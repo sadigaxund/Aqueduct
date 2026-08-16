@@ -161,10 +161,16 @@ def resolve_session_engine_config(
     function was originally extracted to fix) silently discards every
     ``engine.<name>.*`` field a non-Spark engine declares, any
     Blueprint-level override for it, and now the user's ``--set`` as well.
+
+    An engine with no ``cfg.engine.<name>:`` block (``engine_config_base_layer``
+    returns None — e.g. a third-party BYO engine that is not a field on the
+    closed ``AqueductConfig.EngineConfig`` model) is NOT a wall: layer 1 is
+    simply empty and layers 2 and 3 still apply. Returning ``{}`` outright
+    used to drop the Blueprint and ``--set`` layers for exactly the engines
+    that most need a way to be configured without a schema change — a typed
+    error was considered instead and rejected for the same reason.
     """
-    base = engine_config_base_layer(cfg, engine)
-    if base is None:
-        return {}
+    base = engine_config_base_layer(cfg, engine) or {}
     blueprint_override = manifest.engine_config.get(engine, {})
     cli_override = cfg.cli_engine_overrides.get(engine, {})
     return {**base, **blueprint_override, **cli_override}

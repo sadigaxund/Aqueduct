@@ -106,6 +106,26 @@ def test_find_replay_only_confirmed_successful(store):
     assert hit["patch_id"] == "p1"
 
 
+def test_find_replay_skips_a_newer_config_op_candidate_for_an_older_sql_one(store):
+    """F-3: the newest matching row being a `set_engine_config` patch must not
+    make find_replay give up on the whole cache — it should fall back to an
+    older, non-config candidate that also matches."""
+    with store.connect() as cur:
+        ix.upsert(cur, _row("older_sql", "applied", ops=["set_sql"]))
+        ix.upsert(cur, _row("newer_config", "applied", ops=["set_engine_config"]))
+    with store.connect() as cur:
+        hit = ix.find_replay(cur, "sigA", {"older_sql", "newer_config"})
+    assert hit is not None
+    assert hit["patch_id"] == "older_sql"
+
+
+def test_find_replay_none_when_every_candidate_is_a_config_op(store):
+    with store.connect() as cur:
+        ix.upsert(cur, _row("p1", "applied", ops=["set_engine_config"]))
+    with store.connect() as cur:
+        assert ix.find_replay(cur, "sigA", {"p1"}) is None
+
+
 def test_find_coaching_tiers_and_dedupe(store):
     with store.connect() as cur:
         ix.upsert(cur, _row("exact", "applied", signature="sigA"))

@@ -67,6 +67,13 @@ def _now() -> str:
     return datetime.now(tz=UTC).isoformat()
 
 
+# Single source of truth for the op-name string that marks a patch as
+# environment-specific (see ``find_replay`` and
+# ``aqueduct.agent.memory.contains_set_engine_config``, which imports this
+# constant rather than hand-writing the literal a second time).
+SET_ENGINE_CONFIG_OP = "set_engine_config"
+
+
 @dataclass(frozen=True)
 class PatchIndexRow:
     """A row of ``patch_index`` — the metadata recorded alongside a patch body."""
@@ -226,10 +233,21 @@ def find_pending(cur: RelationalCursor, signature: str) -> dict | None:
 
 
 def find_replay(cur: RelationalCursor, signature: str, successful_ids: set[str]) -> dict | None:
-    """Newest applied patch matching the signature AND confirmed successful.
+    """Newest applied, confirmed-successful patch matching the signature that
+    is NOT a ``set_engine_config`` patch, or None.
 
     ``successful_ids`` comes from ``healing_outcomes.run_success_after_patch``
-    — an applied patch with no success record is never replayed."""
+    — an applied patch with no success record is never replayed.
+
+    Config-op patches (``SET_ENGINE_CONFIG_OP`` in ``ops``) are skipped, not
+    just rejected: engine/session config is environment-specific and is
+    never zero-token replayed (see
+    ``aqueduct.agent.memory.contains_set_engine_config``), but that must not
+    give up on the cache entirely when an OLDER matching candidate is a
+    plain, environment-independent fix. The row's ``ops`` column already
+    carries the op-name list, so this is decided from index metadata alone
+    — no body fetch needed. Only when every applied+successful row for this
+    signature is a config-op does this return None."""
     if not signature or not successful_ids:
         return None
     cur.execute(
@@ -240,6 +258,8 @@ def find_replay(cur: RelationalCursor, signature: str, successful_ids: set[str])
     )
     for r in cur.fetchall():
         d = _row_to_dict(_SELECT_COLS, r)
+        if SET_ENGINE_CONFIG_OP in (d.get("ops") or []):
+            continue
         if d["patch_id"] in successful_ids:
             return d
     return None

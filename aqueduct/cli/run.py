@@ -2289,6 +2289,17 @@ def run(
                         # same way an unparseable/retired-op candidate is,
                         # so the discard reads as "found but refused", never
                         # as an ordinary cache miss.
+                        #
+                        # This is now a defense-in-depth backstop, not the
+                        # primary gate: `patch.index.find_replay` already
+                        # skips config-op rows using the index's own `ops`
+                        # metadata, falling back to an older matching
+                        # candidate instead of returning one (see its
+                        # docstring). This check only fires if the freshly
+                        # parsed BODY disagrees with the index metadata that
+                        # got it here — e.g. a `patch_index.ops` row that
+                        # drifted from the object store body it points at —
+                        # so it is deliberately kept rather than deleted.
                         click.echo(
                             f"  ⚠ heal cache: archived patch {_candidate.patch_id} sets engine "
                             f"config (set_engine_config) — engine/session config is "
