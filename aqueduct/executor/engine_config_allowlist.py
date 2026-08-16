@@ -13,14 +13,19 @@ key/value shapes ``set_engine_config`` may write, loaded from
 ``engine_config_allowlist.yml`` next to that engine's ``capabilities.yml``.
 
 **Scope, deliberately narrow (see the module's originating task).** This
-file builds the DATA + the LOADER/VALIDATOR + DISCOVERY + a PRESENCE guard.
-It does **not** wire an enforcement gate against a real patch — nothing here
-is called from ``aqueduct/patch/``. That is a separate, later task. Until
-that gate exists, a malformed shipped allowlist is caught by
+file builds the DATA + the LOADER/VALIDATOR + DISCOVERY + a PRESENCE guard —
+it does not itself decide whether a given patch op is allowed. Enforcement
+against a real patch lives in ``aqueduct/patch/apply.py``'s
+``_check_engine_config_allowlist`` (Gate 1), called unconditionally for
+every ``set_engine_config`` op from ``_check_guardrails`` — independent of
+``agent.guardrails.forbidden_ops``/``allowed_paths``, since this allowlist
+is the only thing constraining what ``set_engine_config`` may write at all.
+``aqueduct/agent/prompts.py`` is a second consumer, loading the allowlist
+through ``load_allowlist`` to render the healing prompt's policy section. A
+malformed shipped allowlist is caught two ways: at CI time by
 ``tests/test_executor/test_engine_config_allowlist.py`` loading every
-SHIPPED file through ``load_allowlist()`` (i.e. the "build" that must never
-go red is CI, not a live heal) — never by a user hitting it mid-heal, because
-nothing consumes this file at heal time yet.
+SHIPPED file through ``load_allowlist()``, and at heal time by a user
+hitting ``EngineConfigAllowlistError`` the moment Gate 1 tries to load it.
 
 **Two shapes, one rule — not hardcoded per engine.** ``engine.<name>:``
 blocks come in two shapes (``aqueduct/parser/schema.py``), and the same
