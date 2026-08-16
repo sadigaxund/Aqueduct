@@ -47,7 +47,6 @@ jobs:
       capabilities: ${{ steps.filter.outputs.capabilities }}
       duckdb:    ${{ steps.filter.outputs.duckdb }}
       typehub:   ${{ steps.filter.outputs.typehub }}
-      deploy:    ${{ steps.filter.outputs.deploy }}
       misc:      ${{ steps.filter.outputs.misc }}
     steps:
       - uses: actions/checkout@v6
@@ -141,9 +140,6 @@ jobs:
             typehub:
               - 'aqueduct/typehub.py'
               - 'tests/test_typehub/**'
-            deploy:
-              - 'aqueduct/deploy/**'
-              - 'tests/test_deploy/**'
             misc:
               - 'aqueduct/models.py'
               - 'aqueduct/utils.py'
@@ -193,7 +189,7 @@ jobs:
           key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
           restore-keys: |
             pip-${{ runner.os }}-py3.11-
-      - run: pip install -e ".[dev,llm,redis,postgres]"
+      - run: pip install -e ".[dev,redis,postgres]"
       - run: |
           set +e
           pytest tests/test_parser/ -m "not spark" --junitxml=results.xml
@@ -222,7 +218,7 @@ jobs:
           key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
           restore-keys: |
             pip-${{ runner.os }}-py3.11-
-      - run: pip install -e ".[dev,llm,redis]"
+      - run: pip install -e ".[dev,redis]"
       - run: |
           set +e
           pytest tests/test_compiler/ -m "not spark" --junitxml=results.xml
@@ -251,7 +247,7 @@ jobs:
           key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
           restore-keys: |
             pip-${{ runner.os }}-py3.11-
-      - run: pip install -e ".[dev,llm,redis]"
+      - run: pip install -e ".[dev,redis]"
       - run: |
           set +e
           pytest tests/test_surveyor/ tests/test_benchmark_store.py -m "not spark" --junitxml=results.xml
@@ -280,7 +276,7 @@ jobs:
           key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
           restore-keys: |
             pip-${{ runner.os }}-py3.11-
-      - run: pip install -e ".[dev,llm,redis]"
+      - run: pip install -e ".[dev,redis]"
       - run: |
           set +e
           pytest tests/test_agent/ -m "not spark" --junitxml=results.xml
@@ -309,7 +305,7 @@ jobs:
           key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
           restore-keys: |
             pip-${{ runner.os }}-py3.11-
-      - run: pip install -e ".[dev,llm,redis]"
+      - run: pip install -e ".[dev,redis]"
       - run: |
           set +e
           pytest tests/test_patch/ -m "not spark" --junitxml=results.xml
@@ -338,7 +334,7 @@ jobs:
           key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
           restore-keys: |
             pip-${{ runner.os }}-py3.11-
-      - run: pip install -e ".[dev,llm,redis]"
+      - run: pip install -e ".[dev,redis]"
       - run: |
           set +e
           pytest tests/test_drift/ -m "not spark" --junitxml=results.xml
@@ -371,7 +367,7 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-      - run: pip install -e ".[dev,spark,llm,redis]"
+      - run: pip install -e ".[dev,spark,redis]"
       - run: |
           set +e
           pytest tests/test_cli/ --junitxml=results.xml
@@ -400,7 +396,7 @@ jobs:
           key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
           restore-keys: |
             pip-${{ runner.os }}-py3.11-
-      - run: pip install -e ".[dev,llm,redis,postgres]"
+      - run: pip install -e ".[dev,redis,postgres]"
       - run: |
           set +e
           pytest tests/test_config.py tests/test_parser/test_config.py tests/test_redaction.py tests/test_secrets.py tests/test_warnings.py -m "not spark" --junitxml=results.xml
@@ -429,7 +425,7 @@ jobs:
           key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
           restore-keys: |
             pip-${{ runner.os }}-py3.11-
-      - run: pip install -e ".[dev,llm,redis]"
+      - run: pip install -e ".[dev,redis]"
       - run: |
           set +e
           pytest tests/test_tools/ -m "not spark" --junitxml=results.xml
@@ -491,7 +487,7 @@ jobs:
           key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
           restore-keys: |
             pip-${{ runner.os }}-py3.11-
-      - run: pip install -e ".[dev,mcp,llm]"
+      - run: pip install -e ".[dev,mcp]"
       - run: |
           set +e
           pytest tests/test_mcp/ -m "not spark" --junitxml=results.xml
@@ -526,7 +522,7 @@ jobs:
       # tests/test_executor_duckdb/test_udf.py fails with a raw DuckDB
       # "'numpy' is required" error, only masked locally by numpy already
       # being present in a dev environment.
-      - run: pip install -e ".[dev,llm,redis,duckdb]"
+      - run: pip install -e ".[dev,redis,duckdb]"
       - run: |
           set +e
           pytest tests/test_executor_duckdb/ -m "not spark" --junitxml=results.xml
@@ -555,41 +551,12 @@ jobs:
           key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
           restore-keys: |
             pip-${{ runner.os }}-py3.11-
-      - run: pip install -e ".[dev,llm,redis]"
+      - run: pip install -e ".[dev,redis]"
       - run: |
           set +e
           pytest tests/test_typehub/ -m "not spark" --junitxml=results.xml
           rc=$?
           python scripts/ci-summary.py results.xml --name "TypeHub"
-          exit $rc
-
-  deploy-tests:
-    needs: changes
-    if: ${{ needs.changes.outputs.deploy == 'true' || github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-      # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env.
-      # A stale/missing entry still re-resolves and re-verifies every
-      # package; this only skips re-downloading wheels pip already has by
-      # exact filename/hash, so it cannot change what version gets installed.
-      # Same key as every other python-3.11 / ci-py311.txt job on purpose —
-      # they share one dependency tree, so they should share one cache entry.
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
-          restore-keys: |
-            pip-${{ runner.os }}-py3.11-
-      - run: pip install -e ".[dev,llm,redis]"
-      - run: |
-          set +e
-          pytest tests/test_deploy/ -m "not spark" --junitxml=results.xml
-          rc=$?
-          python scripts/ci-summary.py results.xml --name "Deploy"
           exit $rc
 
   # `tests/test_*.py` files with no dedicated subdirectory/lane of their own
@@ -620,7 +587,7 @@ jobs:
           key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
           restore-keys: |
             pip-${{ runner.os }}-py3.11-
-      - run: pip install -e ".[dev,llm,redis]"
+      - run: pip install -e ".[dev,redis]"
       - run: |
           set +e
           pytest tests/test_airflow.py tests/test_backlog.py tests/test_infra_http.py tests/test_lint.py tests/test_meta_ci.py tests/test_meta_quality.py tests/test_models.py tests/test_module_loading.py tests/test_overrides.py tests/test_utils.py tests/test_template_warning_sync.py -m "not spark" --junitxml=results.xml
@@ -672,7 +639,7 @@ jobs:
       # drives BOTH the Spark and DuckDB engines in the same process (via a
       # subprocess worker; see the file's own module docstring) to prove a
       # real handoff.root round-trip over MinIO.
-      - run: pip install -e ".[dev,spark,llm,redis,duckdb]"
+      - run: pip install -e ".[dev,spark,redis,duckdb]"
       # AQ_LAKEHOUSE lets conftest provision Hudi/Iceberg jars (Maven coords
       # derived from the installed pyspark version); tests self-skip for any
       # datasource with no build for this Spark line (e.g. Hudi on 3.3).
@@ -742,7 +709,7 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-      - run: pip install -e ".[dev,spark,llm]"
+      - run: pip install -e ".[dev,spark]"
       - run: |
           set +e
           pytest tests/test_gallery.py --junitxml=results.xml
@@ -870,7 +837,7 @@ jobs:
       # (conn.create_function() — see pyproject.toml's [duckdb] extra
       # comment). This job scans the whole suite with no path filter, so it
       # hits those tests too.
-      - run: pip install -e ".[dev,spark,llm,redis,stores,duckdb]"
+      - run: pip install -e ".[dev,spark,redis,stores,duckdb]"
       - run: |
           set +e
           pytest --cov=aqueduct --cov-report=term-missing --cov-fail-under=68 -m "not spark" --junitxml=results.xml

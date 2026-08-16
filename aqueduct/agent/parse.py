@@ -315,15 +315,18 @@ def _parse_patch_spec(text: str) -> tuple[PatchSpec, list[str]]:
 
         # 5. json-repair last-ditch pass — on the ORIGINAL text, so a bad
         #    comment-strip can never compound into a silently mangled patch.
+        #    json-repair is a base dependency, so no ImportError fallback is
+        #    needed here.
         if not recovered:
-            try:
-                from json_repair import repair_json as _repair_json
-            except ImportError:
-                raise decode_exc from None
+            from json_repair import repair_json as _repair_json
+
             repaired = _repair_json(text)
             if not repaired:
                 raise decode_exc from None
-            obj, _ = json.JSONDecoder().raw_decode(repaired)
+            try:
+                obj, _ = json.JSONDecoder().raw_decode(repaired)
+            except json.JSONDecodeError:
+                raise decode_exc from None
             recovery_applied.append("json_repair")
 
     # 6. Unwrap wrappers (e.g. {"patch": {operations: [...]}}). Also handles

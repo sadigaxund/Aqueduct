@@ -16,6 +16,11 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Removed
+- **BREAKING**: the `llm` extra is gone — `pip install aqueduct-core[llm]` now
+  fails with an unknown-extra error. `json-repair` ships in the base install
+  instead, so LLM patch-JSON recovery is always available.
+
 ## [2.1.0rc1] — 2026-08-15
 
 **Pre-release.** PEP 440 spelling, so `pip install aqueduct-core` SKIPS this

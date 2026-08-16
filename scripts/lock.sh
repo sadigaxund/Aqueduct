@@ -35,7 +35,6 @@ uv pip compile pyproject.toml \
   --python-version 3.11 \
   --extra dev \
   --extra spark \
-  --extra llm \
   --extra redis \
   --extra postgres \
   --extra mcp \
