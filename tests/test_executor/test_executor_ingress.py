@@ -6,6 +6,7 @@ import pytest
 
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
 from pyspark.sql import SparkSession
+
 from aqueduct.executor.spark.ingress import IngressError, read_ingress
 from aqueduct.parser.models import Module
 
@@ -97,6 +98,17 @@ def test_ingress_valid_parquet(spark: SparkSession, tmp_path):
     spark.range(10).write.parquet(path)
 
     module = Module(id="m1", type="Ingress", label="M1", config={"format": "parquet", "path": path})
+    df = read_ingress(module, spark)
+
+    assert df.count() == 10
+    assert "id" in df.columns
+
+
+def test_ingress_valid_json(spark: SparkSession, tmp_path):
+    path = str(tmp_path / "valid.json")
+    spark.range(10).write.json(path)
+
+    module = Module(id="m1", type="Ingress", label="M1", config={"format": "json", "path": path})
     df = read_ingress(module, spark)
 
     assert df.count() == 10
@@ -513,8 +525,9 @@ def test_partition_filters_applied_before_schema_hint(spark: SparkSession, tmp_p
 
 def test_partition_filters_with_date_comparison(spark: SparkSession, tmp_path):
     """partition_filters with date literal expr → rows outside range excluded."""
-    from pyspark.sql import Row
     from datetime import date
+
+    from pyspark.sql import Row
 
     path = str(tmp_path / "pf_date.parquet")
     spark.createDataFrame(
@@ -590,6 +603,7 @@ def test_pathless_ingress_formats_are_expected_set():
 # ── Phase 61 — time-travel reads ────────────────────────────────────────────
 
 from unittest.mock import MagicMock
+
 from aqueduct.executor.spark.ingress import _apply_time_travel
 
 

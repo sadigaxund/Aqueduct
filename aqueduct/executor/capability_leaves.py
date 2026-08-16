@@ -177,6 +177,16 @@ from aqueduct.parser.schema import (
 # ── Curated: format strings with a dedicated engine code path ──────────────
 # See module docstring — NOT the full open format list.
 #
+# ``json``/``parquet`` (both Ingress and Egress) and ``iceberg`` (Ingress —
+# already curated on the Egress side) were previously left OUT of this set on
+# the theory that "every engine accepts them without a capability leaf" —
+# false in practice: DuckDB has no JSON egress writer, and no Iceberg ingress
+# reader at all (see each engine's ``capabilities.yml``), so a Blueprint
+# using either compiled clean and only failed at runtime (F-9/F-12). Curating
+# them here is what makes ``compiler/capability_check.py`` actually ask each
+# engine's declaration for a verdict instead of silently passing every
+# format string through ungated.
+#
 # ``depot`` is EGRESS-only. It is not a Spark/DuckDB read format at all: the
 # only depot READ mechanism in the product is the compile-time
 # ``@aq.depot.get()`` function (``aqueduct/compiler/runtime.py``), resolved
@@ -189,8 +199,12 @@ from aqueduct.parser.schema import (
 # `supported` without inventing grammar that doesn't exist. Removed rather
 # than left `unsupported` forever describing a capability that cannot exist
 # without a Blueprint-grammar change — see CHANGELOG.
-INGRESS_FORMATS: frozenset[str] = frozenset({"custom", "delta", "csv", "jdbc", "kafka"})
-EGRESS_FORMATS: frozenset[str] = frozenset({"custom", "delta", "iceberg", "hudi", "depot"})
+INGRESS_FORMATS: frozenset[str] = frozenset(
+    {"custom", "delta", "csv", "jdbc", "kafka", "json", "parquet", "iceberg"}
+)
+EGRESS_FORMATS: frozenset[str] = frozenset(
+    {"custom", "delta", "iceberg", "hudi", "depot", "json", "parquet"}
+)
 
 # ── Curated: engine feature flags (not schema-derivable) ───────────────────
 # One entry per behavioral capability that isn't a config key or op name —

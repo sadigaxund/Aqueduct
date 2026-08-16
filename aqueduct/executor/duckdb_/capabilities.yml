@@ -958,3 +958,24 @@ leaves:
   probe.signal.execution_partitions:
     support: unsupported
     hint: "DuckDB is a single-process, single-node engine with no partition concept to report — there is no analog to Spark's df.rdd.getNumPartitions(). A Probe declaring this signal against a DuckDB-executed Ingress/Channel is rejected at compile time instead of silently writing an empty/missing probe_signals row."
+  egress.format.json:
+    support: supported
+    hint: "DuckDB writes JSON via COPY ... TO '<path>' (FORMAT JSON, ...) — newline-delimited JSON objects by default; options: {array: true} switches to a single JSON array, options: {compression: gzip} (or any DuckDB-recognised compression codec) is passed through, both mirroring the FORMAT JSON option vocabulary DuckDB itself accepts (disjoint from CSV's HEADER/DELIMITER and Parquet's per-column knobs)."
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_write_egress_json_overwrite
+      - tests/test_executor_duckdb/test_executor.py::test_write_egress_json_append_to_existing_target_unions_rows
+  egress.format.parquet:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_write_egress_parquet_overwrite
+  ingress.format.iceberg:
+    support: unsupported
+    hint: "Iceberg has no DuckDB Ingress reader implemented — reading a table's transaction log would require the iceberg DuckDB extension (ATTACH ... or the iceberg_scan table function); duckdb_/ingress.py dispatches only parquet/csv/json. Not implemented."
+  ingress.format.json:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_read_ingress_json
+  ingress.format.parquet:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_read_ingress_parquet

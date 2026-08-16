@@ -698,3 +698,24 @@ leaves:
     support: supported
     tests:
       - tests/test_executor/test_executor_probe.py::test_execution_partitions_zero_action
+  egress.format.json:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_egress.py::test_egress_format_json_roundtrip
+  egress.format.parquet:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_egress.py::test_egress_format_parquet_roundtrip
+  ingress.format.iceberg:
+    support: supported
+    hint: "Requires the Iceberg Spark runtime jar (org.apache.iceberg:iceberg-spark-runtime-<line>_<scala>) on the driver classpath — not bundled with pyspark. See docs/compatibility.md for the AQ_LAKEHOUSE-gated test setup."
+    tests:
+      - tests/test_executor/test_executor_lakehouse.py::test_ingress_format_iceberg_reads_written_table
+  ingress.format.json:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_ingress.py::test_ingress_valid_json
+  ingress.format.parquet:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_ingress.py::test_ingress_valid_parquet
