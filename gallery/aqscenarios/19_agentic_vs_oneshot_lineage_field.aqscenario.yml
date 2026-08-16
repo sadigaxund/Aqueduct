@@ -1,0 +1,51 @@
+aqueduct_scenario: "1.0"
+
+id: agentic_vs_oneshot_lineage_field
+description: >
+  enrich_orders joins on stage_orders.region_id, but stage_orders' explicit
+  SELECT list drops region_id even though it genuinely exists two hops
+  upstream on raw_orders. Spark's suggestion list is drawn only from
+  stage_orders' resolved schema, so it never names region_id — the fix
+  requires tracing the column back through the blueprint, not renaming from
+  a suggestion list. This is the designated A/B scenario for comparing
+  agentic-mode healing (agent.mode: agentic, which offers the model a
+  read_blueprint tool over the FULL authored YAML) against one-shot healing
+  on the identical failure. The .aqscenario.yml format has no per-scenario
+  mode key — `mode` is resolved once per benchmark run from `agent.mode` in
+  aqueduct.yml (or run_scenario(..., mode=...)) and applies uniformly to
+  every scenario in that run. The A/B pair is therefore this ONE file run
+  twice: once with agent.mode left at its "oneshot" default, once with
+  agent.mode: agentic — not two separate scenario files.
+blueprint: blueprints/19_agentic_vs_oneshot_lineage_field.yml
+
+# The fix is a Blueprint edit — a module's config, not an engine knob.
+domains: [pipeline]
+
+inject_failure:
+  module: enrich_orders
+  error_message: |
+    pyspark.errors.exceptions.captured.AnalysisException: [UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `o`.`region_id` cannot be resolved. Did you mean one of the following? [`o`.`order_id`, `o`.`cust_id`, `o`.`amount`, `o`.`order_time`, `r`.`region_id`]. SQLSTATE: 42703
+    == SQL (line 8, position 34) ==
+            FROM stage_orders o
+            JOIN regions_raw r ON o.region_id = r.region_id
+                                   ^^^^^^^^^^^
+    'Join Inner, ('o.region_id = region_id#21)
+    :- SubqueryAlias o
+    :  +- SubqueryAlias stage_orders
+    :     +- Project [order_id#10, cust_id#11, amount#12, order_ts#13 AS order_time#14]
+    :        +- SubqueryAlias raw_orders
+    :           +- Relation [order_id#10,cust_id#11,amount#12,order_ts#13,region_id#15] csv
+    +- SubqueryAlias r
+       +- SubqueryAlias regions_raw
+          +- Relation [region_id#21,region_name#22] csv
+
+expected_patch:
+  effect:
+    module: stage_orders
+    config_contains:
+      query: "region_id"   # AST-normalized substring — region_id now threaded through the projection
+
+assertions:
+  - patch_is_valid: true
+  - patch_applies: true
+  - root_cause_contains: ["region_id", "stage_orders"]

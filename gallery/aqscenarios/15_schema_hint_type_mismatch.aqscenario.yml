@@ -1,0 +1,29 @@
+aqueduct_scenario: "1.0"
+
+id: schema_hint_type_mismatch
+description: >
+  orders_raw declares schema_hint amount: int, but the CSV amount values are
+  decimals — Spark infers double at read time, so the strict-mode schema_hint
+  check raises IngressError before the DataFrame is ever used. The heal must
+  correct the hint to match the real inferred type, not delete or paper over
+  the check (removing the hint would silence future genuine drift too).
+blueprint: blueprints/15_schema_hint_type_mismatch.yml
+
+# The fix is a Blueprint edit — a module's config, not an engine knob.
+domains: [pipeline]
+
+inject_failure:
+  module: orders_raw
+  error_message: |
+    aqueduct.executor.spark.ingress.IngressError: [orders_raw] schema_hint type mismatch on 'amount': expected 'int', actual 'double'
+
+expected_patch:
+  effect:
+    module: orders_raw
+    config_contains:
+      schema_hint: "double"   # the hint's amount entry now matches Spark's real inferred type
+
+assertions:
+  - patch_is_valid: true
+  - patch_applies: true
+  - root_cause_contains: ["amount", "schema_hint", "double"]

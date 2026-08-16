@@ -1,0 +1,56 @@
+aqueduct: "1.0"
+id: pipeline
+name: Pipeline
+# Defect (for scenario 18): TWO independent, unrelated bugs live in this
+# blueprint at once:
+#   1. products_raw declares format: parquet but the file at the path is
+#      actually CSV (same shape as scenario 03).
+#   2. clean_users selects `signup_date`, which does not exist in
+#      users_raw — the column is `signup_ts` (same shape as scenario 02).
+# The two branches share no edge and no module — fixing one cannot touch or
+# reveal the other. inject_failure reports ONLY bug #1 (products_raw); bug #2
+# is dormant (clean_users' SQL never gets analyzed until something queries
+# it), so the failure report never mentions users_raw/clean_users/signup_ts
+# at all. A correct single-patch heal fixes products_raw's format and does
+# not touch clean_users, per the prompt rule "Use only module IDs and field
+# names that appear in the failure report."
+modules:
+  - id: products_raw
+    type: Ingress
+    label: Raw Products
+    config:
+      format: parquet
+      path: data/input/products.csv
+  - id: clean_products
+    type: Channel
+    label: Clean Products
+    config:
+      op: sql
+      query: |
+        SELECT
+          product_id,
+          name,
+          price
+        FROM products_raw
+  - id: users_raw
+    type: Ingress
+    label: Raw Users
+    config:
+      format: csv
+      path: data/input/users.csv
+  - id: clean_users
+    type: Channel
+    label: Clean Users
+    config:
+      op: sql
+      query: |
+        SELECT
+          id,
+          name,
+          signup_date
+        FROM users_raw
+edges:
+  - from: products_raw
+    to: clean_products
+  - from: users_raw
+    to: clean_users
