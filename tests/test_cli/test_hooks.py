@@ -339,6 +339,67 @@ class TestInProcessBlueprintHook:
         assert "blueprint not found" in capsys.readouterr().err
 
 
+class TestInProcessChainedFailureContext:
+    """Regression: the recursive `run_hooks(...)` call that chains an
+    in-process target's OWN on_success/on_failure hooks (hooks.py:412-429)
+    passed no `failure_ctx=`, so it defaulted to None. `_hook_matches_error`
+    treats `failure_ctx is None` as "fire regardless" — a fallback meant for
+    events with no failure context at all (on_success) — so EVERY
+    `when_error:`-filtered entry on the chained target's on_failure list
+    fired even when the target's actual error didn't match."""
+
+    def test_chained_when_error_filter_respects_target_failure(self, tmp_path, monkeypatch, capsys):
+        from unittest.mock import MagicMock
+
+        from aqueduct.cli import hooks as hooks_mod
+        from aqueduct.executor.models import ExecutionStatus
+
+        target = tmp_path / "target.yml"
+        target.write_text(
+            "aqueduct: '1.0'\nid: target\nname: Target\nmodules: []\nedges: []\n"
+            "hooks:\n"
+            "  on_failure:\n"
+            "    - command: echo should_not_fire\n"
+            "      when_error: [SomeSpecificError]\n"
+        )
+        bp = tmp_path / "a.yml"
+        bp.write_text("aqueduct: '1.0'\nid: a\nname: A\nmodules: []\nedges: []\n")
+
+        failing_module = MagicMock(
+            module_id="c",
+            status=ExecutionStatus.ERROR,
+            error="boom",
+            error_type="UnrelatedError",
+        )
+        t_result = MagicMock(
+            status=ExecutionStatus.ERROR,
+            module_results=(failing_module,),
+        )
+
+        def fake_get_executor(engine):
+            fn = MagicMock()
+            fn.return_value = t_result
+            return fn
+
+        import aqueduct.executor as executor_mod
+
+        monkeypatch.setattr(executor_mod, "get_executor", fake_get_executor)
+
+        hooks_mod.run_hooks(
+            (HookEntry("blueprint", str(target), in_process=True),),
+            "on_success",
+            run_id="r1",
+            status="success",
+            blueprint_id="a",
+            blueprint_path=str(bp),
+            allow_command_hooks=True,
+            session=object(),
+        )
+
+        out = capsys.readouterr().out
+        assert "should_not_fire" not in out
+
+
 class TestStaticHookCheck:
     def _write(self, path: Path, hooks_yaml: str = "") -> None:
         path.write_text(f"aqueduct: '1.0'\nid: x\nname: X\nmodules: []\n{hooks_yaml}")

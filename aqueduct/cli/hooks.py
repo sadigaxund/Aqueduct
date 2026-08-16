@@ -115,6 +115,20 @@ def _resolve_target(value: str, anchor: Path) -> Path:
     return p.resolve() if p.is_absolute() else (anchor.parent / p).resolve()
 
 
+class _ChainedFailureCtx:
+    """Minimal failure-context stand-in for an in-process chained target's
+    OWN failure — carries only what `_error_candidates` reads
+    (`.error_type` / `.stack_trace`). Not a `FailureContext`: this hook chain
+    never builds the surveyor's full `FailureContext` (manifest, provenance,
+    …) for a chained target, so a lightweight object is enough to make
+    `when_error:` filtering see the target's real error instead of `None`.
+    """
+
+    def __init__(self, error_type: str | None, stack_trace: str | None) -> None:
+        self.error_type = error_type
+        self.stack_trace = stack_trace
+
+
 def _error_candidates(failure_ctx: Any) -> set[str]:
     """Same candidate set GuardrailsConfig.heal_on_errors matches against:
     the Assert-rule error_type label, plus the exception class name
@@ -415,6 +429,14 @@ def _run_in_process_blueprint_hook(
     t_status = "success" if success else "failure"
     t_event = "on_success" if success else "on_failure"
     t_entries = t_bp.hooks.on_success if success else t_bp.hooks.on_failure
+    t_failure_ctx = None
+    if not success and failing is not None:
+        # A real on_failure event with a real error — build the minimal
+        # object `_hook_matches_error` needs (`.error_type` / `.stack_trace`)
+        # so the target's own `when_error:` entries filter against the
+        # target's actual error instead of hitting the `failure_ctx is None`
+        # "always fire" fallback meant for context-less events.
+        t_failure_ctx = _ChainedFailureCtx(error_type=failing.error_type, stack_trace=failing.error)
     if t_entries:
         run_hooks(
             t_entries,
@@ -424,6 +446,7 @@ def _run_in_process_blueprint_hook(
             blueprint_id=t_bp.id,
             blueprint_path=str(target),
             allow_command_hooks=allow_command_hooks,
+            failure_ctx=t_failure_ctx,
             session=session,
             _chain=new_chain,
         )
