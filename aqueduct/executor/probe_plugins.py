@@ -65,7 +65,7 @@ BUILTIN_SIGNAL_TYPES: frozenset[str] = frozenset(
         "value_distribution",
         "distinct_count",
         "data_freshness",
-        "partition_stats",
+        "execution_partitions",
         "threshold",
     }
 )

@@ -3,7 +3,7 @@
 Covers every implemented signal type (schema_snapshot, row_count_estimate —
 both the parquet-footer and exact-count paths, null_rates, sample_rows,
 value_distribution, distinct_count, data_freshness, threshold, custom — all
-three forms) against a real DuckDB relation, the deliberate `partition_stats`
+three forms) against a real DuckDB relation, the deliberate `execution_partitions`
 non-implementation, `block_full_actions` gating, `report: stdout` note
 rendering, and two end-to-end tests driven through `execute()` — one plain
 Probe->probe_signals round trip, one a real Regulator gated by a real Probe
@@ -228,17 +228,17 @@ def test_data_freshness_missing_column_raises_config_error(duckdb_con, tmp_path)
         _data_freshness(rel, duckdb_con, {})
 
 
-# ── partition_stats — deliberate non-implementation ──────────────────────
+# ── execution_partitions — deliberate non-implementation ──────────────────
 
 
-def test_partition_stats_not_implemented_writes_no_signal(duckdb_con, tmp_path):
+def test_execution_partitions_not_implemented_writes_no_signal(duckdb_con, tmp_path):
     rel = duckdb_con.sql("SELECT 1 AS a")
-    mod = _probe_module([{"type": "partition_stats"}])
+    mod = _probe_module([{"type": "execution_partitions"}])
     execute_probe(mod, rel, duckdb_con, "r1", tmp_path)
     obs = duckdb.connect(str(tmp_path / "observability.db"))
     try:
         row = obs.execute(
-            "SELECT count(*) FROM probe_signals WHERE run_id=? AND signal_type='partition_stats'",
+            "SELECT count(*) FROM probe_signals WHERE run_id=? AND signal_type='execution_partitions'",
             ["r1"],
         ).fetchone()
     finally:

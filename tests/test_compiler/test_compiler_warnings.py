@@ -68,7 +68,7 @@ edges:
         for sig_yaml in [
             "type: row_count_estimate\n          method: spark_listener",
             "type: schema_snapshot",
-            "type: partition_stats",
+            "type: execution_partitions",
         ]:
             yaml_str = f"""
 aqueduct: "1.0"

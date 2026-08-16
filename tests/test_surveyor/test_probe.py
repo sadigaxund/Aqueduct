@@ -1,10 +1,10 @@
 """Tests for the Probe executor."""
 
 import json
-import duckdb
 from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock
 
+import duckdb
 import pytest
 
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
@@ -303,10 +303,10 @@ def test_execute_probe_data_freshness(spark: SparkSession, tmp_path: Path):
     assert "2026-01-01" in payload["max_value"]
 
 
-def test_execute_probe_partition_stats(spark: SparkSession, tmp_path: Path):
+def test_execute_probe_execution_partitions(spark: SparkSession, tmp_path: Path):
     df = spark.range(10).repartition(3)
     module = Module(
-        id="p1", type="Probe", label="P1", config={"signals": [{"type": "partition_stats"}]}
+        id="p1", type="Probe", label="P1", config={"signals": [{"type": "execution_partitions"}]}
     )
     store_dir = tmp_path / "store"
 
@@ -314,7 +314,7 @@ def test_execute_probe_partition_stats(spark: SparkSession, tmp_path: Path):
 
     conn = duckdb.connect(str(store_dir / "observability.db"))
     payload_str = conn.execute(
-        "SELECT payload FROM probe_signals WHERE signal_type='partition_stats'"
+        "SELECT payload FROM probe_signals WHERE signal_type='execution_partitions'"
     ).fetchone()[0]
     conn.close()
 
@@ -326,7 +326,6 @@ class TestProbeBlockFullActions:
     """_row_count_estimate and _null_rates with block_full_actions=True — probe.py."""
 
     def test_row_count_estimate_blocked_returns_blocked_dict(self):
-        from unittest.mock import MagicMock
         from aqueduct.executor.spark.probe import _row_count_estimate
 
         fake_df = MagicMock()
@@ -344,7 +343,6 @@ class TestProbeBlockFullActions:
 
     def test_row_count_estimate_spark_listener_ignores_block_full_actions(self):
         """spark_listener method should run regardless of block_full_actions."""
-        from unittest.mock import MagicMock
         from aqueduct.executor.spark.probe import _row_count_estimate
 
         fake_df = MagicMock()
@@ -360,7 +358,6 @@ class TestProbeBlockFullActions:
         assert result.get("estimate") is None
 
     def test_null_rates_blocked_returns_blocked_dict(self):
-        from unittest.mock import MagicMock
         from aqueduct.executor.spark.probe import _null_rates
 
         fake_df = MagicMock()
@@ -373,7 +370,6 @@ class TestProbeBlockFullActions:
 
     def test_null_rates_not_blocked_calls_sample(self):
         """With block_full_actions=False, sample() IS called on the DataFrame."""
-        from unittest.mock import MagicMock
         from aqueduct.executor.spark.probe import _null_rates
 
         # We verify sample() is invoked (not that it succeeds — no real Spark needed)
@@ -399,6 +395,7 @@ class TestExecuteProbeBlockFullActionsSignature:
 
     def test_execute_probe_has_block_full_actions_param(self):
         import inspect
+
         from aqueduct.executor.spark.probe import execute_probe
 
         sig = inspect.signature(execute_probe)

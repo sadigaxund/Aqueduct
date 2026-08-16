@@ -71,7 +71,7 @@
 #             row_count_estimate is EXACT here (parquet footer for a direct
 #             Ingress tap, COUNT(*) otherwise), never an estimate — the
 #             Spark rationale for sampling it does not transfer to a
-#             single-node exact count. partition_stats stays unsupported —
+#             single-node exact count. execution_partitions stays unsupported —
 #             no partition concept on a single-process engine.
 #   Egress on_new_columns (Pass F): allow/alert/fail, implemented as a
 #             zero-scan LIMIT 0 metadata read against the existing target
@@ -535,7 +535,7 @@ leaves:
       - tests/test_executor_duckdb/test_executor.py::test_module_type_junction_driven_through_execute
   module.type.Probe:
     support: supported
-    hint: "Pass F — 8 of Spark's 9 built-in signals (schema_snapshot, row_count_estimate, null_rates, sample_rows, value_distribution, distinct_count, data_freshness, threshold) plus custom, each a SQL aggregate/sample query or metadata read on the DuckDB relation (see duckdb_/probe.py). row_count_estimate is EXACT here, not an estimate. partition_stats stays unsupported — no partition concept on this engine (see feature parity note in duckdb_/probe.py); it emits its own dedicated runtime warning rather than silently doing nothing."
+    hint: "Pass F — 8 of Spark's 9 built-in signals (schema_snapshot, row_count_estimate, null_rates, sample_rows, value_distribution, distinct_count, data_freshness, threshold) plus custom, each a SQL aggregate/sample query or metadata read on the DuckDB relation (see duckdb_/probe.py). row_count_estimate is EXACT here, not an estimate. execution_partitions stays unsupported — no partition concept on this engine (see feature parity note in duckdb_/probe.py); it emits its own dedicated runtime warning rather than silently doing nothing."
     tests:
       - tests/test_executor_duckdb/test_probe.py::test_module_type_probe_driven_through_execute
       - tests/test_executor_duckdb/test_probe.py::test_regulator_gated_by_probe_threshold_end_to_end
@@ -908,9 +908,6 @@ leaves:
     tests:
       - tests/test_executor_duckdb/test_probe.py::test_null_rates_full_scan
       - tests/test_executor_duckdb/test_probe.py::test_null_rates_blocked_by_block_full_actions
-  probe.signal.partition_stats:
-    support: unsupported
-    hint: "DuckDB is a single-process, single-node engine with no partition concept to report — there is no analog to Spark's df.rdd.getNumPartitions(). A Probe declaring this signal against a DuckDB-executed Ingress/Channel is rejected at compile time instead of silently writing an empty/missing probe_signals row."
   probe.signal.row_count_estimate:
     support: supported
     hint: "EXACT on this engine (parquet-footer read for a direct Ingress tap, COUNT(*) otherwise) rather than a sampled estimate — see duckdb_/probe.py's module docstring; the field name and probe_signals schema stay identical to Spark's."
@@ -958,3 +955,6 @@ leaves:
       core (the cross-engine compile gate and the green-run stamps in
       patch/apply.py). The DuckDB executor never reads it; the keys a revert
       removes leave the resolved session config before `_make_session` runs.
+  probe.signal.execution_partitions:
+    support: unsupported
+    hint: "DuckDB is a single-process, single-node engine with no partition concept to report — there is no analog to Spark's df.rdd.getNumPartitions(). A Probe declaring this signal against a DuckDB-executed Ingress/Channel is rejected at compile time instead of silently writing an empty/missing probe_signals row."

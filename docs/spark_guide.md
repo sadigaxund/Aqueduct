@@ -98,7 +98,7 @@ Only the output is 1% of rows; the I/O cost is 100%.
 |---|---|
 | `row_count_estimate` | `method: spark_listener`: reads from `observability.db`, no Spark action |
 | `schema_snapshot` | Always zero-action |
-| `partition_stats` | `df.rdd.getNumPartitions()`: zero action |
+| `execution_partitions` | `df.rdd.getNumPartitions()`: zero action |
 
 **To silence:** If you accept the cost, add `block_full_actions: false` explicitly in
 the Probe config to document intent.
@@ -296,14 +296,14 @@ See the [post-write maintenance](#iceberg-hudi) table for the full reference.
 pointer (or a `plugin:` entry-point reference).
 
 Custom probes run arbitrary Python on the Spark driver. Unlike built-in signals
-(`null_rates`, `schema_snapshot`, `partition_stats`) which execute as lazy Spark
+(`null_rates`, `schema_snapshot`, `execution_partitions`) which execute as lazy Spark
 expressions, a driver-code callable can call `.collect()`, `.count()`, or other
 Spark actions: the engine cannot enforce the zero-cost-observability contract.
 
 **Suggested alternatives:**
 1. **Inline SQL** (`sql:` or `passed_when:`): executes as a native Spark expression,
    fully vectorized, zero driver-side Python overhead.
-2. **Built-in signal types**: use `schema_snapshot`, `partition_stats`, or
+2. **Built-in signal types**: use `schema_snapshot`, `execution_partitions`, or
    `row_count_estimate` with `method: spark_listener` for zero-cost observability.
 
 **To silence:** If the callable is known to be cheap (e.g. it only inspects the
@@ -343,7 +343,7 @@ a filesystem path: no CWD dependency.
 | Signal / Operation | I/O Cost | Spark Actions | Blocked by `block_full_actions` |
 |---|---|---|---|
 | `schema_snapshot` | Zero | 0 | No |
-| `partition_stats` | Zero | 0 | No |
+| `execution_partitions` | Zero | 0 | No |
 | `row_count_estimate` (spark_listener) | Zero | 0 | No |
 | `sample_rows` | First partition(s) only | 1 (`limit.collect`) | No |
 | `row_count_estimate` (sample) | **Full scan** | 1 | Yes |

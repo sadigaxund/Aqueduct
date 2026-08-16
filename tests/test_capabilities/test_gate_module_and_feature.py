@@ -183,16 +183,18 @@ def test_leaves_for_module_emits_probe_signal_types_but_not_custom():
     assert "probe.signal.custom" not in leaves
 
 
-def test_partition_stats_gated_unsupported_on_duckdb_not_spark():
+def test_execution_partitions_gated_unsupported_on_duckdb_not_spark():
     """DuckDB has no partition concept (single-process engine) — this is the
     compile-time counterpart to duckdb_/probe.py's dedicated
     `runtime_probe_signal_unsupported` warning: the same gap must now be
     caught BEFORE a run starts, like every other unsupported leaf, rather
     than only being discovered mid-execution."""
-    m = _manifest([_module("p", "Probe", {"signals": [{"type": "partition_stats"}]})])
+    m = _manifest([_module("p", "Probe", {"signals": [{"type": "execution_partitions"}]})])
     problems = check_capabilities(m, engine="duckdb")
-    hit = [p for p in problems if p.leaf_id == "probe.signal.partition_stats"]
-    assert hit, f"probe.signal.partition_stats not gated on duckdb: {[p.leaf_id for p in problems]}"
+    hit = [p for p in problems if p.leaf_id == "probe.signal.execution_partitions"]
+    assert (
+        hit
+    ), f"probe.signal.execution_partitions not gated on duckdb: {[p.leaf_id for p in problems]}"
     assert hit[0].module_id == "p"
     assert check_capabilities(m, engine="spark") == []
 
@@ -200,7 +202,7 @@ def test_partition_stats_gated_unsupported_on_duckdb_not_spark():
 def test_all_other_built_in_signal_types_clean_on_both_engines():
     from aqueduct.executor.probe_plugins import BUILTIN_SIGNAL_TYPES
 
-    non_partition = sorted(BUILTIN_SIGNAL_TYPES - {"partition_stats"})
+    non_partition = sorted(BUILTIN_SIGNAL_TYPES - {"execution_partitions"})
     signals = [{"type": t} for t in non_partition]
     # threshold/data_freshness need a config key to be realistic, but the
     # capability gate only looks at `type:` — an empty/minimal config is

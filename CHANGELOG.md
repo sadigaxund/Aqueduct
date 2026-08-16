@@ -16,6 +16,9 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING: the Probe signal `partition_stats` is renamed to `execution_partitions`, with no back-compat alias.** The signal reports `df.rdd.getNumPartitions()` — Spark's EXECUTION partition count, not Hive/table partitioning — and the old name misled readers into thinking it described table partitioning. A Blueprint using `type: partition_stats` now fails with a hard capability-check error at compile time (the same `extra="forbid"` grammar rejection any other unrecognized signal type gets); there is no reader that accepts both spellings. Update `config.signals[].type: partition_stats` to `type: execution_partitions` in any Blueprint that declares it. (`aqueduct/executor/probe_plugins.py`, `aqueduct/executor/spark/probe.py`, `aqueduct/executor/duckdb_/probe.py`, both engines' `capabilities.yml`, `aqueduct/dashboard/app.py`, `aqueduct/stores/queries.py`, `docs/specs.md`, `docs/spark_guide.md`, `AGENTS.md`, `SKILL.md`, `gallery/snippets/26_probe_signals_all/`; tests: `tests/test_executor/test_executor_probe.py`, `tests/test_surveyor/test_probe.py`, `tests/test_capabilities/test_gate_module_and_feature.py`, `tests/test_executor_duckdb/test_probe.py`, `tests/test_compiler/test_compiler_warnings.py`)
+
 ### Added
 
 - `benchmark_results` now persists `refusal` and `engine_config_gate` per row (both were already computed and exported in `aqueduct benchmark --format json`, but never reached the store, so `aqueduct benchmark-diff`/`benchmark-stats` history could not distinguish a config-heal refusal from any other failure). An existing benchmark DB is migrated in place — a new idempotent `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` pair runs on open, in both the DuckDB and Postgres backends — so a pre-2.1 store is not orphaned. (`aqueduct/surveyor/benchmark_store.py`, `docs/observability_guide.md`; tests: `tests/test_benchmark_store.py`)
