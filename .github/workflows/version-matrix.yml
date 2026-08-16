@@ -391,6 +391,29 @@ jobs:
           print("compatibility.md updated")
           PYEOF
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Regenerate ENGINE_MATRIX
+        # The COMPAT_RESULTS region was just regenerated above by hand; this
+        # is the OTHER generated region of docs/compatibility.md
+        # (ENGINE_MATRIX_START/END) — derived from each engine's
+        # capabilities.yml via `aqueduct dev capabilities docs`. Without this
+        # step the Verify step below only ever catches a stale COMPAT_RESULTS
+        # table; a stale ENGINE_MATRIX (an engine's capabilities.yml changed
+        # but nobody ran `aqueduct dev capabilities docs` locally) would
+        # `git diff --quiet` clean and merge undetected — `docs` was
+        # previously invoked only inside this workflow's own error message,
+        # never actually run by any workflow. `[dev]` only, same extra
+        # test-suite.yml's `capabilities-tests` job uses for
+        # `aqueduct dev capabilities check` — capability-tooling walks each
+        # engine's `capabilities.yml` file directly, it does not need
+        # pyspark/duckdb installed to read them.
+        run: |
+          pip install -e ".[dev]"
+          aqueduct dev capabilities docs
+
       - name: Verify the committed matrix is current
         # CI must NEVER write to `main`. This step used to `git commit && git
         # push` the regenerated table, which silently desynced every clone (you
