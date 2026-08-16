@@ -14,7 +14,13 @@ versioning follows [SemVer](https://semver.org/). The stability contract
 applies from v1.0.0 — during alpha/RC, breaking changes may land in any
 release and are marked **BREAKING**.
 
-## [Unreleased]
+## [2.1.0] — 2026-08-17
+
+Final release. Four changes below are marked **BREAKING**; together with the
+ten in 2.1.0rc1 this makes FOURTEEN breaking changes since 2.0.5. They ship
+inside a MINOR bump per the stability contract stated at the top of this
+file: the contract applies from v1.0.0, and during alpha/RC breaking changes
+may land in any release provided they are marked.
 
 ### Added
 
