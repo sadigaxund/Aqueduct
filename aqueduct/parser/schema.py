@@ -876,7 +876,10 @@ class SparkEngineBlockSchema(BaseModel):
             "Per-run Spark session configuration, merged with the engine-"
             "level engine.spark.conf from aqueduct.yml (Blueprint wins), and "
             "with this invocation's -s/--set on top of both. Replaces the "
-            "pre-2.0 top-level spark_config block."
+            "pre-2.0 top-level spark_config block. Deliberately unvalidated "
+            "beyond shape: the engine-config allowlist gates the healing "
+            "agent's self-granted changes, not the operator, who already has "
+            "arbitrary power over their own Blueprint."
         ),
     )
 
