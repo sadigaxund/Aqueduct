@@ -923,6 +923,51 @@ class TestNormalizeSql:
             result = _normalize_sql(text)
         assert result == " ".join(text.lower().split())
 
+    def test_fallback_reports_degradation_via_aqueduct_warning(self):
+        """The silent AST→substring degradation must be surfaced, not swallowed.
+
+        _normalize_sql still must not raise on unparseable SQL (scenario authors
+        legitimately write SQL fragments) — but the fact that comparison quietly
+        degraded to lowercase-substring matching must be reported through
+        aqueduct.warnings.emit with a stable rule_id, naming the offending key
+        and fragment.
+        """
+        import warnings as _stdlib_warnings
+        from unittest.mock import patch as mock_patch
+
+        from aqueduct.surveyor.scenario import _normalize_sql
+        from aqueduct.warnings import AqueductWarning
+
+        text = "NOT SQL  multiple   spaces"
+        with mock_patch("sqlglot.parse_one", side_effect=Exception("parse error")):
+            with _stdlib_warnings.catch_warnings(record=True) as caught:
+                _stdlib_warnings.simplefilter("always")
+                result = _normalize_sql(text, key="query")
+
+        assert result == " ".join(text.lower().split())  # still degrades, does not raise
+        aq_warnings = [w for w in caught if issubclass(w.category, AqueductWarning)]
+        assert aq_warnings, "expected an AqueductWarning reporting the degradation"
+        msg = str(aq_warnings[0].message)
+        assert "config_contains_sql_degraded" in msg
+        assert "query" in msg
+        assert "NOT SQL  multiple   spaces" in msg
+
+    def test_fallback_without_key_still_reports(self):
+        """Degradation is reported even when no key context is given."""
+        import warnings as _stdlib_warnings
+        from unittest.mock import patch as mock_patch
+
+        from aqueduct.surveyor.scenario import _normalize_sql
+        from aqueduct.warnings import AqueductWarning
+
+        with mock_patch("sqlglot.parse_one", side_effect=Exception("parse error")):
+            with _stdlib_warnings.catch_warnings(record=True) as caught:
+                _stdlib_warnings.simplefilter("always")
+                _normalize_sql("@@@INVALID!!!SQL###")
+
+        aq_warnings = [w for w in caught if issubclass(w.category, AqueductWarning)]
+        assert aq_warnings, "expected an AqueductWarning even without a key"
+
 
 # ── _check_expected_effect ────────────────────────────────────────────────────
 

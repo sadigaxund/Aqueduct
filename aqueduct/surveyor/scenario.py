@@ -585,7 +585,7 @@ def _build_failure_ctx(
 _SQL_TYPED_KEYS = ("query", "sql")
 
 
-def _normalize_sql(text: str) -> str:
+def _normalize_sql(text: str, *, key: str | None = None) -> str:
     """Return an AST-normalized canonical form of a SQL string.
 
     Uses sqlglot — already a hard dep (see CLAUDE.md: never write a custom SQL
@@ -595,14 +595,39 @@ def _normalize_sql(text: str) -> str:
     Falls back to lowercased whitespace-collapsed text when sqlglot cannot
     parse the input (LLMs occasionally emit dialect-specific oddities) —
     matches the old string-substring behaviour rather than failing the whole
-    assertion on a parse error.
+    assertion on a parse error. This is a DELIBERATE fallback, not a hard
+    failure: scenario authors legitimately write SQL fragments (partial
+    clauses, dialect-specific syntax) that sqlglot cannot parse standalone,
+    and hard-failing the whole assertion on a parse error would break
+    existing scenarios over a comparison-quality issue, not a real bug.
+    ``key`` (the config key being compared, e.g. "query") is threaded through
+    purely to name the offending key in the emitted warning below.
     """
     try:
         import sqlglot
 
         parsed = sqlglot.parse_one(text)
         return parsed.sql()
-    except Exception:
+    except Exception as exc:
+        # Broad by design (AGENTS.md "over-broad except must carry a
+        # justification"): sqlglot raises many different parser-internal
+        # exception types across dialects/inputs, and this exists precisely
+        # to catch "SQL sqlglot cannot parse" without hard-failing the
+        # scenario — see the docstring above. The degradation from
+        # AST-normalized comparison to lowercase-substring matching is a
+        # real, silent loss of precision, so it MUST NOT be swallowed here:
+        # report it via aqueduct.warnings.emit (module-global, no plumbing
+        # needed through _compare_config_values' several non-list-returning
+        # callers — _module_matches returns bool, _grade_effect recurses
+        # through any_of — to reach a ScenarioResult.soft_failures list).
+        from aqueduct.warnings import emit
+
+        where = f" for key {key!r}" if key else ""
+        emit(
+            "config_contains_sql_degraded",
+            f"config_contains SQL comparison{where} fell back to lowercase-substring "
+            f"matching — sqlglot could not parse {text[:200]!r}: {exc}",
+        )
         return " ".join(text.lower().split())
 
 
@@ -835,8 +860,8 @@ def _compare_config_values(
         expected_str = str(expected_val)
         actual_str = str(actual_val)
         if key in _SQL_TYPED_KEYS:
-            normalized_actual = _normalize_sql(actual_str)
-            normalized_expected = _normalize_sql(expected_str)
+            normalized_actual = _normalize_sql(actual_str, key=key)
+            normalized_expected = _normalize_sql(expected_str, key=key)
             if normalized_expected not in normalized_actual:
                 failures.append(
                     f"{where}[{key!r}]: "
@@ -1920,6 +1945,9 @@ def format_benchmark_table(
         if r.diag_score is not None:
             parts.append(f"{r.diag_score:.0%}")
         parts.append(f"{r.duration_seconds:.0f}s")
+        stop_reason = getattr(r, "stop_reason", None)
+        if stop_reason is not None:
+            parts.append(str(stop_reason))
         return " · ".join(parts)
 
     # Compute column widths AFTER pre-rendering every cell so the column

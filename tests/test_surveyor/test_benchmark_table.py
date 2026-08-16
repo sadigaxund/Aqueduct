@@ -39,6 +39,7 @@ def _r(
     attempts_to_parse: int = 1,
     diag_correct: bool | None = None,
     violated_guardrails: list | None = None,
+    stop_reason: str | None = None,
 ) -> types.SimpleNamespace:
     """Build a minimal fake ScenarioResult for format_benchmark_table."""
     ns = types.SimpleNamespace(
@@ -51,6 +52,7 @@ def _r(
         attempts_to_parse=attempts_to_parse,
         diag_correct=diag_correct,
         violated_guardrails=violated_guardrails,
+        stop_reason=stop_reason,
     )
     return ns
 
@@ -203,6 +205,17 @@ class TestTableContent:
         results = {"sc-1": {"model-a": _r(passed=False)}}
         out = _render(results, ["model-a"])
         assert "FAIL" in out
+
+    def test_stop_reason_appears_in_cell_when_present(self):
+        results = {"sc-1": {"model-a": _r(passed=False, stop_reason="stuck_signature")}}
+        out = _render(results, ["model-a"])
+        assert "stuck_signature" in out
+
+    def test_stop_reason_absent_when_none(self):
+        results = {"sc-1": {"model-a": _r(passed=True, stop_reason=None)}}
+        out = _render(results, ["model-a"])
+        # No stop_reason value leaks into the cell content when unset.
+        assert "None" not in out
 
     def test_scenario_id_in_output(self):
         results = {"my-scenario": {"model-a": _r()}}
