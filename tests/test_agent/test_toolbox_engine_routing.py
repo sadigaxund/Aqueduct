@@ -29,8 +29,9 @@ from unittest.mock import MagicMock, patch
 import duckdb
 import pytest
 
+import aqueduct.executor.protocol as protocol
 from aqueduct.agent.toolbox import ToolBox
-from aqueduct.executor.protocol import ExecutorProtocol, PromptRules, DeferRules, register_protocol
+from aqueduct.executor.protocol import ExecutorProtocol, PromptRules, DeferRules
 from aqueduct.parser.models import ModuleType
 
 pytestmark = pytest.mark.unit
@@ -167,15 +168,17 @@ class TestSparkPathUnchanged:
 
 
 class TestEngineWithNoReaderDegradesGracefully:
-    def test_get_source_schema_unavailable_when_engine_has_no_reader(self):
-        register_protocol(
+    def test_get_source_schema_unavailable_when_engine_has_no_reader(self, monkeypatch):
+        monkeypatch.setitem(
+            protocol.PROTOCOL_REGISTRY,
+            "_test_no_reader_engine",
             ExecutorProtocol(
                 engine="_test_no_reader_engine",
                 execute=lambda *a, **k: None,
                 extract_error=lambda exc: None,
                 prompt_rules=_minimal_prompt_rules(),
                 # read_source_schema / sample_source_rows both default to None.
-            )
+            ),
         )
         session = object()
         mod = types.SimpleNamespace(id="src", type=ModuleType.Ingress)
@@ -190,14 +193,16 @@ class TestEngineWithNoReaderDegradesGracefully:
         assert result["available"] is False
         assert "does not support get_source_schema" in result["reason"]
 
-    def test_sample_rows_unavailable_when_engine_has_no_reader(self):
-        register_protocol(
+    def test_sample_rows_unavailable_when_engine_has_no_reader(self, monkeypatch):
+        monkeypatch.setitem(
+            protocol.PROTOCOL_REGISTRY,
+            "_test_no_reader_engine_2",
             ExecutorProtocol(
                 engine="_test_no_reader_engine_2",
                 execute=lambda *a, **k: None,
                 extract_error=lambda exc: None,
                 prompt_rules=_minimal_prompt_rules(),
-            )
+            ),
         )
         session = object()
         mod = types.SimpleNamespace(id="src", type=ModuleType.Ingress)

@@ -577,7 +577,7 @@ def _call_anthropic_with_tools(
                 {
                     "type": "tool_result",
                     "tool_use_id": block.get("id"),
-                    "content": json.dumps(result, default=str),
+                    "content": json.dumps(result, default=str, ensure_ascii=False),
                 }
             )
         convo = [*convo, {"role": "user", "content": tool_results}]
@@ -979,7 +979,7 @@ def _run_openai_tool_loop(
                 {
                     "role": "tool",
                     "tool_call_id": tc.get("id"),
-                    "content": json.dumps(result, default=str),
+                    "content": json.dumps(result, default=str, ensure_ascii=False),
                 },
             ]
 

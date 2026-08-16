@@ -58,7 +58,7 @@ def emit(
         data = _redaction.redact(data)
 
     if fmt == "json":
-        click.echo(json.dumps(data, indent=2, default=str), err=err)
+        click.echo(json.dumps(data, indent=2, default=str, ensure_ascii=False), err=err)
         return
 
     # text (default) or unrecognised format — human-readable fallback

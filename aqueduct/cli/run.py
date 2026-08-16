@@ -141,7 +141,7 @@ def _render_compile_show(manifest: Any, show: str) -> str:
     manifest_dict = manifest.to_dict()
 
     if show == "manifest":
-        return json.dumps(manifest_dict, indent=2)
+        return json.dumps(manifest_dict, indent=2, ensure_ascii=False)
 
     if show == "inputs":
         return _format_inputs_fingerprint(manifest_dict.get("inputs_fingerprint") or {})
@@ -152,7 +152,7 @@ def _render_compile_show(manifest: Any, show: str) -> str:
     # "all" — full manifest + readable tables appended
     return "\n".join(
         [
-            json.dumps(manifest_dict, indent=2),
+            json.dumps(manifest_dict, indent=2, ensure_ascii=False),
             "",
             "── Provenance ────────────────────────────────────────────────────────",
             _format_provenance_table(manifest_dict.get("provenance_map") or {}),

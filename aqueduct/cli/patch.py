@@ -10,6 +10,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 import click
 
@@ -53,31 +54,118 @@ def _patch_index_obs_store(blueprint_path: Path | None = None):
         return None
 
 
-def _list_from_store(ps, filter_status: str, out_format: str) -> None:
-    """Render patches read straight from the patch store (the source of truth).
-
-    Lists ``pending/`` (or applied/rejected) via ``PatchStore.iter_payloads`` —
-    works for local and object backends. ``blueprint_id``/``rationale`` come from
-    each body's metadata."""
+def _row_from_body(st: str, key: str, payload: dict) -> dict:
+    """Build a `_list_from_store` row from a full patch body (the shape both
+    the index-backed and full-scan paths converge on)."""
     from aqueduct.patch.grammar import PATCH_META_KEY
 
-    statuses = ("pending", "applied", "rejected") if filter_status == "all" else (filter_status,)
+    meta = payload.get(PATCH_META_KEY) or {}
+    return {
+        "status": st,
+        "file": key.rsplit("/", 1)[-1],  # unique surrogate key (timestamped)
+        "patch_id": payload.get("patch_id", ""),
+        "rationale": payload.get("rationale"),
+        "confidence": payload.get("confidence"),
+        "blueprint_id": meta.get("blueprint_id"),
+        "run_id": meta.get("run_id"),
+        "failed_module": meta.get("failed_module"),
+    }
+
+
+def _list_rows_full_scan(ps, statuses: tuple[str, ...]) -> list[dict]:
+    """The pre-Phase-84 path: one full body read per patch via
+    ``PatchStore.iter_payloads`` — O(n) in patch count. Kept as the
+    fallback when the index is unavailable or its query fails, and as the
+    JSON-format path (JSON needs `confidence`/`failed_module`, which live
+    only in the body, so there is nothing to save by consulting the index
+    first)."""
     rows: list[dict] = []
     for st in statuses:
         for _key, _mtime, payload in ps.iter_payloads(st):
-            meta = payload.get(PATCH_META_KEY) or {}
-            rows.append(
-                {
-                    "status": st,
-                    "file": _key.rsplit("/", 1)[-1],  # unique surrogate key (timestamped)
-                    "patch_id": payload.get("patch_id", ""),
-                    "rationale": payload.get("rationale"),
-                    "confidence": payload.get("confidence"),
-                    "blueprint_id": meta.get("blueprint_id"),
-                    "run_id": meta.get("run_id"),
-                    "failed_module": meta.get("failed_module"),
-                }
-            )
+            rows.append(_row_from_body(st, _key, payload))
+    return rows
+
+
+def _list_rows_via_index(ps, obs_store: Any, statuses: tuple[str, ...]) -> list[dict] | None:
+    """Fast path for TEXT output: `patch_index` metadata only — zero body
+    reads for any patch the index already knows about.
+
+    Returns None (→ caller falls back to `_list_rows_full_scan`) when no
+    obs store is available or the query errors; the index is a derived
+    cache, `ps` (the patch store) stays the source of truth. Cross-checked
+    against `PatchStore.list_keys` (a cheap key listing, no body reads) so
+    stale index rows (pointing at a moved/deleted body) are dropped and
+    pre-index patches (written before Phase 53, or by a path that skipped
+    the index write) still list — read individually, since only THOSE
+    bodies are actually missing metadata.
+
+    Table output never renders `confidence`/`failed_module` (body-only
+    fields), so those come back None here — correct for this caller,
+    which is exactly why this fast path exists only for TEXT format.
+    """
+    if obs_store is None:
+        return None
+    from aqueduct.patch import index as _ix
+
+    try:
+        with obs_store.connect() as cur:
+            index_rows: list[dict] = []
+            for st in statuses:
+                index_rows.extend(_ix.list_by_status(cur, status=st, limit=10_000))
+    except Exception:
+        return None
+
+    try:
+        store_keys: dict[str, list[str]] = {
+            st: sorted((k for k in ps.list_keys(st) if k.endswith(".json")), reverse=True)
+            for st in statuses
+        }
+    except Exception:
+        return None
+
+    all_store_keys = {k for keys in store_keys.values() for k in keys}
+    indexed = {r["object_key"]: r for r in index_rows if r["object_key"] in all_store_keys}
+    missing = all_store_keys - set(indexed)
+
+    rows: list[dict] = []
+    for st in statuses:
+        for key in store_keys[st]:  # filename-desc ≈ newest-first (ts-prefixed names)
+            r = indexed.get(key)
+            if r is not None:
+                rows.append(
+                    {
+                        "status": st,
+                        "file": key.rsplit("/", 1)[-1],
+                        "patch_id": r.get("patch_id", ""),
+                        "rationale": r.get("rationale"),
+                        "confidence": None,
+                        "blueprint_id": r.get("blueprint_id") or None,
+                        "run_id": r.get("run_id") or None,
+                        "failed_module": None,
+                    }
+                )
+            elif key in missing:
+                try:
+                    payload = ps.get_json(key)
+                except Exception:
+                    continue
+                rows.append(_row_from_body(st, key, payload))
+    return rows
+
+
+def _list_from_store(ps, filter_status: str, out_format: str, obs_store: Any = None) -> None:
+    """Render patches read straight from the patch store (the source of truth).
+
+    TEXT output (the common interactive case) is served from `patch_index`
+    when available — O(1) metadata query, no per-patch body read. JSON
+    output and the no-index/query-error case fall back to the full
+    `PatchStore.iter_payloads` scan (`_list_rows_full_scan`)."""
+    statuses = ("pending", "applied", "rejected") if filter_status == "all" else (filter_status,)
+    rows: list[dict] | None = None
+    if out_format.lower() != "json":
+        rows = _list_rows_via_index(ps, obs_store, statuses)
+    if rows is None:
+        rows = _list_rows_full_scan(ps, statuses)
     if out_format.lower() == "json":
         emit(rows, fmt="json")
         return
@@ -1506,7 +1594,8 @@ def patch_list(
                 _bp_path if _bp_path else (Path.cwd() / "_sentinel")
             )
             ps = make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, _patches_root)
-            _list_from_store(ps, filter_status, out_format)
+            _obs = _patch_index_obs_store(_bp_path)
+            _list_from_store(ps, filter_status, out_format, obs_store=_obs)
             return
         except Exception as exc:
             # A missing aqueduct.yml resolves to defaults above and never reaches

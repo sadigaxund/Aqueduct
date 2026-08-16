@@ -1450,6 +1450,25 @@ class HandoffConfig(BaseModel):
     )
 
 
+def _freeze_for_hash(value: Any) -> Any:
+    """Recursively turn *value* into something hashable, for
+    ``AqueductConfig.__hash__`` — several nested config models carry plain
+    ``dict``/``list`` fields (e.g. ``EngineConfig.spark.conf``,
+    ``WarningsConfig``'s list fields), which are not hashable as-is.
+    Dict items are sorted by key so equal dicts (order-independent by
+    definition) always freeze to the same tuple.
+    """
+    if isinstance(value, BaseModel):
+        return (type(value), _freeze_for_hash(value.__dict__))
+    if isinstance(value, dict):
+        return tuple(sorted((k, _freeze_for_hash(v)) for k, v in value.items()))
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_for_hash(v) for v in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_freeze_for_hash(v) for v in value)
+    return value
+
+
 class AqueductConfig(BaseModel):
     """Fully validated engine configuration.
 
@@ -1556,6 +1575,33 @@ class AqueductConfig(BaseModel):
             engine: dict(keys) for engine, keys in (layers or {}).items() if keys
         }
         return out
+
+    def __eq__(self, other: object) -> bool:
+        """Field equality only — deliberately excludes ``_cli_engine_overrides``.
+
+        Pydantic v2's generated ``BaseModel.__eq__`` compares
+        ``__pydantic_private__`` (which holds every ``PrivateAttr``,
+        including ``_cli_engine_overrides`` above) BEFORE it compares
+        fields. Two configs that are identical except for this
+        invocation's ``--set`` layer would therefore compare unequal —
+        a per-invocation carrier leaking into object identity. Comparing
+        ``self.__dict__`` (pydantic's field storage; private attrs live
+        separately in ``__pydantic_private__`` and are not part of it)
+        restores the intended semantics: same config, different
+        ``--set`` layer, still equal.
+        """
+        if type(other) is not type(self):
+            return NotImplemented
+        return self.__dict__ == other.__dict__
+
+    def __hash__(self) -> int:
+        """Restore hashability — defining ``__eq__`` sets ``__hash__`` to
+        ``None`` on any class, frozen or not. Hashes exactly the fields
+        ``__eq__`` compares (``self.__dict__``, private attrs excluded),
+        via a recursive freeze since several nested config models carry
+        plain ``dict``/``list`` fields that are not directly hashable.
+        """
+        return hash((type(self), _freeze_for_hash(self.__dict__)))
 
     @field_validator("checkpoint_root")
     @classmethod

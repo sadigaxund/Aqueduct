@@ -29,9 +29,52 @@ from pydantic import BaseModel
 
 from aqueduct.executor.capability_leaves import _SCHEMA_BLOCKS, all_leaves
 from aqueduct.executor.config_leaves import all_config_leaves, core_config_leaves
-from aqueduct.parser.schema import BlueprintSchema
+from aqueduct.parser.schema import (
+    MODULE_NESTED_SCHEMA_BLOCKS,
+    MODULE_TYPE_SCHEMAS,
+    BlueprintSchema,
+    DuckDBEngineBlockSchema,
+    EngineBlockSchema,
+    SparkEngineBlockSchema,
+)
 
 pytestmark = pytest.mark.unit
+
+# ── Explicit exemptions for the REVERSE direction ───────────────────────────
+# Every pydantic model reachable from BlueprintSchema must be governed by
+# _SCHEMA_BLOCKS/MODULE_NESTED_SCHEMA_BLOCKS (the FORWARD direction, checked
+# above) OR be named here, with a reason it deliberately emits no
+# <block>.field.* leaves of its own.
+_EXEMPT_MODELS: dict[type[BaseModel], str] = {
+    # The walk root itself — not a "block", the whole grammar.
+    BlueprintSchema: "root of the walk, not a nested block",
+    # Standing decision: Blueprint engine-block fields (`engine:`) are
+    # deliberately NOT capability leaves. The engine-config allowlist
+    # (aqueduct/patch/apply.py:442) is the only gate on this healing
+    # surface, not a per-engine capability verdict — see also
+    # SparkEngineBlockSchema.conf's docstring.
+    EngineBlockSchema: "engine-config allowlist is the only gate (patch/apply.py:442)",
+    SparkEngineBlockSchema: "engine-config allowlist is the only gate (patch/apply.py:442)",
+    DuckDBEngineBlockSchema: "engine-config allowlist is the only gate (patch/apply.py:442)",
+    # Module-type root/config schemas: these ARE governed by the capability
+    # framework, just via a different, independent mechanism —
+    # capability_leaves.py's `_module_type_field_leaves()` walks
+    # MODULE_TYPE_SCHEMAS directly (module.type.* / <type>.field.* leaves,
+    # including one level into each type's `config:` sub-model). They are
+    # not also routed through `_SCHEMA_BLOCKS`, which exists for blocks
+    # SHARED across module types (agent, retry_policy, ...).
+    **{
+        model: "governed via MODULE_TYPE_SCHEMAS / _module_type_field_leaves(), not _SCHEMA_BLOCKS"
+        for model in MODULE_TYPE_SCHEMAS.values()
+    },
+    **{
+        model.model_fields["config"].annotation: (
+            "governed via MODULE_TYPE_SCHEMAS / _module_type_field_leaves(), not _SCHEMA_BLOCKS"
+        )
+        for model in MODULE_TYPE_SCHEMAS.values()
+        if "config" in model.model_fields
+    },
+}
 
 
 def _annotation_types(annotation: object) -> list[object]:
@@ -77,6 +120,31 @@ def test_every_schema_block_is_reachable_from_blueprint_schema():
         "every engine about grammar no Blueprint can express. Remove the "
         "entry (and re-run `aqueduct dev capabilities sync`), or wire the "
         "model back into BlueprintSchema."
+    )
+
+
+def test_every_reachable_model_is_governed_or_exempt():
+    """REVERSE direction of the invariant above: every pydantic model
+    reachable from ``BlueprintSchema`` must either be walked for its own
+    leaves (``_SCHEMA_BLOCKS`` / ``MODULE_NESTED_SCHEMA_BLOCKS``) or be on
+    the explicit exempt list with a stated reason. A model missing from
+    all three is Blueprint grammar with NO capability-leaf coverage at
+    all — silently ungoverned, the mirror-image failure of the forward
+    test (a leaf with no grammar behind it)."""
+    reachable = _reachable_models(BlueprintSchema)
+    governed = {model for _, model in _SCHEMA_BLOCKS} | {
+        model for _, model in MODULE_NESTED_SCHEMA_BLOCKS
+    }
+    ungoverned = sorted(
+        model.__name__
+        for model in reachable
+        if model not in governed and model not in _EXEMPT_MODELS
+    )
+    assert ungoverned == [], (
+        "Models reachable from BlueprintSchema with NO capability-leaf "
+        f"coverage: {ungoverned}. Add them to _SCHEMA_BLOCKS / "
+        "MODULE_NESTED_SCHEMA_BLOCKS (capability_leaves.py / "
+        "parser/schema.py), or to _EXEMPT_MODELS above with a reason."
     )
 
 

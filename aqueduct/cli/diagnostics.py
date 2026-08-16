@@ -143,7 +143,7 @@ def validate(
                 )
                 if cfg.engine.spark.conf:
                     emit(
-                        f"  spark_config: {json.dumps(cfg.engine.spark.conf)}",
+                        f"  spark_config: {json.dumps(cfg.engine.spark.conf, ensure_ascii=False)}",
                         fmt="text",
                         redact=True,
                     )
@@ -429,7 +429,7 @@ def schema(target: str, output: str) -> None:
         click.echo(f"✗ schema generation failed: {exc}", err=True)
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
-    text = _json.dumps(js, indent=2, sort_keys=True)
+    text = _json.dumps(js, indent=2, sort_keys=True, ensure_ascii=False)
     if output == "-":
         click.echo(text)
     else:
