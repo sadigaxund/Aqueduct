@@ -158,6 +158,8 @@ from aqueduct.executor.spark.funnel import VALID_MODES as _FUNNEL_MODES
 from aqueduct.executor.spark.junction import VALID_MODES as _JUNCTION_MODES
 from aqueduct.parser.models import ModuleType
 from aqueduct.parser.schema import (
+    MODULE_NESTED_SCHEMA_BLOCKS,
+    MODULE_TYPE_SCHEMAS,
     AgentSchema,
     BackoffSchema,
     EdgeSchema,
@@ -165,8 +167,6 @@ from aqueduct.parser.schema import (
     HealedByRecordSchema,
     HookEntrySchema,
     HooksSchema,
-    MODULE_NESTED_SCHEMA_BLOCKS,
-    MODULE_TYPE_SCHEMAS,
     ModuleCommonSchema,
     ModuleRetrySchema,
     RetryPolicySchema,

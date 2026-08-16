@@ -25,9 +25,9 @@ from __future__ import annotations
 
 import pytest
 
-from aqueduct.parser.parser import parse_dict
 from aqueduct.compiler.compiler import compile as compiler_compile
 from aqueduct.executor.spark.executor import execute as executor_execute
+from aqueduct.parser.parser import parse_dict
 
 pytestmark = [pytest.mark.spark, pytest.mark.integration, pytest.mark.slow]
 
