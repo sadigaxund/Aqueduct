@@ -22,12 +22,13 @@ _CFG = AqueductConfig()
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 
 
-def _bp_with_guardrails(allowed_paths=(), forbidden_ops=()):
+def _bp_with_guardrails(allowed_paths=(), forbidden_ops=(), deny_patterns=()):
     return {
         "agent": {
             "guardrails": {
                 "allowed_paths": list(allowed_paths),
                 "forbidden_ops": list(forbidden_ops),
+                "deny_patterns": list(deny_patterns),
             }
         }
     }
@@ -212,6 +213,124 @@ class TestGuardrails:
         )
         with pytest.raises(PatchError, match="/var/leak"):
             _check_guardrails(spec, bp, cfg=_CFG)
+
+
+class TestDenyPatternsGate:
+    """`agent.guardrails.deny_patterns` — evaluated AFTER `allowed_paths`,
+    over the same resolved value. Subtract-only: a path `allowed_paths`
+    permitted (or that was unrestricted because `allowed_paths` was empty)
+    is still refused if it matches a `deny_patterns` entry."""
+
+    def test_deny_with_empty_allowed_paths_still_rejects(self):
+        # allowed_paths is empty (unrestricted) — deny_patterns must still fire.
+        bp = _bp_with_guardrails(deny_patterns=("s3a://prod/secrets/*",))
+        spec = _patch(
+            {
+                "op": "set_module_config_key",
+                "module_id": "x",
+                "key": "path",
+                "value": "s3a://prod/secrets/creds.json",
+            }
+        )
+        with pytest.raises(PatchError, match="s3a://prod/secrets/creds.json"):
+            _check_guardrails(spec, bp, cfg=_CFG)
+
+    def test_deny_beats_matching_allowed_paths_entry(self):
+        # allowed_paths permits the whole prefix; deny_patterns subtracts a
+        # narrower sub-path from it. Deny wins — subtract-only.
+        bp = _bp_with_guardrails(
+            allowed_paths=("s3a://prod/*",),
+            deny_patterns=("s3a://prod/secrets/*",),
+        )
+        spec = _patch(
+            {
+                "op": "set_module_config_key",
+                "module_id": "x",
+                "key": "path",
+                "value": "s3a://prod/secrets/creds.json",
+            }
+        )
+        with pytest.raises(PatchError, match="s3a://prod/secrets/creds.json"):
+            _check_guardrails(spec, bp, cfg=_CFG)
+
+    def test_non_matching_deny_leaves_allowed_path_unaffected(self):
+        bp = _bp_with_guardrails(
+            allowed_paths=("s3a://prod/*",),
+            deny_patterns=("s3a://prod/secrets/*",),
+        )
+        spec = _patch(
+            {
+                "op": "set_module_config_key",
+                "module_id": "x",
+                "key": "path",
+                "value": "s3a://prod/orders/",
+            }
+        )
+        assert (
+            _check_guardrails(spec, bp, cfg=_CFG).status == "not_applicable"
+        )  # not denied, and matches allowed_paths → passes
+
+    def test_error_message_names_pattern_and_value(self):
+        bp = _bp_with_guardrails(deny_patterns=("s3a://prod/secrets/*",))
+        spec = _patch(
+            {
+                "op": "set_module_config_key",
+                "module_id": "x",
+                "key": "path",
+                "value": "s3a://prod/secrets/creds.json",
+            }
+        )
+        with pytest.raises(PatchError) as exc_info:
+            _check_guardrails(spec, bp, cfg=_CFG)
+        message = str(exc_info.value)
+        assert "s3a://prod/secrets/creds.json" in message
+        assert "s3a://prod/secrets/*" in message
+        assert "deny_patterns" in message
+        assert "path" in message
+
+    def test_deny_replace_module_config(self):
+        bp = _bp_with_guardrails(deny_patterns=("/etc/*",))
+        spec = _patch(
+            {
+                "op": "replace_module_config",
+                "module_id": "x",
+                "config": {"format": "parquet", "path": "/etc/passwd"},
+            }
+        )
+        with pytest.raises(PatchError, match="deny_patterns"):
+            _check_guardrails(spec, bp, cfg=_CFG)
+
+    def test_deny_insert_module(self):
+        bp = _bp_with_guardrails(deny_patterns=("s3a://attacker/*",))
+        spec = _patch(
+            {
+                "op": "insert_module",
+                "module": {
+                    "id": "new_ingress",
+                    "type": "Ingress",
+                    "label": "x",
+                    "config": {"format": "parquet", "path": "s3a://attacker/data/"},
+                },
+                "edges_to_add": [],
+                "edges_to_remove": [],
+            }
+        )
+        with pytest.raises(PatchError, match="deny_patterns"):
+            _check_guardrails(spec, bp, cfg=_CFG)
+
+    def test_deny_arcade_expanded_id_skipped(self):
+        bp = _bp_with_guardrails(deny_patterns=("s3a://staging/*",))
+        spec = _patch(
+            {
+                "op": "set_module_config_key",
+                "module_id": "arcade__ingress",
+                "key": "path",
+                "value": "s3a://staging/anywhere/",
+            }
+        )
+        assert (
+            _check_guardrails(spec, bp, cfg=_CFG).status == "not_applicable"
+        )  # arcade-expanded id skipped here, same as allowed_paths
 
 
 class TestEngineConfigAllowlistGate:

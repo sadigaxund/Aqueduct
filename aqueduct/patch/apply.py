@@ -417,26 +417,69 @@ def _check_path_against_allowlist(
         )
 
 
+def _check_path_against_denylist(
+    path_value: Any,
+    deny_patterns: list[str],
+    op_name: str,
+    module_id: str,
+    provenance_map: Any | None,
+    key_hint: str = "path",
+) -> None:
+    """Raise PatchError if a resolved path matches any deny_patterns entry.
+
+    Evaluated AFTER allowed_paths (see ``_check_guardrails``) so this can
+    only SUBTRACT from what ``allowed_paths`` permits, never add — mirrors
+    the deny layer in ``aqueduct/executor/engine_config_allowlist.py``
+    (same ``fnmatch`` semantics, its own explicit step, an error message
+    naming the offending value/pattern/key). Unlike ``allowed_paths`` this
+    runs even when ``allowed_paths`` is empty: an operator can forbid a
+    dangerous prefix without having to enumerate every permitted one.
+    """
+    resolved = _resolve_path_for_guardrail(path_value, provenance_map)
+    if not resolved:
+        return
+    for pattern in deny_patterns:
+        if fnmatch.fnmatch(resolved, pattern):
+            raise PatchError(
+                f"Path value {resolved!r} (key={key_hint!r}) in op {op_name!r} "
+                f"(module {module_id!r}) matches agent.guardrails.deny_patterns "
+                f"pattern {pattern!r} — refused"
+            )
+
+
 def _check_config_dict_paths(
     config: Any,
     allowed_paths: list[str],
+    deny_patterns: list[str],
     op_name: str,
     module_id: str,
     provenance_map: Any | None,
 ) -> None:
-    """Check path/output_path keys inside a module config dict (full or partial)."""
+    """Check path/output_path keys inside a module config dict (full or
+    partial) against allowed_paths, then deny_patterns (in that order)."""
     if not isinstance(config, dict):
         return
     for key in ("path", "output_path"):
         if key in config:
-            _check_path_against_allowlist(
-                config[key],
-                allowed_paths,
-                op_name,
-                module_id,
-                provenance_map,
-                key_hint=key,
-            )
+            value = config[key]
+            if allowed_paths:
+                _check_path_against_allowlist(
+                    value,
+                    allowed_paths,
+                    op_name,
+                    module_id,
+                    provenance_map,
+                    key_hint=key,
+                )
+            if deny_patterns:
+                _check_path_against_denylist(
+                    value,
+                    deny_patterns,
+                    op_name,
+                    module_id,
+                    provenance_map,
+                    key_hint=key,
+                )
 
 
 def _check_engine_config_allowlist(op: Any) -> None:
@@ -507,6 +550,14 @@ def _check_guardrails(
                        add_arcade_ref — must resolve to a value matching at least
                        one fnmatch pattern. ${ctx.*} values are resolved via
                        provenance_map before matching.
+      - deny_patterns: evaluated AFTER allowed_paths, over the same resolved
+                       value and the same op shapes. A path allowed_paths
+                       permitted (or that was unrestricted because
+                       allowed_paths was empty) is still refused if it
+                       matches any deny_patterns entry — deny can only
+                       SUBTRACT from what allowed_paths permits, never add,
+                       so it is checked unconditionally, even when
+                       allowed_paths is empty.
       - set_engine_config: engine/key/value must clear the target engine's
                        core engine_config_allowlist.yml (deny layer, then
                        allow membership, then type/enum) — see
@@ -539,6 +590,7 @@ def _check_guardrails(
     guardrails = (bp_raw.get("agent") or {}).get("guardrails") or {}
     forbidden_ops: list[str] = guardrails.get("forbidden_ops") or []
     allowed_paths: list[str] = guardrails.get("allowed_paths") or []
+    deny_patterns: list[str] = guardrails.get("deny_patterns") or []
 
     for op in patch_spec.operations:
         op_name = op.op
@@ -552,7 +604,7 @@ def _check_guardrails(
         if op_name == "set_engine_config":
             _check_engine_config_allowlist(op)
 
-        if not allowed_paths:
+        if not allowed_paths and not deny_patterns:
             continue
 
         # set_module_config_key — single dotted key inside an existing module config
@@ -562,14 +614,25 @@ def _check_guardrails(
                 continue
             key = getattr(op, "key", None)
             if key in ("path", "output_path"):
-                _check_path_against_allowlist(
-                    getattr(op, "value", None),
-                    allowed_paths,
-                    op_name,
-                    module_id,
-                    provenance_map,
-                    key_hint=str(key),
-                )
+                value = getattr(op, "value", None)
+                if allowed_paths:
+                    _check_path_against_allowlist(
+                        value,
+                        allowed_paths,
+                        op_name,
+                        module_id,
+                        provenance_map,
+                        key_hint=str(key),
+                    )
+                if deny_patterns:
+                    _check_path_against_denylist(
+                        value,
+                        deny_patterns,
+                        op_name,
+                        module_id,
+                        provenance_map,
+                        key_hint=str(key),
+                    )
 
         # replace_module_config — full config dict replacement on an existing module
         elif op_name == "replace_module_config":
@@ -579,6 +642,7 @@ def _check_guardrails(
             _check_config_dict_paths(
                 getattr(op, "config", None),
                 allowed_paths,
+                deny_patterns,
                 op_name,
                 module_id,
                 provenance_map,
@@ -594,6 +658,7 @@ def _check_guardrails(
             _check_config_dict_paths(
                 module_cfg,
                 allowed_paths,
+                deny_patterns,
                 op_name,
                 module_id,
                 provenance_map,

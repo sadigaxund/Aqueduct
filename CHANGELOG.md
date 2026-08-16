@@ -16,6 +16,9 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Added
+- **`agent.guardrails.deny_patterns` — a subtract-only denylist for config path values, evaluated after `allowed_paths`.** `allowed_paths` alone forces an operator to enumerate every permitted prefix before they can forbid one dangerous one; `deny_patterns` is a list of `fnmatch` patterns, checked over the same resolved path value (`${ctx.*}` values still resolved via `ProvenanceMap` first) after `allowed_paths` runs. A path `allowed_paths` permitted — or that was unrestricted because `allowed_paths` was empty — is still refused if it matches a `deny_patterns` entry; `deny_patterns` can never widen what `allowed_paths` allows, only narrow it further, consistent with AGENTS.md's "a permission surface below core may only SUBTRACT, never add." Gates `set_module_config_key`, `replace_module_config`, `insert_module`, `add_probe`, and `add_arcade_ref` — the same op shapes `allowed_paths` already gates. Additive and default-empty (`deny_patterns: []`); an existing Blueprint's behavior is unchanged unless it opts in. See `aqueduct/patch/apply.py::_check_guardrails`, `aqueduct/parser/models.py::GuardrailsConfig`, `aqueduct/parser/schema.py::GuardrailsSchema`.
+
 ## [2.1.0rc1] — 2026-08-15
 
 **Pre-release.** PEP 440 spelling, so `pip install aqueduct-core` SKIPS this

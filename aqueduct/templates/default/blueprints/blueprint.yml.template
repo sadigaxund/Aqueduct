@@ -324,13 +324,21 @@ agent:
 
   # LLM Guardrails — per-blueprint restrictions on what the LLM may patch.
   # Violations → patch staged for human review instead of applied automatically.
-  # NOTE: all four lists live under the `guardrails:` key, not directly on `agent:`.
+  # NOTE: all five lists live under the `guardrails:` key, not directly on `agent:`.
 
   # guardrails:
   #   # allowed_paths: fnmatch patterns for config.path values the LLM may touch.
   #   #   Empty (default) = unrestricted.
   #   allowed_paths:
   #     - "s3a://my-bucket/prod/*"
+
+  #   # deny_patterns: fnmatch patterns for config.path values the LLM may NEVER touch,
+  #   #   evaluated AFTER allowed_paths, over the same resolved value. Subtract-only:
+  #   #   a path allowed_paths permits (or that is unrestricted because allowed_paths
+  #   #   is empty) is still refused if it matches here. Applies even when
+  #   #   allowed_paths is empty. Empty (default) = no additional denial.
+  #   deny_patterns:
+  #     - "s3a://my-bucket/prod/restricted/*"
 
   #   # forbidden_ops: PatchSpec ops the LLM may never use.
   #   #   Empty (default) = all ops permitted.

@@ -99,6 +99,11 @@ class GuardrailsSchema(BaseModel):
     forbidden_ops: list[str] = Field(default_factory=list)
     # fnmatch patterns for config `path` values LLM may write; empty = unrestricted
     allowed_paths: list[str] = Field(default_factory=list)
+    # fnmatch patterns for config `path` values, evaluated AFTER allowed_paths;
+    # subtract-only — a path allowed_paths permits (or that is unrestricted
+    # because allowed_paths is empty) is still refused if it matches here.
+    # Applies even when allowed_paths is empty; empty = no additional denial.
+    deny_patterns: list[str] = Field(default_factory=list)
     # Pre-trigger guards: LLM only fires when error_type matches (empty = no restriction)
     heal_on_errors: list[str] = Field(default_factory=list)
     # Pre-trigger guards: LLM never fires when error_type matches (takes priority over heal_on_errors)

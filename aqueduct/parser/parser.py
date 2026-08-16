@@ -484,6 +484,7 @@ def parse_dict(
             guardrails=GuardrailsConfig(
                 forbidden_ops=tuple(validated.agent.guardrails.forbidden_ops),
                 allowed_paths=tuple(validated.agent.guardrails.allowed_paths),
+                deny_patterns=tuple(validated.agent.guardrails.deny_patterns),
                 heal_on_errors=tuple(validated.agent.guardrails.heal_on_errors),
                 never_heal_errors=tuple(validated.agent.guardrails.never_heal_errors),
             ),
