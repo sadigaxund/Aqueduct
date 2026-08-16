@@ -33,7 +33,6 @@ deployment:
   # config-load; a mismatch raises a clear ConfigError naming both values and
   # the expected shape. Meaningful for engine: spark only.
   #   local | standalone | yarn | kubernetes — Aqueduct runs on the Spark driver (in-process).
-  #   databricks — remote-submit target; requires the deployment.databricks block below.
   #   emr | dataproc — remote-submit targets planned for a future release;
   #   currently rejected at config-load with a "not yet supported" message.
   target: local
@@ -41,20 +40,9 @@ deployment:
   # env: deployment environment tier.
   # local (default) — dev machine, no cluster validation.
   # cluster — standalone/YARN/K8s; doctor warns on relative store paths.
-  # cloud   — future remote-submit targets (Databricks/EMR/Dataproc); same validation as cluster.
+  # cloud   — future remote-submit targets (EMR/Dataproc); same validation as cluster.
   env: local
   # env: cluster
-
-  # databricks: required when target: databricks (rejected at config-load
-  # otherwise). Credentials flow through the DATABRICKS_TOKEN env var or
-  # @aq.secret() — never plaintext here.
-  # databricks:
-  #   workspace_url: https://dbc-xxxx.cloud.databricks.com
-  #   cluster_id: existing-cluster-id            # mutually exclusive with new_cluster
-  #   # new_cluster: {}                          # raw Databricks Jobs API new_cluster spec
-  #   libraries:
-  #     - pypi: { package: "aqueduct-core[spark]" }
-  #   max_concurrent_runs: 1
 
 
 # ── Engine configuration (2.0) ────────────────────────────────────────────────
@@ -296,7 +284,7 @@ stores:
 
 # ── Cluster / Cloud deployment example ───────────────────────────────────────
 #
-# For YARN, Kubernetes, Spark Standalone, or Databricks/EMR/Dataproc:
+# For YARN, Kubernetes, or Spark Standalone:
 #
 #   1. Set deployment.env: cluster (triggers doctor validation of store paths)
 #   2. Set engine.spark.master_url to your cluster endpoint

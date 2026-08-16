@@ -1247,7 +1247,6 @@ def run(
 
     from aqueduct.executor import ExecuteError
     from aqueduct.executor.models import ExecutionResult, ExecutionStatus, ModuleResult
-    from aqueduct.parser.parser import ParseError, parse
 
     # ── Anchor CWD to project root ────────────────────────────────────────────
     # Resolve all CLI-supplied paths to absolute BEFORE chdir so that relative
@@ -1346,103 +1345,6 @@ def run(
             from aqueduct.cli.style import emit_warning_pairs
 
             emit_warning_pairs(list(_lcr.danger_pairs), label="danger:", err=True)
-
-        # ── Phase 63 / 64 — remote-submit targets branch ──────────────────────────
-        _REMOTE_TARGETS = frozenset({"databricks", "emr", "dataproc"})
-        if cfg.deployment.target in _REMOTE_TARGETS:
-            if set_items:
-                # package() below uploads the RAW blueprint.yml / aqueduct.yml
-                # bytes from disk (deploy/databricks.py) — it never sees the
-                # in-memory overridden `cfg`/blueprint dict, so every --set
-                # override would be silently dropped for the remote run even
-                # though the preamble above just announced them. Refuse
-                # loudly instead of letting the remote job run un-overridden.
-                click.echo(
-                    "✗ --set is not supported for remote-submit targets "
-                    f"({cfg.deployment.target}): the packaged run reads "
-                    "blueprint.yml/aqueduct.yml from disk, so overrides "
-                    "would be silently dropped. Edit the files directly or "
-                    "run locally.",
-                    err=True,
-                )
-                sys.exit(exit_codes.CONFIG_ERROR)
-
-            from aqueduct.deploy import get_submitter
-
-            _submitter = get_submitter(cfg.deployment.target, cfg)
-            click.echo(
-                "⚠ self-healing is disabled for remote targets — "
-                "failures must be handled by the orchestrator",
-                err=True,
-            )
-            try:
-                _bp_raw = parse(blueprint, profile=profile)
-                _bp_agent = getattr(_bp_raw, "agent", None)
-                _approval_mode = getattr(_bp_agent, "approval_mode", None) if _bp_agent else None
-                if _approval_mode and _approval_mode not in ("disabled", None):
-                    click.echo(
-                        f"  ⊘ agent.approval_mode={_approval_mode!r} is ignored for "
-                        "remote-submit targets",
-                        err=True,
-                    )
-            except ParseError:
-                pass
-            try:
-                _packaged = _submitter.package(blueprint, cfg)
-            except Exception as exc:
-                click.echo(f"✗ remote package failed: {exc}", err=True)
-                sys.exit(exit_codes.DATA_OR_RUNTIME)
-
-            try:
-                _job_id = _submitter.submit(_packaged, cfg)
-                click.echo(f"  → submitted remote job  id={_job_id}", err=True)
-            except Exception as exc:
-                click.echo(f"✗ remote submit failed: {exc}", err=True)
-                sys.exit(exit_codes.DATA_OR_RUNTIME)
-
-            try:
-                # `poll()` documents raising TimeoutError as EXPECTED, routine
-                # behavior (a slow/stuck remote job) — unlike package()/submit()
-                # above, this call had no try/except at all, so that raised
-                # unstyled, uncaught out of the CLI (a raw traceback, no
-                # exit_codes.* mapping) instead of the same clean "✗ ... "
-                # DATA_OR_RUNTIME its sibling calls get.
-                _remote_result = _submitter.poll(_job_id, cfg)
-            except Exception as exc:
-                click.echo(f"✗ remote poll failed: {exc}", err=True)
-                sys.exit(exit_codes.DATA_OR_RUNTIME)
-            _logs = ""
-            if _remote_result.status == ExecutionStatus.ERROR:
-                try:
-                    # `_packaged` (not `_job_id`) — the artefacts' storage
-                    # key is whatever `package()` assigned, not the target's
-                    # own job/run id (a different id in a different
-                    # namespace; see `Submitter.fetch_logs`'s docstring).
-                    _logs = _submitter.fetch_logs(_packaged, cfg)
-                except Exception as _log_exc:
-                    # Best-effort: a failure fetching logs must not crash the
-                    # failure REPORT itself (we're already about to tell the
-                    # user the run failed) or mask it behind an unrelated
-                    # traceback.
-                    click.echo(f"  ⚠ could not fetch remote logs: {_log_exc}", err=True)
-
-            if _remote_result.status == ExecutionStatus.SUCCESS:
-                for mr in _remote_result.module_results:
-                    icon = "✓" if mr.status == ExecutionStatus.SUCCESS else "✗"
-                    line = f"  {icon} {mr.module_id}"
-                    if mr.error:
-                        line += f"  — {concise_error(mr.error)}"
-                    click.echo(line)
-                from aqueduct.cli.style import dim as _dim
-
-                click.echo(_dim(_rule()))
-                click.echo(f"{click.style('✓', fg='green', bold=True)} blueprint complete")
-                sys.exit(exit_codes.SUCCESS)
-            else:
-                if _logs:
-                    click.echo(f"\n── remote logs ──\n{_logs}\n──", err=True)
-                click.echo(f"\n✗ remote job failed  run_id={run_id}", err=True)
-                sys.exit(exit_codes.DATA_OR_RUNTIME)
 
         _cr = _do_compile(
             blueprint=blueprint,

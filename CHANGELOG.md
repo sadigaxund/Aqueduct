@@ -35,6 +35,9 @@ release and are marked **BREAKING**.
 - `config_contains`'s SQL comparison silently degraded from AST-normalized matching to lowercase-substring matching whenever `sqlglot` could not parse a scenario's SQL fragment — the fallback itself is unchanged (hard-failing would break scenarios that legitimately write partial SQL), but the degradation is no longer silent: it's now reported through `aqueduct.warnings.emit` (`config_contains_sql_degraded` rule_id), naming the config key and the unparseable fragment. (`aqueduct/surveyor/scenario.py::_normalize_sql`; tests: `tests/test_surveyor/test_scenario.py::TestNormalizeSql`)
 - The `aqscenarios` benchmark grader's `has_guardrails` detection only tested the original four `agent.guardrails` fields, so a Blueprint declaring ONLY `deny_patterns` was scored as having no guardrails at all (`violated_guardrails=None` instead of `[]`). The field list is now derived from `GuardrailsConfig`'s dataclass fields instead of an inline literal, so a future guardrail field can't reintroduce this gap. (`aqueduct/surveyor/scenario.py::_try_apply_patch`; tests: `tests/test_surveyor/test_scenario.py::TestTryApplyPatch::test_only_deny_patterns_is_recognized_as_guardrails`)
 
+### Removed
+- **BREAKING: the Databricks remote-submit deploy layer is deleted.** `deployment.target: databricks`, the `deployment.databricks` config block, and the `[databricks]` extra are gone — they were never verified against a live workspace, their unit tests mocked `httpx` so vendor API drift was invisible, and the target-user overlap is about zero, since Databricks users run Workflows. There is no built-in replacement: wrap `aqueduct run` in a Databricks Workflows `spark_python_task` yourself.
+
 ## [2.1.0rc1] — 2026-08-15
 
 **Pre-release.** PEP 440 spelling, so `pip install aqueduct-core` SKIPS this

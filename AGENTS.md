@@ -370,7 +370,7 @@ their original modules.
 | `http.py` | Single source of truth for outbound-HTTP mechanics: `RETRYABLE_DELIVERY_STATUS` / `RETRYABLE_PROVIDER_STATUS`, `retry_after_seconds`, `backoff_delay`, `sign_body` (HMAC-SHA256), `fire_and_forget` (daemon thread), `deliver_with_retry` (best-effort POST loop, stderr-logged). The webhook + OpenLineage daemon-delivery paths build on it; `agent/providers.py` aliases its retryable-status constant + helpers (so existing `providers._RETRYABLE_STATUS` / `_retry_after_seconds` patch paths keep working). Add a new outbound-HTTP caller here, do not re-implement retry/backoff inline. |
 | `module_loading.py` | Single source of truth for "load user code from a dotted path" (`load_module`, `load_callable`): collision-proof `spec_from_file_location` load from a `base_dir` sibling `.py` file when present, `importlib.import_module` fallback otherwise. Backs the secrets resolver, Assert `custom` `fn:`, Probe `custom` `module:`, `udf_registry` `module:`, and `format: custom` DataSource `class:` — all resolve against `Manifest.base_dir` (the top-level Blueprint's directory). Add a new "import user code by dotted path" site here, do not hand-roll `importlib.import_module`/`spec_from_file_location` inline (see failure_taxonomy.md #11). |
 
-When adding a new outbound-HTTP path: reuse `infra/http.py`. The Databricks Jobs-API client (`deploy/databricks.py`) and doctor probes are intentionally NOT on this path (synchronous API client / one-shot reachability probe — different shapes).
+When adding a new outbound-HTTP path: reuse `infra/http.py`. Doctor probes are intentionally NOT on this path (one-shot reachability probe — different shape).
 
 ### `aqueduct/depot/` — Cross-run KV state
 
@@ -396,15 +396,6 @@ The CLI command lives in `aqueduct/cli/drift.py`.
 | `__init__.py` | Spark/network cluster + blueprint-source checks + `run_doctor`; also `check_healed_engine_config` (one row per `healed_by` record carrying an `engine_config_delta` — reports the recorded facts and the `patch revert` command, states NO staleness threshold, and warns only on the derivable equality failure "the recorded value is no longer what resolves") and `check_handoff_engine_access` (Phase 81/82 — per-registered-engine round-trip probe at `handoff.root`; its Spark branch is the 4th lazy-`pyspark`-import site, kept here for the same reason as the other three) |
 | `base.py` | `CheckResult` dataclass |
 | `checks_io.py` | Leaf connectivity checks: config, depot, observability, webhook, agent, secrets, store-backend, aqtest, aqscenario, capabilities (Phase 78 — version-constrained capability check, see `aqueduct/executor/capabilities.py`), `check_handoff_free_space` (Phase 81/82 — free disk space at `handoff.root`, pure `os`/`shutil`, no engine dependency) |
-
-### `aqueduct/deploy/` — Remote-submit deployment targets
-
-| Module | What it owns |
-|--------|--------------|
-| `base.py` | Engine-agnostic, pyspark-free deploy-submitter ABC. Each remote target (Databricks, EMR, Dataproc) implements the packaging → submit → poll → logs lifecycle of a remote batch job whose entrypoint is `aqueduct run <blueprint>` running on the cluster |
-| `databricks.py` | Databricks Jobs API 2.x implementation of `base.py`'s ABC — uploads blueprint + config + bootstrap to DBFS, creates a one-shot `spark_python_task` job run, polls its outcome. Uses `httpx` (already a base dep); the `[databricks]` SDK extra is checked lazily only for a nicer error message |
-
-Invoked from `aqueduct/cli/run.py`'s remote-submit path (`deployment.target: databricks`, see `deployment.databricks` in `aqueduct.yml.template`). Not on the `infra/http.py` outbound-HTTP path — see that section's note on why.
 
 ### `aqueduct/executor/spark/` — Spark execution
 

@@ -788,7 +788,7 @@ Two rules to keep in mind:
 | `@aq.blueprint.dir()` | Absolute directory of the Blueprint file: the safe "relative-to-this-pipeline" anchor for output paths (e.g. `path: @aq.blueprint.dir()/out`). |
 | `@aq.blueprint.path()` | Absolute path of the Blueprint file. |
 | `@aq.deployment.env()` | `deployment.env` (e.g. `dev` / `cluster` / `cloud`), branch paths/behaviour by environment. |
-| `@aq.deployment.target()` | `deployment.target` (e.g. `local` / `databricks`). |
+| `@aq.deployment.target()` | `deployment.target` (e.g. `local` / `standalone`). |
 | `@aq.deployment.engine()` | The execution engine this Manifest is compiled for (`deployment.engine`, e.g. `spark`): stamp it into an output path or a tag when the same Blueprint runs on more than one engine. |
 | `@aq.version()` | The Aqueduct engine version: useful for stamping outputs. |
 
@@ -1927,15 +1927,14 @@ reachability and configuration guidance.
 | **standalone** | Supported (in-cluster) | Starts with `"spark://"` (e.g. `spark://host:7077`) | TCP probe to master host:port |
 | **yarn** | Supported (in-cluster) | Exactly `"yarn"` | Warns if `HADOOP_CONF_DIR` / `YARN_CONF_DIR` env var is unset |
 | **kubernetes** | Supported (in-cluster) | Starts with `"k8s://"` (e.g. `k8s://https://apiserver:443`) | TCP probe to API server host:port; warns if no `spark.kubernetes.*` keys in `engine.spark.conf` |
-| **databricks** | Supported (remote-submit) | N/A (remote-submit) | Requires `deployment.databricks` block; TCP probe to workspace URL |
 | **emr** | Deferred | n/a | Rejected at config-load with a "not yet supported" error |
 | **dataproc** | Deferred | n/a | Rejected at config-load with a "not yet supported" error |
 
-`databricks` is a fully wired **remote-submit** target, the engine packages the
-blueprint, uploads it to DBFS, submits via the Databricks Jobs API, polls to
-completion, and fetches logs. `emr` / `dataproc` are **remote-submit** targets
-planned for a future release; in the current release they are rejected with a
-"not yet supported" error at config-load.
+`emr` / `dataproc` are **remote-submit** targets planned for a future
+release; in the current release they are rejected with a "not yet
+supported" error at config-load. There is no built-in remote-submit target
+today. To run on Databricks, wrap `aqueduct run` in a Databricks Workflows
+`spark_python_task` (see the Production Guide).
 
 See the **[Production Guide](production_guide.md)** for per-target cluster setup,
 required env vars, `engine.spark.conf` keys, and the production readiness checklist.
@@ -1963,19 +1962,8 @@ Note: Click's own `UsageError` (unknown flag, missing required argument) exits *
 
 `emr` and `dataproc` are **rejected at config‑load** in the current release.
 Setting `deployment.target` to either of these values raises a `ConfigError`.
-`databricks` is the sole supported remote‑submit target (see §10.5).
-
-**Config.** Each remote target adds a nested optional block under ``deployment``, e.g. ``deployment.databricks: {workspace_url, cluster_id, ...}``. Credentials flow through ``@aq.secret(...)`` / environment variables, never plaintext in the block.
-
-Self‑healing is **disabled** on all remote‑submit targets, ``aqueduct run``
-skips the healing loop and ignores ``agent.approval``. Patches must be
-authored and applied locally before the next run.
-
-``-s/--set`` overrides are **rejected** (``CONFIG_ERROR``) on a remote‑submit
-target. Packaging uploads ``blueprint.yml``/``aqueduct.yml`` from disk
-verbatim, so an in‑memory override would be silently dropped for the remote
-run; edit the files directly instead (see `docs/cli_reference.md` "Config
-overrides").
+There is no built-in remote-submit target today; see §10.5 for the
+Databricks migration path.
 
 ## **10.9 Engines and the capability framework**
 

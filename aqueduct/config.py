@@ -87,54 +87,6 @@ _URI_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://")
 # ── Sub-models ────────────────────────────────────────────────────────────────
 
 
-class DatabricksDeployConfig(BaseModel):
-    """Per-target settings for ``deployment.target: databricks``.
-
-    Required when ``target`` is ``databricks``.  Credentials flow through
-    ``DATABRICKS_TOKEN`` env var or ``@aq.secret(...)`` — never plaintext
-    in this block.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    workspace_url: str = Field(
-        ...,
-        description="Databricks workspace URL, e.g. https://dbc-xxxx.cloud.databricks.com",
-        json_schema_extra={"engine_scoped": True},
-    )
-    cluster_id: str | None = Field(
-        default=None,
-        description="Existing all-purpose cluster ID. Mutually exclusive with new_cluster.",
-        json_schema_extra={"engine_scoped": True},
-    )
-    new_cluster: dict | None = Field(
-        default=None,
-        description="Raw cluster-creation spec per the Databricks Jobs API new_cluster object. "
-        "Mutually exclusive with cluster_id.",
-        json_schema_extra={"engine_scoped": True},
-    )
-    libraries: list[dict] | None = Field(
-        default=None,
-        description="Libraries to install on the cluster, e.g. [{'pypi': {'package': 'aqueduct-core[spark]'}}].",
-        json_schema_extra={"engine_scoped": True},
-    )
-    max_concurrent_runs: int | None = Field(
-        default=1,
-        description="Maximum concurrent runs for the generated one-shot job.",
-        json_schema_extra={"engine_scoped": True},
-    )
-
-    @model_validator(mode="after")
-    def _validate_cluster(self) -> DatabricksDeployConfig:
-        if not self.cluster_id and not self.new_cluster:
-            raise ValueError("deployment.databricks: one of cluster_id or new_cluster is required")
-        if self.cluster_id and self.new_cluster:
-            raise ValueError(
-                "deployment.databricks: cluster_id and new_cluster are mutually exclusive"
-            )
-        return self
-
-
 class DeploymentConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -147,11 +99,9 @@ class DeploymentConfig(BaseModel):
         ),
         json_schema_extra={"engine_scoped": False},
     )
-    target: Literal[
-        "local", "standalone", "yarn", "kubernetes", "databricks", "emr", "dataproc"
-    ] = Field(
+    target: Literal["local", "standalone", "yarn", "kubernetes", "emr", "dataproc"] = Field(
         default="local",
-        description="Deployment target: local | standalone | yarn | kubernetes | databricks | emr | dataproc",
+        description="Deployment target: local | standalone | yarn | kubernetes | emr | dataproc",
         json_schema_extra={"engine_scoped": True},
     )
     env: Literal["local", "cluster", "cloud"] = Field(
@@ -215,24 +165,14 @@ class DeploymentConfig(BaseModel):
         if self.engine != "spark":
             return self
 
-        if self.target == "databricks" and self.databricks is None:
-            raise ConfigError(
-                "deployment.target=databricks requires the " "deployment.databricks block to be set"
-            )
-
         if self.target in ("emr", "dataproc"):
             raise ConfigError(
                 f"deployment.target={self.target!r} is a remote-submit target "
                 f"not yet supported. "
-                f"Use local | standalone | yarn | kubernetes | databricks."
+                f"Use local | standalone | yarn | kubernetes."
             )
 
         return self
-
-    databricks: DatabricksDeployConfig | None = Field(
-        default=None,
-        description="Databricks Jobs API settings. Required when target=databricks.",
-    )
 
 
 RelationalBackend = Literal["duckdb", "postgres"]
@@ -1643,11 +1583,10 @@ class AqueductConfig(BaseModel):
         ``engine.spark.master_url`` (the pre-2.0 ``deployment.master_url``).
         Only meaningful for ``deployment.engine == "spark"`` — a non-Spark
         engine has no cluster master to validate against a target shape.
-        Remote-submit targets (emr/dataproc) and the databricks-block
-        requirement are handled in ``DeploymentConfig._validate_engine``,
-        which runs first (field-level validators run before this
-        model-level one) and already rejects/accepts those independent of
-        master_url.
+        Remote-submit targets (emr/dataproc) are handled in
+        ``DeploymentConfig._validate_engine``, which runs first (field-level
+        validators run before this model-level one) and already
+        rejects/accepts those independent of master_url.
         """
         if self.deployment.engine != "spark":
             return self
@@ -1655,7 +1594,7 @@ class AqueductConfig(BaseModel):
         target = self.deployment.target
         master = self.engine.spark.master_url
 
-        if target in ("databricks", "emr", "dataproc"):
+        if target in ("emr", "dataproc"):
             return self  # handled by DeploymentConfig._validate_engine
 
         _EXPECTED: dict[str, str] = {
