@@ -16,8 +16,8 @@ from aqueduct.executor.spark.probe import (
     _custom,
     _data_freshness,
     _distinct_count,
+    _execution_partitions,
     _null_rates,
-    _partition_stats,
     _row_count_estimate,
     _sample_rows,
     _threshold,
@@ -249,9 +249,9 @@ def test_data_freshness_max_value(spark):
     assert result["max_value"] == date(2024, 6, 1)
 
 
-def test_partition_stats_zero_action(spark):
+def test_execution_partitions_zero_action(spark):
     df = spark.range(10).repartition(4)
-    result = _partition_stats(df)
+    result = _execution_partitions(df)
     assert result["num_partitions"] == 4
 
 

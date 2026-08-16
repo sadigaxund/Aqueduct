@@ -415,7 +415,7 @@ Invoked from `aqueduct/cli/run.py`'s remote-submit path (`deployment.target: dat
 | `egress.py` | Write: overwrite, append, error, merge (Delta MERGE INTO) |
 | `junction.py` | Fan-out: conditional, broadcast, partition |
 | `funnel.py` | Fan-in: union_all, union, coalesce, zip |
-| `probe.py` | Signals: schema_snapshot, row_count_estimate, null_rates, sample_rows, value_distribution, distinct_count, data_freshness, partition_stats, threshold |
+| `probe.py` | Signals: schema_snapshot, row_count_estimate, null_rates, sample_rows, value_distribution, distinct_count, data_freshness, execution_partitions, threshold |
 | `assert_.py` | Quality gates: min_rows, null_rate, freshness, sql, sql_row, spillway_rate |
 | `session.py` | SparkSession management, Delta conf, cloudpickle patch |
 | `udf.py` | UDF registry, cloudpickle compatibility |

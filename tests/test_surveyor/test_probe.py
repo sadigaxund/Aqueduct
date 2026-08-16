@@ -303,10 +303,10 @@ def test_execute_probe_data_freshness(spark: SparkSession, tmp_path: Path):
     assert "2026-01-01" in payload["max_value"]
 
 
-def test_execute_probe_partition_stats(spark: SparkSession, tmp_path: Path):
+def test_execute_probe_execution_partitions(spark: SparkSession, tmp_path: Path):
     df = spark.range(10).repartition(3)
     module = Module(
-        id="p1", type="Probe", label="P1", config={"signals": [{"type": "partition_stats"}]}
+        id="p1", type="Probe", label="P1", config={"signals": [{"type": "execution_partitions"}]}
     )
     store_dir = tmp_path / "store"
 
@@ -314,7 +314,7 @@ def test_execute_probe_partition_stats(spark: SparkSession, tmp_path: Path):
 
     conn = duckdb.connect(str(store_dir / "observability.db"))
     payload_str = conn.execute(
-        "SELECT payload FROM probe_signals WHERE signal_type='partition_stats'"
+        "SELECT payload FROM probe_signals WHERE signal_type='execution_partitions'"
     ).fetchone()[0]
     conn.close()
 

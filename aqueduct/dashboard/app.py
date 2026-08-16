@@ -692,7 +692,7 @@ def _runs_tab(handles):
                 if len(rows_l) >= 2 and rows_l[0].get("max_value"):
                     df = pd.DataFrame(rows_l)
                     st.line_chart(df.set_index("run")["max_value"])
-            elif sig_type == "partition_stats":
+            elif sig_type == "execution_partitions":
                 rows_l = []
                 for s in reversed(sigs):
                     p = s.payload
@@ -1507,7 +1507,7 @@ def _quality_tab(cfg, store_dir):
                 )
             st.dataframe(pd.DataFrame(rows_l), width="stretch", hide_index=True)
 
-        elif sig_type == "partition_stats":
+        elif sig_type == "execution_partitions":
             rows_l = []
             for s in reversed(sigs):
                 p = s.payload

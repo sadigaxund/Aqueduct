@@ -652,10 +652,6 @@ leaves:
     support: supported
     tests:
       - tests/test_executor/test_executor_probe.py::test_null_rates_computes_per_column_rate
-  probe.signal.partition_stats:
-    support: supported
-    tests:
-      - tests/test_executor/test_executor_probe.py::test_partition_stats_zero_action
   probe.signal.row_count_estimate:
     support: supported
     tests:
@@ -698,3 +694,7 @@ leaves:
       patch/apply.py). No Spark code path reads it, and a reverted record's
       engine-config write is already out of the Blueprint by the time a
       session is built.
+  probe.signal.execution_partitions:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_probe.py::test_execution_partitions_zero_action

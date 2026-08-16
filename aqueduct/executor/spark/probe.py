@@ -47,7 +47,7 @@ data_freshness       ``max(column)`` — latest timestamp / date value in a
                      Blocked when ``block_full_actions=True`` unless
                      ``allow_sample=true`` is set (trades accuracy for safety).
 
-partition_stats      Number of Spark partitions via ``df.rdd.getNumPartitions()``
+execution_partitions Number of Spark partitions via ``df.rdd.getNumPartitions()``
                      — zero Spark action. Never blocked.
 
 Config shape (YAML / dict)
@@ -83,7 +83,7 @@ config:
       allow_sample: false         # true = use fraction below (less accurate)
       fraction: 0.1               # only used when allow_sample: true
 
-    - type: partition_stats
+    - type: execution_partitions
       # no config keys — always zero Spark action
 
     - type: threshold
@@ -453,7 +453,7 @@ def _data_freshness(
     }
 
 
-def _partition_stats(df: DataFrame) -> dict[str, Any]:
+def _execution_partitions(df: DataFrame) -> dict[str, Any]:
     """Capture Spark partition count — zero Spark action."""
     return {"num_partitions": df.rdd.getNumPartitions()}
 
@@ -645,8 +645,8 @@ def execute_probe(
                         payload = _data_freshness(
                             df, sig_cfg, block_full_actions=block_full_actions, sampling=sampling
                         )
-                    elif sig_type == "partition_stats":
-                        payload = _partition_stats(df)
+                    elif sig_type == "execution_partitions":
+                        payload = _execution_partitions(df)
                     elif sig_type == "threshold":
                         payload = _threshold(df, sig_cfg)
                     elif sig_type == "custom":

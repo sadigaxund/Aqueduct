@@ -505,7 +505,7 @@ PROBE_METRIC_LABELS: dict[str, str] = {
     "row_count_estimate": "Row Count Estimate",
     "sample_rows": "Sample Rows",
     "data_freshness": "Data Freshness",
-    "partition_stats": "Partition Stats",
+    "execution_partitions": "Execution Partitions",
     "threshold": "Threshold Check",
     "custom": "Custom Signal",
 }
