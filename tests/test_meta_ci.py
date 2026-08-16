@@ -14,6 +14,7 @@ Two properties, and both are load-bearing in OPPOSITE directions:
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -653,3 +654,221 @@ def test_every_test_file_is_selected_by_some_pre_merge_lane():
             "is actually mislabelled, or — if this is genuinely deliberate — "
             "add it to _MAIN_ONLY_TEST_DIR_ALLOWLIST with a reason."
         )
+
+
+# ── Extra-gated test paths must be named by a lane that installs the extra ──
+# (Phase 84.) The bug class: a file/directory whose behavior is gated on an
+# optional package at IMPORT time (module-level `pytest.importorskip(...)`,
+# or a module-level `try: import X / except ImportError:` fallback) still
+# gets picked up by every guard above as long as SOME pre-merge lane's pytest
+# path args reach it — even when that lane never installs X. Two very
+# different failure shapes hide behind that gap, and this guard is the only
+# one that catches either:
+#   - `tests/test_airflow.py` falls back to MOCK Operator/Sensor/Trigger
+#     classes and runs green either way, so a lane that never installs real
+#     airflow silently tests nothing real — a fake-green, not a skip.
+#   - `tests/test_dashboard/` (see its allowlist entry) calls
+#     `pytest.importorskip`, which honestly SKIPS instead of faking a pass —
+#     lower severity, but still only meaningful in a lane that installs the
+#     extra; it is exempted here, same as everywhere else in this file, via
+#     `_MAIN_ONLY_TEST_DIR_ALLOWLIST` because it has NO pre-merge lane at all.
+#
+# Detection is restricted to MODULE-LEVEL (column-0) constructs on purpose —
+# a `pytest.importorskip(...)` or `try/except ImportError` nested inside an
+# individual test function is a normal per-test soft-skip (e.g.
+# `tests/test_cli/test_cli.py`'s `pytest.importorskip("psycopg2")` inside one
+# test), not a claim about the whole file/directory, and every such case in
+# this repo already lands inside a directory some OTHER lane installs the
+# extra for anyway. Column-0 is also exactly the shape the two real bugs
+# above take: a whole-file/module decision made once at collection time.
+#
+# The extra a gated import maps to is resolved from `pyproject.toml`'s own
+# `[project.optional-dependencies]` table — never a hardcoded package->extra
+# dict (see the module-level guidance in this file and in AGENTS.md) — by
+# normalized substring match against each extra's real (non-aggregate)
+# dependency specs, and aggregate extras (`aqueduct-core[x]` cross-refs,
+# e.g. `all` -> `schedulers` -> `airflow`) are expanded the same way, purely
+# by parsing those cross-refs out of the table itself.
+
+_AGGREGATE_EXTRA_RE = re.compile(r"aqueduct-core\[([\w-]+)\]")
+_MODULE_LEVEL_IMPORTORSKIP_RE = re.compile(
+    r'^(?:\w+\s*=\s*)?pytest\.importorskip\(\s*["\']([\w.]+)["\']'
+)
+_TRY_BLOCK_IMPORT_RE = re.compile(r"^\s*(?:import|from)\s+([\w.]+)")
+
+
+def _optional_dependencies() -> dict[str, list[str]]:
+    data = tomllib.loads((_REPO / "pyproject.toml").read_text(encoding="utf-8"))
+    return data["project"]["optional-dependencies"]
+
+
+def _module_level_gated_imports(text: str) -> set[str]:
+    """Top-level module names gated by a COLUMN-0 `pytest.importorskip(...)`
+    or `try: import X ... except ImportError:` in `text`. Only the first
+    dotted segment is kept (`pyspark.sql` -> `pyspark`) since that's the
+    distributable unit an extra actually installs."""
+    names: set[str] = set()
+    lines = text.splitlines()
+    for line in lines:
+        m = _MODULE_LEVEL_IMPORTORSKIP_RE.match(line)
+        if m:
+            names.add(m.group(1).split(".")[0])
+    for i, line in enumerate(lines):
+        if not line.startswith("except ImportError"):
+            continue
+        j = i - 1
+        while j >= 0 and not lines[j].startswith("try:"):
+            j -= 1
+        if j < 0:
+            continue
+        for k in range(j + 1, i):
+            m = _TRY_BLOCK_IMPORT_RE.match(lines[k])
+            if m:
+                names.add(m.group(1).split(".")[0])
+    return names
+
+
+def _leaf_extras_for_import(import_name: str, optional_deps: dict[str, list[str]]) -> set[str]:
+    """Extra names that directly declare a REAL (non-aggregate) dependency
+    matching `import_name`, via normalized ('-', '_', '.' stripped,
+    lowercased) substring match against that dependency's bare distribution
+    name — e.g. `airflow` matches `apache-airflow` (the `airflow` extra's
+    real payload), `psycopg2` matches `psycopg2-binary` (the `postgres`
+    extra's). An import with no match anywhere (almost always an internal
+    `aqueduct.*` fallback import, e.g. `tests/test_redaction.py`'s
+    `try: from aqueduct.surveyor.surveyor import Surveyor`) yields an empty
+    set — such imports are not extra-gating at all and are silently dropped,
+    exactly as intended."""
+    norm_imp = re.sub(r"[-_.]", "", import_name.lower())
+    if not norm_imp:
+        return set()
+    leaves: set[str] = set()
+    for extra, deps in optional_deps.items():
+        for dep in deps:
+            if _AGGREGATE_EXTRA_RE.fullmatch(dep.strip()):
+                continue
+            pkg_m = re.match(r"[A-Za-z0-9_.\-]+", dep.strip())
+            if not pkg_m:
+                continue
+            norm_pkg = re.sub(r"[-_.]", "", pkg_m.group().lower())
+            if norm_pkg and (norm_imp in norm_pkg or norm_pkg in norm_imp):
+                leaves.add(extra)
+                break
+    return leaves
+
+
+def _leaf_extras_reachable(extra_names: set[str], optional_deps: dict[str, list[str]]) -> set[str]:
+    """Every extra name in `extra_names` (or reachable from one of them by
+    following `aqueduct-core[x]` aggregate cross-refs, e.g. `all` ->
+    `schedulers` -> `airflow`) that carries at least one REAL dependency —
+    i.e. an extra that, once resolved, actually installs a real package, not
+    just a name that only re-exports other extras. Purely graph-derived from
+    `optional_deps` itself; no part of this is a hardcoded extra hierarchy."""
+    seen: set[str] = set()
+    stack = list(extra_names)
+    leaves: set[str] = set()
+    while stack:
+        cur = stack.pop()
+        if cur in seen or cur not in optional_deps:
+            continue
+        seen.add(cur)
+        has_real = False
+        for dep in optional_deps[cur]:
+            m = _AGGREGATE_EXTRA_RE.fullmatch(dep.strip())
+            if m:
+                stack.append(m.group(1))
+            else:
+                has_real = True
+        if has_real:
+            leaves.add(cur)
+    return leaves
+
+
+def _job_pip_install_extras(job: dict) -> set[str]:
+    extras: set[str] = set()
+    for step in job.get("steps", []):
+        for line in step.get("run", "").splitlines():
+            m = re.search(r'pip install -e "\.\[([^\]]+)\]"', line.strip())
+            if m:
+                extras |= {e.strip() for e in m.group(1).split(",")}
+    return extras
+
+
+def _job_pytest_path_args(job: dict) -> list[str]:
+    paths: list[str] = []
+    for step in job.get("steps", []):
+        for line in step.get("run", "").splitlines():
+            line = line.strip()
+            if line.startswith("pytest "):
+                p, _ = _parse_pytest_command(line)
+                paths.extend(p)
+    return paths
+
+
+def _covers_entity(path_arg: str, entity_rel: str) -> bool:
+    """True if pytest path argument `path_arg` reaches `entity_rel` — either
+    because `path_arg` IS `entity_rel` (file or directory, with or without a
+    trailing slash), or because `path_arg` names something INSIDE it (a
+    specific file inside a directory entity, e.g. `executor-tests` naming
+    `tests/test_surveyor/test_probe.py` while the entity is the whole
+    `tests/test_surveyor` directory)."""
+    if path_arg == entity_rel or path_arg == entity_rel + "/":
+        return True
+    return path_arg.startswith(entity_rel + "/")
+
+
+def test_extra_gated_test_path_is_named_by_a_lane_that_installs_that_extra():
+    """Every top-level `tests/test_*` directory / loose `tests/test_*.py`
+    file that gates on an optional extra at module level must be named by a
+    PRE-merge job in `test-suite.yml` whose `pip install -e ".[...]"` line
+    actually installs that extra (directly, or via an aggregate like `all`).
+
+    This is the guard that would have caught `tests/test_airflow.py`: it was
+    named by `misc-tests` (`pip install -e ".[dev,llm,redis]"` — no airflow),
+    so the file ran green against its own MOCK fallback classes on every
+    pre-merge push, never against real Airflow.
+    """
+    optional_deps = _optional_dependencies()
+    jobs = [job for job in _workflow("test-suite.yml")["jobs"].values() if _is_pre_merge_job(job)]
+    assert jobs, "no pre-merge jobs found in test-suite.yml"
+
+    entities: list[tuple[str, list[Path]]] = []
+    for p in sorted((_REPO / "tests").iterdir()):
+        if p.is_dir() and p.name.startswith("test_"):
+            rel = p.relative_to(_REPO).as_posix()
+            if rel in _MAIN_ONLY_TEST_DIR_ALLOWLIST:
+                continue
+            entities.append((rel, sorted(p.rglob("*.py"))))
+        elif p.is_file() and p.name.startswith("test_") and p.suffix == ".py":
+            entities.append((p.relative_to(_REPO).as_posix(), [p]))
+    assert entities, "no tests/test_* directories or files found — did the layout move?"
+
+    for rel, files in entities:
+        gated_imports: set[str] = set()
+        for f in files:
+            gated_imports |= _module_level_gated_imports(f.read_text(encoding="utf-8"))
+        gated_extras: set[str] = set()
+        for imp in gated_imports:
+            gated_extras |= _leaf_extras_for_import(imp, optional_deps)
+        if not gated_extras:
+            continue
+
+        for extra in sorted(gated_extras):
+            covered = any(
+                any(_covers_entity(p, rel) for p in _job_pytest_path_args(job))
+                and extra in _leaf_extras_reachable(_job_pip_install_extras(job), optional_deps)
+                for job in jobs
+            )
+            assert covered, (
+                f"{rel} is gated at module level (pytest.importorskip / "
+                f"try-except ImportError) on something that maps to the "
+                f"{extra!r} extra, but no pre-merge job in test-suite.yml "
+                f"both runs pytest against {rel} AND installs the {extra!r} "
+                "extra (directly, or via an aggregate like `all`). Either "
+                f"add {extra!r} (or an aggregate that reaches it) to the "
+                f'`pip install -e ".[...]"` line of whichever job already '
+                f"names {rel}, or add a new lane for it (copy the "
+                "`all-extras-tests` shape), or — if this is genuinely "
+                "deliberate — add it to _MAIN_ONLY_TEST_DIR_ALLOWLIST with a "
+                "reason."
+            )

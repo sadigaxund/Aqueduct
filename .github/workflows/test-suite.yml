@@ -49,6 +49,7 @@ jobs:
       typehub:   ${{ steps.filter.outputs.typehub }}
       deploy:    ${{ steps.filter.outputs.deploy }}
       misc:      ${{ steps.filter.outputs.misc }}
+      airflow:   ${{ steps.filter.outputs.airflow }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v4
@@ -150,7 +151,6 @@ jobs:
               - 'aqueduct/lint.py'
               - 'aqueduct/overrides.py'
               - 'aqueduct/infra/module_loading.py'
-              - 'aqueduct/integrations/airflow/**'
               - 'aqueduct/executor/capabilities.py'
               - 'aqueduct/compiler/warnings/**'
               - 'aqueduct/executor/spark/warnings/**'
@@ -158,7 +158,6 @@ jobs:
               - '.github/workflows/**'
               - 'requirements/**'
               - 'pyproject.toml'
-              - 'tests/test_airflow.py'
               - 'tests/test_backlog.py'
               - 'tests/test_infra_http.py'
               - 'tests/test_lint.py'
@@ -169,6 +168,17 @@ jobs:
               - 'tests/test_overrides.py'
               - 'tests/test_utils.py'
               - 'tests/test_template_warning_sync.py'
+            # Real-airflow + full-`[all]`-install lane (Phase 84). Gated
+            # separately from `misc` so an unrelated misc-* change doesn't
+            # spuriously re-run the slow `[all,dev]` install, and so removing
+            # this filter key (or the job it gates) is a one-line, legible
+            # diff instead of a buried edit inside `misc`'s list.
+            airflow:
+              - 'aqueduct/integrations/airflow/**'
+              - 'tests/test_airflow.py'
+              - 'pyproject.toml'
+              - 'requirements/**'
+              - '.github/workflows/**'
 
   # ── Unit-test layer — fast, no Spark needed ──────────────────────────
 
@@ -623,9 +633,63 @@ jobs:
       - run: pip install -e ".[dev,llm,redis]"
       - run: |
           set +e
-          pytest tests/test_airflow.py tests/test_backlog.py tests/test_infra_http.py tests/test_lint.py tests/test_meta_ci.py tests/test_meta_quality.py tests/test_models.py tests/test_module_loading.py tests/test_overrides.py tests/test_utils.py tests/test_template_warning_sync.py -m "not spark" --junitxml=results.xml
+          pytest tests/test_backlog.py tests/test_infra_http.py tests/test_lint.py tests/test_meta_ci.py tests/test_meta_quality.py tests/test_models.py tests/test_module_loading.py tests/test_overrides.py tests/test_utils.py tests/test_template_warning_sync.py -m "not spark" --junitxml=results.xml
           rc=$?
           python scripts/ci-summary.py results.xml --name "Misc"
+          exit $rc
+
+  # ── Real-airflow / full-extras layer ──────────────────────────────────
+  # tests/test_airflow.py catches ImportError on `import airflow` and
+  # substitutes MOCK Operator/Sensor/Trigger base classes when the real
+  # package is absent (see the file's own try/except at module scope), so it
+  # runs green either way — it was previously named only by `misc-tests`,
+  # which installs `[dev,llm,redis]` (no airflow), so pre-merge it only ever
+  # ran against mocks. This is the ONLY pre-merge lane with the real
+  # `apache-airflow` package installed (real airflow otherwise only ran in
+  # release.yml's `[all,dev]` gate, i.e. never pre-merge) — see
+  # tests/test_meta_ci.py's extra-gating guard, which fails the build if this
+  # lane (or its `[all]` install) ever drifts out of sync with the file.
+  #
+  # Installing `[all,dev]` rather than the slim `[airflow]`/`[schedulers]`
+  # extra is deliberate: it also makes this the only pre-merge lane that
+  # proves the FULL `[all]` extra set (spark, duckdb, secrets, stores,
+  # schedulers/airflow, llm, databricks) resolves and installs together in
+  # one `pip install` — a real packaging regression here (see commit
+  # 051956b, where `[all]` never installed DuckDB's numpy) was previously
+  # only caught post-merge by `coverage` or at release time by release.yml's
+  # own `[all,dev]` install. Pytest selection stays scoped to
+  # tests/test_airflow.py, on purpose: the `pip install` step itself is what
+  # proves the extra set installs cleanly, and every other file the `[all]`
+  # extras touch already has its own dedicated pre-merge lane (duckdb-tests,
+  # stores-tests, etc.) — re-running the whole suite here would just
+  # duplicate them under a slower, more expensive install.
+  all-extras-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.airflow == 'true' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env.
+      # A stale/missing entry still re-resolves and re-verifies every
+      # package; this only skips re-downloading wheels pip already has by
+      # exact filename/hash, so it cannot change what version gets installed.
+      # Same key as every other python-3.11 / ci-py311.txt job on purpose —
+      # they share one dependency tree, so they should share one cache entry.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py3.11-
+      - run: pip install -e ".[all,dev]"
+      - run: |
+          set +e
+          pytest tests/test_airflow.py -m "not spark" --junitxml=results.xml
+          rc=$?
+          python scripts/ci-summary.py results.xml --name "All-extras (airflow)"
           exit $rc
 
   # ── Spark layer — needs local[1] via setup-java ──────────────────────
