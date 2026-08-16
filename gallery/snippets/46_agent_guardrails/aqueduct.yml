@@ -1,0 +1,27 @@
+aqueduct_config: "2.0"
+
+warnings:
+  suppress:
+    - "*"
+
+deployment:
+  engine: spark
+  target: local
+
+engine:
+  spark:
+    master_url: "local[*]"
+
+stores:
+  observability:
+    backend: duckdb
+    path: .aqueduct
+
+agent:
+  provider: openai_compat
+  model: gpt-4o-mini
+  # This snippet's guardrail demo uses `aqueduct patch apply` on
+  # hand-authored PatchSpec files (sample_patches/): deterministic, no LLM
+  # call involved. This connection block only matters if you also run
+  # `aqueduct run blueprint.yml` / `aqueduct heal` to see a real agent
+  # produce a patch that the SAME guardrails then evaluate.

@@ -1,0 +1,44 @@
+aqueduct_config: "2.0"
+
+warnings:
+  suppress:
+    - "*"
+
+deployment:
+  engine: spark
+  target: local
+
+engine:
+  spark:
+    master_url: "local[*]"
+
+stores:
+  observability:
+    backend: duckdb
+    path: .aqueduct
+
+# agent.cascade is an aqueduct.yml-level (engine) field ONLY. A Blueprint
+# cannot declare or override its own cascade (AgentSchema has no `cascade`
+# field; it is a CONNECTION concern, like provider/base_url/api_key).
+agent:
+  provider: openai_compat
+  model: gpt-4o-mini
+  budget:
+    max_reprompts: 3
+  cascade:
+    # Tier 1: cheap/local, tried first. A typo like this snippet's is
+    # exactly the class of fix a small model handles in one shot.
+    - model: qwen2.5-coder:7b
+      provider: openai_compat
+      base_url: "http://localhost:11434/v1"
+      max_reprompts: 2
+      max_seconds: 30
+    # Tier 2: only reached when tier 1 gets stuck, exhausts its budget, or
+    # defers. Escalation reasons: StopReason.STUCK_SIGNATURE,
+    # EXHAUSTED_ATTEMPTS, DEFERRED (aqueduct/agent/cascade.py).
+    - model: claude-sonnet-4-6
+      provider: anthropic
+      max_reprompts: 3
+      max_seconds: 120
+      deep_loop: true
+      allow_defer: true

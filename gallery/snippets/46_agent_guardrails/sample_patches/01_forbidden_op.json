@@ -1,0 +1,11 @@
+{
+  "patch_id": "demo-forbidden-op",
+  "rationale": "Attempt to remove the output module entirely instead of fixing the query.",
+  "operations": [
+    {
+      "op": "remove_module",
+      "module_id": "output",
+      "edges_to_add": []
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "patch_id": "demo-disallowed-path",
+  "rationale": "Attempt to redirect the Egress output outside data/output/.",
+  "operations": [
+    {
+      "op": "set_module_config_key",
+      "module_id": "output",
+      "key": "path",
+      "value": "/etc/aqueduct_exfil.parquet"
+    }
+  ]
+}
