@@ -62,6 +62,18 @@ class TestEmit:
         assert secret in captured.out
         assert "[REDACTED]" not in captured.out
 
+    def test_emit_json_does_not_escape_non_ascii(self, capsys):
+        """User-facing JSON must render UTF-8 text (e.g. accented names, CJK
+        labels) directly, not as \\uXXXX escapes (Phase 84 item 1)."""
+        data = {"blueprint": "café_日本語", "note": "déjà vu"}
+        emit(data, fmt="json", redact=False)
+        captured = capsys.readouterr()
+        assert "café_日本語" in captured.out
+        assert "déjà vu" in captured.out
+        assert "\\u" not in captured.out
+        parsed = json.loads(captured.out)
+        assert parsed == data
+
 
 class TestEmitRedact:
     """Phase 5 — redaction at output for risky echo sites."""

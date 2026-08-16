@@ -805,7 +805,9 @@ def apply_patch_file(
             applied_dir = patches_dir / "applied"
             applied_dir.mkdir(parents=True, exist_ok=True)
             archive_path = applied_dir / patch_path.name
-            archive_path.write_text(json.dumps(_redact(raw_spec), indent=2), encoding="utf-8")
+            archive_path.write_text(
+                json.dumps(_redact(raw_spec), indent=2, ensure_ascii=False), encoding="utf-8"
+            )
             if patch_path.exists():  # remove from pending — applied + archived
                 patch_path.unlink()
     except Exception as exc:
@@ -891,7 +893,9 @@ def reject_patch(
 
     raw["rejected_at"] = datetime.now(tz=UTC).isoformat()
     raw["rejection_reason"] = reason
-    rejected_path.write_text(json.dumps(_redact(raw), indent=2), encoding="utf-8")
+    rejected_path.write_text(
+        json.dumps(_redact(raw), indent=2, ensure_ascii=False), encoding="utf-8"
+    )
     pending_path.unlink()
 
     _set_index_status(obs_store, patch_id, PatchStore.REJECTED)

@@ -539,7 +539,9 @@ def _build_user_prompt(
 
     # Failed module config (compiled — resolved values)
     failed_mod = next((m for m in modules if m["id"] == failure_ctx.failed_module), None)
-    failed_config = json.dumps(failed_mod.get("config", {}) if failed_mod else {}, indent=2)
+    failed_config = json.dumps(
+        failed_mod.get("config", {}) if failed_mod else {}, indent=2, ensure_ascii=False
+    )
 
     # Module list summary
     module_list = (
@@ -860,7 +862,7 @@ def _build_system_prompt(
             mapping.pop("defer_to_human", None)
         raw_schema.get("$defs", {}).pop("DeferToHumanOp", None)
 
-    schema = json.dumps(raw_schema, indent=2)
+    schema = json.dumps(raw_schema, indent=2, ensure_ascii=False)
 
     # Phase 41: defer rules — only shown when allow_defer is True so the
     # model doesn't see an easy way out on normal heals.
