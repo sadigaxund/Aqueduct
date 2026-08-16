@@ -16,10 +16,16 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Added
+
+- `benchmark_results` now persists `refusal` and `engine_config_gate` per row (both were already computed and exported in `aqueduct benchmark --format json`, but never reached the store, so `aqueduct benchmark-diff`/`benchmark-stats` history could not distinguish a config-heal refusal from any other failure). An existing benchmark DB is migrated in place — a new idempotent `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` pair runs on open, in both the DuckDB and Postgres backends — so a pre-2.1 store is not orphaned. (`aqueduct/surveyor/benchmark_store.py`, `docs/observability_guide.md`; tests: `tests/test_benchmark_store.py`)
+- `format_benchmark_table` (the `aqueduct benchmark` terminal table) now shows `stop_reason` in each result cell when set, matching the field already persisted to `benchmark_results` and exported to `--format json` — a benchmark run's terminal output could previously not distinguish "the model gave up" from "ran out of attempts" without re-reading the JSON. (`aqueduct/surveyor/scenario.py`; tests: `tests/test_surveyor/test_benchmark_table.py`)
+
 ### Fixed
 
 - `docs/roadmap.md` and `docs/compatibility.md` no longer claim Iceberg and Hudi table formats are "planned, not started" — both shipped, are declared `supported` on Spark, and run against real Maven-provisioned Iceberg/Hudi bundles in CI.
 - Removed the false claim that Aqueduct supports JDBC egress (`docs/roadmap.md`, `docs/production_guide.md`). JDBC is ingress-only, a Spark `DataFrameReader.format("jdbc")` passthrough; no `egress.format.jdbc` leaf exists on either engine and no JDBC writer exists.
+- `config_contains`'s SQL comparison silently degraded from AST-normalized matching to lowercase-substring matching whenever `sqlglot` could not parse a scenario's SQL fragment — the fallback itself is unchanged (hard-failing would break scenarios that legitimately write partial SQL), but the degradation is no longer silent: it's now reported through `aqueduct.warnings.emit` (`config_contains_sql_degraded` rule_id), naming the config key and the unparseable fragment. (`aqueduct/surveyor/scenario.py::_normalize_sql`; tests: `tests/test_surveyor/test_scenario.py::TestNormalizeSql`)
 
 ## [2.1.0rc1] — 2026-08-15
 
