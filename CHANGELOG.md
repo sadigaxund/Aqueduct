@@ -16,6 +16,9 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Removed
+- **BREAKING: the Databricks remote-submit deploy layer is deleted.** `deployment.target: databricks`, the `deployment.databricks` config block, and the `[databricks]` extra are gone — they were never verified against a live workspace, their unit tests mocked `httpx` so vendor API drift was invisible, and the target-user overlap is about zero, since Databricks users run Workflows. There is no built-in replacement: wrap `aqueduct run` in a Databricks Workflows `spark_python_task` yourself.
+
 ## [2.1.0rc1] — 2026-08-15
 
 **Pre-release.** PEP 440 spelling, so `pip install aqueduct-core` SKIPS this

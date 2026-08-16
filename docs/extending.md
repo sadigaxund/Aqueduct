@@ -102,7 +102,7 @@ scaffold. (`lineage.*` is core because OpenLineage emission is built in
 condition — a DuckDB run emits the same events a Spark run does.) The ones
 that DO appear are the ones that genuinely dispatch through an engine:
 `probes.*`, `metrics.use_observe`, `timezone`, `checkpoint_root`,
-`deployment.target`/`databricks.*`, `handoff.root`,
+`deployment.target`, `handoff.root`,
 `agent.sandbox_master_url`/`block_on_explain_regression`,
 `danger.allow_full_probe_actions`. A field under `engine.<name>.*`
 (`engine.spark.master_url`, `engine.duckdb.memory_limit`) is positionally

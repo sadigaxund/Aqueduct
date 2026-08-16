@@ -38,15 +38,13 @@ Aqueduct creates a `SparkSession` on the driver. Cluster connection is controlle
 
 The `target` field is validated against `engine.spark.master_url` at config-load. A
 mismatch raises a `ConfigError` naming both values and the expected shape.
-`databricks` is a fully wired **remote‑submit** target, the engine packages
-the blueprint, uploads to DBFS, submits via the Databricks Jobs API, and
-polls to completion. `emr` and `dataproc` are rejected, they require a
+`emr` and `dataproc` are rejected, they require a
 packaging/submit layer planned for a future release.
 
 ```yaml
 deployment:
   env: cluster
-  target: standalone                   # local | standalone | yarn | kubernetes | databricks | emr | dataproc
+  target: standalone                   # local | standalone | yarn | kubernetes | emr | dataproc
 
 engine:
   spark:
@@ -609,50 +607,18 @@ Without `OPTIMIZE`, incremental pipelines using `mode: append` or `mode: merge` 
 
 `emr` and `dataproc` are **rejected at config‑load** in the current
 release. Setting `deployment.target` to either of these two values raises
-a `ConfigError`. `databricks` is the sole supported remote‑submit target
-(see below).
-
-The sections below (Databricks E2E, EMR, Dataproc) are forward‑looking
-reference for EMR/Dataproc; the Databricks sections are fully wired.
-
-### Databricks
-
-**Prerequisites.** `aqueduct-core[databricks]` (optional SDK) or plain `httpx` (already a base dep). The Databricks cluster must have `aqueduct-core[spark]` installed as a library (pypi or init script).
-
-**Configuration.** Add a `deployment.databricks` block to `aqueduct.yml`:
-
-```yaml
-deployment:
-  target: databricks
-  databricks:
-    workspace_url: "https://dbc-xxxx.cloud.databricks.com"
-    cluster_id: "0123-456789-abcdefgh"          # existing cluster — mutually exclusive with new_cluster
-    max_concurrent_runs: 1                      # max parallel job runs submitted by this pipeline (default 1)
-    # new_cluster:                               # one-shot cluster spec per Jobs API
-    #   spark_version: "15.3.x-scala2.12"
-    #   node_type_id: "i3.xlarge"
-    #   num_workers: 4
-    # libraries:                                 # optional — pypi libraries installed on the job cluster
-    #   - pypi:
-    #       package: "aqueduct-core[spark]"
-    #   - pypi:
-    #       package: "delta-spark"
-```
-
-**Credentials.** Set `DATABRICKS_TOKEN` in the submitting environment or reference it via `@aq.secret('DATABRICKS_TOKEN')` in the Blueprint context. The token is never placed in `aqeduct.yml` plaintext.
-
-**Execution flow.**
-1. `aqueduct run blueprint.yml` on the submitting machine
-2. Blueprint + `aqeduct.yml` + bootstrap script uploaded to `dbfs:/aqueduct/jobs/<run_id>/`
-3. `POST /api/2.1/jobs/runs/submit` with a `spark_python_task` running `aqueduct run dbfs:/.../blueprint.yml`
-4. The local CLI polls `GET /api/2.1/jobs/runs/get` with exponential backoff (5s → 60s cap)
-5. On success, exit `0`; on failure, exit `DATA_OR_RUNTIME(2)` with remote driver logs printed
-
-**Doctor check.** `aqueduct doctor` includes a `remote-target` check, it verifies the workspace URL is reachable and a `DATABRICKS_TOKEN` is set. Status: `fail` (non-blocking, `run_doctor` continues to subsequent checks).
+a `ConfigError`. There is no built‑in remote‑submit target today.
 
 ### EMR / Dataproc
 
 Deferred. These targets raise `NotImplementedError` at runtime. They will reuse the existing `aws` / `gcp` extras for their submit clients when implemented.
+
+### Databricks
+
+Databricks is not a built-in deployment target. Run Aqueduct on Databricks by
+wrapping `aqueduct run` in a Databricks Workflows `spark_python_task` — the
+task calls `aqueduct run blueprint.yml` like any other environment, and
+Databricks owns scheduling, retries, and cluster lifecycle.
 
 ## Production readiness checklist
 

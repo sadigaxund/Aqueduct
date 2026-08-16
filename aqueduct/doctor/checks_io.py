@@ -1034,13 +1034,12 @@ def check_store_backend(
 def check_remote_target(cfg: Any) -> CheckResult:
     """Verify credentials and API reachability for remote-submit targets.
 
-    Only runs when ``deployment.target`` is ``databricks`` / ``emr`` /
-    ``dataproc`` — no-op (return ``warn``) otherwise.  Non-fatal:
-    failures warn, never block.
+    Only runs when ``deployment.target`` is ``emr`` / ``dataproc`` — no-op
+    (return ``skip``) otherwise.  Non-fatal: failures warn, never block.
     """
     t = time.monotonic()
     target = getattr(cfg.deployment, "target", "local")
-    if target not in ("databricks", "emr", "dataproc"):
+    if target not in ("emr", "dataproc"):
         if target in ("standalone", "yarn", "kubernetes"):
             msg = (
                 f"target={target} — no remote-submit credentials to verify "
@@ -1049,62 +1048,6 @@ def check_remote_target(cfg: Any) -> CheckResult:
         else:
             msg = "target is local — no remote cluster to check"
         return CheckResult("remote-target", "skip", msg, _ms(t))
-
-    if target == "databricks":
-        db_cfg = getattr(cfg.deployment, "databricks", None)
-        if db_cfg is None:
-            return CheckResult(
-                "remote-target",
-                "fail",
-                "deployment.databricks block is required for target=databricks",
-                _ms(t),
-            )
-        workspace = getattr(db_cfg, "workspace_url", "")
-        if not workspace:
-            return CheckResult(
-                "remote-target",
-                "fail",
-                "deployment.databricks.workspace_url is required",
-                _ms(t),
-            )
-
-        token = os.environ.get("DATABRICKS_TOKEN")
-        if not token:
-            return CheckResult(
-                "remote-target",
-                "fail",
-                "DATABRICKS_TOKEN environment variable is not set — "
-                "set it or reference it via @aq.secret('DATABRICKS_TOKEN')",
-                _ms(t),
-            )
-
-        # Liveness check
-        try:
-            import httpx as _httpx
-
-            ws = workspace.rstrip("/")
-            if not ws.startswith("https://"):
-                ws = f"https://{ws}"
-            r = _httpx.head(
-                f"{ws}/api/2.1/clusters/list",
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=10,
-            )
-            r.raise_for_status()
-        except Exception as exc:
-            return CheckResult(
-                "remote-target",
-                "fail",
-                f"Databricks API unreachable at {workspace!r}: {exc}",
-                _ms(t),
-            )
-
-        return CheckResult(
-            "remote-target",
-            "ok",
-            f"Databricks workspace={workspace}  cluster_id={getattr(db_cfg, 'cluster_id', None) or 'new_cluster'}",
-            _ms(t),
-        )
 
     # emr / dataproc — not yet wired
     return CheckResult(

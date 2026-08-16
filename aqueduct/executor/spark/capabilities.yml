@@ -109,11 +109,6 @@ leaves:
   config.agent.sandbox_master_url: supported
   config.checkpoint_root: supported
   config.danger.allow_full_probe_actions: supported
-  config.deployment.databricks.cluster_id: supported
-  config.deployment.databricks.libraries: supported
-  config.deployment.databricks.max_concurrent_runs: supported
-  config.deployment.databricks.new_cluster: supported
-  config.deployment.databricks.workspace_url: supported
   config.deployment.target: supported
   config.engine.spark.conf: supported
   config.engine.spark.master_url: supported
