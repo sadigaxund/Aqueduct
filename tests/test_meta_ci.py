@@ -702,6 +702,41 @@ def _optional_dependencies() -> dict[str, list[str]]:
     return data["project"]["optional-dependencies"]
 
 
+# `[project.optional-dependencies]` extras, keyed to the exact category
+# vocabulary in AGENTS.md's "Packaging & Extras Policy". Nothing reads this
+# section of pyproject.toml anywhere else in the test suite — adding a
+# feature-named extra (`[drift]`, `[openlineage]`, ...) without updating both
+# the policy prose AND this set would otherwise ship silently. Each set below
+# is a closed, explicit list on purpose: the whole point of a falsifiable
+# guard is that growing the vocabulary requires touching the test, not that
+# the test infers the vocabulary from whatever pyproject.toml happens to say.
+_PER_VENDOR_LEAVES = {"aws", "gcp", "azure", "postgres", "redis", "airflow", "object-store"}
+_CAPABILITY_AGGREGATES = {"secrets", "stores", "schedulers", "all"}
+# Engine leaves: register an `aqueduct.engines` entry point and ship their
+# own capabilities.yml — see AGENTS.md's "Engine leaves" bullet. Not vendor
+# SDKs, not dev tooling, and (deliberately) not rolled into any aggregate.
+_ENGINE_LEAVES = {"spark", "duckdb"}
+# Dev-tooling extras: the one documented exception to the two-axis rule.
+# Never a runtime-capability dep, never in `all`.
+_DEV_TOOLING_EXTRAS = {"dev", "dashboard", "mcp"}
+
+# Runtime-capability leaves that must roll up into a capability aggregate —
+# per-vendor leaves belonging to `secrets`/`stores`/`schedulers`. Engine
+# leaves are deliberately excluded (see AGENTS.md: no "engines" aggregate).
+_AGGREGATE_MEMBERSHIP = {
+    "secrets": {"aws", "gcp", "azure"},
+    "stores": {"postgres", "redis", "object-store"},
+    "schedulers": {"airflow"},
+}
+
+
+def _load_pyproject_extras() -> dict[str, list[str]]:
+    import tomllib
+
+    data = tomllib.loads((_REPO / "pyproject.toml").read_text(encoding="utf-8"))
+    return data["project"]["optional-dependencies"]
+
+
 def _module_level_gated_imports(text: str) -> set[str]:
     """Top-level module names gated by a COLUMN-0 `pytest.importorskip(...)`
     or `try: import X ... except ImportError:` in `text`. Only the first
@@ -872,3 +907,62 @@ def test_extra_gated_test_path_is_named_by_a_lane_that_installs_that_extra():
                 "deliberate — add it to _MAIN_ONLY_TEST_DIR_ALLOWLIST with a "
                 "reason."
             )
+
+
+def test_pyproject_extras_match_the_packaging_policy_categories():
+    """Every extra in `[project.optional-dependencies]` must fall into one of
+    the four explicit categories AGENTS.md's "Packaging & Extras Policy"
+    names: per-vendor leaf, capability aggregate, engine leaf, or the
+    documented dev-tooling exception. An extra outside all four is exactly
+    the feature-named-extra drift the policy forbids — this guard exists so
+    that drift fails CI instead of just prose review.
+
+    `databricks` currently exists in this worktree's pyproject.toml but is
+    slated for removal alongside the rest of the Databricks deploy layer on
+    the group branch (out of scope here); it is not added to any category
+    set below on purpose, so it stays visible as a named failure rather than
+    being quietly allow-listed.
+    """
+    extras = _load_pyproject_extras()
+    known = _PER_VENDOR_LEAVES | _CAPABILITY_AGGREGATES | _ENGINE_LEAVES | _DEV_TOOLING_EXTRAS
+    unknown = sorted(set(extras) - known - {"databricks"})
+    assert not unknown, (
+        f"extra(s) {unknown!r} in pyproject.toml's [project.optional-dependencies] "
+        "are not named in any of AGENTS.md's Packaging & Extras Policy categories "
+        "(per-vendor leaf / capability aggregate / engine leaf / dev-tooling "
+        "exception). Map the new extra onto an existing axis, or update the "
+        "policy AND this test's category sets together if it is genuinely new."
+    )
+
+
+def test_pyproject_aggregate_extras_include_every_member_leaf():
+    """The other direction of the same guard: an aggregate that DOESN'T list
+    one of its own member leaves is a silent under-install, not a syntax
+    error — `aqueduct-core[secrets]` would quietly stop covering a vendor.
+    Checked against the exact `aqueduct-core[<leaf>]` self-reference spelling
+    the aggregates already use in pyproject.toml.
+    """
+    extras = _load_pyproject_extras()
+    for aggregate, members in _AGGREGATE_MEMBERSHIP.items():
+        declared = set(extras[aggregate])
+        for member in members:
+            expected = f"aqueduct-core[{member}]"
+            assert expected in declared, (
+                f"[{aggregate}] is missing '{expected}' — every per-vendor leaf "
+                f"in {sorted(members)!r} must appear in its aggregate."
+            )
+
+
+def test_pyproject_dev_tooling_extras_stay_out_of_all():
+    """Dev-tooling extras are the documented exception to the two-axis rule
+    specifically BECAUSE they never run in the data path — `all` bundling
+    them would bloat headless Spark-driver / CI installs. Guards against the
+    dev-tooling carve-out quietly regressing into a runtime axis."""
+    extras = _load_pyproject_extras()
+    all_members = set(extras["all"])
+    for name in _DEV_TOOLING_EXTRAS:
+        leaked = f"aqueduct-core[{name}]"
+        assert leaked not in all_members, (
+            f"dev-tooling extra '{name}' appears inside [all] — dev-tooling "
+            "extras are documented as staying OUT of all/the runtime axes."
+        )

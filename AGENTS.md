@@ -42,6 +42,18 @@ multiplies the surface users have to reason about.
   `object-store` — one SDK/capability each.
 - **Capability aggregates:** `secrets` (= aws+gcp+azure), `stores`
   (= postgres+redis+object-store), `schedulers` (= airflow), `all`.
+- **Engine leaves:** `spark`, `duckdb` — one execution engine each. An engine
+  leaf is distinct from a per-vendor leaf: it is not wrapping a vendor SDK, it
+  is registering an execution engine — the thing that runs a compiled
+  blueprint. What makes an extra an engine leaf (mechanically, not just by
+  name) is that it registers an `aqueduct.engines` entry point (see
+  `[project.entry-points."aqueduct.engines"]`) and ships its own
+  `capabilities.yml` declaring what that engine supports. Both engine leaves
+  are pulled into `all`, same as every other leaf, but neither rolls into
+  `secrets`, `stores`, or `schedulers` — there is no "engines" aggregate,
+  because installing more than one engine at a time is a normal, expected
+  configuration (not an aggregate-of-convenience the way `secrets` bundles
+  every cloud vendor's SDK).
 
 A user installs an aggregate or a leaf. When a new optional dependency appears,
 map it onto an existing axis: reuse a vendor leaf if it's that vendor's SDK, or

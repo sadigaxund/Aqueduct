@@ -49,6 +49,8 @@ idna==3.18
     #   httpx
 iniconfig==2.3.0
     # via pytest
+json-repair==0.63.2
+    # via aqueduct-core (pyproject.toml)
 mypy-extensions==1.1.0
     # via black
 numpy==2.4.6

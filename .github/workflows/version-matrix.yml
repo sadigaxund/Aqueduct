@@ -14,7 +14,7 @@ jobs:
   # compat checks, not per-push unit checks. The suite keeps the fast
   # parse/compile `gallery-tests` guard for branch pushes.
   #
-  # CANARY LANE (Phase 78): `pip install -e ".[dev,spark,llm]"` below installs
+  # CANARY LANE (Phase 78): `pip install -e ".[dev,spark,duckdb]"` below installs
   # UNPINNED latest dependency versions — the opposite of the `compat` job's
   # 3 pinned combos. It exists to catch a breaking upstream release early
   # (e.g. it once pulled unreleased pandas 3.0/numpy 2.5 and broke snippet 28)
@@ -58,7 +58,7 @@ jobs:
       # snippet 05_channel_sql_udf's Python UDF hits DuckDB's
       # conn.create_function(), which requires numpy unconditionally (see
       # pyproject.toml's [duckdb] extra comment).
-      - run: pip install -e ".[dev,spark,llm,duckdb]"
+      - run: pip install -e ".[dev,spark,duckdb]"
       - run: bash scripts/run_snippets.sh -e ${{ matrix.engine }}
 
   # BLOCKING snippet lane (Phase 78) — the PROMISE-lane counterpart to the
@@ -115,7 +115,7 @@ jobs:
           java-version: '17'
       # duckdb extra pulls numpy — see the snippets canary job's identical
       # comment above; this BLOCKING lane runs the same engine matrix.
-      - run: pip install -e ".[dev,spark,llm,duckdb]"
+      - run: pip install -e ".[dev,spark,duckdb]"
       - run: bash scripts/run_snippets.sh -e ${{ matrix.engine }}
 
   # PROMISE LANES (Phase 78): the 3 pinned combos below (LTS / Latest / Legacy)
