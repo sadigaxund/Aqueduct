@@ -377,3 +377,37 @@ class TestValidateStoreBackendsCoverage:
         )
         _validate_store_backends(StoresConfig())
         assert probed == []
+
+
+class TestAqueductConfigEqHash:
+    """Phase 84 item 3 — ``_cli_engine_overrides`` (a PrivateAttr) must not
+    leak into ``AqueductConfig.__eq__``/``__hash__``. Pydantic v2's
+    generated ``__eq__`` compares ``__pydantic_private__`` before fields, so
+    two otherwise-identical configs differing only by their per-invocation
+    ``-s/--set`` layer used to compare unequal. Closing a latent trap — no
+    shipped call site compares AqueductConfig instances today."""
+
+    def test_cli_engine_overrides_does_not_break_equality(self):
+        cfg = AqueductConfig()
+        overridden = cfg.with_cli_engine_overrides(
+            {"spark": {"spark.sql.shuffle.partitions": "10"}}
+        )
+        assert overridden.cli_engine_overrides != cfg.cli_engine_overrides
+        assert overridden == cfg
+
+    def test_field_differences_still_compare_unequal(self):
+        assert AqueductConfig() != AqueductConfig(timezone="UTC")
+
+    def test_hash_matches_across_differing_cli_overrides(self):
+        cfg = AqueductConfig()
+        overridden = cfg.with_cli_engine_overrides({"duckdb": {"threads": "4"}})
+        assert hash(cfg) == hash(overridden)
+
+    def test_hash_differs_for_field_differences(self):
+        assert hash(AqueductConfig()) != hash(AqueductConfig(timezone="UTC"))
+
+    def test_config_is_usable_as_a_set_or_dict_key(self):
+        cfg = AqueductConfig()
+        overridden = cfg.with_cli_engine_overrides({"spark": {"k": "v"}})
+        seen = {cfg, overridden}
+        assert len(seen) == 1  # equal + same hash → collapse to one entry

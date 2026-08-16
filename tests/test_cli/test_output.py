@@ -7,8 +7,8 @@ import json
 import click
 import pytest
 
-from aqueduct.cli.output import emit, warn
 from aqueduct import redaction
+from aqueduct.cli.output import emit, warn
 
 pytestmark = pytest.mark.unit
 
