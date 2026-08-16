@@ -42,6 +42,18 @@ multiplies the surface users have to reason about.
   `object-store` — one SDK/capability each.
 - **Capability aggregates:** `secrets` (= aws+gcp+azure), `stores`
   (= postgres+redis+object-store), `schedulers` (= airflow), `all`.
+- **Engine leaves:** `spark`, `duckdb` — one execution engine each. An engine
+  leaf is distinct from a per-vendor leaf: it is not wrapping a vendor SDK, it
+  is registering an execution engine — the thing that runs a compiled
+  blueprint. What makes an extra an engine leaf (mechanically, not just by
+  name) is that it registers an `aqueduct.engines` entry point (see
+  `[project.entry-points."aqueduct.engines"]`) and ships its own
+  `capabilities.yml` declaring what that engine supports. Both engine leaves
+  are pulled into `all`, same as every other leaf, but neither rolls into
+  `secrets`, `stores`, or `schedulers` — there is no "engines" aggregate,
+  because installing more than one engine at a time is a normal, expected
+  configuration (not an aggregate-of-convenience the way `secrets` bundles
+  every cloud vendor's SDK).
 
 A user installs an aggregate or a leaf. When a new optional dependency appears,
 map it onto an existing axis: reuse a vendor leaf if it's that vendor's SDK, or
@@ -81,7 +93,7 @@ category; it is not a loophole for runtime features (those still follow the axes
 - `aqueduct/executor/capability_leaves.py` — engine-agnostic, **pyspark-free** grammar leaf walker (Phase 78): `all_leaves()` derives the canonical capability-leaf-id set by introspecting `parser/schema.py` pydantic models (module types + nested config blocks) and reading the op/mode/format constants next to their dispatch code (`channel_ops.py`, `spark/egress.py`'s `SUPPORTED_MODES`/`ON_NEW_COLUMNS_POLICIES`, `spark/junction.py`'s `VALID_MODES`, `spark/funnel.py`'s `VALID_MODES`). `INGRESS_FORMATS`/`EGRESS_FORMATS`/`FEATURE_FLAGS` are the hand-curated exceptions (not schema-derivable — see the module docstring for why). This is the anti-drift core: a new schema field / op / mode automatically becomes a leaf that every registered engine must give a verdict for (enforced by `tests/test_capabilities/test_closure.py`).
 - `aqueduct/executor/config_leaves.py` — engine-agnostic, **pyspark-free** ENGINE-CONFIG leaf walker (Phase 78 Step 3; Q4 step 2 added the scoping below). `all_config_leaves(engine=None)` derives the ENGINE-SCOPED `config.*` checklist by introspecting `aqueduct/config.py`'s `AqueductConfig` pydantic models (recursing into nested `BaseModel` fields; a `list[Model]`/`dict[str, Model]` field like `stores.depots`/`agent.cascade` is one atomic leaf, not enumerated per key), filtered to fields carrying an EXPLICIT `Field(..., json_schema_extra={"engine_scoped": True})` tag — every field must carry `True` or `False`, there is no untagged/implicit state. `engine=<name>` additionally drops every OTHER engine's `engine.<name>.*` leaves (positionally owned by exactly one engine — derived from the path segment, never a hand-listed engine name). `core_config_leaves()` is the `False`-tagged complement (~88 of 105 leaves — `webhooks.*`/`secrets.*`/`stores.*`/`lineage.*`/most of `agent.*`/`danger.*` — that never appear in any engine's table because they run in core code paths with no per-engine implementation to diverge from), derived from the SAME tag so the two cannot drift. A field discovered with NO `engine_scoped` key at all raises `CapabilityScopeError` naming the field and both resolutions; a field under `engine.<name>.*` tagged `False` (or untagged) ALSO raises — there is no valid "core" reading for a field namespaced to one engine. `explicitly_set_config_leaves(cfg)` walks an actual validated config INSTANCE via `model_fields_set` at each nesting level, returning only the leaves the user explicitly wrote — narrowed to the SAME `engine_scoped` tag, since once a core leaf leaves the checklist there is no row for it — `aqueduct/config.py::load_config()` calls this at config-resolution time, once `deployment.engine` is known, and emits a suppressible `engine_key_ignored` warning (same rule id and `aqueduct.warnings.emit` machinery as the blueprint gate) for any explicitly-set leaf whose verdict isn't `SUPPORTED` — WARN, never ERROR (the same `aqueduct.yml` must stay valid across engines). Closes the gap left by Step 0's leaf walker (`capability_leaves.py` covers Blueprint grammar only, not `aqueduct.yml`). Imports `aqueduct.config` at module level; `config.py` imports this module back only lazily (inside `load_config()`), avoiding a circular import.
 - `aqueduct/executor/capability_tooling.py` — engine-agnostic, **pyspark-free** capability-declaration tooling (Phase 78): `governed_leaves(engine=None)` (grammar ∪ engine-scoped config, threading `engine` through to `config_leaves.all_config_leaves(engine=...)` — Q4 step 2), `discover_declarations()` (every `capabilities.yml` this install governs — resolved from the `aqueduct.engines` entry points via `find_spec`, WITHOUT importing an engine module, because an engine with an incomplete table cannot be imported), `check()`/`sync()`/`scaffold()`/`render_matrix()`/`write_matrix()`, each now computing that ENGINE's own checklist rather than one shared cross-engine set. `sync(prune_orphans=True)` deletes an orphaned row's text block by default (mechanical, comment-preserving — `_remove_leaf_rows`) rather than only reporting it, because an orphaned row already makes the declaration invalid; `--no-prune` on the CLI falls back to report-only. Returns values; the CLI (`aqueduct/cli/dev.py`) does all rendering. This is the code behind `aqueduct dev capabilities …`; `scripts/capabilities.py` only forwards to it.
-- `aqueduct/executor/spark/capabilities.py` + `capabilities.yml` — the Spark engine's capability declaration. The **YAML is the declaration** (one explicit row per leaf — 320 as of 2026-08-02: 303 grammar + 17 engine-scoped config, Q4 step 2 — each `supported`/`unsupported`/`ignored_with_warning`/`undeclared`, plus optional `requires` + `hint`); the `.py` only loads and registers it via `load_declaration()`, passing `all_config_leaves(engine="spark")` (not the cross-engine union) as the checklist. **pyspark-free** despite living under `spark/`. There is NO default-verdict sweep: an engine states what it supports leaf by leaf. A new engine ships its own `capabilities.yml` — data, not Python. (Count drifts as leaves are added — treat this as a snapshot, not a contract; the authoritative count is `len(governed_leaves())`/the YAML itself.)
+- `aqueduct/executor/spark/capabilities.py` + `capabilities.yml` — the Spark engine's capability declaration. The **YAML is the declaration** (one explicit row per leaf — 311 as of 2026-08-16: 294 grammar + 17 engine-scoped config, Q4 step 2 — each `supported`/`unsupported`/`ignored_with_warning`/`undeclared`, plus optional `requires` + `hint`); the `.py` only loads and registers it via `load_declaration()`, passing `all_config_leaves(engine="spark")` (not the cross-engine union) as the checklist. **pyspark-free** despite living under `spark/`. There is NO default-verdict sweep: an engine states what it supports leaf by leaf. A new engine ships its own `capabilities.yml` — data, not Python. (Count drifts as leaves are added — treat this as a snapshot, not a contract; the authoritative count is `len(governed_leaves())`/the YAML itself. DuckDB, the other registered engine, declares 319 rows as of the same date: 294 grammar + 25 engine-scoped config — the grammar count matches Spark's because both share the same Blueprint grammar; only the engine-scoped config leaf count differs.)
 - `aqueduct/executor/protocol.py` — engine-agnostic, **pyspark-free** `ExecutorProtocol` + `PromptRules` (Phase 78 Step 2): a frozen dataclass (`engine`, `execute`, `extract_error`, `prompt_rules`) an engine registers via `register_protocol()` as an import side effect of its `aqueduct.engines` entry-point module, mirroring `capabilities.py`'s `EngineCapabilities`/`CAPABILITY_REGISTRY` pattern. `__post_init__` raises `EnginePluginError` (an `AqueductError` — an engine-plugin author is a user of this seam, so the error-taxonomy rule applies; never a bare builtin) if `execute`, `extract_error`, or the `PromptRules` pack is missing/incomplete — the structural guarantee that an engine cannot register without an error extractor (exception → `FailureContext` fields) or a prompt-rules pack. `PromptRules` (`persona`, `root_cause_note`, `rules`, all required non-empty) is the engine's half of the healing system prompt; see the composition rule below. `get_protocol(engine)` calls `capabilities.load_engines()` before its registry lookup and raises `UnknownEngineError` for an unregistered engine, same fail-closed posture as `get_capabilities()`. See `docs/specs.md` §10.9.
 - `aqueduct/executor/session_config.py` — engine-agnostic, **pyspark-free** `SessionSpec` engine-config resolution (Phase 82 remediation, generalized in the `spark_config`→`engine_config` cross-engine remediation pass): `resolve_session_engine_config(cfg, engine, manifest)` builds each engine's `aqueduct.yml`-level config (Spark's merged `conf` dict; every other engine's `engine.<name>` sub-model dumped via `model_dump()`) and layers that SAME engine's `Manifest.engine_config[engine]` entry on top (Blueprint wins on a key conflict) — one precedence rule, shared by every registered engine, not a Spark-only special case. Also `session_secrets_options(cfg, manifest)` (the `secrets:` block bag for `SessionSpec.engine_options`) and `session_config_fingerprint(cfg, engine, manifest)` (a deterministic hash of `resolve_session_engine_config`'s output — `aqueduct/cli/run.py`'s `_execute_target` compares it against the live session's fingerprint before every single-engine execution and rebuilds only on mismatch, so a Manifest is never executed against a session built from a different Manifest; this is the ONLY part of a `SessionSpec` that can vary within one run, since `cfg` and the target `engine` are fixed at process start). Split out of `protocol.py` on purpose — these are session-config helpers, not part of the `ExecutorProtocol` contract an engine implements, and `protocol.py`'s public surface is the thing tracked for the BYO-engine stability criterion (see the "READINESS TEST" standing decision). Every `SessionSpec` builder resolves through here: `aqueduct/cli/run.py` (single-engine and polyglot), `aqueduct/cli/drift.py`, and `aqueduct/patch/preview.py::run_sandbox_gate` (Gate 3) — so a sandbox replay sees the SAME engine config a real run would use, not a hardcoded `manifest.spark_config` read that only ever populated for a Spark target (the defect this module's extraction fixed, then generalized to every engine's Blueprint-level override).
 - `aqueduct/executor/orchestrator.py` — engine-agnostic multi-island polyglot execution orchestrator (Phase 81 step 3). A single-engine Manifest still runs through that one engine's own `ExecutorProtocol.execute()` directly (e.g. via `cli/run.py`); a Manifest whose `islands` span more than one engine needs this coordinator ABOVE the per-engine call — opens a session per island in island-topological order, executes each island's modules through its own engine on an island-scoped sub-Manifest, and performs each boundary's synthetic Handoff module's spill write/read between islands.
@@ -185,11 +197,12 @@ made the closure guarantee a tautology once already. Replace each `undeclared` w
 a real verdict per engine: `supported` (optionally with `requires:` for a version
 floor and `hint:`), `unsupported`, or `ignored_with_warning`.
 
-**Do not** copy another engine's verdicts to make the red go away. Spark declares
-319 `supported` rows (of 320 leaves total, 2026-08-02) because Spark implements 319
-things; pasting them into a new engine is a silent claim to implement all of them,
-which is precisely the failure this framework exists to catch. Read Spark's table;
-never clone it.
+**Do not** copy another engine's verdicts to make the red go away. Spark's table is
+mostly `supported` rows because Spark implements most of the grammar; pasting them
+into a new engine is a silent claim to implement all of them, which is precisely the
+failure this framework exists to catch. The row count itself is a moving snapshot
+(`len(governed_leaves())`, or the YAML row count directly) — never hardcode it in a
+check. Read Spark's table; never clone it.
 
 ### Adding or bumping a dependency
 
@@ -369,7 +382,7 @@ their original modules.
 | `http.py` | Single source of truth for outbound-HTTP mechanics: `RETRYABLE_DELIVERY_STATUS` / `RETRYABLE_PROVIDER_STATUS`, `retry_after_seconds`, `backoff_delay`, `sign_body` (HMAC-SHA256), `fire_and_forget` (daemon thread), `deliver_with_retry` (best-effort POST loop, stderr-logged). The webhook + OpenLineage daemon-delivery paths build on it; `agent/providers.py` aliases its retryable-status constant + helpers (so existing `providers._RETRYABLE_STATUS` / `_retry_after_seconds` patch paths keep working). Add a new outbound-HTTP caller here, do not re-implement retry/backoff inline. |
 | `module_loading.py` | Single source of truth for "load user code from a dotted path" (`load_module`, `load_callable`): collision-proof `spec_from_file_location` load from a `base_dir` sibling `.py` file when present, `importlib.import_module` fallback otherwise. Backs the secrets resolver, Assert `custom` `fn:`, Probe `custom` `module:`, `udf_registry` `module:`, and `format: custom` DataSource `class:` — all resolve against `Manifest.base_dir` (the top-level Blueprint's directory). Add a new "import user code by dotted path" site here, do not hand-roll `importlib.import_module`/`spec_from_file_location` inline (see failure_taxonomy.md #11). |
 
-When adding a new outbound-HTTP path: reuse `infra/http.py`. The Databricks Jobs-API client (`deploy/databricks.py`) and doctor probes are intentionally NOT on this path (synchronous API client / one-shot reachability probe — different shapes).
+When adding a new outbound-HTTP path: reuse `infra/http.py`. Doctor probes are intentionally NOT on this path (one-shot reachability probe — different shape).
 
 ### `aqueduct/depot/` — Cross-run KV state
 
@@ -396,15 +409,6 @@ The CLI command lives in `aqueduct/cli/drift.py`.
 | `base.py` | `CheckResult` dataclass |
 | `checks_io.py` | Leaf connectivity checks: config, depot, observability, webhook, agent, secrets, store-backend, aqtest, aqscenario, capabilities (Phase 78 — version-constrained capability check, see `aqueduct/executor/capabilities.py`), `check_handoff_free_space` (Phase 81/82 — free disk space at `handoff.root`, pure `os`/`shutil`, no engine dependency) |
 
-### `aqueduct/deploy/` — Remote-submit deployment targets
-
-| Module | What it owns |
-|--------|--------------|
-| `base.py` | Engine-agnostic, pyspark-free deploy-submitter ABC. Each remote target (Databricks, EMR, Dataproc) implements the packaging → submit → poll → logs lifecycle of a remote batch job whose entrypoint is `aqueduct run <blueprint>` running on the cluster |
-| `databricks.py` | Databricks Jobs API 2.x implementation of `base.py`'s ABC — uploads blueprint + config + bootstrap to DBFS, creates a one-shot `spark_python_task` job run, polls its outcome. Uses `httpx` (already a base dep); the `[databricks]` SDK extra is checked lazily only for a nicer error message |
-
-Invoked from `aqueduct/cli/run.py`'s remote-submit path (`deployment.target: databricks`, see `deployment.databricks` in `aqueduct.yml.template`). Not on the `infra/http.py` outbound-HTTP path — see that section's note on why.
-
 ### `aqueduct/executor/spark/` — Spark execution
 
 | Module | What it owns |
@@ -415,7 +419,7 @@ Invoked from `aqueduct/cli/run.py`'s remote-submit path (`deployment.target: dat
 | `egress.py` | Write: overwrite, append, error, merge (Delta MERGE INTO) |
 | `junction.py` | Fan-out: conditional, broadcast, partition |
 | `funnel.py` | Fan-in: union_all, union, coalesce, zip |
-| `probe.py` | Signals: schema_snapshot, row_count_estimate, null_rates, sample_rows, value_distribution, distinct_count, data_freshness, partition_stats, threshold |
+| `probe.py` | Signals: schema_snapshot, row_count_estimate, null_rates, sample_rows, value_distribution, distinct_count, data_freshness, execution_partitions, threshold |
 | `assert_.py` | Quality gates: min_rows, null_rate, freshness, sql, sql_row, spillway_rate |
 | `session.py` | SparkSession management, Delta conf, cloudpickle patch |
 | `udf.py` | UDF registry, cloudpickle compatibility |
@@ -779,6 +783,34 @@ All user-facing output goes through `aqueduct/cli/style.py` — never a raw `pri
 Warning lifecycle / placement: **engine/config** warnings print above the `▶` run header, **blueprint/compile + session** warnings below it, **runtime** (probe/assert) warnings during execution. The header is the divider between "setup context" and "this run".
 
 Drift to watch for (grep these before a commit that touches `cli/`): raw `print(` or `click.echo(click.style(...))` with hand-rolled colour in a command, `logger.warning` carrying no `rule_id`, a reintroduced `%(levelname)s:` / raw `WARNING:` log format, bare-int `sys.exit`. The consolidated output funnel lives in `cli/output.py` — compose through `emit()` / `warn()`, not raw `click.echo` / `style.*`.
+
+### Every session consumer reads the shared holder, never a captured local
+
+A `run` command execution never executes a Manifest on a session built from a different
+Manifest (cross-engine remediation; see `session_config_fingerprint` in
+`aqueduct/executor/session_config.py` for what goes into that comparison). `_execute_target`
+in `aqueduct/cli/run.py` rebuilds the current single-engine session in place whenever the
+Manifest it is about to execute would resolve a different `engine_config` than the one the
+live session carries — on both the outer heal loop's baseline re-execution at the top of
+`while True:` and every patch retry, since either can leave a stale session behind.
+
+Because that rebuild happens in place, on a mutable `_SessionHolder` (`run.py:604`,
+`__slots__ = ("session", "engine_config_fingerprint")`), every consumer must read
+`.session` off that ONE shared holder instance at the moment it runs, never capture a bare
+`session` local. Two consumers make this load-bearing rather than stylistic:
+
+- The `atexit` closer registered in `_setup_surveyor` (`run.py:1087`) closes over the
+  holder, not a `session` local — `_setup_surveyor` has already returned by the time a heal
+  retry rebuilds the session, so a plain `atexit.register(lambda: close(session))` would
+  freeze on the pre-patch session (leaking it, since it would never be closed) and double-close
+  nothing on the rebuilt one.
+- `_execute_target`, the terminal `on_success`/`on_failure` hooks, and the agentic `ToolBox`
+  all read `_session_holder.session` for the same reason: whichever session is CURRENT at the
+  moment they run, never the one that existed when they were defined.
+
+Do not confuse this with the unrelated `atexit.register(session.stop)` at `run.py:1526` — a
+short-lived sandbox dry-run session with no holder, built and torn down within one function
+with no rebuild path, where a bare local is correct.
 
 ## Docs writing style (user-facing prose)
 

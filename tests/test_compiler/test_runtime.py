@@ -225,7 +225,7 @@ class TestAqMeta:
             blueprint_name="My BP",
             blueprint_path="/proj/blueprints/my_bp.yml",
             deployment_env="cluster",
-            deployment_target="databricks",
+            deployment_target="standalone",
             deployment_engine="spark",
         )
         assert resolve_tier1_str("@aq.blueprint.id()", reg) == "my_bp"
@@ -233,7 +233,7 @@ class TestAqMeta:
         assert resolve_tier1_str("@aq.blueprint.path()", reg) == "/proj/blueprints/my_bp.yml"
         assert resolve_tier1_str("@aq.blueprint.dir()", reg) == "/proj/blueprints"
         assert resolve_tier1_str("@aq.deployment.env()", reg) == "cluster"
-        assert resolve_tier1_str("@aq.deployment.target()", reg) == "databricks"
+        assert resolve_tier1_str("@aq.deployment.target()", reg) == "standalone"
         assert resolve_tier1_str("@aq.deployment.engine()", reg) == "spark"
         assert resolve_tier1_str("@aq.version()", reg)  # non-empty
 

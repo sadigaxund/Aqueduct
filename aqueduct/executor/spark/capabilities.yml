@@ -50,6 +50,7 @@ leaves:
   agent.field.sandbox_mode: supported
   agent.field.supports_tools: supported
   agent_guardrails.field.allowed_paths: supported
+  agent_guardrails.field.deny_patterns: supported
   agent_guardrails.field.forbidden_ops: supported
   agent_guardrails.field.heal_on_errors: supported
   agent_guardrails.field.never_heal_errors: supported
@@ -109,11 +110,6 @@ leaves:
   config.agent.sandbox_master_url: supported
   config.checkpoint_root: supported
   config.danger.allow_full_probe_actions: supported
-  config.deployment.databricks.cluster_id: supported
-  config.deployment.databricks.libraries: supported
-  config.deployment.databricks.max_concurrent_runs: supported
-  config.deployment.databricks.new_cluster: supported
-  config.deployment.databricks.workspace_url: supported
   config.deployment.target: supported
   config.engine.spark.conf: supported
   config.engine.spark.master_url: supported
@@ -652,10 +648,6 @@ leaves:
     support: supported
     tests:
       - tests/test_executor/test_executor_probe.py::test_null_rates_computes_per_column_rate
-  probe.signal.partition_stats:
-    support: supported
-    tests:
-      - tests/test_executor/test_executor_probe.py::test_partition_stats_zero_action
   probe.signal.row_count_estimate:
     support: supported
     tests:
@@ -698,3 +690,28 @@ leaves:
       patch/apply.py). No Spark code path reads it, and a reverted record's
       engine-config write is already out of the Blueprint by the time a
       session is built.
+  probe.signal.execution_partitions:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_probe.py::test_execution_partitions_zero_action
+  egress.format.json:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_egress.py::test_egress_format_json_roundtrip
+  egress.format.parquet:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_egress.py::test_egress_format_parquet_roundtrip
+  ingress.format.iceberg:
+    support: supported
+    hint: "Requires the Iceberg Spark runtime jar (org.apache.iceberg:iceberg-spark-runtime-<line>_<scala>) on the driver classpath — not bundled with pyspark. See docs/compatibility.md for the AQ_LAKEHOUSE-gated test setup."
+    tests:
+      - tests/test_executor/test_executor_lakehouse.py::test_ingress_format_iceberg_reads_written_table
+  ingress.format.json:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_ingress.py::test_ingress_valid_json
+  ingress.format.parquet:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_ingress.py::test_ingress_valid_parquet

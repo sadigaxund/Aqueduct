@@ -34,8 +34,8 @@ Each engine declares a verdict for every capability leaf in a YAML data file shi
 
 | Engine | Leaves declared | Supported | Version-gated | Ignored with warning | Unsupported |
 |---|---|---|---|---|---|
-| `duckdb` | 313 | 254 | 0 | 4 | 55 |
-| `spark` | 305 | 304 | 7 | 0 | 1 |
+| `duckdb` | 314 | 259 | 0 | 4 | 51 |
+| `spark` | 306 | 305 | 7 | 0 | 1 |
 
 ### Conditional and refused capabilities
 
@@ -56,11 +56,6 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 | `duckdb` | `channel.op.repartition` | unsupported | — | op=repartition is a Spark physical-partition-count hint; DuckDB has no partition concept to repartition. Not applicable. |
 | `duckdb` | `config.agent.block_on_explain_regression` | unsupported | — | relies on the Spark explain()-plan snapshot gate; no DuckDB equivalent implemented. |
 | `duckdb` | `config.agent.sandbox_master_url` | unsupported | — | sandbox_master_url pins a Spark master URL for the patch-preview sandbox session; DuckDB has no cluster master to pin (single-process, always local). |
-| `duckdb` | `config.deployment.databricks.cluster_id` | unsupported | — | single-node engine — schedule the container on one node. Databricks is a Spark deployment target. |
-| `duckdb` | `config.deployment.databricks.libraries` | unsupported | — | single-node engine — schedule the container on one node. Databricks is a Spark deployment target. |
-| `duckdb` | `config.deployment.databricks.max_concurrent_runs` | unsupported | — | single-node engine — schedule the container on one node. Databricks is a Spark deployment target. |
-| `duckdb` | `config.deployment.databricks.new_cluster` | unsupported | — | single-node engine — schedule the container on one node. Databricks is a Spark deployment target. |
-| `duckdb` | `config.deployment.databricks.workspace_url` | unsupported | — | single-node engine — schedule the container on one node. Databricks is a Spark deployment target. |
 | `duckdb` | `config.metrics.use_observe` | unsupported | — | use_observe toggles Spark's Observation API (a SparkListener-driven zero-cost row-count mechanism); DuckDB has no equivalent listener hook. This engine does not yet collect per-module runtime metrics (rows/bytes) outside the Handoff module at all (see executor/models.py's module_metrics writer), so there is no existing collection path for this flag to toggle either way — the key is inert here, not superseded by an always-on alternative. |
 | `duckdb` | `egress.field.class_` | unsupported | — | format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB. |
 | `duckdb` | `egress.field.maintenance` | unsupported | — | DuckDB has no OPTIMIZE/VACUUM/compaction operation for parquet or any format it writes here — post-write maintenance is a no-op it cannot perform. Not implemented. |
@@ -95,11 +90,12 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 | `duckdb` | `ingress.field.time_travel` | unsupported | — | Requires a delta-rs bridge to read a Delta table's transaction log at a version/timestamp. Not implemented — see feature.delta_time_travel. |
 | `duckdb` | `ingress.format.custom` | unsupported | — | format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB. |
 | `duckdb` | `ingress.format.delta` | unsupported | — | Requires a delta-rs bridge (the deltalake Python package can read a Delta table's transaction log). Not implemented. |
+| `duckdb` | `ingress.format.iceberg` | unsupported | — | Iceberg has no DuckDB Ingress reader implemented — reading a table's transaction log would require the iceberg DuckDB extension (ATTACH ... or the iceberg_scan table function); duckdb_/ingress.py dispatches only parquet/csv/json. Not implemented. |
 | `duckdb` | `ingress.format.jdbc` | unsupported | — | Requires the postgres scanner extension (ATTACH ... (TYPE POSTGRES), the same wire protocol jdbc: postgres:// targets). Not implemented. |
 | `duckdb` | `ingress.format.kafka` | unsupported | — | Kafka streaming ingress has no DuckDB equivalent — DuckDB is a batch, single-process engine. |
 | `duckdb` | `ingress_time_travel.field.timestamp` | unsupported | — | time_travel is unimplemented on DuckDB — see feature.delta_time_travel. |
 | `duckdb` | `ingress_time_travel.field.version` | unsupported | — | time_travel is unimplemented on DuckDB — see feature.delta_time_travel. |
-| `duckdb` | `probe.signal.partition_stats` | unsupported | — | DuckDB is a single-process, single-node engine with no partition concept to report — there is no analog to Spark's df.rdd.getNumPartitions(). A Probe declaring this signal against a DuckDB-executed Ingress/Channel is rejected at compile time instead of silently writing an empty/missing probe_signals row. |
+| `duckdb` | `probe.signal.execution_partitions` | unsupported | — | DuckDB is a single-process, single-node engine with no partition concept to report — there is no analog to Spark's df.rdd.getNumPartitions(). A Probe declaring this signal against a DuckDB-executed Ingress/Channel is rejected at compile time instead of silently writing an empty/missing probe_signals row. |
 | `duckdb` | `probe_signal.field.method` | ignored_with_warning | — | Accepted but never inspected — row_count_estimate is always an exact count on this engine regardless of method: sample/spark_listener (see module.type.Probe's hint); the field is authoring-parity only. |
 | `duckdb` | `type.native.spark` | unsupported | — | 'spark:<spelling>' names a type in Spark's native type system, which DuckDB's SQL parser does not understand. Use the hub vocabulary (bigint, array<T>, ...) or 'duckdb:<spelling>' for a DuckDB-native escape hatch. |
 | `spark` | `egress.format.custom` | supported | `pyspark>=4.0` | format: custom requires pyspark>=4.0 (the spark.dataSource registry). See docs/compatibility.md. |
@@ -131,7 +127,7 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 | Spark 3.x (`pyspark==3.5.8`) | ⚠: tested via Legacy CI combo | ⚠: tested via Legacy CI combo | ❌ |
 | Delta Lake (`delta-spark>=4.0,<5.0` for Spark 4.x; `delta-spark==3.3.0` for Spark 3.5) | ✅ | ✅ | ⚠ |
 | Custom Python DataSource (`format: custom`) | ✅ | ✅ | ⚠ |
-| Iceberg / Hudi | planned | planned | planned |
+| Iceberg / Hudi (Spark, maintenance included) | ✅ | ✅ | ⚠ |
 
 ## Notes
 
@@ -140,7 +136,7 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 - **Python 3.13 + PySpark 4.0** needs a system-installed `cloudpickle>=3.0`; the bundled cloudpickle 2.x in current PySpark recurses or segfaults during UDF serialization. Aqueduct monkeypatches at startup when both conditions hold. See `aqueduct/executor/spark/udf.py::_patch_pyspark_cloudpickle`, the patch self-deprecates once upstream PySpark ships cloudpickle ≥ 3.
 - **LLM providers**: Anthropic (default) and any OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, NVIDIA NIM, together.ai, Groq). Per-provider quirks documented in `gallery/aqscenarios/README.md`.
 - **Stores**: DuckDB embedded (default), Postgres (`aqueduct-core[postgres]`), Redis (`aqueduct-core[redis]`). All tested against the matrix above.
-- **Remote-submit targets**: Databricks Jobs API (`aqueduct-core[databricks]`, optional `databricks-sdk>=0.30`; the submitter works with raw `httpx` as well). EMR / Dataproc deferred. See the [Production Guide](production_guide.md) for per-target setup.
+- **Remote-submit targets**: none built in. EMR / Dataproc deferred. To run on Databricks, wrap `aqueduct run` in a Databricks Workflows `spark_python_task`. See the [Production Guide](production_guide.md) for per-target setup.
 - **Airflow**: `aqueduct-core[airflow]` (requires `apache-airflow>=2.7`). Tested against Python 3.11 + 3.12 only (Airflow's own compatibility ceiling). Provides `AqueductOperator`, `AqueductPatchSensor`, and `AqueductPatchTrigger`, lazy-imported from `aqueduct.integrations.airflow`. DAG import does not pull pyspark.
 - **Secrets providers**: `env` (built-in, no SDK needed), `aws` (`aqueduct-core[aws]`), `gcp` (`aqueduct-core[gcp]`), `azure` (`aqueduct-core[azure]`). All tested against the matrix above.
 
@@ -158,7 +154,7 @@ incompatibilities, not a roadmap; no Connect support is scheduled (see
 | Call site | Feature it powers | Behavior under Connect | Fallback / current mitigation |
 |---|---|---|---|
 | `aqueduct/executor/spark/channel.py:320-350` (`_apply_metrics_boundary`) | `metrics_boundary: true` Channel config: forces a `repartition()` boundary so `SparkListener`-derived stage metrics attribute correctly per-Channel | **Degrades gracefully.** `df.rdd.getNumPartitions()` is now guarded: on a Connect `DataFrame` (`.rdd` is not implemented in Connect) the boundary is skipped and a `[runtime_metrics_boundary_skipped]` warning fires; the transform result flows through unchanged | Graceful: metrics boundary silently skipped, warning surfaced, module still runs |
-| `aqueduct/executor/spark/probe.py:426` (`_partition_stats`) | `type: partition_stats` Probe signal | **Degrades.** Same `df.rdd.getNumPartitions()` call, but the dispatch loop in `execute_probe` wraps every signal in a per-signal `try/except` (probe.py:629), the signal is skipped, a `runtime_probe_signal_error` warning fires, and the pipeline continues | Graceful: signal silently omitted, warning surfaced |
+| `aqueduct/executor/spark/probe.py:456` (`_execution_partitions`) | `type: execution_partitions` Probe signal | **Degrades.** Same `df.rdd.getNumPartitions()` call, but the dispatch loop in `execute_probe` wraps every signal in a per-signal `try/except` (probe.py:629), the signal is skipped, a `runtime_probe_signal_error` warning fires, and the pipeline continues | Graceful: signal silently omitted, warning surfaced |
 | `aqueduct/executor/spark/metrics.py:101-104` (`_hadoop_fs_bytes`) | Byte-count metrics (`bytes_read`/`bytes_written`) for cloud/HDFS paths (s3a://, gs://, hdfs://, etc.) | **Degrades.** `spark._jvm` / `spark._jsc.hadoopConfiguration()` raise `AttributeError` on a Connect session; the whole function body is wrapped in `try/except Exception: return None` | Graceful: byte-count metrics come back `None` (not collected) rather than 0; no crash |
 | `aqueduct/patch/explain_gate.py:50-90` (`_formatted_plan`/`capture_plan_snapshot`, Gate 4) | Post-patch physical-plan regression detection (`Exchange`/`BroadcastExchange`/`BatchEvalPython` node counts vs. baseline) | **Degrades gracefully.** `df._jdf` does not exist on a Connect `DataFrame`; both the primary path and its own fallback raise, caught by the outer `try/except`, returning `""`. `capture_plan_snapshot` now stamps `plan_available: False` on empty-plan captures, and `run_explain_gate` reports `status="skip"` ("plan capture unavailable on this session, gate skipped") instead of comparing all-zero "after" counts against a real baseline | Graceful: gate reports skip/unavailable, not a false regression |
 | `aqueduct/executor/spark/warnings/jar_availability.py:34-60` (`_loaded_jar_names`) | `jar_availability` compiler/session-startup warning (missing JDBC/Kafka/Delta/Iceberg/Hudi driver JARs) | **Degrades honestly.** `spark.sparkContext._jsc` raises on Connect (`sparkContext` itself is not exposed by a Connect `SparkSession`); `_loaded_jar_names` now returns `None` (inspection failed) rather than `[]` (genuinely no JARs). `check()` distinguishes the two, when a Blueprint declares a JAR-requiring format and inspection is unavailable, it emits a "could not verify JAR availability" note instead of staying silent | Graceful: surfaces an honest "could not verify" note when relevant, rather than a false all-clear |

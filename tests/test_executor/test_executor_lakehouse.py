@@ -25,9 +25,9 @@ from __future__ import annotations
 
 import pytest
 
-from aqueduct.parser.parser import parse_dict
 from aqueduct.compiler.compiler import compile as compiler_compile
 from aqueduct.executor.spark.executor import execute as executor_execute
+from aqueduct.parser.parser import parse_dict
 
 pytestmark = [pytest.mark.spark, pytest.mark.integration, pytest.mark.slow]
 
@@ -152,3 +152,61 @@ def test_iceberg_roundtrip_with_maintenance(spark, tmp_path):
 
     df = spark.sql("SELECT count(*) FROM local.db.test_table")
     assert df.collect()[0][0] == 100
+
+
+def test_ingress_format_iceberg_reads_written_table(spark, tmp_path):
+    """`ingress.format.iceberg` — read an Iceberg table back through
+    Aqueduct's own Ingress reader (not a raw ``spark.read``), proving the
+    curated leaf's `supported` verdict against a real read, not just a
+    write. Iceberg tables are catalog-identifier-addressed, not path-based;
+    ``read_ingress`` passes a table identifier straight through to
+    ``spark.read.format('iceberg').load(<identifier>)`` since ``format:``
+    dispatch is a generic pass-through (see ``spark/ingress.py``)."""
+    _require_datasource(spark, "iceberg")
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    spark.range(50).write.parquet(str(data_dir / "input.parquet"))
+
+    bp = parse_dict(
+        {
+            "aqueduct": "1.0",
+            "id": "iceberg-ingress-test",
+            "name": "Iceberg ingress read",
+            "modules": [
+                {
+                    "id": "src",
+                    "type": "Ingress",
+                    "label": "src",
+                    "config": {"format": "parquet", "path": str(data_dir / "input.parquet")},
+                },
+                {
+                    "id": "sink",
+                    "type": "Egress",
+                    "label": "sink",
+                    "config": {
+                        "format": "iceberg",
+                        "mode": "overwrite",
+                        "table": "local.db.ingress_test_table",
+                    },
+                },
+            ],
+            "edges": [{"from": "src", "to": "sink"}],
+        },
+        base_dir=tmp_path,
+    )
+    manifest = compiler_compile(bp, blueprint_path=tmp_path)
+    result = executor_execute(manifest, spark)
+    assert result.status == "success", str(result.module_results)
+
+    from aqueduct.executor.spark.ingress import read_ingress
+    from aqueduct.models import Module
+
+    module = Module(
+        id="ing",
+        type="Ingress",
+        label="ing",
+        config={"format": "iceberg", "path": "local.db.ingress_test_table"},
+    )
+    df = read_ingress(module, spark)
+    assert df.count() == 50

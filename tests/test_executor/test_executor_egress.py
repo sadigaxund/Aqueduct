@@ -55,6 +55,22 @@ def test_egress_partition_by(spark: SparkSession, tmp_path):
     assert "part=1" in parts
 
 
+def test_egress_format_parquet_roundtrip(spark: SparkSession, tmp_path):
+    path = str(tmp_path / "out.parquet")
+    df = spark.range(10)
+    module = Module(id="m1", type="Egress", label="M1", config={"format": "parquet", "path": path})
+    write_egress(df, module)
+    assert spark.read.parquet(path).count() == 10
+
+
+def test_egress_format_json_roundtrip(spark: SparkSession, tmp_path):
+    path = str(tmp_path / "out.json")
+    df = spark.range(10)
+    module = Module(id="m1", type="Egress", label="M1", config={"format": "json", "path": path})
+    write_egress(df, module)
+    assert spark.read.json(path).count() == 10
+
+
 def _part_file_count(path) -> int:
     return len([p for p in path.iterdir() if p.name.startswith("part-") and p.suffix == ".parquet"])
 

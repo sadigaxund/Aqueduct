@@ -1,0 +1,49 @@
+# blueprint.yml
+# Multi-model healing cascade demo, shipped in its HEALED state (this is
+# what `aqueduct run` in CI exercises, LLM-free). `blueprint_bugged.yml`
+# carries the deliberate error (wrong column name) that, with
+# `approval: auto`, would trigger self-healing immediately, walking the
+# tiers declared in aqueduct.yml's agent.cascade (cheapest first) instead
+# of a single fixed model — see the README for that reader flow.
+#
+# No `cascade` key here: it is engine-level ONLY (aqueduct.yml), never a
+# Blueprint field.
+
+aqueduct: "1.0"
+id: cascade_demo
+name: "Multi-Model Healing Cascade"
+
+agent:
+  approval: auto
+
+modules:
+  - id: raw_orders
+    label: "Raw Orders"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/orders.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: enrich
+    label: "Enriched Orders"
+    type: Channel
+    config:
+      op: sql
+      # Healed: 'total_amt' is the real column (blueprint_bugged.yml has the
+      # original 'total' typo the README's cascade walkthrough exercises).
+      query: "SELECT order_id, customer, amount, total_amt * 1.1 AS total_with_tax FROM raw_orders"
+
+  - id: output
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/orders.parquet
+      mode: overwrite
+
+edges:
+  - from: raw_orders
+    to: enrich
+  - from: enrich
+    to: output

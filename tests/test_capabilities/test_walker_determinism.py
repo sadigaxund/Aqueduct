@@ -42,7 +42,7 @@ class _Inner(BaseModel):
 class _OuterPep604(BaseModel):
     """A model whose sub-config field uses the PEP 604 ``Inner | None`` spelling
     — identical to how ``aqueduct/config.py`` declares ``agent.budget``,
-    ``deployment.databricks``, etc."""
+    etc."""
 
     inner: _Inner | None = None
     top: int = 0
@@ -96,11 +96,14 @@ def test_real_config_optional_submodel_leaves_present():
     Q4 step 2: ``config.agent.budget.*`` is a CORE leaf (untagged — the
     budget knobs run in ``aqueduct/agent/``, never dispatched through an
     engine), so it is asserted via ``core_config_leaves()`` rather than
-    ``all_config_leaves()`` now. ``config.deployment.databricks.cluster_id``
-    is the ENGINE-SCOPED example of the SAME PEP 604 union shape
-    (``databricks: DatabricksDeployConfig | None``) — asserted via
-    ``all_config_leaves()`` alongside it, so both sides of the tag stay
-    covered by this determinism proof."""
+    ``all_config_leaves()`` now. The ENGINE-SCOPED side of the same PEP 604
+    union shape used to be pinned against a real field
+    (``deployment.databricks: DatabricksDeployConfig | None``), removed along
+    with the whole Databricks remote-submit deploy layer — the mechanism
+    itself stays covered by the synthetic-model tests above
+    (``test_pep604_optional_submodel_is_recursed_not_atomic`` /
+    ``test_pep604_and_typing_optional_agree``); this test now only pins the
+    CORE side against real config."""
     from aqueduct.executor.config_leaves import all_config_leaves, core_config_leaves
 
     core_leaves = core_config_leaves()
@@ -112,9 +115,6 @@ def test_real_config_optional_submodel_leaves_present():
     # And the parent must NOT survive as an atomic leaf (that was the buggy shape).
     assert "config.agent.budget" not in core_leaves
     assert "config.agent.budget" not in scoped_leaves
-    # Same PEP 604 union shape, engine-scoped side (`deployment.databricks`).
-    assert "config.deployment.databricks.cluster_id" in scoped_leaves
-    assert "config.deployment.databricks.cluster_id" not in core_leaves
 
 
 def test_registered_engine_tables_match_walker_on_this_interpreter():

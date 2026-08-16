@@ -1,0 +1,40 @@
+aqueduct_scenario: "1.0"
+
+id: field_not_found_join_ref
+description: >
+  join_orders' JOIN condition references `c.custid`, which does not exist on
+  customers_raw — the real column is `cust_id`. Unlike scenario 02 (a bad
+  column in the SELECT list), the unresolved reference here sits in the ON
+  clause, exercising the suggested-columns extraction (UNRESOLVED_COLUMN.
+  WITH_SUGGESTION) from a different SQL position.
+blueprint: blueprints/16_field_not_found_join_ref.yml
+
+# The fix is a Blueprint edit — a module's config, not an engine knob.
+domains: [pipeline]
+
+inject_failure:
+  module: join_orders
+  error_message: |
+    pyspark.errors.exceptions.captured.AnalysisException: [UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `c`.`custid` cannot be resolved. Did you mean one of the following? [`c`.`cust_id`, `c`.`name`, `c`.`region`, `o`.`order_id`, `o`.`amount`]. SQLSTATE: 42703
+    == SQL (line 8, position 34) ==
+            FROM orders_raw o
+            JOIN customers_raw c ON o.cust_id = c.custid
+                                                 ^^^^^^^^
+    'Join Inner, (cust_id#10 = 'c.custid)
+    :- SubqueryAlias o
+    :  +- SubqueryAlias orders_raw
+    :     +- Relation [order_id#8,cust_id#9,amount#10] csv
+    +- SubqueryAlias c
+       +- SubqueryAlias customers_raw
+          +- Relation [cust_id#11,name#12,region#13] csv
+
+expected_patch:
+  effect:
+    module: join_orders
+    config_contains:
+      query: "c.cust_id"   # AST-normalized substring — accepts any reformat
+
+assertions:
+  - patch_is_valid: true
+  - patch_applies: true
+  - root_cause_contains: ["custid", "cust_id"]

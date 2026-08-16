@@ -105,6 +105,7 @@ def test_agent_config_to_dict_includes_all_guardrails_fields(tmp_path):
         "  guardrails:\n"
         "    forbidden_ops: [remove_module]\n"
         "    allowed_paths: ['modules.*.config.*']\n"
+        "    deny_patterns: ['modules.*.config.secret.*']\n"
         "    heal_on_errors: [AnalysisException]\n"
         "    never_heal_errors: [OutOfMemoryError]\n"
         "modules:\n  - id: m\n    type: Channel\n    label: M\n"
@@ -114,8 +115,11 @@ def test_agent_config_to_dict_includes_all_guardrails_fields(tmp_path):
     d = bp.agent.to_dict()
     assert d["guardrails"]["forbidden_ops"] == ["remove_module"]
     assert d["guardrails"]["allowed_paths"] == ["modules.*.config.*"]
+    assert d["guardrails"]["deny_patterns"] == ["modules.*.config.secret.*"]
     assert d["guardrails"]["heal_on_errors"] == ["AnalysisException"]
     assert d["guardrails"]["never_heal_errors"] == ["OutOfMemoryError"]
+    # Also reaches the compiled GuardrailsConfig dataclass, not just to_dict().
+    assert bp.agent.guardrails.deny_patterns == ("modules.*.config.secret.*",)
 
 
 def test_resolve_agent_connection_inherits_progressive(tmp_path):

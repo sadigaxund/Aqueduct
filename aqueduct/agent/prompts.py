@@ -500,9 +500,10 @@ def _build_guardrails_section(guardrails: Any) -> str:
 
     forbidden = _field("forbidden_ops")
     allowed_paths = _field("allowed_paths")
+    deny_patterns = _field("deny_patterns")
     heal_on = _field("heal_on_errors")
     never_heal = _field("never_heal_errors")
-    if not (forbidden or allowed_paths or heal_on or never_heal):
+    if not (forbidden or allowed_paths or deny_patterns or heal_on or never_heal):
         return ""
     lines = [
         "",
@@ -513,6 +514,11 @@ def _build_guardrails_section(guardrails: Any) -> str:
     if allowed_paths:
         lines.append(
             f"- allowed file paths (operations may only target these — fnmatch patterns): {', '.join(allowed_paths)}"
+        )
+    if deny_patterns:
+        lines.append(
+            f"- denied file paths (operations must NOT target these — fnmatch patterns, checked "
+            f"even against an otherwise-allowed path): {', '.join(deny_patterns)}"
         )
     if heal_on:
         lines.append(f"- heal only on these error_types: {', '.join(heal_on)}")
@@ -539,7 +545,9 @@ def _build_user_prompt(
 
     # Failed module config (compiled — resolved values)
     failed_mod = next((m for m in modules if m["id"] == failure_ctx.failed_module), None)
-    failed_config = json.dumps(failed_mod.get("config", {}) if failed_mod else {}, indent=2)
+    failed_config = json.dumps(
+        failed_mod.get("config", {}) if failed_mod else {}, indent=2, ensure_ascii=False
+    )
 
     # Module list summary
     module_list = (
@@ -860,7 +868,7 @@ def _build_system_prompt(
             mapping.pop("defer_to_human", None)
         raw_schema.get("$defs", {}).pop("DeferToHumanOp", None)
 
-    schema = json.dumps(raw_schema, indent=2)
+    schema = json.dumps(raw_schema, indent=2, ensure_ascii=False)
 
     # Phase 41: defer rules — only shown when allow_defer is True so the
     # model doesn't see an easy way out on normal heals.

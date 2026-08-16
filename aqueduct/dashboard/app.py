@@ -692,7 +692,7 @@ def _runs_tab(handles):
                 if len(rows_l) >= 2 and rows_l[0].get("max_value"):
                     df = pd.DataFrame(rows_l)
                     st.line_chart(df.set_index("run")["max_value"])
-            elif sig_type == "partition_stats":
+            elif sig_type == "execution_partitions":
                 rows_l = []
                 for s in reversed(sigs):
                     p = s.payload
@@ -1507,7 +1507,7 @@ def _quality_tab(cfg, store_dir):
                 )
             st.dataframe(pd.DataFrame(rows_l), width="stretch", hide_index=True)
 
-        elif sig_type == "partition_stats":
+        elif sig_type == "execution_partitions":
             rows_l = []
             for s in reversed(sigs):
                 p = s.payload
@@ -1702,7 +1702,7 @@ def _render_op(op: dict) -> str:
         return f"replace macro  {op.get('name', '')}"
     if t == "set_engine_config":
         return f"set {op.get('engine', 'engine')} config  {op.get('key', '')} = \"{op.get('value', '')}\""
-    return f"{t}  {mid}  ({json.dumps({k: v for k, v in op.items() if k not in ('op', 'type', 'module_id', 'target')})})"
+    return f"{t}  {mid}  ({json.dumps({k: v for k, v in op.items() if k not in ('op', 'type', 'module_id', 'target')}, ensure_ascii=False)})"
 
 
 def _find_blueprint_file(path_str: str | None, bp_id: str) -> Path | None:

@@ -19,7 +19,7 @@ pip install -r requirements.txt
 | `value_distribution` | Value frequency per column |
 | `distinct_count` | Distinct value counts |
 | `data_freshness` | MAX(timestamp) and age |
-| `partition_stats` | Spark physical partition count (`df.rdd.getNumPartitions()`) — takes no config |
+| `execution_partitions` | Spark physical partition count (`df.rdd.getNumPartitions()`) — takes no config |
 | `threshold` | SQL aggregate boolean `expr:` — emits `passed` for Regulator gating |
 
 Results are stored in the `probe_signals` table in the observability store.

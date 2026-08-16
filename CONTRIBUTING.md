@@ -66,6 +66,17 @@ CI runs jobs per feature area (parser, compiler, executor, agent, etc.).
 Only jobs whose files changed fire on branches, so don't worry if unrelated
 jobs skip your PR.  See AGENTS.md for the full job table.
 
+## Capability framework
+
+Adding a grammar leaf (a module-type field, Channel op, Egress write mode, Junction/Funnel
+fan mode, feature flag) or a new `aqueduct.yml` engine-config key breaks the build on
+purpose: every registered engine must give it an explicit verdict. Run
+`aqueduct dev capabilities sync` to append `undeclared` rows to each engine's
+`capabilities.yml`, then replace each with a real verdict (`supported` | `unsupported` |
+`ignored_with_warning`). A `supported` verdict on an execution leaf also needs a `tests:`
+key naming the pytest id(s) that exercise it on that engine. See AGENTS.md's "Adding a
+grammar leaf or an `aqueduct.yml` config key" section for the full workflow.
+
 ## Code style
 
 ```bash

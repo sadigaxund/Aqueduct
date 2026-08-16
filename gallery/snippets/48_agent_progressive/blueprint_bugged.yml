@@ -1,0 +1,74 @@
+# blueprint_bugged.yml
+# Progressive (chained) multi-patch healing demo: TWO INDEPENDENT bugs, in
+# two DIFFERENT Channels:
+#
+#   1. `priced`     references 'unit_cost'. The real column is 'unit_price'.
+#   2. `discounted` (downstream of `priced`) filters on 'quantity'. The
+#      real column is 'qty'.
+#
+# A non-progressive multi-patch loop re-diagnoses bug #1 on every attempt:
+# it patches `priced` in memory, re-runs, sees the pipeline still fail (now
+# at `discounted`, bug #2), discards the candidate, and starts over against
+# the ORIGINAL unpatched Blueprint. Bug #1's fix is never carried forward.
+#
+# `agent.progressive: true` fixes that: link 1 fixes `priced`, sees the
+# NEXT failure surface at a DIFFERENT module (`discounted`) and folds link
+# 1's fix into an accumulating patch instead of discarding it; link 2 then
+# diagnoses `discounted` against the manifest with link 1's fix already
+# applied. Nothing is written to disk until the full 2-op patch passes the
+# pipeline end-to-end.
+
+aqueduct: "1.0"
+id: progressive_demo
+name: "Progressive Multi-Patch Healing"
+
+agent:
+  approval: auto
+  progressive: true
+  max_chain: 3
+  # Progressive healing is refused at heal-start unless sandbox_mode is not
+  # 'off' (each chain link's advancement test IS the sandbox gate). 'sample'
+  # is the default, set explicitly here so the requirement is visible.
+  sandbox_mode: sample
+
+modules:
+  - id: raw_orders
+    label: "Raw Orders"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/orders.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: priced
+    label: "Priced Lines"
+    type: Channel
+    config:
+      op: sql
+      # Bug #1: 'unit_cost' doesn't exist, the real column is 'unit_price'.
+      query: "SELECT order_id, customer, qty, unit_price, qty * unit_cost AS line_total FROM raw_orders"
+
+  - id: discounted
+    label: "Discounted Lines"
+    type: Channel
+    config:
+      op: sql
+      # Bug #2 (independent of #1): 'quantity' doesn't exist, the real
+      # column carried through `priced` is 'qty'.
+      query: "SELECT order_id, customer, line_total, line_total * 0.9 AS discount_total FROM priced WHERE quantity > 0"
+
+  - id: output
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/orders.parquet
+      mode: overwrite
+
+edges:
+  - from: raw_orders
+    to: priced
+  - from: priced
+    to: discounted
+  - from: discounted
+    to: output

@@ -61,6 +61,11 @@ class GuardrailsConfig:
     allowed_paths: tuple[
         str, ...
     ] = ()  # fnmatch patterns for config path values; empty = unrestricted
+    deny_patterns: tuple[str, ...] = ()
+    # fnmatch patterns for config path values, evaluated AFTER allowed_paths;
+    # subtract-only — a path allowed_paths permits (or that is unrestricted
+    # because allowed_paths is empty) is still refused if it matches here.
+    # Applies even when allowed_paths is empty; empty = no additional denial.
     heal_on_errors: tuple[
         str, ...
     ] = ()  # LLM only fires when error_type matches; empty = no restriction
@@ -183,6 +188,7 @@ class AgentConfig:
             "guardrails": {
                 "forbidden_ops": list(self.guardrails.forbidden_ops),
                 "allowed_paths": list(self.guardrails.allowed_paths),
+                "deny_patterns": list(self.guardrails.deny_patterns),
                 "heal_on_errors": list(self.guardrails.heal_on_errors),
                 "never_heal_errors": list(self.guardrails.never_heal_errors),
             },

@@ -195,7 +195,12 @@ class TestParsePatchSpec:
         assert "stripped_line_comments" in recovery
 
     def test_json_repair_fallback_on_original_not_comment_stripped(self):
-        """json_repair fallback operates on the original text, not comment-stripped text."""
+        """json_repair fallback operates on the original text, not comment-stripped
+        text. The missing comma after "op" means stripping the trailing line
+        comment alone (step 4) still leaves invalid JSON, so this must fall
+        through to the json_repair pass (step 5) — which repairs BOTH the
+        missing comma and the comment in one shot on the untouched original
+        text, producing a valid PatchSpec."""
         raw = """{
   "patch_id": "fix-repair",
   "rationale": "repair test",
@@ -204,18 +209,17 @@ class TestParsePatchSpec:
   "root_cause": "type issue",
   "operations": [
     {
-      "op": set_module_config_key  // missing quotes around op value
-      "module_id": "m1",
+      "op": "set_module_config_key"
+      "module_id": "m1",  // missing comma above, trailing comment here
       "key": "format",
       "value": "parquet"
     }
   ]
 }"""
-        try:
-            spec, recovery = _parse_patch_spec(raw)
-            assert "stripped_line_comments" in recovery or "json_repair" in recovery
-        except Exception:
-            pass  # json_repair may not be installed; JSONDecodeError is acceptable
+        spec, recovery = _parse_patch_spec(raw)
+        assert spec.patch_id == "fix-repair"
+        assert "json_repair" in recovery
+        assert "stripped_line_comments" not in recovery
 
     def test_orphan_think_closing_stripped(self):
         """Orphan </think> without opener: prose before closer stripped."""

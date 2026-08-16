@@ -31,7 +31,7 @@ modules:
           columns: [category, name]
         - type: data_freshness
           column: created_at
-        - type: partition_stats
+        - type: execution_partitions
         - type: threshold
           expr: "MIN(price) >= 0.0 AND MAX(price) <= 500.0"
 

@@ -87,54 +87,6 @@ _URI_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://")
 # ── Sub-models ────────────────────────────────────────────────────────────────
 
 
-class DatabricksDeployConfig(BaseModel):
-    """Per-target settings for ``deployment.target: databricks``.
-
-    Required when ``target`` is ``databricks``.  Credentials flow through
-    ``DATABRICKS_TOKEN`` env var or ``@aq.secret(...)`` — never plaintext
-    in this block.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    workspace_url: str = Field(
-        ...,
-        description="Databricks workspace URL, e.g. https://dbc-xxxx.cloud.databricks.com",
-        json_schema_extra={"engine_scoped": True},
-    )
-    cluster_id: str | None = Field(
-        default=None,
-        description="Existing all-purpose cluster ID. Mutually exclusive with new_cluster.",
-        json_schema_extra={"engine_scoped": True},
-    )
-    new_cluster: dict | None = Field(
-        default=None,
-        description="Raw cluster-creation spec per the Databricks Jobs API new_cluster object. "
-        "Mutually exclusive with cluster_id.",
-        json_schema_extra={"engine_scoped": True},
-    )
-    libraries: list[dict] | None = Field(
-        default=None,
-        description="Libraries to install on the cluster, e.g. [{'pypi': {'package': 'aqueduct-core[spark]'}}].",
-        json_schema_extra={"engine_scoped": True},
-    )
-    max_concurrent_runs: int | None = Field(
-        default=1,
-        description="Maximum concurrent runs for the generated one-shot job.",
-        json_schema_extra={"engine_scoped": True},
-    )
-
-    @model_validator(mode="after")
-    def _validate_cluster(self) -> DatabricksDeployConfig:
-        if not self.cluster_id and not self.new_cluster:
-            raise ValueError("deployment.databricks: one of cluster_id or new_cluster is required")
-        if self.cluster_id and self.new_cluster:
-            raise ValueError(
-                "deployment.databricks: cluster_id and new_cluster are mutually exclusive"
-            )
-        return self
-
-
 class DeploymentConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -147,11 +99,9 @@ class DeploymentConfig(BaseModel):
         ),
         json_schema_extra={"engine_scoped": False},
     )
-    target: Literal[
-        "local", "standalone", "yarn", "kubernetes", "databricks", "emr", "dataproc"
-    ] = Field(
+    target: Literal["local", "standalone", "yarn", "kubernetes", "emr", "dataproc"] = Field(
         default="local",
-        description="Deployment target: local | standalone | yarn | kubernetes | databricks | emr | dataproc",
+        description="Deployment target: local | standalone | yarn | kubernetes | emr | dataproc",
         json_schema_extra={"engine_scoped": True},
     )
     env: Literal["local", "cluster", "cloud"] = Field(
@@ -215,24 +165,14 @@ class DeploymentConfig(BaseModel):
         if self.engine != "spark":
             return self
 
-        if self.target == "databricks" and self.databricks is None:
-            raise ConfigError(
-                "deployment.target=databricks requires the " "deployment.databricks block to be set"
-            )
-
         if self.target in ("emr", "dataproc"):
             raise ConfigError(
                 f"deployment.target={self.target!r} is a remote-submit target "
                 f"not yet supported. "
-                f"Use local | standalone | yarn | kubernetes | databricks."
+                f"Use local | standalone | yarn | kubernetes."
             )
 
         return self
-
-    databricks: DatabricksDeployConfig | None = Field(
-        default=None,
-        description="Databricks Jobs API settings. Required when target=databricks.",
-    )
 
 
 RelationalBackend = Literal["duckdb", "postgres"]
@@ -1510,6 +1450,25 @@ class HandoffConfig(BaseModel):
     )
 
 
+def _freeze_for_hash(value: Any) -> Any:
+    """Recursively turn *value* into something hashable, for
+    ``AqueductConfig.__hash__`` — several nested config models carry plain
+    ``dict``/``list`` fields (e.g. ``EngineConfig.spark.conf``,
+    ``WarningsConfig``'s list fields), which are not hashable as-is.
+    Dict items are sorted by key so equal dicts (order-independent by
+    definition) always freeze to the same tuple.
+    """
+    if isinstance(value, BaseModel):
+        return (type(value), _freeze_for_hash(value.__dict__))
+    if isinstance(value, dict):
+        return tuple(sorted((k, _freeze_for_hash(v)) for k, v in value.items()))
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_for_hash(v) for v in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_freeze_for_hash(v) for v in value)
+    return value
+
+
 class AqueductConfig(BaseModel):
     """Fully validated engine configuration.
 
@@ -1617,6 +1576,33 @@ class AqueductConfig(BaseModel):
         }
         return out
 
+    def __eq__(self, other: object) -> bool:
+        """Field equality only — deliberately excludes ``_cli_engine_overrides``.
+
+        Pydantic v2's generated ``BaseModel.__eq__`` compares
+        ``__pydantic_private__`` (which holds every ``PrivateAttr``,
+        including ``_cli_engine_overrides`` above) BEFORE it compares
+        fields. Two configs that are identical except for this
+        invocation's ``--set`` layer would therefore compare unequal —
+        a per-invocation carrier leaking into object identity. Comparing
+        ``self.__dict__`` (pydantic's field storage; private attrs live
+        separately in ``__pydantic_private__`` and are not part of it)
+        restores the intended semantics: same config, different
+        ``--set`` layer, still equal.
+        """
+        if type(other) is not type(self):
+            return NotImplemented
+        return self.__dict__ == other.__dict__
+
+    def __hash__(self) -> int:
+        """Restore hashability — defining ``__eq__`` sets ``__hash__`` to
+        ``None`` on any class, frozen or not. Hashes exactly the fields
+        ``__eq__`` compares (``self.__dict__``, private attrs excluded),
+        via a recursive freeze since several nested config models carry
+        plain ``dict``/``list`` fields that are not directly hashable.
+        """
+        return hash((type(self), _freeze_for_hash(self.__dict__)))
+
     @field_validator("checkpoint_root")
     @classmethod
     def _validate_checkpoint_root(cls, v: str | None) -> str | None:
@@ -1643,11 +1629,10 @@ class AqueductConfig(BaseModel):
         ``engine.spark.master_url`` (the pre-2.0 ``deployment.master_url``).
         Only meaningful for ``deployment.engine == "spark"`` — a non-Spark
         engine has no cluster master to validate against a target shape.
-        Remote-submit targets (emr/dataproc) and the databricks-block
-        requirement are handled in ``DeploymentConfig._validate_engine``,
-        which runs first (field-level validators run before this
-        model-level one) and already rejects/accepts those independent of
-        master_url.
+        Remote-submit targets (emr/dataproc) are handled in
+        ``DeploymentConfig._validate_engine``, which runs first (field-level
+        validators run before this model-level one) and already
+        rejects/accepts those independent of master_url.
         """
         if self.deployment.engine != "spark":
             return self
@@ -1655,7 +1640,7 @@ class AqueductConfig(BaseModel):
         target = self.deployment.target
         master = self.engine.spark.master_url
 
-        if target in ("databricks", "emr", "dataproc"):
+        if target in ("emr", "dataproc"):
             return self  # handled by DeploymentConfig._validate_engine
 
         _EXPECTED: dict[str, str] = {

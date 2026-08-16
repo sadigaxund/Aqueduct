@@ -1,8 +1,9 @@
-import duckdb
 import json
+from pathlib import Path
+
+import duckdb
 from rich.console import Console
 from rich.table import Table
-from pathlib import Path
 
 console = Console()
 
@@ -121,12 +122,12 @@ def _show_data_freshness(payload: dict):
     console.print(t)
 
 
-def _show_partition_stats(payload: dict):
+def _show_execution_partitions(payload: dict):
     num_parts = payload.get("num_partitions", None)
     console.print(
-        f"[bold blue]Partition Stats:[/bold blue] {num_parts} partition(s)"
+        f"[bold blue]Execution Partitions:[/bold blue] {num_parts} partition(s)"
         if num_parts
-        else "[dim]Partition Stats: (none)[/dim]"
+        else "[dim]Execution Partitions: (none)[/dim]"
     )
 
 
@@ -138,7 +139,7 @@ _SIGNAL_DISPLAY = {
     "value_distribution": _show_value_distribution,
     "distinct_count": _show_distinct_count,
     "data_freshness": _show_data_freshness,
-    "partition_stats": _show_partition_stats,
+    "execution_partitions": _show_execution_partitions,
 }
 
 

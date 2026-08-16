@@ -12,7 +12,7 @@ discipline ``assert_.py``'s module docstring explains in full (small
 engine-agnostic pieces are copied by hand rather than reaching across the
 Spark/DuckDB boundary).
 
-Signal coverage — 8 of Spark's 9 built-ins, plus ``custom``. ``partition_stats``
+Signal coverage — 8 of Spark's 9 built-ins, plus ``custom``. ``execution_partitions``
 is the one deliberate omission: DuckDB is single-process with no partition
 concept to report (see the dispatcher's dedicated warning below) — an
 "unsupported signal type" is not the same state as "unknown signal type" and
@@ -43,7 +43,7 @@ relation?", not "does it call a Spark action?"):
   data_freshness        One pass (``MAX(column)`` aggregate, optionally
                         sampled). Gated by ``block_full_actions`` unless
                         ``allow_sample: true``.
-  partition_stats       Not implemented — see above. Never gated (there is
+  execution_partitions  Not implemented — see above. Never gated (there is
                         nothing to run).
   threshold             One pass (SQL aggregate boolean expression,
                         transpiled from Spark SQL). Never gated — same as
@@ -60,7 +60,7 @@ Config shape (YAML / dict) — identical to Spark's; see
 ``aqueduct/executor/spark/probe.py``'s module docstring for the full
 per-signal-type key reference. Not repeated here to avoid the two drifting;
 the only behavioural difference from that reference is ``row_count_estimate``
-(exact here, not an estimate) and the absence of ``partition_stats``.
+(exact here, not an estimate) and the absence of ``execution_partitions``.
 """
 
 from __future__ import annotations
@@ -673,9 +673,9 @@ def execute_probe(
                             block_full_actions=block_full_actions,
                             sampling=sampling,
                         )
-                    elif sig_type == "partition_stats":
+                    elif sig_type == "execution_partitions":
                         # Deliberate backstop, not the primary guard (Pass G2):
-                        # `probe.signal.partition_stats` is now a governed
+                        # `probe.signal.execution_partitions` is now a governed
                         # `unsupported` capability leaf on this engine
                         # (capabilities.yml), so a Blueprint compiled through
                         # the normal `compile()` path is refused at COMPILE
@@ -689,13 +689,13 @@ def execute_probe(
                         # confirming every `execute_probe` call site is
                         # gate-checked first.
                         logger.warning(
-                            "[runtime_probe_signal_unsupported] Probe %r: partition_stats has no "
+                            "[runtime_probe_signal_unsupported] Probe %r: execution_partitions has no "
                             "DuckDB equivalent (single-process engine, no partition concept); skipping.",
                             module.id,
                         )
                         _add_module_warning(
                             "runtime_probe_signal_unsupported",
-                            f"Probe {module.id!r}: partition_stats has no DuckDB equivalent "
+                            f"Probe {module.id!r}: execution_partitions has no DuckDB equivalent "
                             "(no partition concept); skipping.",
                         )
                         continue

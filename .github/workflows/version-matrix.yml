@@ -14,7 +14,7 @@ jobs:
   # compat checks, not per-push unit checks. The suite keeps the fast
   # parse/compile `gallery-tests` guard for branch pushes.
   #
-  # CANARY LANE (Phase 78): `pip install -e ".[dev,spark,llm]"` below installs
+  # CANARY LANE (Phase 78): `pip install -e ".[dev,spark,duckdb]"` below installs
   # UNPINNED latest dependency versions — the opposite of the `compat` job's
   # 3 pinned combos. It exists to catch a breaking upstream release early
   # (e.g. it once pulled unreleased pandas 3.0/numpy 2.5 and broke snippet 28)
@@ -58,7 +58,7 @@ jobs:
       # snippet 05_channel_sql_udf's Python UDF hits DuckDB's
       # conn.create_function(), which requires numpy unconditionally (see
       # pyproject.toml's [duckdb] extra comment).
-      - run: pip install -e ".[dev,spark,llm,duckdb]"
+      - run: pip install -e ".[dev,spark,duckdb]"
       - run: bash scripts/run_snippets.sh -e ${{ matrix.engine }}
 
   # BLOCKING snippet lane (Phase 78) — the PROMISE-lane counterpart to the
@@ -115,7 +115,7 @@ jobs:
           java-version: '17'
       # duckdb extra pulls numpy — see the snippets canary job's identical
       # comment above; this BLOCKING lane runs the same engine matrix.
-      - run: pip install -e ".[dev,spark,llm,duckdb]"
+      - run: pip install -e ".[dev,spark,duckdb]"
       - run: bash scripts/run_snippets.sh -e ${{ matrix.engine }}
 
   # PROMISE LANES (Phase 78): the 3 pinned combos below (LTS / Latest / Legacy)
@@ -390,6 +390,29 @@ jobs:
               f.write(result)
           print("compatibility.md updated")
           PYEOF
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Regenerate ENGINE_MATRIX
+        # The COMPAT_RESULTS region was just regenerated above by hand; this
+        # is the OTHER generated region of docs/compatibility.md
+        # (ENGINE_MATRIX_START/END) — derived from each engine's
+        # capabilities.yml via `aqueduct dev capabilities docs`. Without this
+        # step the Verify step below only ever catches a stale COMPAT_RESULTS
+        # table; a stale ENGINE_MATRIX (an engine's capabilities.yml changed
+        # but nobody ran `aqueduct dev capabilities docs` locally) would
+        # `git diff --quiet` clean and merge undetected — `docs` was
+        # previously invoked only inside this workflow's own error message,
+        # never actually run by any workflow. `[dev]` only, same extra
+        # test-suite.yml's `capabilities-tests` job uses for
+        # `aqueduct dev capabilities check` — capability-tooling walks each
+        # engine's `capabilities.yml` file directly, it does not need
+        # pyspark/duckdb installed to read them.
+        run: |
+          pip install -e ".[dev]"
+          aqueduct dev capabilities docs
 
       - name: Verify the committed matrix is current
         # CI must NEVER write to `main`. This step used to `git commit && git

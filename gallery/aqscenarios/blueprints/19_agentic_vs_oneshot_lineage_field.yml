@@ -1,0 +1,61 @@
+aqueduct: "1.0"
+id: pipeline
+name: Pipeline
+# Defect (for scenario 19): raw_orders genuinely HAS a region_id column, but
+# stage_orders' explicit SELECT list drops it (only order_id/cust_id/amount/
+# order_time survive the projection). enrich_orders then joins on
+# stage_orders.region_id, which does not exist there — the column exists two
+# hops upstream, not one. Spark's own "Did you mean" suggestion list is drawn
+# from stage_orders' actual resolved schema, so it never mentions region_id
+# at all: the fix is not a rename from the suggestion list, it is threading
+# a genuinely-existing upstream column through an intermediate module's
+# projection. Root-causing this requires seeing the WHOLE blueprint, not
+# just the failing module's immediate (pruned) context — the intended A/B
+# scenario for oneshot vs agentic-mode healing (see the .aqscenario.yml
+# description for how the mode is selected).
+modules:
+  - id: raw_orders
+    type: Ingress
+    label: Raw Orders
+    config:
+      format: csv
+      path: data/input/orders.csv
+  - id: stage_orders
+    type: Channel
+    label: Stage Orders
+    config:
+      op: sql
+      query: |
+        SELECT
+          order_id,
+          cust_id,
+          amount,
+          order_ts AS order_time
+        FROM raw_orders
+  - id: regions_raw
+    type: Ingress
+    label: Raw Regions
+    config:
+      format: csv
+      path: data/input/regions.csv
+  - id: enrich_orders
+    type: Channel
+    label: Enrich Orders With Region
+    config:
+      op: sql
+      query: |
+        SELECT
+          o.order_id,
+          o.cust_id,
+          o.amount,
+          o.order_time,
+          r.region_name
+        FROM stage_orders o
+        JOIN regions_raw r ON o.region_id = r.region_id
+edges:
+  - from: raw_orders
+    to: stage_orders
+  - from: stage_orders
+    to: enrich_orders
+  - from: regions_raw
+    to: enrich_orders

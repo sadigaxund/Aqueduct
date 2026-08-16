@@ -1,0 +1,66 @@
+# blueprint.yml
+# agent.guardrails demo, shipped in its HEALED state (this is what
+# `aqueduct run` in CI exercises). `blueprint_bugged.yml` carries the
+# deliberate bug (wrong column name in `enrich`'s query) the README's
+# `sample_patches/` walkthrough is built around — see the README for the
+# reader flow. The guardrails block below constrains what ANY patch
+# (LLM-authored or hand-authored) is allowed to do to this Blueprint,
+# enforced deterministically at apply time. See sample_patches/ and the
+# README for three patches that exercise it.
+
+aqueduct: "1.0"
+id: guardrails_demo
+name: "Agent Guardrails"
+
+agent:
+  approval: human
+  guardrails:
+    # PatchSpec op names blocked outright, regardless of what they'd do.
+    forbidden_ops:
+      - insert_module
+      - remove_module
+    # fnmatch patterns checked against the RESOLVED value of any `path` or
+    # `output_path` config key a patch writes (not a filesystem check, a
+    # string match against what the Blueprint would end up saying). Only
+    # `data/output/*` is writable via a patch; a patch that tries to point
+    # Egress somewhere else is rejected before it ever touches disk.
+    allowed_paths:
+      - "data/output/*"
+    # Pre-trigger guard (checked before the LLM is even called): only fire
+    # healing on a Spark analysis failure, never on an infra/permission error.
+    heal_on_errors:
+      - AnalysisException
+    never_heal_errors:
+      - PermissionError
+
+modules:
+  - id: raw_orders
+    label: "Raw Orders"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/orders.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: enrich
+    label: "Enriched Orders"
+    type: Channel
+    config:
+      op: sql
+      # Healed: 'total_amt' is the real column (blueprint_bugged.yml has the
+      # original 'total' typo the README's guardrails walkthrough exercises).
+      query: "SELECT order_id, customer, amount, total_amt * 1.1 AS total_with_tax FROM raw_orders"
+
+  - id: output
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/orders.parquet
+      mode: overwrite
+
+edges:
+  - from: raw_orders
+    to: enrich
+  - from: enrich
+    to: output

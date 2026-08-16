@@ -10,9 +10,10 @@ to keep benchmark history disjoint from per-blueprint observability rows.
 The two stores have no foreign-key relationship — benchmark runs are not
 tied to a real ``run_id``.
 
-The store is intentionally lightweight: one table, no migrations beyond
-``CREATE TABLE IF NOT EXISTS``, no schema versioning. Add migration scaffolding
-here only if a future column needs back-population for existing rows.
+The store is intentionally lightweight: one table. ``CREATE TABLE IF NOT
+EXISTS`` covers fresh installs; existing stores get new columns via the
+idempotent ``_BENCHMARK_RESULTS_MIGRATIONS`` ALTER tuple below (see
+``aqueduct/surveyor/ddl.py``'s schema-evolution rule for the full rationale).
 """
 
 from __future__ import annotations
@@ -57,13 +58,27 @@ CREATE TABLE IF NOT EXISTS benchmark_results (
     stop_reason         VARCHAR,
     escalated           BOOLEAN,
     tokens_in_total     INTEGER,
-    tokens_out_total    INTEGER
+    tokens_out_total    INTEGER,
+    -- Phase 84 — why a scenario declined to produce a patch, and whether the
+    -- production engine-config gate passed for it. See the migrations tuple
+    -- below: pre-existing stores gain these via ALTER, not just this CREATE.
+    refusal             VARCHAR,
+    engine_config_gate  VARCHAR
 );
 CREATE INDEX IF NOT EXISTS idx_benchmark_triple
     ON benchmark_results (scenario_id, model, prompt_version, recorded_at);
 CREATE INDEX IF NOT EXISTS idx_benchmark_model_passed
     ON benchmark_results (model, passed);
 """
+
+# Schema-evolution rule (see aqueduct/surveyor/ddl.py's comment for the full
+# rationale): CREATE TABLE IF NOT EXISTS never adds columns to an existing
+# table, so a new column needs an idempotent ALTER migration too. Applied in
+# both the DuckDB path (_connect) and the Postgres path (BenchmarkStore.cursor).
+_BENCHMARK_RESULTS_MIGRATIONS: tuple[str, ...] = (
+    "ALTER TABLE benchmark_results ADD COLUMN IF NOT EXISTS refusal VARCHAR",
+    "ALTER TABLE benchmark_results ADD COLUMN IF NOT EXISTS engine_config_gate VARCHAR",
+)
 
 
 def default_store_path(scenarios_dir: Path) -> Path:
@@ -86,13 +101,14 @@ def default_store_path(scenarios_dir: Path) -> Path:
 def _connect(store_path: Path):
     """Open a DuckDB connection, creating the parent dir + DDL on first use.
 
-    2.0 assumes a fresh store — the CREATE TABLE declares every column, so there
-    are no additive ALTER migrations (a pre-2.0 benchmark DB must be recreated)."""
+    Existing stores are migrated in place — see _BENCHMARK_RESULTS_MIGRATIONS."""
     import duckdb
 
     store_path.parent.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect(str(store_path))
     con.execute(_BENCHMARK_DDL)
+    for _migration in _BENCHMARK_RESULTS_MIGRATIONS:
+        con.execute(_migration)
     return con
 
 
@@ -152,7 +168,9 @@ class BenchmarkStore:
             from aqueduct.stores.postgres import _pg_relational
 
             with _pg_relational(self.location, self.schema) as cur:
-                cur.execute(_BENCHMARK_DDL)  # 2.0: CREATE has all columns, no ALTER migrations
+                cur.execute(_BENCHMARK_DDL)
+                for _migration in _BENCHMARK_RESULTS_MIGRATIONS:
+                    cur.execute(_migration)
                 yield cur
         elif self.backend == "duckdb":
             con = _connect(Path(self.location))
@@ -212,8 +230,9 @@ def persist_results(
                             confidence, duration_seconds, attempts_to_parse,
                             diag_score, root_cause_match, category_match,
                             failures, soft_failures, violated_guardrails,
-                            stop_reason, escalated, tokens_in_total, tokens_out_total
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            stop_reason, escalated, tokens_in_total, tokens_out_total,
+                            refusal, engine_config_gate
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         [
                             str(uuid.uuid4()),
@@ -239,6 +258,8 @@ def persist_results(
                             getattr(r, "escalated", False),
                             int(getattr(r, "tokens_in_total", 0) or 0),
                             int(getattr(r, "tokens_out_total", 0) or 0),
+                            getattr(r, "refusal", None),
+                            getattr(r, "engine_config_gate", None),
                         ],
                     )
                     written += 1

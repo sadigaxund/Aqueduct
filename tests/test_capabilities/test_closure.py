@@ -20,6 +20,7 @@ nor the declaration it imports pulls in pyspark itself (verified below).
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -74,6 +75,12 @@ def _engine_of(path: Path) -> str:
 def _verdict_of(row) -> str:
     """A row is either a bare verdict string or a mapping with `support:`."""
     return row if isinstance(row, str) else (row or {}).get("support", "")
+
+
+def _hint_of(row) -> str:
+    """A row's `hint:` text, or "" for a bare verdict string / a mapping with
+    no hint. Never reads YAML comments — only the parsed field value."""
+    return "" if isinstance(row, str) else str((row or {}).get("hint") or "")
 
 
 pytestmark = pytest.mark.unit
@@ -194,6 +201,39 @@ def test_every_verdict_key_is_a_real_leaf(decl_path):
         f"{decl_path.name} declares capability verdicts for leaf ids that don't exist in "
         f"the grammar or config schema: {orphaned}. Likely a typo, or a leaf that was "
         "renamed/removed without updating the declaration."
+    )
+
+
+_PHASE_ARTEFACT_RE = re.compile(r"Phase [0-9]|Sprint [0-9]|Task [0-9]")
+
+
+@pytest.mark.parametrize("decl_path", _DECLARATIONS, ids=[p.parent.name for p in _DECLARATIONS])
+def test_hints_carry_no_phase_artefacts(decl_path):
+    """`hint:` VALUES render verbatim into the generated capability matrix in
+    ``docs/compatibility.md`` (AGENTS.md's Change-Trigger Matrix, "A source
+    field that RENDERS INTO a user-facing surface is itself user-facing") —
+    a user-facing surface the repo-wide
+    ``grep -rnE "Phase [0-9]|Sprint [0-9]|Task [0-9]"`` sweep never scans,
+    because it does not touch ``aqueduct/``. A hint reading e.g. "unsupported
+    until Phase 81" would reach users through that generated matrix with no
+    guard catching it.
+
+    This checks only the PARSED `hint:` field value, never the raw YAML text
+    — the same declarations legitimately carry `# Phase NN —` provenance
+    comments elsewhere (per AGENTS.md, source-code comments/docstrings are
+    exempt), and a raw-text scan would flag those false positives.
+    """
+    rows = _declared_rows(decl_path)
+    offenders = {
+        leaf: hint
+        for leaf, row in rows.items()
+        if (hint := _hint_of(row)) and _PHASE_ARTEFACT_RE.search(hint)
+    }
+    assert not offenders, (
+        f"{_engine_of(decl_path)} ({decl_path.name}) has phase/sprint/task artefacts in "
+        f"`hint:` VALUES: {offenders}. hint: text renders verbatim into the generated "
+        "docs/compatibility.md matrix — a user-facing surface. Write hints as a durable "
+        "statement of what the engine does or does not do, never as a schedule."
     )
 
 

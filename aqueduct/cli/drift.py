@@ -118,7 +118,7 @@ def drift(
     obs = open_obs_write(cfg, manifest.blueprint_id, store_dir)
     drift_store.ensure_schema(obs)
 
-    manifest_json = _json.dumps(manifest.to_dict())
+    manifest_json = _json.dumps(manifest.to_dict(), ensure_ascii=False)
 
     # ── Spark session (metadata-only reads — no actions) ───────────────────────
     from aqueduct.executor.session_config import resolve_session_engine_config

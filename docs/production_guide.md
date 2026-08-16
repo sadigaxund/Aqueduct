@@ -4,6 +4,26 @@
 
 ---
 
+## Supported vendor boundary
+
+What Aqueduct supports in production, and what it does not.
+
+**In scope:**
+
+- **Airflow** as the scheduler shim (`AqueductOperator`, `AqueductPatchSensor`/`AqueductPatchTrigger`). See [Scheduling](#scheduling).
+- **JDBC, ingress only**, as a Spark passthrough to `DataFrameReader.format("jdbc")`, with a Postgres-only auth preflight in `aqueduct doctor --preflight`. There is no JDBC egress; see [Retry idempotency](#retry-idempotency-half-write-exposure-by-module).
+- **Postgres** as an observability/depot store backend (`stores.*.backend: postgres`).
+- **Delta, Iceberg, and Hudi** table format maintenance on Spark (`OPTIMIZE`/`VACUUM`/`ZORDER`, `expire_snapshots`, compaction/cleanup). See [Delta Lake operational notes](#delta-lake-operational-notes).
+
+**Out of scope:**
+
+- **Databricks remote-submit deployment.** Removed from this release; Databricks is no longer a supported `deployment.target`.
+- **Spark Connect** (`spark.remote(...)`). Several call sites depend on classic-session internals (`SparkContext`, `_jdf`) and degrade gracefully rather than working under a Connect session. Revisit if Connect becomes the default batch path; see the roadmap.
+- **MotherDuck.** No support, and no code trace, for MotherDuck-hosted DuckDB.
+- **Delta write on DuckDB.** DuckDB has no Delta writer; every Delta write leaf is `unsupported` on that engine. Implementable via `delta-rs`; see the roadmap for the deferred design.
+
+---
+
 ## Deployment environments
 
 Aqueduct supports three deployment environments, declared under the `deployment:` block in `aqueduct.yml`:
@@ -38,15 +58,13 @@ Aqueduct creates a `SparkSession` on the driver. Cluster connection is controlle
 
 The `target` field is validated against `engine.spark.master_url` at config-load. A
 mismatch raises a `ConfigError` naming both values and the expected shape.
-`databricks` is a fully wired **remote‑submit** target, the engine packages
-the blueprint, uploads to DBFS, submits via the Databricks Jobs API, and
-polls to completion. `emr` and `dataproc` are rejected, they require a
+`emr` and `dataproc` are rejected, they require a
 packaging/submit layer planned for a future release.
 
 ```yaml
 deployment:
   env: cluster
-  target: standalone                   # local | standalone | yarn | kubernetes | databricks | emr | dataproc
+  target: standalone                   # local | standalone | yarn | kubernetes | emr | dataproc
 
 engine:
   spark:
@@ -598,10 +616,11 @@ Without `OPTIMIZE`, incremental pipelines using `mode: append` or `mode: merge` 
 | `format: delta`, any mode | **Safe** | Delta commits are atomic: a failed write never leaves a partial commit visible to readers; a retry either fully lands or fully doesn't. |
 | `parquet` / `csv`, `mode: overwrite` | **Safe-ish** | A retry rewrites the entire target from scratch, so a half-written file from the failed attempt is simply overwritten. Not atomic mid-write (a concurrent reader could see a torn file), but idempotent across retries. |
 | `parquet` / `csv`, `mode: append` | **NOT SAFE** | The failed attempt may have already appended some files before failing. A retry appends again, the rows already written are duplicated, not replaced. This is what the compiler's [`delivery_append_retry_dupes`](spark_guide.md#delivery-append-retry-dupes) warning flags. |
-| `format: jdbc`, `mode: append` | **NOT SAFE** | Same failure mode as parquet/csv append: a partially committed batch of rows leaves duplicates on retry. JDBC has no cross-statement atomicity guarantee here. |
 | `mode: merge` (Delta `MERGE INTO`) | **Idempotent by construction** | A MERGE keyed on a stable match condition re-applies safely, matched rows update in place, unmatched rows insert once, regardless of how many times the same batch is retried. |
 
-**Guidance:** if a pipeline needs transactional, retry-safe appends, use Delta (`format: delta`, `mode: append` or `mode: merge`) rather than parquet/csv/JDBC append. If you must retry a parquet/csv/JDBC-append pipeline, prefer `max_attempts: 1` with orchestrator-level retry handling that can dedup downstream, or switch the sink to `mode: overwrite` for full-refresh outputs only (never on an incremental sink, it destroys history).
+JDBC is ingress-only in Aqueduct (a Spark `DataFrameReader.format("jdbc")` passthrough); there is no JDBC egress, so it has no row in this table.
+
+**Guidance:** if a pipeline needs transactional, retry-safe appends, use Delta (`format: delta`, `mode: append` or `mode: merge`) rather than parquet/csv append. If you must retry a parquet/csv-append pipeline, prefer `max_attempts: 1` with orchestrator-level retry handling that can dedup downstream, or switch the sink to `mode: overwrite` for full-refresh outputs only (never on an incremental sink, it destroys history).
 
 ---
 
@@ -609,50 +628,18 @@ Without `OPTIMIZE`, incremental pipelines using `mode: append` or `mode: merge` 
 
 `emr` and `dataproc` are **rejected at config‑load** in the current
 release. Setting `deployment.target` to either of these two values raises
-a `ConfigError`. `databricks` is the sole supported remote‑submit target
-(see below).
-
-The sections below (Databricks E2E, EMR, Dataproc) are forward‑looking
-reference for EMR/Dataproc; the Databricks sections are fully wired.
-
-### Databricks
-
-**Prerequisites.** `aqueduct-core[databricks]` (optional SDK) or plain `httpx` (already a base dep). The Databricks cluster must have `aqueduct-core[spark]` installed as a library (pypi or init script).
-
-**Configuration.** Add a `deployment.databricks` block to `aqueduct.yml`:
-
-```yaml
-deployment:
-  target: databricks
-  databricks:
-    workspace_url: "https://dbc-xxxx.cloud.databricks.com"
-    cluster_id: "0123-456789-abcdefgh"          # existing cluster — mutually exclusive with new_cluster
-    max_concurrent_runs: 1                      # max parallel job runs submitted by this pipeline (default 1)
-    # new_cluster:                               # one-shot cluster spec per Jobs API
-    #   spark_version: "15.3.x-scala2.12"
-    #   node_type_id: "i3.xlarge"
-    #   num_workers: 4
-    # libraries:                                 # optional — pypi libraries installed on the job cluster
-    #   - pypi:
-    #       package: "aqueduct-core[spark]"
-    #   - pypi:
-    #       package: "delta-spark"
-```
-
-**Credentials.** Set `DATABRICKS_TOKEN` in the submitting environment or reference it via `@aq.secret('DATABRICKS_TOKEN')` in the Blueprint context. The token is never placed in `aqeduct.yml` plaintext.
-
-**Execution flow.**
-1. `aqueduct run blueprint.yml` on the submitting machine
-2. Blueprint + `aqeduct.yml` + bootstrap script uploaded to `dbfs:/aqueduct/jobs/<run_id>/`
-3. `POST /api/2.1/jobs/runs/submit` with a `spark_python_task` running `aqueduct run dbfs:/.../blueprint.yml`
-4. The local CLI polls `GET /api/2.1/jobs/runs/get` with exponential backoff (5s → 60s cap)
-5. On success, exit `0`; on failure, exit `DATA_OR_RUNTIME(2)` with remote driver logs printed
-
-**Doctor check.** `aqueduct doctor` includes a `remote-target` check, it verifies the workspace URL is reachable and a `DATABRICKS_TOKEN` is set. Status: `fail` (non-blocking, `run_doctor` continues to subsequent checks).
+a `ConfigError`. There is no built‑in remote‑submit target today.
 
 ### EMR / Dataproc
 
 Deferred. These targets raise `NotImplementedError` at runtime. They will reuse the existing `aws` / `gcp` extras for their submit clients when implemented.
+
+### Databricks
+
+Databricks is not a built-in deployment target. Run Aqueduct on Databricks by
+wrapping `aqueduct run` in a Databricks Workflows `spark_python_task` — the
+task calls `aqueduct run blueprint.yml` like any other environment, and
+Databricks owns scheduling, retries, and cluster lifecycle.
 
 ## Production readiness checklist
 

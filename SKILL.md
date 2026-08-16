@@ -330,7 +330,7 @@ Rule types: `schema_match | not_null | min_rows | max_rows | null_rate | freshne
       - { type: schema_snapshot }   # zero-cost (SparkListener)
       - { type: row_count_estimate }
 ```
-Signal types: `schema_snapshot | row_count_estimate | null_rates | sample_rows | value_distribution | distinct_count | data_freshness | partition_stats | threshold | custom`. Runs on both engines except `partition_stats` (Spark-only — no partition concept on DuckDB). Sample-based signals (`null_rates`, `value_distribution`, `distinct_count`, `data_freshness`) need `danger.allow_full_probe_actions: true` in `aqueduct.yml` on either engine. `row_count_estimate` is sampled on Spark but an EXACT count on DuckDB (parquet footer or `COUNT(*)`, never gated by `allow_full_probe_actions` there). Probes attach by `attach_to`, not edges — a `from:` edge off a Probe on any port but `signal` is a `CompileError`. `type: custom` → `module:`+`entry:` pointer (mirrors the UDF contract) resolves against a sibling `.py` file next to the blueprint before falling back to a normal import; never inline code.
+Signal types: `schema_snapshot | row_count_estimate | null_rates | sample_rows | value_distribution | distinct_count | data_freshness | execution_partitions | threshold | custom`. Runs on both engines except `execution_partitions` (Spark-only — no partition concept on DuckDB). Sample-based signals (`null_rates`, `value_distribution`, `distinct_count`, `data_freshness`) need `danger.allow_full_probe_actions: true` in `aqueduct.yml` on either engine. `row_count_estimate` is sampled on Spark but an EXACT count on DuckDB (parquet footer or `COUNT(*)`, never gated by `allow_full_probe_actions` there). Probes attach by `attach_to`, not edges — a `from:` edge off a Probe on any port but `signal` is a `CompileError`. `type: custom` → `module:`+`entry:` pointer (mirrors the UDF contract) resolves against a sibling `.py` file next to the blueprint before falling back to a normal import; never inline code.
 
 ### Regulator — gate driven by a Probe `signal` edge
 ```yaml
@@ -428,6 +428,7 @@ agent:
   prompt_context: "Amounts are cents; never cast to INT."   # author hints to the healer
   guardrails:
     allowed_paths: ["s3a://my-bucket/**"]
+    deny_patterns: ["s3a://my-bucket/prod/**"]   # evaluated AFTER allowed_paths; subtract-only
     forbidden_ops: [remove_module, insert_module]
   sandbox_mode: sample        # sample|preflight|off — how patches are pre-validated
   mode: oneshot                # oneshot (default) | agentic — agentic lets the model call read-only diagnostic tools before answering

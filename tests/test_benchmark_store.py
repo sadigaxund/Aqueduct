@@ -753,3 +753,115 @@ def test_persist_results_writes_phase34_columns(tmp_path):
 
     assert rows[0] == ("s1", StopReason.STUCK_SIGNATURE, True, 100, 50)
     assert rows[1] == ("s2", None, False, 0, 0)
+
+
+# ── Phase 84 migrations: refusal, engine_config_gate ────────────────────────
+
+
+def test_benchmark_migration_phase84_new_store(tmp_path):
+    """Fresh store DDL includes refusal and engine_config_gate."""
+    store_path = tmp_path / "bench.duckdb"
+    con = _connect(store_path)
+    cols = con.execute(
+        "SELECT column_name FROM information_schema.columns WHERE table_name='benchmark_results'"
+    ).fetchall()
+    con.close()
+
+    cnames = [c[0] for c in cols]
+    assert "refusal" in cnames
+    assert "engine_config_gate" in cnames
+
+
+def test_benchmark_migration_phase84_old_shaped_table_gains_columns(tmp_path):
+    """An OLD-shaped table (created without refusal/engine_config_gate — as a
+    pre-2.1 benchmark DB would be) gains both columns on open, without losing
+    existing rows. This is the regression test for the migration itself, not
+    just for a fresh CREATE TABLE (which already declares every column)."""
+    store_path = tmp_path / "bench.duckdb"
+    old_con = duckdb.connect(str(store_path))
+    old_con.execute(
+        """
+        CREATE TABLE benchmark_results (
+            id                  VARCHAR PRIMARY KEY,
+            recorded_at         VARCHAR NOT NULL,
+            scenario_id         VARCHAR NOT NULL,
+            model               VARCHAR NOT NULL,
+            prompt_version      VARCHAR,
+            provider            VARCHAR,
+            base_url            VARCHAR,
+            passed              BOOLEAN NOT NULL,
+            patch_valid         BOOLEAN NOT NULL,
+            patch_applies       BOOLEAN NOT NULL,
+            confidence          DOUBLE PRECISION,
+            duration_seconds    DOUBLE PRECISION,
+            attempts_to_parse   INTEGER,
+            diag_score          DOUBLE PRECISION,
+            root_cause_match    BOOLEAN,
+            category_match      BOOLEAN,
+            failures            JSON,
+            soft_failures       JSON,
+            violated_guardrails JSON,
+            stop_reason         VARCHAR,
+            escalated           BOOLEAN,
+            tokens_in_total     INTEGER,
+            tokens_out_total    INTEGER
+        )
+        """
+    )
+    old_con.execute(
+        "INSERT INTO benchmark_results (id, recorded_at, scenario_id, model, passed, "
+        "patch_valid, patch_applies) VALUES ('r1', '2026-01-01T00:00:00', 's1', 'm1', "
+        "true, true, true)"
+    )
+    old_con.close()
+
+    con = _connect(store_path)
+    cnames = [
+        c[0]
+        for c in con.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name='benchmark_results'"
+        ).fetchall()
+    ]
+    assert "refusal" in cnames
+    assert "engine_config_gate" in cnames
+
+    row = con.execute(
+        "SELECT id, refusal, engine_config_gate FROM benchmark_results WHERE id = 'r1'"
+    ).fetchone()
+    con.close()
+    assert row == ("r1", None, None)  # pre-existing row preserved, new columns NULL
+
+
+def test_benchmark_migration_phase84_idempotent(tmp_path):
+    """Migration is idempotent — second _connect does not re-issue the ALTERs."""
+    store_path = tmp_path / "bench.duckdb"
+    con1 = _connect(store_path)
+    con1.close()
+
+    con2 = _connect(store_path)
+    cols = con2.execute(
+        "SELECT COUNT(*) FROM information_schema.columns "
+        "WHERE table_name='benchmark_results' AND column_name='refusal'"
+    ).fetchone()[0]
+    con2.close()
+
+    assert cols == 1
+
+
+def test_persist_results_writes_phase84_columns(tmp_path):
+    """persist_results writes refusal and engine_config_gate from ScenarioResult."""
+    store_path = tmp_path / "bench.duckdb"
+    r_full = _make_result("s1", "m1")
+    r_full.refusal = "guardrail"
+    r_full.engine_config_gate = "fail"
+
+    results = {"s1": {"m1": r_full}}
+    persist_results(results, store_path)
+
+    con = duckdb.connect(str(store_path))
+    row = con.execute(
+        "SELECT refusal, engine_config_gate FROM benchmark_results WHERE scenario_id = 's1'"
+    ).fetchone()
+    con.close()
+
+    assert row == ("guardrail", "fail")

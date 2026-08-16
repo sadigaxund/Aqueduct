@@ -23,7 +23,7 @@
 # Q4 STEP 2 (see AGENTS.md + docs/specs.md §10.9): the CHECKLIST below only
 # ever lists ENGINE-SCOPED `config.*` leaves (those genuinely dispatch
 # through an engine — probes.*, metrics.use_observe, timezone,
-# checkpoint_root, deployment.target/databricks.*, handoff.root,
+# checkpoint_root, deployment.target, handoff.root,
 # agent.sandbox_master_url, agent.block_on_explain_regression,
 # danger.allow_full_probe_actions). CORE config leaves (config.webhooks.*,
 # config.secrets.*, config.stores.*, config.lineage.*, most of
@@ -71,19 +71,20 @@
 #             row_count_estimate is EXACT here (parquet footer for a direct
 #             Ingress tap, COUNT(*) otherwise), never an estimate — the
 #             Spark rationale for sampling it does not transfer to a
-#             single-node exact count. partition_stats stays unsupported —
+#             single-node exact count. execution_partitions stays unsupported —
 #             no partition concept on a single-process engine.
 #   Egress on_new_columns (Pass F): allow/alert/fail, implemented as a
 #             zero-scan LIMIT 0 metadata read against the existing target
 #             before write — see egress.py's _enforce_on_new_columns.
-#   Iceberg / Hudi / Kafka / custom DataSource / Databricks deployment: all
-#   Spark-specific, not applicable to DuckDB at all.
+#   Iceberg / Hudi / Kafka / custom DataSource: all Spark-specific, not
+#   applicable to DuckDB at all.
 #   Delta / JDBC / Depot ingress+egress, egress.mode.overwrite_partitions,
-#   feature.{delta_write,delta_time_travel,parallel_mode}: DEFERRED —
-#   implementable on DuckDB (delta-rs / postgres scanner / httpfs /
-#   per-thread cursor, see each leaf's hint) but deliberately left out of
-#   Stage A scope. Grouped in their own comment blocks below so the verdict
-#   flip is a one-line edit per leaf once a later stage picks one up.
+#   feature.{delta_write,delta_time_travel,parallel_mode}: DEFERRED, not
+#   architecturally blocked. See docs/roadmap.md "DuckDB: Delta, JDBC,
+#   Depot ingress/egress and related features" for the implementation path
+#   per leaf (delta-rs / postgres scanner / httpfs / per-thread cursor).
+#   Grouped in their own comment blocks below so the verdict flip is a
+#   one-line edit per leaf once a later stage picks one up.
 
 engine: duckdb
 
@@ -113,6 +114,7 @@ leaves:
   agent.field.sandbox_mode: supported
   agent.field.supports_tools: supported
   agent_guardrails.field.allowed_paths: supported
+  agent_guardrails.field.deny_patterns: supported
   agent_guardrails.field.forbidden_ops: supported
   agent_guardrails.field.heal_on_errors: supported
   agent_guardrails.field.never_heal_errors: supported
@@ -184,24 +186,9 @@ leaves:
       - tests/test_executor_duckdb/test_probe.py::test_config_danger_allow_full_probe_actions_gates_via_block_full_actions
       - tests/test_executor_duckdb/test_probe.py::test_row_count_estimate_not_gated_by_block_full_actions
       - tests/test_executor_duckdb/test_probe.py::test_threshold_not_gated_by_block_full_actions
-  config.deployment.databricks.cluster_id:
-    support: unsupported
-    hint: "single-node engine — schedule the container on one node. Databricks is a Spark deployment target."
-  config.deployment.databricks.libraries:
-    support: unsupported
-    hint: "single-node engine — schedule the container on one node. Databricks is a Spark deployment target."
-  config.deployment.databricks.max_concurrent_runs:
-    support: unsupported
-    hint: "single-node engine — schedule the container on one node. Databricks is a Spark deployment target."
-  config.deployment.databricks.new_cluster:
-    support: unsupported
-    hint: "single-node engine — schedule the container on one node. Databricks is a Spark deployment target."
-  config.deployment.databricks.workspace_url:
-    support: unsupported
-    hint: "single-node engine — schedule the container on one node. Databricks is a Spark deployment target."
   config.deployment.target:
     support: supported
-    hint: "DuckDB is a single-node engine — only target=local is meaningful. Remote-submit / cluster targets (databricks, emr, dataproc, yarn, kubernetes, standalone) have no DuckDB execution path; use the spark engine for those."
+    hint: "DuckDB is a single-node engine — only target=local is meaningful. Remote-submit / cluster targets (emr, dataproc, yarn, kubernetes, standalone) have no DuckDB execution path; use the spark engine for those."
   config.engine.duckdb.database_path:
     support: supported
     tests:
@@ -534,7 +521,7 @@ leaves:
       - tests/test_executor_duckdb/test_executor.py::test_module_type_junction_driven_through_execute
   module.type.Probe:
     support: supported
-    hint: "Pass F — 8 of Spark's 9 built-in signals (schema_snapshot, row_count_estimate, null_rates, sample_rows, value_distribution, distinct_count, data_freshness, threshold) plus custom, each a SQL aggregate/sample query or metadata read on the DuckDB relation (see duckdb_/probe.py). row_count_estimate is EXACT here, not an estimate. partition_stats stays unsupported — no partition concept on this engine (see feature parity note in duckdb_/probe.py); it emits its own dedicated runtime warning rather than silently doing nothing."
+    hint: "Pass F — 8 of Spark's 9 built-in signals (schema_snapshot, row_count_estimate, null_rates, sample_rows, value_distribution, distinct_count, data_freshness, threshold) plus custom, each a SQL aggregate/sample query or metadata read on the DuckDB relation (see duckdb_/probe.py). row_count_estimate is EXACT here, not an estimate. execution_partitions stays unsupported — no partition concept on this engine (see feature parity note in duckdb_/probe.py); it emits its own dedicated runtime warning rather than silently doing nothing."
     tests:
       - tests/test_executor_duckdb/test_probe.py::test_module_type_probe_driven_through_execute
       - tests/test_executor_duckdb/test_probe.py::test_regulator_gated_by_probe_threshold_end_to_end
@@ -907,9 +894,6 @@ leaves:
     tests:
       - tests/test_executor_duckdb/test_probe.py::test_null_rates_full_scan
       - tests/test_executor_duckdb/test_probe.py::test_null_rates_blocked_by_block_full_actions
-  probe.signal.partition_stats:
-    support: unsupported
-    hint: "DuckDB is a single-process, single-node engine with no partition concept to report — there is no analog to Spark's df.rdd.getNumPartitions(). A Probe declaring this signal against a DuckDB-executed Ingress/Channel is rejected at compile time instead of silently writing an empty/missing probe_signals row."
   probe.signal.row_count_estimate:
     support: supported
     hint: "EXACT on this engine (parquet-footer read for a direct Ingress tap, COUNT(*) otherwise) rather than a sampled estimate — see duckdb_/probe.py's module docstring; the field name and probe_signals schema stay identical to Spark's."
@@ -957,3 +941,27 @@ leaves:
       core (the cross-engine compile gate and the green-run stamps in
       patch/apply.py). The DuckDB executor never reads it; the keys a revert
       removes leave the resolved session config before `_make_session` runs.
+  probe.signal.execution_partitions:
+    support: unsupported
+    hint: "DuckDB is a single-process, single-node engine with no partition concept to report — there is no analog to Spark's df.rdd.getNumPartitions(). A Probe declaring this signal against a DuckDB-executed Ingress/Channel is rejected at compile time instead of silently writing an empty/missing probe_signals row."
+  egress.format.json:
+    support: supported
+    hint: "DuckDB writes JSON via COPY ... TO '<path>' (FORMAT JSON, ...) — newline-delimited JSON objects by default; options: {array: true} switches to a single JSON array, options: {compression: gzip} (or any DuckDB-recognised compression codec) is passed through, both mirroring the FORMAT JSON option vocabulary DuckDB itself accepts (disjoint from CSV's HEADER/DELIMITER and Parquet's per-column knobs)."
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_write_egress_json_overwrite
+      - tests/test_executor_duckdb/test_executor.py::test_write_egress_json_append_to_existing_target_unions_rows
+  egress.format.parquet:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_write_egress_parquet_overwrite
+  ingress.format.iceberg:
+    support: unsupported
+    hint: "Iceberg has no DuckDB Ingress reader implemented — reading a table's transaction log would require the iceberg DuckDB extension (ATTACH ... or the iceberg_scan table function); duckdb_/ingress.py dispatches only parquet/csv/json. Not implemented."
+  ingress.format.json:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_read_ingress_json
+  ingress.format.parquet:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_read_ingress_parquet
