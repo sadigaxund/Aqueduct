@@ -16,6 +16,12 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Fixed
+- Non-ASCII text (accented names, CJK labels, …) is no longer mangled into `\uXXXX` escapes at the 13 reader-facing `json.dumps()` call sites an LLM or a human actually reads (healing prompts, tool results, `patch list`/`run --show`/`doctor` output, the dashboard, archived patch bodies). Hash/fingerprint/HMAC sites are untouched.
+- `AqueductConfig.__eq__`/`__hash__` no longer compare the `_cli_engine_overrides` private attr, so two configs differing only by their `-s/--set` layer compare equal — closes a latent trap (no shipped call site compares config instances today).
+- `aqueduct patch list` serves TEXT output from `patch_index` instead of reading every patch body, when an observability store is available.
+- `.github/workflows/version-matrix.yml`'s Verify step now also regenerates `docs/compatibility.md`'s ENGINE_MATRIX region before diffing, so a stale table (an engine's `capabilities.yml` changed without a local `aqueduct dev capabilities docs` run) is caught instead of merging undetected.
+
 ## [2.1.0rc1] — 2026-08-15
 
 **Pre-release.** PEP 440 spelling, so `pip install aqueduct-core` SKIPS this
