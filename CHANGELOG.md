@@ -16,6 +16,11 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Fixed
+
+- `docs/roadmap.md` and `docs/compatibility.md` no longer claim Iceberg and Hudi table formats are "planned, not started" — both shipped, are declared `supported` on Spark, and run against real Maven-provisioned Iceberg/Hudi bundles in CI.
+- Removed the false claim that Aqueduct supports JDBC egress (`docs/roadmap.md`, `docs/production_guide.md`). JDBC is ingress-only, a Spark `DataFrameReader.format("jdbc")` passthrough; no `egress.format.jdbc` leaf exists on either engine and no JDBC writer exists.
+
 ## [2.1.0rc1] — 2026-08-15
 
 **Pre-release.** PEP 440 spelling, so `pip install aqueduct-core` SKIPS this
