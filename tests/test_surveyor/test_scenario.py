@@ -805,6 +805,23 @@ class TestTryApplyPatch:
         assert violated == []
         assert patched_dict is not None
 
+    def test_only_deny_patterns_is_recognized_as_guardrails(self, tmp_path):
+        # Regression: a blueprint that declares ONLY `deny_patterns` (no
+        # forbidden_ops/allowed_paths/heal_on_errors/never_heal_errors) must
+        # still be recognized as having guardrails, so `violated_guardrails`
+        # is `[]` (clean) rather than `None` (N/A). Deny is satisfied here
+        # since the patch's path doesn't match the deny pattern.
+        from aqueduct.surveyor.scenario import _try_apply_patch
+
+        bp_path = self._create_bp(tmp_path, "deny_patterns: [secrets/*]")
+        patch = self._make_patch("set_module_config_key", key="path", value="/new")
+
+        outcome = _try_apply_patch(patch, bp_path)
+
+        assert outcome.applied is True
+        assert outcome.violated_guardrails == []
+        assert outcome.patched_dict is not None
+
     def test_forbidden_ops_violation(self, tmp_path):
         from aqueduct.surveyor.scenario import _try_apply_patch
 

@@ -1148,12 +1148,16 @@ def _try_apply_patch(
         bp_raw = _yaml_load(blueprint_path)
 
         # Guardrail check — None when none declared, else list (empty = clean).
+        # Field set is DERIVED from `GuardrailsConfig` (not an inline literal)
+        # so a newly-added guardrail field is automatically recognized here
+        # instead of silently falling through as "no guardrails declared".
+        from dataclasses import fields as _dataclass_fields
+
+        from aqueduct.parser.models import GuardrailsConfig
+
         guardrails_block = (bp_raw.get("agent") or {}).get("guardrails") or {}
-        has_guardrails = bool(
-            guardrails_block.get("forbidden_ops")
-            or guardrails_block.get("allowed_paths")
-            or guardrails_block.get("heal_on_errors")
-            or guardrails_block.get("never_heal_errors")
+        has_guardrails = any(
+            guardrails_block.get(f.name) for f in _dataclass_fields(GuardrailsConfig)
         )
         violated: list[str] | None = [] if has_guardrails else None
         # Called UNCONDITIONALLY, even for a scenario blueprint that declares
