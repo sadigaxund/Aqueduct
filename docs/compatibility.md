@@ -34,8 +34,8 @@ Each engine declares a verdict for every capability leaf in a YAML data file shi
 
 | Engine | Leaves declared | Supported | Version-gated | Ignored with warning | Unsupported |
 |---|---|---|---|---|---|
-| `duckdb` | 319 | 259 | 0 | 4 | 56 |
-| `spark` | 311 | 310 | 7 | 0 | 1 |
+| `duckdb` | 314 | 259 | 0 | 4 | 51 |
+| `spark` | 306 | 305 | 7 | 0 | 1 |
 
 ### Conditional and refused capabilities
 
@@ -56,11 +56,6 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 | `duckdb` | `channel.op.repartition` | unsupported | — | op=repartition is a Spark physical-partition-count hint; DuckDB has no partition concept to repartition. Not applicable. |
 | `duckdb` | `config.agent.block_on_explain_regression` | unsupported | — | relies on the Spark explain()-plan snapshot gate; no DuckDB equivalent implemented. |
 | `duckdb` | `config.agent.sandbox_master_url` | unsupported | — | sandbox_master_url pins a Spark master URL for the patch-preview sandbox session; DuckDB has no cluster master to pin (single-process, always local). |
-| `duckdb` | `config.deployment.databricks.cluster_id` | unsupported | — | single-node engine — schedule the container on one node. Databricks is a Spark deployment target. |
-| `duckdb` | `config.deployment.databricks.libraries` | unsupported | — | single-node engine — schedule the container on one node. Databricks is a Spark deployment target. |
-| `duckdb` | `config.deployment.databricks.max_concurrent_runs` | unsupported | — | single-node engine — schedule the container on one node. Databricks is a Spark deployment target. |
-| `duckdb` | `config.deployment.databricks.new_cluster` | unsupported | — | single-node engine — schedule the container on one node. Databricks is a Spark deployment target. |
-| `duckdb` | `config.deployment.databricks.workspace_url` | unsupported | — | single-node engine — schedule the container on one node. Databricks is a Spark deployment target. |
 | `duckdb` | `config.metrics.use_observe` | unsupported | — | use_observe toggles Spark's Observation API (a SparkListener-driven zero-cost row-count mechanism); DuckDB has no equivalent listener hook. This engine does not yet collect per-module runtime metrics (rows/bytes) outside the Handoff module at all (see executor/models.py's module_metrics writer), so there is no existing collection path for this flag to toggle either way — the key is inert here, not superseded by an always-on alternative. |
 | `duckdb` | `egress.field.class_` | unsupported | — | format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB. |
 | `duckdb` | `egress.field.maintenance` | unsupported | — | DuckDB has no OPTIMIZE/VACUUM/compaction operation for parquet or any format it writes here — post-write maintenance is a no-op it cannot perform. Not implemented. |
