@@ -1,0 +1,46 @@
+# blueprint.yml
+# Multi-model healing cascade demo. `enrich` has a deliberate error (wrong
+# column name); `approval: auto` means a failed run triggers self-healing
+# immediately, walking the tiers declared in aqueduct.yml's agent.cascade
+# (cheapest first) instead of a single fixed model.
+#
+# No `cascade` key here: it is engine-level ONLY (aqueduct.yml), never a
+# Blueprint field.
+
+aqueduct: "1.0"
+id: cascade_demo
+name: "Multi-Model Healing Cascade"
+
+agent:
+  approval: auto
+
+modules:
+  - id: raw_orders
+    label: "Raw Orders"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/orders.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: enrich
+    label: "Enriched Orders"
+    type: Channel
+    config:
+      op: sql
+      # Deliberate bug: 'total' doesn't exist, the real column is 'total_amt'.
+      query: "SELECT order_id, customer, amount, total * 1.1 AS total_with_tax FROM raw_orders"
+
+  - id: output
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/orders.parquet
+      mode: overwrite
+
+edges:
+  - from: raw_orders
+    to: enrich
+  - from: enrich
+    to: output

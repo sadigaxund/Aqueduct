@@ -1,0 +1,70 @@
+# blueprint.yml
+# `aqueduct drift` demo: two independent sources, two independent stories.
+#
+# orders_a: the BREAKING story. A column gets dropped upstream.
+# orders_b: the BENIGN story. A column gets added upstream.
+#
+# `populate_data.py` writes the starting ("baseline") schema for both, then
+# `populate_data.py drift` mutates each source independently so a second
+# `aqueduct drift` run sees one breaking change and one benign change.
+
+aqueduct: "1.0"
+id: schema_drift_demo
+name: "Schema Drift Check"
+
+modules:
+  - id: orders_a
+    label: "Orders (breaking-drift source)"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/orders_a.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: select_a
+    label: "Passthrough A"
+    type: Channel
+    config:
+      op: sql
+      query: "SELECT order_id, customer, amount, status FROM orders_a"
+
+  - id: output_a
+    label: "Save Orders A"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/orders_a.parquet
+      mode: overwrite
+
+  - id: orders_b
+    label: "Orders (benign-drift source)"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/orders_b.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: select_b
+    label: "Passthrough B"
+    type: Channel
+    config:
+      op: sql
+      query: "SELECT order_id, customer, amount, status FROM orders_b"
+
+  - id: output_b
+    label: "Save Orders B"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/orders_b.parquet
+      mode: overwrite
+
+edges:
+  - from: orders_a
+    to: select_a
+  - from: select_a
+    to: output_a
+  - from: orders_b
+    to: select_b
+  - from: select_b
+    to: output_b

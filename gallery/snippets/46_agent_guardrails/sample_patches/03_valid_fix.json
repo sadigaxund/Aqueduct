@@ -1,0 +1,12 @@
+{
+  "patch_id": "demo-valid-fix",
+  "rationale": "Fix the column typo: 'total' does not exist, the source column is 'total_amt'.",
+  "operations": [
+    {
+      "op": "set_module_config_key",
+      "module_id": "enrich",
+      "key": "query",
+      "value": "SELECT order_id, customer, amount, total_amt * 1.1 AS total_with_tax FROM raw_orders"
+    }
+  ]
+}

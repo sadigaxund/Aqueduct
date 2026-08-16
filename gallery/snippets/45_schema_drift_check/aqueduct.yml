@@ -1,0 +1,28 @@
+aqueduct_config: "2.0"
+
+warnings:
+  suppress:
+    - "*"
+
+deployment:
+  engine: spark
+  target: local
+
+engine:
+  spark:
+    master_url: "local[*]"
+
+stores:
+  observability:
+    backend: duckdb
+    path: .aqueduct
+
+agent:
+  provider: openai_compat
+  model: gpt-4o-mini
+  budget:
+    max_reprompts: 3
+  # `aqueduct drift` only calls the agent when it finds a BREAKING change
+  # (a dropped or type-changed column). Without AQ_OPENAI_BASE_URL /
+  # AQ_LLM_API_KEY set, that call fails gracefully and the command still
+  # reports the drift correctly (see the README).

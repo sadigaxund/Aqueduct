@@ -16,6 +16,9 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Added
+- Four new gallery snippets: `45_schema_drift_check` (`aqueduct drift`), `46_agent_guardrails` (`agent.guardrails`), `47_agent_cascade` (`agent.cascade`), and `48_agent_progressive` (`agent.progressive`).
+
 ## [2.1.0rc1] — 2026-08-15
 
 **Pre-release.** PEP 440 spelling, so `pip install aqueduct-core` SKIPS this
