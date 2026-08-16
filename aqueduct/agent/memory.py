@@ -109,7 +109,7 @@ def contains_set_engine_config(operations: Any) -> bool:
     """
     for op in operations or []:
         op_name = getattr(op, "op", None) if not isinstance(op, dict) else op.get("op")
-        if op_name == "set_engine_config":
+        if op_name == _ix.SET_ENGINE_CONFIG_OP:
             return True
     return False
 
@@ -144,12 +144,16 @@ def find_replay_candidate(
     sig_hash: str,
     successful_patch_ids: set[str],
 ) -> ReplayCandidate | None:
-    """Newest applied patch matching the signature AND confirmed successful.
+    """Newest applied, confirmed-successful, non-config-op patch matching the
+    signature, or None.
 
-    The index gives the matching row; the body (with ``operations``) is fetched
-    from the object store via ``object_key``. ``successful_patch_ids`` comes from
-    ``healing_outcomes.run_success_after_patch = true`` — an applied patch with
-    no success record is never replayed."""
+    The index gives the matching row (``_ix.find_replay`` already skips any
+    row whose ``ops`` includes a ``set_engine_config`` write, falling back to
+    an OLDER matching candidate rather than giving up on the cache — see its
+    docstring); the body (with ``operations``) is fetched from the object
+    store via ``object_key``. ``successful_patch_ids`` comes from
+    ``healing_outcomes.run_success_after_patch = true`` — an applied patch
+    with no success record is never replayed."""
     if obs_store is None or patch_store is None or not sig_hash or not successful_patch_ids:
         return None
     try:
