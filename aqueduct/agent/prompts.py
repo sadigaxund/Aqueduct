@@ -500,9 +500,10 @@ def _build_guardrails_section(guardrails: Any) -> str:
 
     forbidden = _field("forbidden_ops")
     allowed_paths = _field("allowed_paths")
+    deny_patterns = _field("deny_patterns")
     heal_on = _field("heal_on_errors")
     never_heal = _field("never_heal_errors")
-    if not (forbidden or allowed_paths or heal_on or never_heal):
+    if not (forbidden or allowed_paths or deny_patterns or heal_on or never_heal):
         return ""
     lines = [
         "",
@@ -513,6 +514,11 @@ def _build_guardrails_section(guardrails: Any) -> str:
     if allowed_paths:
         lines.append(
             f"- allowed file paths (operations may only target these — fnmatch patterns): {', '.join(allowed_paths)}"
+        )
+    if deny_patterns:
+        lines.append(
+            f"- denied file paths (operations must NOT target these — fnmatch patterns, checked "
+            f"even against an otherwise-allowed path): {', '.join(deny_patterns)}"
         )
     if heal_on:
         lines.append(f"- heal only on these error_types: {', '.join(heal_on)}")

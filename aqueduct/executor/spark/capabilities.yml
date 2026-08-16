@@ -50,6 +50,7 @@ leaves:
   agent.field.sandbox_mode: supported
   agent.field.supports_tools: supported
   agent_guardrails.field.allowed_paths: supported
+  agent_guardrails.field.deny_patterns: supported
   agent_guardrails.field.forbidden_ops: supported
   agent_guardrails.field.heal_on_errors: supported
   agent_guardrails.field.never_heal_errors: supported

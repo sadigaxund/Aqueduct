@@ -428,6 +428,7 @@ agent:
   prompt_context: "Amounts are cents; never cast to INT."   # author hints to the healer
   guardrails:
     allowed_paths: ["s3a://my-bucket/**"]
+    deny_patterns: ["s3a://my-bucket/prod/**"]   # evaluated AFTER allowed_paths; subtract-only
     forbidden_ops: [remove_module, insert_module]
   sandbox_mode: sample        # sample|preflight|off — how patches are pre-validated
   mode: oneshot                # oneshot (default) | agentic — agentic lets the model call read-only diagnostic tools before answering
