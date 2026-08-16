@@ -16,6 +16,10 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Added
+
+- **Five new `aqscenarios` benchmark scenarios** (15–19) covering shipped prompt rules with no prior coverage: an Ingress `schema_hint` type mismatch, a JOIN-condition field-not-found (suggested-columns extraction from a non-SELECT SQL position), a reserved-identifier backtick-quoting fix, a two-independent-bug blueprint that grades a surgical single-patch heal against unreported collateral edits, and the designated oneshot-vs-agentic-mode A/B comparison scenario.
+
 ## [2.1.0rc1] — 2026-08-15
 
 **Pre-release.** PEP 440 spelling, so `pip install aqueduct-core` SKIPS this

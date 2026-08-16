@@ -1,0 +1,30 @@
+aqueduct: "1.0"
+id: pipeline
+name: Pipeline
+# Defect (for scenario 17): activity_raw carries a column literally named
+# `user`. clean_activity's SQL references it bare (unquoted) — `USER` is a
+# reserved keyword in Spark's ANSI SQL grammar (spark.sql.ansi.enabled
+# defaults to true on Spark 4), so the parser rejects it as a column
+# reference. It must be backtick-quoted: `user`.
+modules:
+  - id: activity_raw
+    type: Ingress
+    label: Raw Activity
+    config:
+      format: csv
+      path: data/input/activity.csv
+  - id: clean_activity
+    type: Channel
+    label: Clean Activity
+    config:
+      op: sql
+      query: |
+        SELECT
+          id,
+          user,
+          action,
+          ts
+        FROM activity_raw
+edges:
+  - from: activity_raw
+    to: clean_activity

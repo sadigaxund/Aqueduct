@@ -1,0 +1,38 @@
+aqueduct: "1.0"
+id: pipeline
+name: Pipeline
+# Defect (for scenario 16): join_orders' ON clause references `c.custid`,
+# which does not exist on customers_raw — the column is `cust_id`. Unlike
+# scenario 02 (a bad column in the SELECT list), the bad reference here is
+# in the JOIN condition, exercising the same suggested-columns extraction
+# from a different SQL position.
+modules:
+  - id: orders_raw
+    type: Ingress
+    label: Raw Orders
+    config:
+      format: csv
+      path: data/input/orders.csv
+  - id: customers_raw
+    type: Ingress
+    label: Raw Customers
+    config:
+      format: csv
+      path: data/input/customers.csv
+  - id: join_orders
+    type: Channel
+    label: Join Orders With Customers
+    config:
+      op: sql
+      query: |
+        SELECT
+          o.order_id,
+          o.amount,
+          c.name
+        FROM orders_raw o
+        JOIN customers_raw c ON o.cust_id = c.custid
+edges:
+  - from: orders_raw
+    to: join_orders
+  - from: customers_raw
+    to: join_orders

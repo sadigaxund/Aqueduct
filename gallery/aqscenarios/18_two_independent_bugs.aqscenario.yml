@@ -1,0 +1,44 @@
+aqueduct_scenario: "1.0"
+
+id: two_independent_bugs
+description: >
+  This blueprint carries TWO independent, real defects on disjoint branches:
+  products_raw declares format: parquet for a CSV file (like scenario 03),
+  AND clean_users (unrelated, no shared edge) selects the nonexistent
+  `signup_date` instead of `signup_ts` (like scenario 02). inject_failure
+  reports ONLY the products_raw failure — signup_date is dormant and never
+  named in the report. This distinguishes a surgical single-patch heal (fixes
+  only what was reported) from a chained/progressive one that guesses at
+  unreported problems it was never shown evidence for. The prompt rule under
+  test: "Use only module IDs and field names that appear in the failure
+  report."
+blueprint: blueprints/18_two_independent_bugs.yml
+
+# The fix is a Blueprint edit — a module's config, not an engine knob.
+domains: [pipeline]
+
+inject_failure:
+  module: products_raw
+  error_message: |
+    pyspark.errors.exceptions.captured.AnalysisException: [UNABLE_TO_INFER_SCHEMA] Unable to infer schema for Parquet. It must be specified manually. SQLSTATE: 42KD9
+      at org.apache.spark.sql.execution.datasources.DataSource.getOrInferFileFormatSchema(DataSource.scala:201)
+      at org.apache.spark.sql.execution.datasources.DataSource.resolveRelation(DataSource.scala:411)
+    (Ingress products_raw — reader.format("parquet").load("data/input/products.csv"))
+
+expected_patch:
+  effect:
+    module: products_raw
+    config_contains:
+      format: "csv"   # the reported bug is fixed
+    # The unrelated dormant bug in clean_users must be left exactly as it
+    # was — a model that "fixes ahead" of the failure report and rewrites a
+    # module it was never shown evidence for fails this half of the effect.
+    modules_contain:
+      type: Channel
+      config_contains:
+        query: "signup_date"
+
+assertions:
+  - patch_is_valid: true
+  - patch_applies: true
+  - root_cause_contains: ["parquet", "csv", "schema"]
