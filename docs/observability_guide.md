@@ -431,6 +431,8 @@ One row per `(scenario_id, model, prompt_version)` benchmark execution. Lives in
 | `escalated`           | BOOLEAN             | |
 | `tokens_in_total`     | INTEGER             | |
 | `tokens_out_total`    | INTEGER             | |
+| `refusal`             | VARCHAR             | Why the scenario declined to produce a patch: `policy` \| `inert` \| `guardrail` \| `invalid`; NULL when the run didn't refuse |
+| `engine_config_gate`  | VARCHAR             | Engine-config gate outcome for this run: `pass` \| `fail` \| `not_applicable` |
 
 ### `depot.db`
 
