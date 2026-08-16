@@ -14,6 +14,16 @@ downstream at bug #2.
 pip install -r requirements.txt
 ```
 
+## Two blueprints
+
+`blueprint_bugged.yml` is the deliberately-broken pipeline this demo is
+built around (see the two bugs below); it's the file the commands below
+run to trigger the progressive chain. `blueprint.yml` is the same
+pipeline already healed; it's the file CI's snippet lane runs via
+`aqueduct run blueprint.yml`, so the lane stays green with no LLM key.
+Both files share the identical `agent: {approval: auto, progressive:
+true, max_chain: 3, sandbox_mode: sample}` block.
+
 ## How it works
 
 This blueprint has two independent bugs in two different Channels:
@@ -53,7 +63,7 @@ explicitly (the same as the default) so the requirement is visible.
 
 ```bash
 python populate_data.py
-aqueduct run blueprint.yml
+aqueduct run blueprint_bugged.yml
 ```
 
 The run fails at `priced` (bug #1). Because `approval: auto` and

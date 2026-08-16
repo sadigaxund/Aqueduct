@@ -13,9 +13,19 @@ LLM call is required to see the effect.
 pip install -r requirements.txt
 ```
 
+## Two blueprints
+
+`blueprint_bugged.yml` is the deliberately-broken pipeline this demo is
+built around (`enrich`'s query references a `total` column that doesn't
+exist — the real column is `total_amt`) — that's the file the commands
+below patch. `blueprint.yml` is the same pipeline already healed (`total`
+corrected to `total_amt`); it's the file CI's snippet lane runs via
+`aqueduct run blueprint.yml`, so the lane stays green with no LLM key. Both
+files carry the identical `agent.guardrails` block.
+
 ## How it works
 
-`blueprint.yml`'s `agent.guardrails` block declares:
+`blueprint_bugged.yml`'s (and `blueprint.yml`'s) `agent.guardrails` block declares:
 
 - `forbidden_ops: [insert_module, remove_module]`: these PatchSpec
   operation types are blocked outright, whatever they would do.
@@ -44,31 +54,39 @@ first two guardrails directly:
 ```bash
 python populate_data.py
 
-aqueduct patch apply sample_patches/01_forbidden_op.json --blueprint blueprint.yml
+aqueduct patch apply sample_patches/01_forbidden_op.json --blueprint blueprint_bugged.yml
 # ✗ patch failed: Operation 'remove_module' is forbidden by agent.guardrails.forbidden_ops...
 
-aqueduct patch apply sample_patches/02_disallowed_path.json --blueprint blueprint.yml
+aqueduct patch apply sample_patches/02_disallowed_path.json --blueprint blueprint_bugged.yml
 # ✗ patch failed: Path value '/etc/aqueduct_exfil.parquet' (key='path') in op
 #   'set_module_config_key' (module 'output') does not match any
 #   agent.guardrails.allowed_paths pattern: ['data/output/*']
 
-aqueduct patch apply sample_patches/03_valid_fix.json --blueprint blueprint.yml
-aqueduct patch commit --blueprint blueprint.yml
+aqueduct patch apply sample_patches/03_valid_fix.json --blueprint blueprint_bugged.yml
+aqueduct patch commit --blueprint blueprint_bugged.yml
 
 python inspect_results.py
 ```
 
-The first two commands leave `blueprint.yml` untouched: the guardrail
-check runs before any operation is applied to the working copy, and
-`01_forbidden_op.json`/`02_disallowed_path.json` are left in place since
-they were never applied. The third command applies and archives normally;
-`aqueduct patch apply` treats a local patch file as a pending patch, so
-`sample_patches/03_valid_fix.json` is moved into `patches/applied/` and
-removed from `sample_patches/` once it succeeds. Restore it from git (or
-re-run `git checkout -- sample_patches/03_valid_fix.json`) to repeat the
-demo. `patch commit` writes the applied change to `blueprint.yml`.
+`inspect_results.py` reads `blueprint.yml` (the already-healed file), not
+`blueprint_bugged.yml` — it always reports the fix as applied. Point it at
+`blueprint_bugged.yml` yourself (`cp blueprint_bugged.yml blueprint.yml`,
+or edit the hardcoded filename) to see it flag the still-broken query
+before you run the commands above.
 
-`aqueduct run blueprint.yml` (with an LLM configured and `approval: human`
-or `auto`) would produce a real LLM patch here instead of
+The first two commands leave `blueprint_bugged.yml` untouched: the
+guardrail check runs before any operation is applied to the working copy,
+and `01_forbidden_op.json`/`02_disallowed_path.json` are left in place
+since they were never applied. The third command applies and archives
+normally; `aqueduct patch apply` treats a local patch file as a pending
+patch, so `sample_patches/03_valid_fix.json` is moved into
+`patches/applied/` and removed from `sample_patches/` once it succeeds.
+Restore it from git (or re-run `git checkout -- sample_patches/03_valid_fix.json`)
+to repeat the demo. `patch commit` writes the applied change to
+`blueprint_bugged.yml`, leaving it identical to the already-healed
+`blueprint.yml`.
+
+`aqueduct run blueprint_bugged.yml` (with an LLM configured and `approval:
+human` or `auto`) would produce a real LLM patch here instead of
 `03_valid_fix.json`. It passes through the exact same `_check_guardrails`
 gate.

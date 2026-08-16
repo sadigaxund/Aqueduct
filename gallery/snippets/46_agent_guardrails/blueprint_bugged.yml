@@ -1,12 +1,9 @@
-# blueprint.yml
-# agent.guardrails demo, shipped in its HEALED state (this is what
-# `aqueduct run` in CI exercises). `blueprint_bugged.yml` carries the
-# deliberate bug (wrong column name in `enrich`'s query) the README's
-# `sample_patches/` walkthrough is built around — see the README for the
-# reader flow. The guardrails block below constrains what ANY patch
-# (LLM-authored or hand-authored) is allowed to do to this Blueprint,
-# enforced deterministically at apply time. See sample_patches/ and the
-# README for three patches that exercise it.
+# blueprint_bugged.yml
+# agent.guardrails demo. `enrich` has a deliberate bug (wrong column name)
+# so a self-heal would normally need to patch its `query`. The guardrails
+# block below constrains what ANY patch (LLM-authored or hand-authored) is
+# allowed to do to this Blueprint, enforced deterministically at apply time.
+# See sample_patches/ and the README for three patches that exercise it.
 
 aqueduct: "1.0"
 id: guardrails_demo
@@ -47,9 +44,8 @@ modules:
     type: Channel
     config:
       op: sql
-      # Healed: 'total_amt' is the real column (blueprint_bugged.yml has the
-      # original 'total' typo the README's guardrails walkthrough exercises).
-      query: "SELECT order_id, customer, amount, total_amt * 1.1 AS total_with_tax FROM raw_orders"
+      # Deliberate bug: 'total' doesn't exist, the real column is 'total_amt'.
+      query: "SELECT order_id, customer, amount, total * 1.1 AS total_with_tax FROM raw_orders"
 
   - id: output
     label: "Save Result"

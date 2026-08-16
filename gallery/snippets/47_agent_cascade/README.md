@@ -11,6 +11,17 @@ one shot, so a cascade avoids spending a hosted model's tokens on those.
 pip install -r requirements.txt
 ```
 
+## Two blueprints
+
+`blueprint_bugged.yml` is the deliberately-broken pipeline this demo is
+built around (`enrich`'s query references a `total` column that doesn't
+exist — the real column is `total_amt`); it's the file the commands below
+run to trigger the cascade. `blueprint.yml` is the same pipeline already
+healed; it's the file CI's snippet lane runs via `aqueduct run
+blueprint.yml`, so the lane stays green with no LLM key. Both files share
+the identical `agent: {approval: auto}` block, and both read the same
+`aqueduct.yml` cascade config.
+
 ## How it works
 
 `aqueduct.yml`'s `agent.cascade` is a list of tiers, cheapest first:
@@ -50,7 +61,7 @@ recorded on the `healing_outcomes` row for the heal.
 
 ```bash
 python populate_data.py
-aqueduct run blueprint.yml
+aqueduct run blueprint_bugged.yml
 ```
 
 `enrich`'s query references a column that doesn't exist (`total`, the real

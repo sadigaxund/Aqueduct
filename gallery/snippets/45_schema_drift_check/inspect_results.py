@@ -38,6 +38,16 @@ def main():
             ORDER BY checked_at
             """
         ).fetchall()
+    except duckdb.CatalogException:
+        # `drift_checks` is only created by `aqueduct drift`, never by a
+        # plain `aqueduct run`. A CI/plain-run pass with no drift check yet
+        # is expected, not an error — see README's "How to run" for the
+        # `aqueduct drift` walkthrough that populates this table.
+        console.print(
+            "[bold yellow]⚠[/bold yellow] No drift_checks table yet — run "
+            "'aqueduct drift blueprint.yml' to populate it (see README)."
+        )
+        return
     finally:
         con.close()
 

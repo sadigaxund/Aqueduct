@@ -1,8 +1,6 @@
-# blueprint.yml
-# Progressive (chained) multi-patch healing demo, shipped in its HEALED
-# state (this is what `aqueduct run` in CI exercises, LLM-free).
-# `blueprint_bugged.yml` carries the two INDEPENDENT bugs this demo is
-# built around, in two DIFFERENT Channels:
+# blueprint_bugged.yml
+# Progressive (chained) multi-patch healing demo: TWO INDEPENDENT bugs, in
+# two DIFFERENT Channels:
 #
 #   1. `priced`     references 'unit_cost'. The real column is 'unit_price'.
 #   2. `discounted` (downstream of `priced`) filters on 'quantity'. The
@@ -18,8 +16,7 @@
 # 1's fix into an accumulating patch instead of discarding it; link 2 then
 # diagnoses `discounted` against the manifest with link 1's fix already
 # applied. Nothing is written to disk until the full 2-op patch passes the
-# pipeline end-to-end. See the README for that reader flow against
-# `blueprint_bugged.yml`.
+# pipeline end-to-end.
 
 aqueduct: "1.0"
 id: progressive_demo
@@ -48,19 +45,17 @@ modules:
     type: Channel
     config:
       op: sql
-      # Healed: 'unit_price' is the real column (blueprint_bugged.yml has
-      # the original 'unit_cost' bug the README's progressive-healing
-      # walkthrough exercises).
-      query: "SELECT order_id, customer, qty, unit_price, qty * unit_price AS line_total FROM raw_orders"
+      # Bug #1: 'unit_cost' doesn't exist, the real column is 'unit_price'.
+      query: "SELECT order_id, customer, qty, unit_price, qty * unit_cost AS line_total FROM raw_orders"
 
   - id: discounted
     label: "Discounted Lines"
     type: Channel
     config:
       op: sql
-      # Healed: 'qty' is the real column carried through `priced`
-      # (blueprint_bugged.yml has the original 'quantity' bug).
-      query: "SELECT order_id, customer, line_total, line_total * 0.9 AS discount_total FROM priced WHERE qty > 0"
+      # Bug #2 (independent of #1): 'quantity' doesn't exist, the real
+      # column carried through `priced` is 'qty'.
+      query: "SELECT order_id, customer, line_total, line_total * 0.9 AS discount_total FROM priced WHERE quantity > 0"
 
   - id: output
     label: "Save Result"
