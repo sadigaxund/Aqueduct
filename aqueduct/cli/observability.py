@@ -23,6 +23,7 @@ from aqueduct.cli import (
     cli,
 )
 from aqueduct.cli.output import emit
+from aqueduct.cli.render.tables import Column, render_table
 from aqueduct.cli.style import error as _error
 from aqueduct.executor.models import ExecutionStatus
 from aqueduct.stores.read import open_obs_read  # Phase 69 — backend-aware reads
@@ -635,18 +636,27 @@ def _profile_run(run_id, cfg, store_dir, fmt) -> None:
         return
 
     click.echo(f"Resource profile — run_id={run_id}  modules={len(records)}")
-    click.echo(f"  {'Module':<26}{'Duration':>10}{'%Dur':>7}{'RowsOut':>12}{'BytesOut':>11}")
-    click.echo(f"  {'-'*26}{'-'*10:>10}{'-'*6:>7}{'-'*11:>12}{'-'*10:>11}")
+    table_rows = []
     for r in records:
         pct = (100.0 * (r["duration_ms"] or 0) / total_dur) if total_dur else 0.0
         dur = f"{r['duration_ms']}ms" if r["duration_ms"] is not None else "-"
         rows_out = "-" if r["records_written"] is None else f"{r['records_written']:,}"
-        click.echo(
-            f"  {r['module_id']:<26}{dur:>10}{pct:>6.1f}%{rows_out:>12}{_fmt_bytes(r['bytes_written']):>11}"
+        table_rows.append(
+            [r["module_id"], dur, f"{pct:.1f}%", rows_out, _fmt_bytes(r["bytes_written"])]
         )
-    click.echo(f"  {'-'*66}")
-    click.echo(
-        f"  {'TOTAL':<26}{str(total_dur)+'ms':>10}{'100.0%':>7}{'':>12}{_fmt_bytes(total_bw):>11}"
+    table_rows.append(["TOTAL", f"{total_dur}ms", "100.0%", "", _fmt_bytes(total_bw)])
+    # `Module` is the flex column — module IDs are the only field here with
+    # real length variance; the rest are fixed-width numeric/formatted values
+    # (right-aligned, matching the original `:>N` hand-rolled widths).
+    render_table(
+        [
+            Column("Module", flex=True),
+            Column("Duration", align="right"),
+            Column("%Dur", align="right"),
+            Column("RowsOut", align="right"),
+            Column("BytesOut", align="right"),
+        ],
+        table_rows,
     )
 
 
@@ -734,14 +744,27 @@ def _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt) -> None:
         return
 
     click.echo(f"Resource trend — blueprint={blueprint_id}  runs_analyzed={len(run_ids)}")
-    click.echo(f"  {'Module':<26}{'Runs':>6}{'AvgDur':>10}{'MaxDur':>10}{'LastDur':>10}")
-    click.echo(f"  {'-'*26}{'-'*6:>6}{'-'*9:>10}{'-'*9:>10}{'-'*9:>10}")
+    table_rows = []
     for r in records:
         avg = f"{r['avg_duration_ms']}ms" if r["avg_duration_ms"] is not None else "-"
         mx = f"{r['max_duration_ms']}ms" if r["max_duration_ms"] is not None else "-"
         ld = f"{r['last_duration_ms']}ms" if r["last_duration_ms"] is not None else "-"
-        flag = "  ⚠ slowdown" if r["regressed"] else ""
-        click.echo(f"  {r['module_id']:<26}{r['runs']:>6}{avg:>10}{mx:>10}{ld:>10}{flag}")
+        flag = "⚠ slowdown" if r["regressed"] else ""
+        table_rows.append([r["module_id"], str(r["runs"]), avg, mx, ld, flag])
+    # `Note` (the slowdown flag) is the flex column — everything else here is
+    # a fixed-format numeric/duration value; `Module` stays fixed like the
+    # profile table above so the two commands' column widths read alike.
+    render_table(
+        [
+            Column("Module"),
+            Column("Runs", align="right"),
+            Column("AvgDur", align="right"),
+            Column("MaxDur", align="right"),
+            Column("LastDur", align="right"),
+            Column("Note", flex=True),
+        ],
+        table_rows,
+    )
 
 
 # ── aqueduct runs ─────────────────────────────────────────────────────────────
@@ -943,16 +966,23 @@ def runs(
         click.echo("No runs found.")
         return
 
-    click.echo(
-        f"  {'run_id':<38} {'blueprint':<30} {'status':<10} {'started':<22} {'failed_module'}"
-    )
-    click.echo(f"  {'-'*38} {'-'*30} {'-'*10} {'-'*22} {'-'*20}")
+    table_rows = []
     for run_id_val, bp_id, status, started_at, finished_at, first_failed in rows:
         icon = "✓" if status == ExecutionStatus.SUCCESS else ("↻" if status == "running" else "✗")
         failed_col = (first_failed or "") if status == ExecutionStatus.ERROR else ""
-        click.echo(
-            f"  {icon} {run_id_val:<37} {bp_id:<30} {status:<10} {str(started_at)[:19]:<22} {failed_col}"
-        )
+        table_rows.append([f"{icon} {run_id_val}", bp_id, status, str(started_at)[:19], failed_col])
+    # `failed_module` is the flex column — it's empty on most rows and an
+    # arbitrary module id on the rest, the most variable field here.
+    render_table(
+        [
+            Column("run_id"),
+            Column("blueprint"),
+            Column("status"),
+            Column("started"),
+            Column("failed_module", flex=True),
+        ],
+        table_rows,
+    )
 
 
 # ── aqueduct lineage ──────────────────────────────────────────────────────────

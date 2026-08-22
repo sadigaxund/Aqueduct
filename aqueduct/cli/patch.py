@@ -25,6 +25,7 @@ from aqueduct.cli import (
     style,
 )
 from aqueduct.cli.render.funnel import emit
+from aqueduct.cli.render.tables import Column, render_table
 
 
 def _patch_index_obs_store(blueprint_path: Path | None = None):
@@ -174,19 +175,31 @@ def _list_from_store(ps, filter_status: str, out_format: str, obs_store: Any = N
         return
     # `file` is the UNIQUE key (`<ts>_<patch_id>.json`) — shown in FULL so it can
     # be copied verbatim into `apply`/`reject` (the embedded slug is the model's
-    # non-unique patch_id, so no separate column). Width is the longest filename;
-    # ljust never truncates, so a long name prints whole.
-    _fw = max((len(r.get("file") or "") for r in rows), default=4)
-    click.echo(f"\n  {'file':<{_fw}}  {'status':<9} {'blueprint':<22} rationale")
-    click.echo(f"  {'-' * _fw}  {'-' * 9} {'-' * 22} {'-' * 20}")
-    has_pending = False
-    for r in rows:
-        st = r["status"]
-        has_pending = has_pending or st == "pending"
-        fn = r.get("file") or ""
-        bp = (r.get("blueprint_id") or "")[:22]
-        rationale = (r.get("rationale") or "").replace("\n", " ")[:60]
-        click.echo(f"  {fn:<{_fw}}  {st:<9} {bp:<22} {rationale}")
+    # non-unique patch_id, so no separate column). `rationale` is the ONE flex
+    # column (highest length variance) — it absorbs remaining terminal width
+    # and truncates with `…` on a narrow TTY; -v/piping always print it whole.
+    from aqueduct.cli.verbosity import resolve_verbosity
+
+    click.echo("")
+    render_table(
+        [
+            Column("file"),
+            Column("status"),
+            Column("blueprint"),
+            Column("rationale", flex=True),
+        ],
+        [
+            [
+                r.get("file") or "",
+                r["status"],
+                r.get("blueprint_id") or "",
+                (r.get("rationale") or "").replace("\n", " "),
+            ]
+            for r in rows
+        ],
+        verbose=resolve_verbosity() >= 1,
+    )
+    has_pending = any(r["status"] == "pending" for r in rows)
     if has_pending:
         click.echo("\n  Apply:  aqueduct patch apply <patch_id|file> --blueprint <blueprint.yml>")
         click.echo("  Reject: aqueduct patch reject <patch_id|file> --reason '<reason>'")
@@ -1661,18 +1674,25 @@ def patch_list(
             continue
 
         click.echo(f"\n  [{status_label}]  {d}")
-        click.echo(f"  {'file':<55} {'patch_id':<36} {'rationale'}")
-        click.echo(f"  {'-'*55} {'-'*36} {'-'*40}")
-
+        group_rows = []
         for f in files:
             try:
                 data = json.loads(f.read_text(encoding="utf-8"))
             except Exception:
                 data = {}
             pid = data.get("patch_id", f.stem)
-            rationale = (data.get("rationale") or "").replace("\n", " ")[:60]
-            click.echo(f"  {f.name:<55} {pid:<36} {rationale}")
+            rationale = (data.get("rationale") or "").replace("\n", " ")
+            group_rows.append([f.name, pid, rationale])
             total += 1
+        # `rationale` is the flex column — it has by far the highest length
+        # variance of the three; `file`/`patch_id` are fixed-format tokens.
+        from aqueduct.cli.verbosity import resolve_verbosity
+
+        render_table(
+            [Column("file"), Column("patch_id"), Column("rationale", flex=True)],
+            group_rows,
+            verbose=resolve_verbosity() >= 1,
+        )
 
     if total == 0:
         click.echo(f"No {filter_status} patches found in {patches_root}")
@@ -1778,11 +1798,21 @@ def log_cmd(blueprint: str, fmt: str) -> None:
         click.echo("No commits found.")
         return
 
-    click.echo(f"  {'hash':<10} {'date':<20} {'patches':<40} {'ops'}")
-    click.echo(f"  {'-'*10} {'-'*20} {'-'*40} {'-'*30}")
-    for e in entries:
-        patches_col = e["patches"][:38] + ".." if len(e["patches"]) > 40 else e["patches"]
-        click.echo(f"  {e['hash']:<10} {e['date']:<20} {patches_col:<40} {e['ops']}")
+    # `patches` is the flex column — a comma-joined list of patch_ids (or the
+    # "(manual change)" fallback) with far more length variance than `ops`,
+    # which is a single short commit-trailer descriptor.
+    from aqueduct.cli.verbosity import resolve_verbosity
+
+    render_table(
+        [
+            Column("hash"),
+            Column("date"),
+            Column("patches", flex=True),
+            Column("ops"),
+        ],
+        [[e["hash"], e["date"], e["patches"], e["ops"]] for e in entries],
+        verbose=resolve_verbosity() >= 1,
+    )
 
 
 # ── aqueduct rollback ─────────────────────────────────────────────────────────
