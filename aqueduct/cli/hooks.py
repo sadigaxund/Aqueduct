@@ -212,9 +212,11 @@ def run_hooks(
     bp_path = Path(blueprint_path).resolve()
     chain = _chain if _chain is not None else _chain_paths()
 
+    from aqueduct.cli.render.funnel import echo as _funnel_echo
+
     def _ok(label: str, dur: float) -> None:
         icon = click.style("✓", fg="green")
-        click.echo(f"  {icon} {label}    " + click.style(_fmt_dur(dur), dim=True))
+        _funnel_echo(f"  {icon} {label}    " + click.style(_fmt_dur(dur), dim=True), err=False)
 
     entries = matching
     for i, h in enumerate(entries):
@@ -305,7 +307,9 @@ def run_hooks(
                 payload = {"run_id": run_id, "blueprint_id": blueprint_id, "status": status}
                 fire_webhook(endpoint, full_payload=payload, template_vars=payload, event=event)
                 icon = click.style("✓", fg="green")
-                click.echo(f"  {icon} {label}    " + click.style("fired (async)", dim=True))
+                _funnel_echo(
+                    f"  {icon} {label}    " + click.style("fired (async)", dim=True), err=False
+                )
             except Exception as exc:  # noqa: BLE001 — webhooks are best-effort by contract
                 _warn(f"[hook_failed] {label} — {exc}")
                 if i + 1 < len(entries):

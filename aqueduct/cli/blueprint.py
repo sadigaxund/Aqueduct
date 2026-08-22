@@ -118,18 +118,23 @@ def blueprint_history_cmd(
         )
         return
 
+    from aqueduct.cli.render.funnel import echo as _funnel_echo
+
     if not events:
-        click.echo(f"No remediation history for blueprint {blueprint_id!r}.")
+        _funnel_echo(f"No remediation history for blueprint {blueprint_id!r}.", err=False)
         return
 
-    click.echo(f"Blueprint history — {blueprint_id}")
-    click.echo("")
+    _funnel_echo(f"Blueprint history — {blueprint_id}", err=False)
+    _funnel_echo("", err=False)
     for e in events:
         icon = _EVENT_ICON.get(e["event_type"], "·")
         sha = f"  [{e['git_sha']}]" if e.get("git_sha") else ""
         conf = f"  confidence={e['confidence']:.2f}" if e.get("confidence") is not None else ""
         ts = e["timestamp"] or "(unknown time)"
-        click.echo(f"  {icon} {ts:<26} {e['event_type']:<18} {e['description']}{conf}{sha}")
+        # Result table body — wraps on a TTY, one full record when piped.
+        _funnel_echo(
+            f"  {icon} {ts:<26} {e['event_type']:<18} {e['description']}{conf}{sha}", err=False
+        )
 
 
 def blueprint_history_events(

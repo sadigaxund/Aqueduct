@@ -43,10 +43,9 @@ def mcp_serve(config_path: str | None) -> None:
     import importlib.util
 
     if importlib.util.find_spec("mcp") is None:
-        click.echo(
-            "✗ aqueduct mcp serve needs the 'mcp' extra: pip install aqueduct-core[mcp]",
-            err=True,
-        )
+        from aqueduct.cli.render.funnel import error as _funnel_error
+
+        _funnel_error("aqueduct mcp serve needs the 'mcp' extra: pip install aqueduct-core[mcp]")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     from aqueduct.mcp.server import serve

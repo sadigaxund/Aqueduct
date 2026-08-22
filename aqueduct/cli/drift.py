@@ -73,6 +73,8 @@ def drift(
     """
     import json as _json
 
+    from aqueduct.cli.render.funnel import echo as _funnel_echo
+    from aqueduct.cli.render.funnel import error as _funnel_error
     from aqueduct.cli.style import error as _error
     from aqueduct.compiler.compiler import CompileError
     from aqueduct.compiler.compiler import compile as compiler_compile
@@ -99,17 +101,16 @@ def drift(
             deployment_target=getattr(cfg.deployment, "target", None),
         )
     except (ParseError, CompileError) as exc:
-        click.echo(f"✗ could not compile {blueprint!r}: {exc}", err=True)
+        _funnel_error(f"could not compile {blueprint!r}: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     ingress = [m for m in manifest.modules if m.type == ModuleType.Ingress]
     if only_module:
         ingress = [m for m in ingress if m.id == only_module]
     if not ingress:
-        click.echo(
-            "✗ no Ingress modules to check"
-            + (f" (module {only_module!r} not found)" if only_module else ""),
-            err=True,
+        _funnel_error(
+            "no Ingress modules to check"
+            + (f" (module {only_module!r} not found)" if only_module else "")
         )
         sys.exit(exit_codes.USAGE_ERROR)
 
@@ -141,7 +142,7 @@ def drift(
             except Exception as exc:
                 undiffable = True
                 results.append({"module": mod.id, "status": "undiffable", "error": str(exc)})
-                click.echo(f"✗ {mod.id}: could not read source schema — {exc}", err=True)
+                _funnel_error(f"{mod.id}: could not read source schema — {exc}")
                 continue
 
             baseline = drift_store.get_baseline(obs, manifest.blueprint_id, mod.id)
@@ -155,8 +156,11 @@ def drift(
                     status="baseline_set",
                 )
                 results.append({"module": mod.id, "status": "baseline_set", "columns": len(live)})
-                click.echo(
-                    f"◆ {mod.id}: baseline established ({len(live)} columns) — no prior schema to diff"
+                # Text-format result row (--format text is the default report),
+                # so this stays on stdout like the rest of the per-module rows.
+                _funnel_echo(
+                    f"◆ {mod.id}: baseline established ({len(live)} columns) — no prior schema to diff",
+                    err=False,
                 )
                 continue
 
@@ -227,19 +231,24 @@ def _change_dict(c: Any) -> dict[str, Any]:
 
 
 def _echo_result(module_id: str, result: Any, patch_id: str | None) -> None:
+    # Text-format result rows (--format text is the default report) — stdout,
+    # routed through the funnel so a long `c.describe()` wraps on a TTY and
+    # stays one full record when piped.
+    from aqueduct.cli.render.funnel import echo as _funnel_echo
+
     if not result.has_drift:
-        click.echo(f"✓ {module_id}: no drift")
+        _funnel_echo(f"✓ {module_id}: no drift", err=False)
         return
     if result.has_breaking:
-        click.echo(f"⚠ {module_id}: breaking drift")
+        _funnel_echo(f"⚠ {module_id}: breaking drift", err=False)
         for c in result.breaking:
-            click.echo(f"    · {c.describe()}")
+            _funnel_echo(f"    · {c.describe()}", err=False)
         if patch_id:
-            click.echo(f"  → patch staged: {patch_id}")
+            _funnel_echo(f"  → patch staged: {patch_id}", err=False)
         else:
-            click.echo("  → no patch (agent disabled or failed to produce one)")
+            _funnel_echo("  → no patch (agent disabled or failed to produce one)", err=False)
     for c in result.benign:
-        click.echo(f"  ◦ {module_id}: benign — {c.describe()} (no heal)")
+        _funnel_echo(f"  ◦ {module_id}: benign — {c.describe()} (no heal)", err=False)
 
 
 def _heal_drift(
@@ -262,7 +271,9 @@ def _heal_drift(
 
     eng = cfg.agent
     if eng.model is None:
-        click.echo(f"  (agent disabled — set agent.model to auto-heal {module_id!r})", err=True)
+        from aqueduct.cli.render.funnel import echo as _funnel_echo
+
+        _funnel_echo(f"  (agent disabled — set agent.model to auto-heal {module_id!r})", err=True)
         return None
 
     failure_ctx = build_synthetic_failure_context(

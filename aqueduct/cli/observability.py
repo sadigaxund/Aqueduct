@@ -217,6 +217,9 @@ def report(
     )
 
     if fmt == "html":
+        # Self-contained HTML document meant for `> run.html` redirection —
+        # never wrapped/truncated, so raw click.echo (explicit err=False)
+        # rather than funnel.echo.
         click.echo(
             _render_run_html(
                 run_id_val,
@@ -226,7 +229,8 @@ def report(
                 finished_at,
                 module_results,
                 metrics_rows,
-            )
+            ),
+            err=False,
         )
         return
 
@@ -260,23 +264,34 @@ def report(
         writer = _csv.writer(buf)
         writer.writerow(["run_id", "blueprint_id", "status", "started_at", "finished_at"])
         writer.writerow([run_id_val, blueprint_id, status, started_at, finished_at])
-        click.echo(buf.getvalue(), nl=False)
+        # CSV structured result meant for redirection/piping — never
+        # wrapped, so raw click.echo (explicit err=False).
+        click.echo(buf.getvalue(), nl=False, err=False)
         buf2 = io.StringIO()
         writer2 = _csv.writer(buf2)
         writer2.writerow(["module_id", "status", "error"])
         for mr in module_results:
             writer2.writerow([mr.get("module_id", ""), mr.get("status", ""), mr.get("error", "")])
-        click.echo(buf2.getvalue(), nl=False)
+        click.echo(buf2.getvalue(), nl=False, err=False)
         return
 
-    # table format
+    # table format — the default report; result rows go to stdout, routed
+    # through the funnel so a long error message wraps on a TTY and stays
+    # one full record when piped. verbose=True (-v) lifts the 60-char error
+    # truncation below.
+    from aqueduct.cli.render.funnel import echo as _funnel_echo
+    from aqueduct.cli.verbosity import resolve_verbosity
+
+    verbose = resolve_verbosity() >= 1
     status_icon = "✓" if status == ExecutionStatus.SUCCESS else "✗"
-    click.echo(f"{status_icon} run_id={run_id_val}  blueprint={blueprint_id}  status={status}")
-    click.echo(f"  started:  {started_at}")
-    click.echo(f"  finished: {finished_at or '(running)'}")
-    click.echo("")
-    click.echo(f"  {'Module':<30} {'Status':<10} Error")
-    click.echo(f"  {'-'*30} {'-'*10} {'-'*40}")
+    _funnel_echo(
+        f"{status_icon} run_id={run_id_val}  blueprint={blueprint_id}  status={status}", err=False
+    )
+    _funnel_echo(f"  started:  {started_at}", err=False)
+    _funnel_echo(f"  finished: {finished_at or '(running)'}", err=False)
+    _funnel_echo("", err=False)
+    _funnel_echo(f"  {'Module':<30} {'Status':<10} Error", err=False)
+    _funnel_echo(f"  {'-'*30} {'-'*10} {'-'*40}", err=False)
     for mr in module_results:
         icon = (
             "✓"
@@ -284,9 +299,13 @@ def report(
             else ("⏭" if mr.get("status") == ExecutionStatus.SKIPPED else "✗")
         )
         err = mr.get("error") or ""
-        if len(err) > 60:
+        if not verbose and len(err) > 60:
             err = err[:57] + "..."
-        click.echo(f"  {icon} {mr.get('module_id', ''):<28} {mr.get('status', ''):<10} {err}")
+        _funnel_echo(
+            f"  {icon} {mr.get('module_id', ''):<28} {mr.get('status', ''):<10} {err}",
+            err=False,
+            verbose=verbose,
+        )
 
 
 def _first_module_id(module_results: Any) -> str:
@@ -388,10 +407,13 @@ def _report_trend(
                     type_rows.append((run_id, ts, f.get("type")))
                     break
 
+    from aqueduct.cli.render.funnel import echo as _funnel_echo
+
     if not null_rows and not type_rows:
-        click.echo(
+        _funnel_echo(
             f"No probe signals for column {column!r} since {since}. "
-            f"(Attach a null_rates or schema_snapshot Probe to track it.)"
+            f"(Attach a null_rates or schema_snapshot Probe to track it.)",
+            err=False,
         )
         return
 
@@ -410,26 +432,30 @@ def _report_trend(
         )
         return
 
-    click.echo(
+    _funnel_echo(
         f"Quality trend — column: {column}"
-        + (f"  blueprint: {blueprint_id}" if blueprint_id else "")
+        + (f"  blueprint: {blueprint_id}" if blueprint_id else ""),
+        err=False,
     )
     if null_rows:
-        click.echo("\n  null-rate:")
-        click.echo(f"    {'captured_at':<28} {'run_id':<20} null_rate")
+        _funnel_echo("\n  null-rate:", err=False)
+        _funnel_echo(f"    {'captured_at':<28} {'run_id':<20} null_rate", err=False)
         for rid, ts, nr in null_rows:
-            click.echo(
-                f"    {ts:<28} {rid[:18]:<20} {nr:.4f}"
-                if nr is not None
-                else f"    {ts:<28} {rid[:18]:<20} (n/a)"
+            _funnel_echo(
+                (
+                    f"    {ts:<28} {rid[:18]:<20} {nr:.4f}"
+                    if nr is not None
+                    else f"    {ts:<28} {rid[:18]:<20} (n/a)"
+                ),
+                err=False,
             )
     if type_rows:
-        click.echo("\n  type history:")
-        click.echo(f"    {'captured_at':<28} {'run_id':<20} type")
+        _funnel_echo("\n  type history:", err=False)
+        _funnel_echo(f"    {'captured_at':<28} {'run_id':<20} type", err=False)
         prev = None
         for rid, ts, ct in type_rows:
             marker = "  ⚠ type drift" if (prev is not None and ct != prev) else ""
-            click.echo(f"    {ts:<28} {rid[:18]:<20} {ct}{marker}")
+            _funnel_echo(f"    {ts:<28} {rid[:18]:<20} {ct}{marker}", err=False)
             prev = ct
 
 
@@ -595,8 +621,10 @@ def _profile_run(run_id, cfg, store_dir, fmt) -> None:
         )
         rows = cur.fetchall()
 
+    from aqueduct.cli.render.funnel import echo as _funnel_echo
+
     if not rows:
-        click.echo(f"No module_metrics for run {run_id!r}.")
+        _funnel_echo(f"No module_metrics for run {run_id!r}.", err=False)
         return
 
     cols = [
@@ -632,10 +660,12 @@ def _profile_run(run_id, cfg, store_dir, fmt) -> None:
         for r in records:
             pct = (100.0 * (r["duration_ms"] or 0) / total_dur) if total_dur else 0.0
             w.writerow([r[c] for c in cols] + [f"{pct:.1f}"])
-        click.echo(buf.getvalue(), nl=False)
+        # CSV structured result meant for redirection/piping — never
+        # wrapped, so raw click.echo (explicit err=False).
+        click.echo(buf.getvalue(), nl=False, err=False)
         return
 
-    click.echo(f"Resource profile — run_id={run_id}  modules={len(records)}")
+    _funnel_echo(f"Resource profile — run_id={run_id}  modules={len(records)}", err=False)
     table_rows = []
     for r in records:
         pct = (100.0 * (r["duration_ms"] or 0) / total_dur) if total_dur else 0.0
@@ -677,7 +707,9 @@ def _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt) -> None:
         )
         run_ids = [r[0] for r in cur.fetchall()]
         if not run_ids:
-            click.echo(f"No runs for blueprint {blueprint_id!r}.")
+            from aqueduct.cli.render.funnel import echo as _funnel_echo
+
+            _funnel_echo(f"No runs for blueprint {blueprint_id!r}.", err=False)
             return
         latest = run_ids[0]
         placeholders = ",".join("?" * len(run_ids))
@@ -740,10 +772,16 @@ def _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt) -> None:
         w.writerow(cols)
         for r in records:
             w.writerow([r[c] for c in cols])
-        click.echo(buf.getvalue(), nl=False)
+        # CSV structured result meant for redirection/piping — never
+        # wrapped, so raw click.echo (explicit err=False).
+        click.echo(buf.getvalue(), nl=False, err=False)
         return
 
-    click.echo(f"Resource trend — blueprint={blueprint_id}  runs_analyzed={len(run_ids)}")
+    from aqueduct.cli.render.funnel import echo as _funnel_echo
+
+    _funnel_echo(
+        f"Resource trend — blueprint={blueprint_id}  runs_analyzed={len(run_ids)}", err=False
+    )
     table_rows = []
     for r in records:
         avg = f"{r['avg_duration_ms']}ms" if r["avg_duration_ms"] is not None else "-"
@@ -863,7 +901,9 @@ def runs(
             if flat.exists():
                 candidates.append(flat)
         if not candidates:
-            click.echo("No runs found (no observability.db files discovered)")
+            from aqueduct.cli.render.funnel import echo as _funnel_echo
+
+            _funnel_echo("No runs found (no observability.db files discovered)", err=False)
             return
         from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
 
@@ -905,13 +945,18 @@ def runs(
                 fmt="json",
             )
         elif _total == 0:
-            click.echo("No healing outcomes recorded yet.")
+            from aqueduct.cli.render.funnel import echo as _funnel_echo
+
+            _funnel_echo("No healing outcomes recorded yet.", err=False)
         else:
-            click.echo(f"  heals recorded: {_total}")
+            from aqueduct.cli.render.funnel import echo as _funnel_echo
+
+            _funnel_echo(f"  heals recorded: {_total}", err=False)
             for _res in sorted(_by_resolution):
-                click.echo(f"    {_res:<10} {_by_resolution[_res]}")
-            click.echo(
-                f"  zero-token coverage: {_coverage:.1%}  ({_zero_token}/{_total} heals needed no LLM call)"
+                _funnel_echo(f"    {_res:<10} {_by_resolution[_res]}", err=False)
+            _funnel_echo(
+                f"  zero-token coverage: {_coverage:.1%}  ({_zero_token}/{_total} heals needed no LLM call)",
+                err=False,
             )
         return
 
@@ -963,7 +1008,9 @@ def runs(
         return
 
     if not rows:
-        click.echo("No runs found.")
+        from aqueduct.cli.render.funnel import echo as _funnel_echo
+
+        _funnel_echo("No runs found.", err=False)
         return
 
     table_rows = []
@@ -1112,8 +1159,10 @@ def lineage(
         cur.execute(query, params)
         rows = cur.fetchall()
 
+    from aqueduct.cli.render.funnel import echo as _funnel_echo
+
     if not rows:
-        click.echo(f"No lineage records found for blueprint {blueprint_id!r}.")
+        _funnel_echo(f"No lineage records found for blueprint {blueprint_id!r}.", err=False)
         return
 
     if fmt == "json":
@@ -1131,12 +1180,15 @@ def lineage(
         )
         return
 
-    click.echo(f"Column lineage — blueprint: {blueprint_id}")
-    click.echo(f"  {'Channel':<25} {'Output Column':<25} {'Source Table':<25} Source Column")
-    click.echo(f"  {'-'*25} {'-'*25} {'-'*25} {'-'*25}")
+    _funnel_echo(f"Column lineage — blueprint: {blueprint_id}", err=False)
+    _funnel_echo(
+        f"  {'Channel':<25} {'Output Column':<25} {'Source Table':<25} Source Column", err=False
+    )
+    _funnel_echo(f"  {'-'*25} {'-'*25} {'-'*25} {'-'*25}", err=False)
     for channel_id, output_column, source_table, source_column in rows:
-        click.echo(
-            f"  {channel_id:<25} {output_column:<25} {source_table:<25} {source_column or ''}"
+        _funnel_echo(
+            f"  {channel_id:<25} {output_column:<25} {source_table:<25} {source_column or ''}",
+            err=False,
         )
 
 
@@ -1176,9 +1228,11 @@ def _lineage_chain(
         _error(f"could not compile {blueprint_arg!r}: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
+    from aqueduct.cli.render.funnel import echo as _funnel_echo
+
     hops = compute_type_chain(manifest.modules, manifest.edges, column)
     if not hops:
-        click.echo(f"No SQL Channel produces column {column!r} in {bp.id!r}.")
+        _funnel_echo(f"No SQL Channel produces column {column!r} in {bp.id!r}.", err=False)
         return
 
     if fmt == "json":
@@ -1198,13 +1252,13 @@ def _lineage_chain(
         )
         return
 
-    click.echo(f"Column chain — blueprint: {bp.id}  column: {column}")
-    click.echo("")
+    _funnel_echo(f"Column chain — blueprint: {bp.id}  column: {column}", err=False)
+    _funnel_echo("", err=False)
     prev_type: str | None = None
     for i, h in enumerate(hops):
         connector = "  │" if i else "  "
         if i:
-            click.echo("  │")
+            _funnel_echo("  │", err=False)
         type_note = ""
         if show_types:
             marker = ""
@@ -1212,9 +1266,10 @@ def _lineage_chain(
                 marker = "  ⚠ type change"
             type_note = f"  :: {h.output_type}{marker}"
             prev_type = h.output_type if h.output_type != "UNKNOWN" else prev_type
-        click.echo(f"  ▸ {h.channel_id}.{h.output_column}{type_note}")
-        click.echo(
-            f"{connector}    ← {h.source_table or '(source)'}.{h.source_column}  [{h.transform_op}]"
+        _funnel_echo(f"  ▸ {h.channel_id}.{h.output_column}{type_note}", err=False)
+        _funnel_echo(
+            f"{connector}    ← {h.source_table or '(source)'}.{h.source_column}  [{h.transform_op}]",
+            err=False,
         )
 
 
@@ -1315,13 +1370,17 @@ def signal(
                 "SELECT passed, error_message, CAST(set_at AS VARCHAR) FROM signal_overrides WHERE signal_id = ?",
                 [signal_id],
             ).fetchone()
+        from aqueduct.cli.render.funnel import echo as _funnel_echo
+
         if row is None:
-            click.echo(f"  {signal_id}: no persistent override (evaluates from Probe data)")
+            _funnel_echo(
+                f"  {signal_id}: no persistent override (evaluates from Probe data)", err=False
+            )
         else:
             state = "open" if row[0] else "closed (blocked)"
-            click.echo(f"  {signal_id}: gate={state}  set_at={row[2]}")
+            _funnel_echo(f"  {signal_id}: gate={state}  set_at={row[2]}", err=False)
             if row[1]:
-                click.echo(f"  reason: {row[1]}")
+                _funnel_echo(f"  reason: {row[1]}", err=False)
         return
 
     if error_msg is not None and value_str == "true":
@@ -1337,8 +1396,11 @@ def signal(
         if passed:
             # Clear override — delete row entirely
             cur.execute("DELETE FROM signal_overrides WHERE signal_id = ?", [signal_id])
-            click.echo(
-                f"✓ signal {signal_id!r}: override cleared — gate resumes normal Probe evaluation"
+            from aqueduct.cli.render.funnel import success as _funnel_success
+
+            _funnel_success(
+                f"signal {signal_id!r}: override cleared — gate resumes normal Probe evaluation",
+                err=False,
             )
         else:
             cur.execute(
@@ -1353,11 +1415,15 @@ def signal(
                 [signal_id, False, error_msg, now],
             )
             msg_note = f"  reason: {error_msg}" if error_msg else ""
-            click.echo(
-                f"✓ signal {signal_id!r}: gate CLOSED — all future runs blocked at this Regulator"
+            from aqueduct.cli.render.funnel import echo as _funnel_echo
+            from aqueduct.cli.render.funnel import success as _funnel_success
+
+            _funnel_success(
+                f"signal {signal_id!r}: gate CLOSED — all future runs blocked at this Regulator",
+                err=False,
             )
             if msg_note:
-                click.echo(msg_note)
+                _funnel_echo(msg_note, err=False)
 
 
 # ── aqueduct dashboard (Phase 68) ─────────────────────────────────────────────
@@ -1392,10 +1458,8 @@ def dashboard(
     import subprocess
 
     if importlib.util.find_spec("streamlit") is None:
-        click.echo(
-            "✗ aqueduct dashboard needs the 'dashboard' extra: "
-            "pip install aqueduct-core[dashboard]",
-            err=True,
+        _error(
+            "aqueduct dashboard needs the 'dashboard' extra: pip install aqueduct-core[dashboard]"
         )
         sys.exit(exit_codes.CONFIG_ERROR)
 

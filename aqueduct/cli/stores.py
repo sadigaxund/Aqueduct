@@ -148,11 +148,16 @@ def stores_migrate(
     finally:
         conn.close()
 
+    from aqueduct.cli.render.funnel import echo as _funnel_echo
+    from aqueduct.cli.render.funnel import success as _funnel_success
+
     if not rows:
-        click.echo(f"  source depot has 0 rows — nothing to copy ({from_path})")
+        _funnel_echo(f"  source depot has 0 rows — nothing to copy ({from_path})", err=False)
         return
 
     for key, value in rows:
         bundle.depot.kv_put(str(key), str(value))
 
-    click.echo(f"✓ migrated {len(rows)} depot key(s)  source={from_path}  target={target_label}")
+    _funnel_success(
+        f"migrated {len(rows)} depot key(s)  source={from_path}  target={target_label}", err=False
+    )
