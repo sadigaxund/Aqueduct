@@ -24,7 +24,7 @@ from aqueduct.cli import (
     cli,
     style,
 )
-from aqueduct.cli.output import emit
+from aqueduct.cli.render.funnel import emit
 
 
 def _patch_index_obs_store(blueprint_path: Path | None = None):
@@ -306,7 +306,7 @@ def patch_preview(
     try:
         config_delta_res = _check_guardrails(spec, bp_raw, provenance_map=None, cfg=cfg)
     except PatchError as exc:
-        from aqueduct.cli.style import error as _style_error
+        from aqueduct.cli.render.style import error as _style_error
 
         _style_error(f"guardrails gate blocked: {exc}")
         sys.exit(exit_codes.DATA_OR_RUNTIME)
@@ -425,13 +425,13 @@ def patch_preview(
     # Text report — headers dim (structural), gate status lines use the
     # shared ✓/✗/⚠/· vocabulary (style.py) so `patch preview`'s gate pyramid
     # reads consistently with the rest of the CLI's output.
-    from aqueduct.cli.style import dim as _dim
+    from aqueduct.cli.render.style import dim as _dim
 
     def _gate_status_line(status: str) -> None:
-        from aqueduct.cli.style import error as _e
-        from aqueduct.cli.style import info as _i
-        from aqueduct.cli.style import success as _s
-        from aqueduct.cli.style import warn as _w
+        from aqueduct.cli.render.style import error as _e
+        from aqueduct.cli.render.style import info as _i
+        from aqueduct.cli.render.style import success as _s
+        from aqueduct.cli.render.style import warn as _w
 
         label = f"status: {status}"
         if status == GateStatus.PASS:

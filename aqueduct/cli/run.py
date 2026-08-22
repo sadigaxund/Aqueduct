@@ -22,7 +22,7 @@ from aqueduct.cli import (
     _rule,
     cli,
 )
-from aqueduct.cli.output import emit
+from aqueduct.cli.render.funnel import emit
 from aqueduct.executor.models import concise_error
 from aqueduct.models import ModuleType
 
@@ -308,8 +308,8 @@ def _load_engine_config(
     import sys as _sys
 
     from aqueduct.cli import _resolve_and_load_env as _renv
-    from aqueduct.cli.style import error as _err
-    from aqueduct.cli.style import warn as _warn
+    from aqueduct.cli.render.style import error as _err
+    from aqueduct.cli.render.style import warn as _warn
 
     # ── .env loading ───────────────────────────────────────────────────────────
     _renv(env_file, _project_root / blueprint_abs.name, cli_env=cli_env)
@@ -487,7 +487,7 @@ def _emit_explain_regressions(g4) -> None:
     while the LLM path printed it."""
     if g4 is None or getattr(g4, "status", None) != "warn":
         return
-    from aqueduct.cli.output import warn as _warn
+    from aqueduct.cli.render.funnel import warn as _warn
 
     for _r in getattr(g4, "regressions", ()) or ():
         _warn("explain_regression", _r.detail)
@@ -509,7 +509,7 @@ def _do_compile(
         from pathlib import Path as _P
 
         from aqueduct.cli import _compile_with_warnings
-        from aqueduct.cli.style import error as _err
+        from aqueduct.cli.render.style import error as _err
         from aqueduct.compiler.compiler import CompileError
         from aqueduct.compiler.compiler import compile as compiler_compile
         from aqueduct.depot.depot import DepotStore as _DS
@@ -851,10 +851,10 @@ def _setup_surveyor(
             selector_note = "  [" + ", ".join(parts) + "]"
         exec_date_note = f"  exec_date={execution_date}" if execution_date else ""
         from aqueduct.cli import _rule
-        from aqueduct.cli.style import dim as _dim
+        from aqueduct.cli.render.style import dim as _dim
 
         _r = _dim(_rule())
-    from aqueduct.cli.style import emit_warnings as _emit_warnings
+    from aqueduct.cli.render.style import emit_warnings as _emit_warnings
 
     # \u2500\u2500 Header \u2014 the divider between engine/setup context (above) and this run \u2500\u2500
     click.echo(_r)
@@ -972,7 +972,7 @@ def _setup_surveyor(
         resolved_agent_cascade,
     )
     if _heal_mode != "disabled" and not _agent_reachable:
-        from aqueduct.cli.style import warn as _style_warn
+        from aqueduct.cli.render.style import warn as _style_warn
 
         _style_warn(
             f"self-healing is enabled (agent.approval={_heal_mode}) but the agent is not "
@@ -1327,7 +1327,7 @@ def run(
         # ── Resolution preamble — surface the non-default inputs shaping this run
         # (dim info lines next to the `· env ·` notice). Keys only for --set:
         # values may embed secrets that were never registered for redaction.
-        from aqueduct.cli.style import info as _preamble_info
+        from aqueduct.cli.render.style import info as _preamble_info
 
         _over_parts = []
         if set_items:
@@ -1342,7 +1342,7 @@ def run(
         if cfg.secrets.provider != "env":
             _preamble_info(f"· secrets  ·  provider: {cfg.secrets.provider}", err=True)
         if _lcr.danger_pairs:
-            from aqueduct.cli.style import emit_warning_pairs
+            from aqueduct.cli.render.style import emit_warning_pairs
 
             emit_warning_pairs(list(_lcr.danger_pairs), label="danger:", err=True)
 
@@ -1452,13 +1452,13 @@ def run(
                 detail = (
                     f" — first error in {failing.module_id!r}: {failing.error}" if failing else ""
                 )
-                from aqueduct.cli.style import error as _style_error
+                from aqueduct.cli.render.style import error as _style_error
 
                 _style_error(f"sandbox run status={result.status}{detail}")
                 sys.exit(exit_codes.DATA_OR_RUNTIME)
 
             _ran = sum(1 for r in result.module_results if r.status == ExecutionStatus.SUCCESS)
-            from aqueduct.cli.style import success as _style_success
+            from aqueduct.cli.render.style import success as _style_success
 
             _style_success(
                 f"sandbox run succeeded — {_ran} module(s) executed, "
@@ -1695,7 +1695,7 @@ def run(
             )
 
             def _mr_line(mr, name, pad, lead, warn_prefix):
-                from aqueduct.cli.style import dim as _dim
+                from aqueduct.cli.render.style import dim as _dim
 
                 if mr.status == ExecutionStatus.ERROR and mr.error:
                     line = f"{lead}{_icon(mr)} {name}  {click.style('— ' + concise_error(mr.error), fg='red')}"
@@ -1715,7 +1715,7 @@ def run(
                     line = f"{lead}{_icon(mr)} {name.ljust(pad)}   {tail}".rstrip()
                 click.echo(line)
                 for rule_id, msg in mr.warnings:
-                    from aqueduct.cli.output import warn as _output_warn
+                    from aqueduct.cli.render.funnel import warn as _output_warn
 
                     _output_warn(rule_id, msg, prefix=warn_prefix, err=False)
                 # Probe `report: stdout` lines — informational, dim, never in
@@ -1735,8 +1735,8 @@ def run(
                 bytes transferred, and duration, distinct from an ordinary
                 module row so a cross-engine transport step reads as what it
                 is rather than an anonymous module id."""
-                from aqueduct.cli.output import format_bytes as _format_bytes
-                from aqueduct.cli.style import dim as _dim
+                from aqueduct.cli.render.funnel import format_bytes as _format_bytes
+                from aqueduct.cli.render.style import dim as _dim
 
                 _cfg = _handoff_info[mr.module_id]
                 _boundary = (
@@ -1759,7 +1759,7 @@ def run(
                     line = f"{lead}{_icon(mr)} ⇄ {_boundary}   {tail}".rstrip()
                 click.echo(line)
                 for rule_id, msg in mr.warnings:
-                    from aqueduct.cli.output import warn as _output_warn
+                    from aqueduct.cli.render.funnel import warn as _output_warn
 
                     _output_warn(rule_id, msg, prefix=warn_prefix, err=False)
 
@@ -1814,7 +1814,7 @@ def run(
                 and _gate_result.status == _GateStatus.UNAVAILABLE
             ):
                 _polyglot_sandbox_unavailable_warned = True
-                from aqueduct.cli.style import warn as _style_warn
+                from aqueduct.cli.render.style import warn as _style_warn
 
                 _style_warn(_gate_result.detail)
 
@@ -2282,7 +2282,7 @@ def run(
             _attempt_display = (
                 f"{patch_count + 1}/{max_patches}" if max_patches > 1 else f"{patch_count + 1}"
             )
-            from aqueduct.cli.style import colorize_line as _style_heal_line
+            from aqueduct.cli.render.style import colorize_line as _style_heal_line
 
             # Live SSE streaming is interactive-TTY-only (piped/CI keep the
             # non-streaming POST path).
@@ -2582,7 +2582,7 @@ def run(
                 effective_mode == "auto" and not _cascade_tiers and _replay_result is None
             ):
                 if _replay_result is not None:
-                    from aqueduct.cli.style import info as _prog_info
+                    from aqueduct.cli.render.style import info as _prog_info
 
                     _prog_info(
                         "progressive chain not started — replay-cache hit served "
@@ -2591,7 +2591,7 @@ def run(
                     )
                 elif not _progressive_scope_warned:
                     _progressive_scope_warned = True
-                    from aqueduct.cli.output import warn as _output_warn
+                    from aqueduct.cli.render.funnel import warn as _output_warn
 
                     if effective_mode != "auto":
                         _scope_reason = (
@@ -3441,8 +3441,8 @@ def run(
                         from aqueduct.agent.regression_artifact import (
                             generate as _gen_regression_artifact,
                         )
-                        from aqueduct.cli.style import info as _ra_info
-                        from aqueduct.cli.style import success as _ra_success
+                        from aqueduct.cli.render.style import info as _ra_info
+                        from aqueduct.cli.render.style import success as _ra_success
 
                         try:
                             _ra_result = _gen_regression_artifact(
@@ -3520,7 +3520,7 @@ def run(
             for rid, msg in mr.warnings
         ]
         if _runtime_pairs:
-            from aqueduct.cli.style import emit_warning_pairs
+            from aqueduct.cli.render.style import emit_warning_pairs
 
             emit_warning_pairs(_runtime_pairs, label="runtime:", verbose=verbose)
 
@@ -3529,8 +3529,8 @@ def run(
             # heal_attempts and `healing_outcomes.parent_run_id`. In multi-patch
             # mode `result.run_id` would be the LAST iteration's per-iteration
             # uuid, which can't be used to retrieve the full heal history.
-            from aqueduct.cli.style import dim as _dim
-            from aqueduct.cli.style import error as _style_error
+            from aqueduct.cli.render.style import dim as _dim
+            from aqueduct.cli.render.style import error as _style_error
 
             click.echo(_dim(_rule()), err=True)
             if failure_ctx:
@@ -3585,7 +3585,7 @@ def run(
             ):
                 if _obs.get("status") != "observed":
                     continue
-                from aqueduct.cli.output import emit_info as _emit_info
+                from aqueduct.cli.render.funnel import emit_info as _emit_info
 
                 _emit_info(f"perf vs pre-patch baseline: {_obs['detail']}")
                 for _caveat in _obs.get("caveats") or []:
@@ -3611,8 +3611,8 @@ def run(
             )
 
         status_label = "patched" if result.status == ExecutionStatus.PATCHED else "complete"
-        from aqueduct.cli.style import dim as _dim
-        from aqueduct.cli.style import success as _style_success
+        from aqueduct.cli.render.style import dim as _dim
+        from aqueduct.cli.render.style import success as _style_success
 
         click.echo(_dim(_rule()))
         _style_success(f"blueprint {status_label}")

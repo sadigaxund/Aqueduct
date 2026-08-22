@@ -23,7 +23,7 @@ from aqueduct.cli import (
     _sniff_file_kind,
     cli,
 )
-from aqueduct.cli.output import emit
+from aqueduct.cli.render.funnel import emit
 
 
 @cli.command()
@@ -193,7 +193,7 @@ def validate(
                 if hook_problems:
                     file_results[-1]["hook_warnings"] = hook_problems
                 if text and hook_problems:
-                    from aqueduct.cli.style import emit_warnings
+                    from aqueduct.cli.render.style import emit_warnings
 
                     emit_warnings(_hook_caught, label="hooks:")
             except ParseError as exc:
@@ -359,12 +359,12 @@ def lint_cmd(
         )
     else:
         if not findings:
-            from aqueduct.cli.style import success as _style_success
+            from aqueduct.cli.render.style import success as _style_success
 
             _style_success(f"{blueprint}: no lint findings")
         else:
-            from aqueduct.cli.style import error as _style_error
-            from aqueduct.cli.style import warn as _style_warn
+            from aqueduct.cli.render.style import error as _style_error
+            from aqueduct.cli.render.style import warn as _style_warn
 
             for f in findings:
                 sev = _sev(f)
@@ -514,13 +514,13 @@ def doctor(
     """
     from pathlib import Path
 
-    from aqueduct.cli.style import COLOR as _COLOR
-    from aqueduct.cli.style import ICON as _ICON
-    from aqueduct.cli.style import dim as _dim
-    from aqueduct.cli.style import emit_warnings as _emit_warnings
-    from aqueduct.cli.style import error as _error
-    from aqueduct.cli.style import info as _info
-    from aqueduct.cli.style import success as _success
+    from aqueduct.cli.render.style import COLOR as _COLOR
+    from aqueduct.cli.render.style import ICON as _ICON
+    from aqueduct.cli.render.style import dim as _dim
+    from aqueduct.cli.render.style import emit_warnings as _emit_warnings
+    from aqueduct.cli.render.style import error as _error
+    from aqueduct.cli.render.style import info as _info
+    from aqueduct.cli.render.style import success as _success
     from aqueduct.doctor import run_doctor
 
     config_path: Path | None = None
