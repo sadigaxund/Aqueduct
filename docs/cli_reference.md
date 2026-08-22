@@ -9,7 +9,8 @@ Bare `aqueduct` (no subcommand) prints a branded version banner including the en
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--version` | n/a | Print the installed `aqueduct-core` version and exit |
-| `-v`, `--verbose` | off | Enable DEBUG logging (LLM prompts, SQL plans, etc.) |
+| `-v`, `--verbose` | 0 | Repeatable output-detail tier. `-v` = full Aqueduct-side narrative (untruncated errors/warnings, uncollapsed `doctor` rows, uncapped probe notes, transcript detail). `-vv` = also show the raw layer (engine/Spark startup + log4j output, prompt text, streamed model text). Works before OR after the subcommand — `aqueduct -v run bp.yml` and `aqueduct run -v bp.yml` are equivalent (`run` and `doctor` keep their own `-v` too, purely so the postfix form works; the effective level is the max of both). Does **not** enable DEBUG logging — use `--debug` for that. |
+| `--debug` | off | Enable Python DEBUG logging (root logger — library/framework internals). Independent of `-v`. |
 | `--log-format text\|json` | `text` | Output format for logs |
 | `--suppress-warning <id>` | n/a | Silence one `AQ-WARN [<id>]` rule. Repeatable. Use `'*'` to silence all. Applied BEFORE the subcommand. |
 
@@ -53,7 +54,7 @@ Aqueduct automatically loads `.env` from the directory of the config or blueprin
 | *(handoff checks, always on)* | `handoff-space`: free disk space at `handoff.root` (skips on a remote URI — not a local-disk question; warns, never fails, below a 5 GiB heuristic). `handoff-access:<engine>`: a write+read+cleanup round-trip at `handoff.root` for every registered engine (`aqueduct.executor.capabilities.CAPABILITY_REGISTRY`, never a hardcoded engine list). DuckDB's probe runs unconditionally (a `:memory:` connection is cheap) and attempts a real round trip on a remote root too — `httpfs` autoloads on first touch, using the configured `engine.duckdb.s3_*`/`extension_repository` if present (see [specs.md §10.9](specs.md#109-engines-and-the-capability-framework)) — reporting a genuine `ok`/`fail` rather than an unconditional skip. Spark's probe needs a real SparkSession to prove the configured `engine.spark.conf` credentials actually work, so it only runs under `--preflight`; the default is a `skip` naming that. |
 | `aqueduct doctor --aqtest <file>` | Schema pre-flight on a `.aqtest.yml` (verifies blueprint ref + module IDs) |
 | `aqueduct doctor --aqscenario <file>` | Schema pre-flight on a `.aqscenario.yml`: hard-validates the whole file (unknown keys at any level, the `expected_patch.effect` shape, the assertion vocabulary, `domains:`), then verifies the blueprint ref and that `inject_failure.module` names a module in it. Reports the simulated engine, the effect keys the scenario actually grades, and its declared domains. No LLM call. |
-| `aqueduct doctor -v, --verbose` | Also show skipped checks (not-applicable / not-configured), not just the collapsed summary |
+| `aqueduct doctor -v, --verbose` | Same root `-v` tier flag, kept on `doctor` too so `aqueduct doctor -v` (postfix) works — the effective level is the max of this and a root-level `-v`. At tier 1+, also shows skipped checks (not-applicable / not-configured), not just the collapsed summary. |
 | `aqueduct doctor --format json` | Machine-readable result of every check (`{schema_version, summary, checks[]}`); implies `--verbose` (nothing collapsed). Text mode groups checks into sections (Config, Stores, Spark, …). |
 | `aqueduct completion {bash\|zsh\|fish}` | Emit a shell-completion script for installation |
 

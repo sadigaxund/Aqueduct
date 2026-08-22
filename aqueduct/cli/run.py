@@ -130,10 +130,10 @@ def compile(
     rendered = _render_compile_show(manifest, show.lower())
 
     if output == "-":
-        click.echo(rendered)
+        click.echo(rendered, err=False)
     else:
         Path(output).write_text(rendered, encoding="utf-8")
-        click.echo(f"Compile artefact written → {output}  (--show={show})")
+        click.echo(f"Compile artefact written → {output}  (--show={show})", err=False)
 
 
 def _render_compile_show(manifest: Any, show: str) -> str:
@@ -359,7 +359,8 @@ def _load_engine_config(
         if _config_set_nested.get("danger"):
             _warn(
                 f"--set DANGER override(s) (single-run, NOT persisted): "
-                f"{_config_set_nested['danger']}"
+                f"{_config_set_nested['danger']}",
+                err=True,
             )
 
     # ── Store dir resolution ───────────────────────────────────────────────────
@@ -490,7 +491,7 @@ def _emit_explain_regressions(g4) -> None:
     from aqueduct.cli.render.funnel import warn as _warn
 
     for _r in getattr(g4, "regressions", ()) or ():
-        _warn("explain_regression", _r.detail)
+        _warn("explain_regression", _r.detail, err=True)
 
 
 def _do_compile(
@@ -500,7 +501,7 @@ def _do_compile(
     execution_date_str,
     store_dir_abs,
     cfg,
-    verbose,
+    verbosity,
     blueprint_set_nested,
 ):
     """Phase 2 — parse blueprint + build stores + compile → ``_CompileResult``."""
@@ -583,7 +584,7 @@ def _do_compile(
             deployment_env=getattr(cfg.deployment, "env", None),
             deployment_target=getattr(cfg.deployment, "target", None),
             engine=getattr(cfg.deployment, "engine", "spark"),
-            _verbose=verbose,
+            _verbose=verbosity >= 1,
             _defer=True,  # emit after the run header (tier-2 blueprint warnings)
         )
     except CompileError as exc:
@@ -703,7 +704,7 @@ def _setup_surveyor(
     cfg,
     _obs_routing_base,
     _using_default_obs_path,
-    verbose,
+    verbosity,
     allow_multi_patch_flag,
     _project_root,
     blueprint_str,
@@ -818,7 +819,7 @@ def _setup_surveyor(
                     + click.style("  \u00b7  aqueduct patch list", dim=True),
                     err=True,
                 )
-                if verbose:
+                if verbosity >= 1:
                     for p in pending_patches:
                         click.echo(f"  \u00b7 {p.stem}", err=True)
 
@@ -857,7 +858,9 @@ def _setup_surveyor(
     from aqueduct.cli.render.style import emit_warnings as _emit_warnings
 
     # \u2500\u2500 Header \u2014 the divider between engine/setup context (above) and this run \u2500\u2500
-    click.echo(_r)
+    # Explicitly stdout: the header + tree + closing divider + verdict form
+    # ONE coherent "final result" block that must survive `> run.log` intact.
+    click.echo(_r, err=False)
     _arrow = click.style("\u25b6", fg="cyan", bold=True)
     _bp_label = click.style(manifest.blueprint_id, bold=True)
     # A polyglot Manifest (>1 island) names every engine actually involved,
@@ -875,15 +878,16 @@ def _setup_surveyor(
         f"{_arrow} "
         f"{_bp_label}  \u00b7  "
         f"{len(manifest.modules)} modules  \u00b7  run {run_id}  \u00b7  {_engine_desc}"
-        f"{selector_note}{exec_date_note}"
+        f"{selector_note}{exec_date_note}",
+        err=False,
     )
-    click.echo(_r)
+    click.echo(_r, err=False)
 
     # Tier 2 \u2014 blueprint + session warnings AFTER the header (the header names the
     # blueprint they are about). Engine/config-level warnings already printed
     # above the header; runtime probe/assert warnings come later, during execution.
-    _emit_warnings(compile_warnings, verbose=verbose, label="compile:")
-    _emit_warnings(_setup_caught, verbose=verbose, label="session:")
+    _emit_warnings(compile_warnings, verbose=verbosity >= 1, err=True, label="compile:")
+    _emit_warnings(_setup_caught, verbose=verbosity >= 1, err=True, label="session:")
 
     # The blueprint's compile warnings are now shown once (grouped). The run
     # re-parses/re-compiles the SAME blueprint several times after this point —
@@ -979,6 +983,7 @@ def _setup_surveyor(
             f"reachable (provider={resolved_agent_provider}, no API key / base_url, and no "
             "usable cascade tier) — failures will NOT be auto-healed. Set the API key env "
             "var, agent.base_url, or a cascade tier base_url.",
+            err=True,
         )
 
     # ── Register agent API key for redaction ─────────────────────────────────────
@@ -1068,7 +1073,7 @@ def _setup_surveyor(
                 blueprint_id=manifest.blueprint_id,
                 engine_config=resolve_session_engine_config(cfg, engine, manifest),
                 master_url=master_url,
-                quiet_startup=not verbose,
+                quiet_startup=(verbosity < 2),
                 timezone=cfg.timezone,
                 engine_options=session_secrets_options(cfg, manifest),
             )
@@ -1186,11 +1191,15 @@ def _setup_surveyor(
 @click.option(
     "-v",
     "--verbose",
-    is_flag=True,
-    default=False,
-    help="Show the full Spark/JVM startup banner (incubator notice, log4j init, "
-    "NativeCodeLoader). Suppressed by default for cleaner output; runtime Spark "
-    "warnings always print.",
+    "verbose",
+    count=True,
+    help="Increase output detail (repeatable: -v, -vv). Also honoured when "
+    "given on the root group instead (`aqueduct -v run ...`) — the effective "
+    "level is the max of both. -v = full Aqueduct-side story (untruncated "
+    "errors/warnings, uncapped probe notes, transcript detail); -vv = also "
+    "show the raw layer (full Spark/JVM startup banner — incubator notice, "
+    "log4j init, NativeCodeLoader — plus prompt text and streamed model "
+    "text). See `aqueduct --help` for the full tier description.",
 )
 @click.option(
     "--sandbox",
@@ -1231,7 +1240,7 @@ def run(
     from_module: str | None,
     to_module: str | None,
     execution_date_str: str | None,
-    verbose: bool = False,
+    verbose: int = 0,
     allow_multi_patch_flag: bool = False,
     env_file: str | None = None,
     cli_env: tuple[str, ...] = (),
@@ -1245,8 +1254,15 @@ def run(
     import uuid
     from pathlib import Path
 
+    from aqueduct.cli.verbosity import resolve_verbosity
     from aqueduct.executor import ExecuteError
     from aqueduct.executor.models import ExecutionResult, ExecutionStatus, ModuleResult
+
+    # Effective verbosity = max(root `-v` count, this command's own `-v`
+    # count) — see aqueduct/cli/verbosity.py for the tier semantics. `verbose`
+    # (the local count, kept for Click's postfix `run -v` support) is not
+    # used again below this point; every consumer reads `verbosity`.
+    verbosity = resolve_verbosity(local=verbose)
 
     # ── Anchor CWD to project root ────────────────────────────────────────────
     # Resolve all CLI-supplied paths to absolute BEFORE chdir so that relative
@@ -1353,7 +1369,7 @@ def run(
             execution_date_str=execution_date_str,
             store_dir_abs=store_dir_abs,
             cfg=cfg,
-            verbose=verbose,
+            verbosity=verbosity,
             blueprint_set_nested=blueprint_set_nested,
         )
         manifest = _cr.manifest
@@ -1423,7 +1439,7 @@ def run(
                 manifest.blueprint_id,
                 merged_spark_config,
                 master_url=master_url,
-                quiet_startup=not verbose,
+                quiet_startup=(verbosity < 2),
             )
             atexit.register(session.stop)
 
@@ -1454,7 +1470,7 @@ def run(
                 )
                 from aqueduct.cli.render.style import error as _style_error
 
-                _style_error(f"sandbox run status={result.status}{detail}")
+                _style_error(f"sandbox run status={result.status}{detail}", err=False)
                 sys.exit(exit_codes.DATA_OR_RUNTIME)
 
             _ran = sum(1 for r in result.module_results if r.status == ExecutionStatus.SUCCESS)
@@ -1462,7 +1478,8 @@ def run(
 
             _style_success(
                 f"sandbox run succeeded — {_ran} module(s) executed, "
-                f"{len(egress_targets)} Egress skipped"
+                f"{len(egress_targets)} Egress skipped",
+                err=False,
             )
             for tgt in egress_targets:
                 click.echo(
@@ -1478,7 +1495,7 @@ def run(
             cfg=cfg,
             _obs_routing_base=_obs_routing_base,
             _using_default_obs_path=_using_default_obs_path,
-            verbose=verbose,
+            verbosity=verbosity,
             allow_multi_patch_flag=allow_multi_patch_flag,
             _project_root=_project_root,
             blueprint_str=blueprint,
@@ -1648,7 +1665,7 @@ def run(
                 if getattr(m, "disabled_reason", None)
             }
 
-            click.echo()
+            click.echo(err=False)
 
             def _icon(mr):
                 if mr.status == ExecutionStatus.SUCCESS:
@@ -1713,7 +1730,7 @@ def run(
                         meta.append(_module_engine[mr.module_id])
                     tail = _dim("  ·  ".join(meta)) if meta else ""
                     line = f"{lead}{_icon(mr)} {name.ljust(pad)}   {tail}".rstrip()
-                click.echo(line)
+                click.echo(line, err=False)
                 for rule_id, msg in mr.warnings:
                     from aqueduct.cli.render.funnel import warn as _output_warn
 
@@ -1721,12 +1738,13 @@ def run(
                 # Probe `report: stdout` lines — informational, dim, never in
                 # the warning roll-up. Capped unless -v.
                 _notes = tuple(getattr(mr, "notes", ()) or ())
-                _cap = len(_notes) if verbose else 10
+                _cap = len(_notes) if verbosity >= 1 else 10
                 for note in _notes[:_cap]:
-                    click.echo(_dim(f"{warn_prefix}{note}"))
+                    click.echo(_dim(f"{warn_prefix}{note}"), err=False)
                 if len(_notes) > _cap:
                     click.echo(
-                        _dim(f"{warn_prefix}· {len(_notes) - _cap} more  ·  -v for full output")
+                        _dim(f"{warn_prefix}· {len(_notes) - _cap} more  ·  -v for full output"),
+                        err=False,
                     )
 
             def _handoff_line(mr, pad, lead, warn_prefix):
@@ -1757,7 +1775,7 @@ def run(
                         meta.append(_fmt_dur(_m.get("duration_ms")))
                     tail = _dim("  ·  ".join(meta)) if meta else ""
                     line = f"{lead}{_icon(mr)} ⇄ {_boundary}   {tail}".rstrip()
-                click.echo(line)
+                click.echo(line, err=False)
                 for rule_id, msg in mr.warnings:
                     from aqueduct.cli.render.funnel import warn as _output_warn
 
@@ -1778,7 +1796,7 @@ def run(
                     _p_icon = click.style("✓", fg="green")
                 else:
                     _p_icon = click.style("⏭", fg="cyan")
-                click.echo(f"  {_p_icon} {item}")
+                click.echo(f"  {_p_icon} {item}", err=False)
                 for _i, _kid in enumerate(_kids):
                     _glyph = "└─" if _i == len(_kids) - 1 else "├─"
                     _lead = "    " + click.style(_glyph, fg="bright_black") + " "
@@ -1816,7 +1834,7 @@ def run(
                 _polyglot_sandbox_unavailable_warned = True
                 from aqueduct.cli.render.style import warn as _style_warn
 
-                _style_warn(_gate_result.detail)
+                _style_warn(_gate_result.detail, err=True)
 
         def _execute_target(
             target_manifest, *, run_id: str, resume_run_id: str | None = None, **kw
@@ -1902,7 +1920,7 @@ def run(
                                 cfg, engine, target_manifest
                             ),
                             master_url=master_url,
-                            quiet_startup=not verbose,
+                            quiet_startup=(verbosity < 2),
                             timezone=cfg.timezone,
                             engine_options=session_secrets_options(cfg, target_manifest),
                         )
@@ -1959,7 +1977,7 @@ def run(
                 warnings_suppress=cfg.warnings.suppress,
                 engine_configs=_engine_configs,
                 master_url=master_url,
-                quiet_startup=not verbose,
+                quiet_startup=(verbosity < 2),
                 timezone=cfg.timezone,
                 secrets_config=session_secrets_options(cfg, target_manifest)["secrets"],
                 block_full_actions=kw.get("block_full_actions", False),
@@ -2285,11 +2303,13 @@ def run(
             from aqueduct.cli.render.style import colorize_line as _style_heal_line
 
             # Live SSE streaming is interactive-TTY-only (piped/CI keep the
-            # non-streaming POST path).
-            _use_stream = sys.stdout.isatty()
+            # non-streaming POST path). The ENTIRE heal block — including this
+            # stream — is narrative (stderr), so the TTY check is against
+            # stderr, not stdout.
+            _use_stream = sys.stderr.isatty()
             _transcript = TranscriptWriter(
-                verbose=verbose,
-                write=lambda s: emit(_style_heal_line(s)),
+                verbose=verbosity >= 1,
+                write=lambda s: emit(_style_heal_line(s), err=True),
                 streamed=_use_stream,
             )
 
@@ -2332,7 +2352,7 @@ def run(
                     if _use_stream
                     else "│   · contacting agent… (first response can be slow — big prompt / local cold-start)"
                 )
-                emit(_style_heal_line(_cue))
+                emit(_style_heal_line(_cue), err=True)
 
             # Run blueprint doctor checks against the compiled Manifest (all modules resolved,
             # arcades expanded — no need to re-parse or recurse into sub-blueprints).
@@ -2372,23 +2392,25 @@ def run(
             _stream_state = {"chars": 0, "kind": None, "active": False}
 
             def _on_token(kind: str, text: str) -> None:
+                # Heal-block narrative — stderr, like everything else in this
+                # block (see the stream-routing note on `_use_stream` above).
                 _stream_state["active"] = True
-                if verbose:
+                if verbosity >= 1:
                     if kind != _stream_state["kind"]:
                         head = "· thinking" if kind == "thinking" else "▸ answer"
-                        sys.stdout.write(f"\n│   {head}:\n│   ┆ ")
+                        sys.stderr.write(f"\n│   {head}:\n│   ┆ ")
                         _stream_state["kind"] = kind
-                    sys.stdout.write(text.replace("\n", "\n│   ┆ "))
+                    sys.stderr.write(text.replace("\n", "\n│   ┆ "))
                 else:
                     _stream_state["chars"] += len(text)
                     label = "thinking" if kind == "thinking" else "writing"
-                    sys.stdout.write(f"\r│   · {label}… {_stream_state['chars']} chars")
-                sys.stdout.flush()
+                    sys.stderr.write(f"\r│   · {label}… {_stream_state['chars']} chars")
+                sys.stderr.flush()
 
             def _close_stream() -> None:
                 if _stream_state["active"]:
-                    sys.stdout.write("\n")
-                    sys.stdout.flush()
+                    sys.stderr.write("\n")
+                    sys.stderr.flush()
                     _stream_state.update(chars=0, kind=None, active=False)
 
             def _on_attempt(rec):
@@ -2610,6 +2632,7 @@ def run(
                         f"agent.progressive: true is set but progressive healing "
                         f"is skipped for this run — {_scope_reason}. Falling back "
                         "to the standard heal loop.",
+                        err=True,
                     )
             if (
                 resolved_agent_progressive
@@ -3452,7 +3475,9 @@ def run(
                             # None — never wrap them in click.echo (stray blank
                             # line + message on the wrong stream).
                             if _ra_result.written:
-                                _ra_success(f"regression test written → {_ra_result.path}")
+                                _ra_success(
+                                    f"regression test written → {_ra_result.path}", err=True
+                                )
                             else:
                                 _ra_info(
                                     f"regression artifact skipped: {_ra_result.skip_reason}",
@@ -3522,7 +3547,7 @@ def run(
         if _runtime_pairs:
             from aqueduct.cli.render.style import emit_warning_pairs
 
-            emit_warning_pairs(_runtime_pairs, label="runtime:", verbose=verbose)
+            emit_warning_pairs(_runtime_pairs, label="runtime:", verbose=verbosity >= 1, err=True)
 
         if result.status not in (ExecutionStatus.SUCCESS, ExecutionStatus.PATCHED):
             # Print the outer (user-visible) run_id — that's the join key for
@@ -3532,14 +3557,20 @@ def run(
             from aqueduct.cli.render.style import dim as _dim
             from aqueduct.cli.render.style import error as _style_error
 
-            click.echo(_dim(_rule()), err=True)
+            # Stdout, explicitly: the closing divider + verdict are part of
+            # the SAME framed result block as the header/tree above (must
+            # survive `> run.log` piped alone) — `style.error` defaults to
+            # stderr, so the destination is overridden here rather than
+            # fought around.
+            click.echo(_dim(_rule()), err=False)
             if failure_ctx:
                 _style_error(
                     f"blueprint failed  run_id={run_id}"
-                    f"  failed_module={failure_ctx.failed_module}"
+                    f"  failed_module={failure_ctx.failed_module}",
+                    err=False,
                 )
             else:
-                _style_error(f"blueprint failed  run_id={run_id}")
+                _style_error(f"blueprint failed  run_id={run_id}", err=False)
             # on_failure hooks — after the verdict line, before the exit code.
             # Hook outcomes never alter the exit code below.
             from aqueduct.cli.hooks import run_hooks as _run_hooks
@@ -3587,9 +3618,9 @@ def run(
                     continue
                 from aqueduct.cli.render.funnel import emit_info as _emit_info
 
-                _emit_info(f"perf vs pre-patch baseline: {_obs['detail']}")
+                _emit_info(f"perf vs pre-patch baseline: {_obs['detail']}", err=True)
                 for _caveat in _obs.get("caveats") or []:
-                    _emit_info(f"  {_caveat}")
+                    _emit_info(f"  {_caveat}", err=True)
         except Exception:
             pass  # provenance stamping must never affect a successful run
 
@@ -3614,8 +3645,8 @@ def run(
         from aqueduct.cli.render.style import dim as _dim
         from aqueduct.cli.render.style import success as _style_success
 
-        click.echo(_dim(_rule()))
-        _style_success(f"blueprint {status_label}")
+        click.echo(_dim(_rule()), err=False)
+        _style_success(f"blueprint {status_label}", err=False)
 
         # on_success hooks — chained blueprints / webhooks / gated commands.
         # A hooks section closes with its own `run complete` footer.
@@ -3632,6 +3663,6 @@ def run(
             session=_session_holder.session,
             engine=engine,
         ):
-            _style_success("run complete")
+            _style_success("run complete", err=False)
     finally:
         os.chdir(_original_cwd)

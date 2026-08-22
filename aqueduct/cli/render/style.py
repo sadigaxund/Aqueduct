@@ -72,8 +72,8 @@ def error(msg: str, *, err: bool = True) -> None:
     click.echo(click.style(f"{ICON['fail']} {msg}", fg="red"), err=err)
 
 
-def success(msg: str) -> None:
-    click.echo(click.style(f"{ICON['ok']} {msg}", fg="green"))
+def success(msg: str, *, err: bool = False) -> None:
+    click.echo(click.style(f"{ICON['ok']} {msg}", fg="green"), err=err)
 
 
 def warn(msg: str, *, err: bool = True) -> None:

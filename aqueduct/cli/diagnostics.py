@@ -73,6 +73,7 @@ def validate(
                         "error": "no file given and no aqueduct.yml in CWD",
                     },
                     fmt="json",
+                    err=False,
                 )
             else:
                 click.echo("✗ no file given and no aqueduct.yml in CWD", err=True)
@@ -95,7 +96,7 @@ def validate(
                 _apply_warnings_from_cfg(cfg)
             except ConfigError as exc:
                 if text:
-                    click.echo(f"✗ {path}: {exc}", err=True)
+                    click.echo(f"✗ {path}: {exc}", err=False)
                 file_results.append(
                     {"path": str(path), "kind": "config", "valid": False, "error": str(exc)}
                 )
@@ -124,28 +125,37 @@ def validate(
                 }
             )
             if text:
-                emit(f"✓ {path}  [engine config]", fmt="text", redact=True)
+                emit(f"✓ {path}  [engine config]", fmt="text", redact=True, err=False)
                 emit(
                     f"  engine:  {cfg.deployment.engine}  target={cfg.deployment.target}  master={cfg.engine.spark.master_url}",
                     fmt="text",
                     redact=True,
+                    err=False,
                 )
                 emit(
                     f"  stores:  observability={cfg.stores.observability.path or '(default)'}  depot={cfg.stores.default_depot().path}",
                     fmt="text",
                     redact=True,
+                    err=False,
                 )
-                emit(f"  secrets: provider={cfg.secrets.provider}", fmt="text", redact=True)
+                emit(
+                    f"  secrets: provider={cfg.secrets.provider}",
+                    fmt="text",
+                    redact=True,
+                    err=False,
+                )
                 emit(
                     f"  webhooks: {', '.join(f'{k}={v}' for k, v in wh.items()) if wh else '(not configured)'}",
                     fmt="text",
                     redact=True,
+                    err=False,
                 )
                 if cfg.engine.spark.conf:
                     emit(
                         f"  spark_config: {json.dumps(cfg.engine.spark.conf, ensure_ascii=False)}",
                         fmt="text",
                         redact=True,
+                        err=False,
                     )
 
         elif kind == "blueprint" or kind is None:
@@ -165,7 +175,8 @@ def validate(
                 )
                 if text:
                     click.echo(
-                        f"✓ {path}  [blueprint: {bp.id}  {len(bp.modules)} modules, {len(bp.edges)} edges]"
+                        f"✓ {path}  [blueprint: {bp.id}  {len(bp.modules)} modules, {len(bp.edges)} edges]",
+                        err=False,
                     )
 
                 # Hook-cycle / depth / missing-target static check — same graph
@@ -195,14 +206,14 @@ def validate(
                 if text and hook_problems:
                     from aqueduct.cli.render.style import emit_warnings
 
-                    emit_warnings(_hook_caught, label="hooks:")
+                    emit_warnings(_hook_caught, err=True, label="hooks:")
             except ParseError as exc:
                 file_results.append(
                     {"path": str(path), "kind": "blueprint", "valid": False, "error": str(exc)}
                 )
                 any_fail = True
                 if text:
-                    click.echo(f"✗ {path}: {exc}", err=True)
+                    click.echo(f"✗ {path}: {exc}", err=False)
 
         else:  # aqtest / aqscenario — schema pre-flight lives in `doctor`
             file_results.append(
@@ -217,7 +228,7 @@ def validate(
                 click.echo(
                     f"- {path}: {kind} file — use `aqueduct doctor --{kind} {path}` "
                     "for schema pre-flight",
-                    err=True,
+                    err=False,
                 )
 
     if fmt == "json":
@@ -234,6 +245,7 @@ def validate(
                 "files": file_results,
             },
             fmt="json",
+            err=False,
         )
 
     sys.exit(exit_codes.CONFIG_ERROR if any_fail else exit_codes.SUCCESS)
@@ -305,9 +317,10 @@ def lint_cmd(
                     "findings": [],
                 },
                 fmt="json",
+                err=False,
             )
         else:
-            click.echo(f"✗ {blueprint}: parse error — {exc}", err=True)
+            click.echo(f"✗ {blueprint}: parse error — {exc}", err=False)
         sys.exit(exit_codes.CONFIG_ERROR)
 
     findings = run_lint(bp)
@@ -356,12 +369,13 @@ def lint_cmd(
                 ],
             },
             fmt="json",
+            err=False,
         )
     else:
         if not findings:
             from aqueduct.cli.render.style import success as _style_success
 
-            _style_success(f"{blueprint}: no lint findings")
+            _style_success(f"{blueprint}: no lint findings", err=False)
         else:
             from aqueduct.cli.render.style import error as _style_error
             from aqueduct.cli.render.style import warn as _style_warn
@@ -374,8 +388,8 @@ def lint_cmd(
                     _style_error(msg, err=False)
                 else:
                     _style_warn(msg, err=False)
-            click.echo()
-            click.echo(f"{len(findings)} finding(s): {n_error} error, {n_warn} warn")
+            click.echo(err=False)
+            click.echo(f"{len(findings)} finding(s): {n_error} error, {n_warn} warn", err=False)
 
     sys.exit(exit_codes.CONFIG_ERROR if has_blocking else exit_codes.SUCCESS)
 
@@ -431,10 +445,10 @@ def schema(target: str, output: str) -> None:
 
     text = _json.dumps(js, indent=2, sort_keys=True, ensure_ascii=False)
     if output == "-":
-        click.echo(text)
+        click.echo(text, err=False)
     else:
         Path(output).write_text(text + "\n", encoding="utf-8")
-        click.echo(f"✓ wrote {target} schema → {output}", err=True)
+        click.echo(f"✓ wrote {target} schema → {output}", err=False)
 
 
 @cli.command()
@@ -472,9 +486,12 @@ def schema(target: str, output: str) -> None:
     "-v",
     "--verbose",
     "verbose",
-    is_flag=True,
-    default=False,
-    help="Show skipped checks too (not-applicable / not-configured), not just the collapsed summary.",
+    count=True,
+    help="Increase output detail (repeatable: -v, -vv). Also honoured when given "
+    "on the root group instead (`aqueduct -v doctor ...`) — the effective level "
+    "is the max of both. -v shows skipped checks too (not-applicable / "
+    "not-configured), not just the collapsed summary — same as `--format json`, "
+    "which never collapses rows.",
 )
 @click.option(
     "--format",
@@ -492,7 +509,7 @@ def doctor(
     preflight: bool,
     aqtest_path: str | None,
     aqscenario_path: str | None,
-    verbose: bool,
+    verbose: int,
     fmt: str,
     env_file: str | None,
     cli_env: tuple[str, ...],
@@ -521,7 +538,10 @@ def doctor(
     from aqueduct.cli.render.style import error as _error
     from aqueduct.cli.render.style import info as _info
     from aqueduct.cli.render.style import success as _success
+    from aqueduct.cli.verbosity import resolve_verbosity
     from aqueduct.doctor import run_doctor
+
+    verbosity = resolve_verbosity(local=verbose)
 
     config_path: Path | None = None
     blueprint_path: Path | None = None
@@ -634,7 +654,7 @@ def doctor(
 
     # ── Emit any warnings caught during config-load / run_doctor before the grid ──
     if fmt == "text":
-        _emit_warnings(_caught, verbose=verbose)
+        _emit_warnings(_caught, verbose=verbosity >= 1, err=True)
 
     # ── JSON output (no row collapsing — every check is emitted) ──────────────
     if fmt == "json":
@@ -657,6 +677,7 @@ def doctor(
                 ],
             },
             fmt="json",
+            err=False,
         )
         sys.exit(exit_codes.CONFIG_ERROR if any_fail else exit_codes.SUCCESS)
 
@@ -667,14 +688,15 @@ def doctor(
         else _DEFAULT_CONFIG_FILENAME
     )
     _r = _dim(_rule())
-    click.echo(_r)
+    click.echo(_r, err=False)
     click.echo(
         f"{click.style(_ICON['header'], fg=_COLOR['header'], bold=True)} "
         f"{click.style('doctor', bold=True)}  \u00b7  "
         f"{_file_label}  \u00b7  "
-        f"{len(results)} checks"
+        f"{len(results)} checks",
+        err=False,
     )
-    click.echo(_r)
+    click.echo(_r, err=False)
 
     # ── Text output (grouped sections) ────────────────────────────────────────
     # Default view = actionable rows only. Hidden (collapsed into one aligned
@@ -684,8 +706,8 @@ def doctor(
     def _hidden(r) -> bool:
         return r.status == "skip" or (r.status == "ok" and r.quiet_when_ok)
 
-    shown = results if verbose else [r for r in results if not _hidden(r)]
-    hidden = [] if verbose else [r for r in results if _hidden(r)]
+    shown = results if verbosity >= 1 else [r for r in results if not _hidden(r)]
+    hidden = [] if verbosity >= 1 else [r for r in results if _hidden(r)]
 
     col_w = max((len(r.name) for r in shown), default=0)
     col_w = max(col_w, len("more")) + 2
@@ -703,7 +725,8 @@ def doctor(
         if not rows:
             continue
         click.echo(
-            click.style(f"  {_GROUP_LABEL.get(grp, grp.title())}", fg=_COLOR["header"], bold=True)
+            click.style(f"  {_GROUP_LABEL.get(grp, grp.title())}", fg=_COLOR["header"], bold=True),
+            err=False,
         )
         for r in rows:
             icon = _ICON[r.status]
@@ -711,18 +734,19 @@ def doctor(
             label = r.name.ljust(col_w)
             elapsed = f"  [{r.elapsed_ms}ms]" if r.elapsed_ms > 0 else ""
             line = f"    {icon} {label}{r.detail}{elapsed}"
-            click.echo(click.style(line, fg=color) if color else line)
+            click.echo(click.style(line, fg=color) if color else line, err=False)
 
     if hidden:
         names = ", ".join(r.name for r in hidden)
         # Same aligned `{glyph} {name.ljust(col_w)}{detail}` shape as the rows above.
         _info(
-            f"  · {'more'.ljust(col_w)}{names}  (ok / not applicable / not configured — --verbose)"
+            f"  · {'more'.ljust(col_w)}{names}  (ok / not applicable / not configured — --verbose)",
+            err=False,
         )
 
-    click.echo(_dim(_rule()))
+    click.echo(_dim(_rule()), err=False)
     if any_fail:
-        _error("one or more checks failed")
+        _error("one or more checks failed", err=False)
         sys.exit(exit_codes.CONFIG_ERROR)
     else:
-        _success("all checks passed")
+        _success("all checks passed", err=False)

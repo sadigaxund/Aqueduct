@@ -59,7 +59,7 @@ def _compile_with_warnings(
         return result, list(caught)
     from aqueduct.cli.style import emit_warnings
 
-    emit_warnings(caught, verbose=_verbose, label="compile:")
+    emit_warnings(caught, verbose=_verbose, err=True, label="compile:")
     return result
 
 
@@ -1199,7 +1199,28 @@ class _AqueductCLIGroup(click.Group):
     prog_name="aqueduct",
     message="%(prog)s %(version)s",
 )
-@click.option("-v", "--verbose", is_flag=True, default=False, help="Enable DEBUG logging.")
+@click.option(
+    "-v",
+    "--verbose",
+    "verbosity",
+    count=True,
+    help=(
+        "Increase Aqueduct-side output detail. Repeatable: -v = full narrative "
+        "(untruncated errors/warnings, uncollapsed doctor rows, uncapped probe "
+        "notes, transcript detail); -vv = also show the raw layer (engine/Spark "
+        "startup + log4j output, prompt text, streamed model text). Placed "
+        "before OR after the subcommand (`aqueduct -v run bp.yml` / "
+        "`aqueduct run -v bp.yml`) — the effective level is the max of both. "
+        "Does NOT enable DEBUG logging; use --debug for that."
+    ),
+)
+@click.option(
+    "--debug",
+    is_flag=True,
+    default=False,
+    help="Enable Python DEBUG logging (root logger — library/framework internals, "
+    "distinct from -v's Aqueduct-side output tiers).",
+)
 @click.option(
     "--log-format",
     "log_format",
@@ -1227,7 +1248,8 @@ class _AqueductCLIGroup(click.Group):
 @click.pass_context
 def cli(
     ctx: click.Context,
-    verbose: bool,
+    verbosity: int,
+    debug: bool,
     log_format: str,
     suppress_warnings: tuple[str, ...],
 ) -> None:
@@ -1236,7 +1258,7 @@ def cli(
 
     from aqueduct.warnings import install_cli_formatter, set_default_suppress
 
-    level = logging.DEBUG if verbose else logging.WARNING
+    level = logging.DEBUG if debug else logging.WARNING
 
     if log_format.lower() == "json":
         handler = logging.StreamHandler()
@@ -1250,7 +1272,7 @@ def cli(
         from aqueduct.cli.style import StyledLogFormatter
 
         handler = logging.StreamHandler()
-        handler.setFormatter(StyledLogFormatter(verbose=verbose))
+        handler.setFormatter(StyledLogFormatter(verbose=debug))
 
         class _RuntimeNestedFilter(logging.Filter):
             """Probe/Assert runtime warnings are displayed nested under their
@@ -1276,6 +1298,7 @@ def cli(
     set_default_suppress(suppress=list(suppress_warnings))
     ctx.ensure_object(dict)
     ctx.obj["suppress_warnings_cli"] = list(suppress_warnings)
+    ctx.obj["verbosity"] = verbosity
 
     _install_secret_redaction_hooks()
 
@@ -1286,8 +1309,8 @@ def cli(
 
     # Bare `aqueduct` (no subcommand) → branded banner above the help.
     if ctx.invoked_subcommand is None:
-        click.echo(_render_banner())
-        click.echo(ctx.get_help())
+        click.echo(_render_banner(), err=False)
+        click.echo(ctx.get_help(), err=False)
         ctx.exit()
 
 
