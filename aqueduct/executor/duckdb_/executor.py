@@ -37,12 +37,17 @@ What this stage does NOT implement (honest gaps, not silent ones):
     across threads internally; the Aqueduct-level "independent DAG subtrees
     on separate Python threads" optimization Spark's executor has is simply
     not built yet.
-  - Sandbox/lineage/explain-snapshot capture, per-module runtime metrics
-    persistence to the observability store, and hook firing are all left to
-    the caller (the ``aqueduct run`` CLI path composes those around
+  - Sandbox/lineage/explain-snapshot capture and hook firing are left to the
+    caller (the ``aqueduct run`` CLI path composes those around
     ``ExecutorProtocol.execute`` for any engine already — see
     ``aqueduct/cli/blueprint.py``) exactly as they are for Spark today for
-    everything past `ExecutionResult`.
+    everything past `ExecutionResult`. Per-module runtime metrics
+    persistence (``module_metrics``: duration + row/byte counts where
+    cheaply derivable) is NO LONGER a gap this engine leaves to the caller —
+    Phase 85 D1 gave every real module type here parity with Spark's own
+    ``_write_stage_metrics`` calls (see each dispatch branch below and
+    ``duckdb_/egress.py::write_egress``'s docstring for exactly what is and
+    is not derivable on this engine without an extra scan).
 """
 
 from __future__ import annotations
@@ -89,7 +94,7 @@ from aqueduct.executor.models import (
     manifest_hash as _manifest_hash,
 )
 from aqueduct.executor.models import (
-    write_module_metrics as _write_handoff_metrics,
+    write_module_metrics as _write_module_metrics,
 )
 from aqueduct.executor.spill import dir_size_bytes, is_remote_uri
 from aqueduct.models import Edge, Manifest, Module, ModuleType, RetryPolicy
@@ -147,6 +152,50 @@ def _is_retriable(exc: Exception, policy: RetryPolicy) -> bool:
     if policy.transient_errors:
         return any(p in msg for p in policy.transient_errors)
     return True
+
+
+def _null_metrics() -> dict[str, Any]:
+    """A ``module_metrics`` fields dict with every collection field ``None``
+    (unknown / not applicable). Duplicated from
+    ``aqueduct.executor.spark.metrics.null_metrics`` (same shape) rather than
+    imported — that module lives in the ``spark`` package and, while it does
+    not itself import ``pyspark`` at runtime, keeping this duckdb-only file
+    free of any import from a sibling engine's package is the same
+    discipline the retry helpers above already follow."""
+    return {
+        "records_read": None,
+        "bytes_read": None,
+        "records_written": None,
+        "bytes_written": None,
+        "duration_ms": 0,
+    }
+
+
+def _path_bytes(path_str: str | None) -> int | None:
+    """Local-filesystem byte size of a path this engine just read/wrote —
+    Ingress/Egress's ``config['path']`` may be a single file (the common
+    case: ``COPY ... TO '<file>'``) or a directory (``partition_by``
+    writes). Mirrors ``aqueduct.executor.spark.metrics.dir_bytes``'s
+    file-or-directory handling, kept as a local duplicate for the same
+    package-isolation reason as ``_null_metrics`` above.
+
+    Returns None (not 0) when the path is empty, remote (no cheap local
+    stat), or unreadable — ``bytes_written``/``bytes_read`` stay NULL rather
+    than a fabricated 0 in those cases (AGENTS.md: a number core cannot
+    derive is a number core must not state)."""
+    if not path_str:
+        return None
+    if is_remote_uri(path_str):
+        return None
+    p = Path(path_str)
+    try:
+        if p.is_file():
+            return p.stat().st_size
+        if p.is_dir():
+            return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+    except OSError:
+        return None
+    return None
 
 
 def _backoff_seconds(attempt: int, policy: RetryPolicy) -> float:
@@ -688,6 +737,7 @@ def execute(
         # ── Ingress ──────────────────────────────────────────────────────
         if module.type == ModuleType.Ingress:
             mod_policy = _module_retry_policy(module, manifest.retry_policy)
+            _t0 = time.monotonic()
             try:
                 rel = _with_retry(
                     lambda: read_ingress(module, con, base_dir=manifest.base_dir),
@@ -703,6 +753,26 @@ def execute(
                     continue
                 return fail_result
             frame_store[module.id] = rel
+            # ``records_read`` stays NULL here (parity gap vs Spark, not an
+            # oversight): Spark's Observation attaches to the DataFrame and
+            # is read for free off whatever downstream action ALREADY scans
+            # it (Egress write, etc.) — zero extra passes. DuckDB's
+            # relations are re-executed independently at each consumption
+            # point (this `rel` and any downstream reader of it are separate
+            # query plans over the source), so counting rows here would mean
+            # a genuine extra scan of the source purely to report a number —
+            # exactly what this task's spec says not to do. See D1 report.
+            _write_module_metrics(
+                store_dir,
+                observability_store,
+                run_id,
+                module.id,
+                {
+                    **_null_metrics(),
+                    "bytes_read": _path_bytes(module.config.get("path")),
+                    "duration_ms": int((time.monotonic() - _t0) * 1000),
+                },
+            )
             _write_checkpoint(con, module, checkpoint_dir, manifest, data={"data": rel})
             module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
 
@@ -784,6 +854,7 @@ def execute(
                         )
 
             mod_policy = _module_retry_policy(module, manifest.retry_policy)
+            _t0 = time.monotonic()
             try:
                 rel = _with_retry(
                     lambda: execute_channel(_channel_module, upstream, con), mod_policy, module.id
@@ -796,6 +867,17 @@ def execute(
                     frame_store[module.id] = _GATE_CLOSED
                     continue
                 return fail_result
+            # Duration only — mirrors Spark's Channel branch, which also
+            # writes null_metrics()+duration_ms only (a Channel has no
+            # natural read/write action of its own to attribute row/byte
+            # counts to on EITHER engine).
+            _write_module_metrics(
+                store_dir,
+                observability_store,
+                run_id,
+                module.id,
+                {**_null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
+            )
 
             spillway_condition: str | None = module.config.get("spillway_condition")
             has_spillway_edge = any(
@@ -866,6 +948,7 @@ def execute(
                 return _fail(manifest.blueprint_id, run_id, module_results)
 
             mod_policy = _module_retry_policy(module, manifest.retry_policy)
+            _t0 = time.monotonic()
             try:
                 branch_rels = _with_retry(
                     lambda: execute_junction(module, val), mod_policy, module.id
@@ -879,6 +962,16 @@ def execute(
                         frame_store[f"{module.id}.{branch.get('id', '')}"] = _GATE_CLOSED
                     continue
                 return fail_result
+            # Duration only — mirrors Spark's Junction branch (null_metrics()
+            # + duration_ms; a Junction fans out, it has no read/write of its
+            # own to attribute row/byte counts to).
+            _write_module_metrics(
+                store_dir,
+                observability_store,
+                run_id,
+                module.id,
+                {**_null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
+            )
             for branch_id, branch_rel in branch_rels.items():
                 frame_store[f"{module.id}.{branch_id}"] = branch_rel
             _write_checkpoint(con, module, checkpoint_dir, manifest, data=branch_rels)
@@ -927,6 +1020,7 @@ def execute(
                 continue
 
             mod_policy = _module_retry_policy(module, manifest.retry_policy)
+            _t0 = time.monotonic()
             try:
                 rel = _with_retry(
                     lambda: execute_funnel(module, funnel_upstream, con), mod_policy, module.id
@@ -940,6 +1034,14 @@ def execute(
                     continue
                 return fail_result
             frame_store[module.id] = rel
+            # Duration only — mirrors Spark's Funnel branch.
+            _write_module_metrics(
+                store_dir,
+                observability_store,
+                run_id,
+                module.id,
+                {**_null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
+            )
             _write_checkpoint(con, module, checkpoint_dir, manifest, data={"data": rel})
             module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
 
@@ -1128,8 +1230,9 @@ def execute(
                 )
 
             mod_policy = _module_retry_policy(module, manifest.retry_policy)
+            _t0 = time.monotonic()
             try:
-                _with_retry(
+                _records_written = _with_retry(
                     lambda: write_egress(val, module, con, depot=depot, base_dir=manifest.base_dir),
                     mod_policy,
                     module.id,
@@ -1141,6 +1244,23 @@ def execute(
                 if gate_closed:
                     continue
                 return fail_result
+            # `records_written` comes straight off the write statement's own
+            # result (see `write_egress`'s docstring) — zero extra scans,
+            # and a real 0 for an empty relation (Phase 85 D3), not NULL.
+            # `bytes_written` is local-filesystem-only (`table:`/`depot:`
+            # writes and remote paths stay NULL — see `_path_bytes`).
+            _write_module_metrics(
+                store_dir,
+                observability_store,
+                run_id,
+                module.id,
+                {
+                    **_null_metrics(),
+                    "records_written": _records_written,
+                    "bytes_written": _path_bytes(module.config.get("path")),
+                    "duration_ms": int((time.monotonic() - _t0) * 1000),
+                },
+            )
             _write_checkpoint(con, module, checkpoint_dir, manifest)
 
             # ── Watermark update (Depot-only) — mirrors Spark's ────────────
@@ -1250,7 +1370,7 @@ def execute(
                     return _fail(manifest.blueprint_id, run_id, module_results)
                 finally:
                     con.unregister(input_name)
-                _write_handoff_metrics(
+                _write_module_metrics(
                     store_dir,
                     observability_store,
                     run_id,
@@ -1276,7 +1396,7 @@ def execute(
                         )
                     )
                     return _fail(manifest.blueprint_id, run_id, module_results)
-                _write_handoff_metrics(
+                _write_module_metrics(
                     store_dir,
                     observability_store,
                     run_id,

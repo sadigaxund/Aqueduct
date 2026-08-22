@@ -63,10 +63,13 @@ _DUCKDB_EXECUTE_KWARGS: frozenset[str] = frozenset(
         "block_full_actions",
         "warnings_suppress",
         "warnings_silence_all",
-        # Phase 81 step 3 — `observability_store` backs the Handoff module's OWN
-        # (limited, handoff-only) module_metrics write; `handoff_spill_uris` is
-        # the {handoff_module_id: spill_uri} map the orchestrator resolves. Both
-        # are no-ops for a Manifest with no Handoff module (the common case).
+        # Phase 81 step 3 — `observability_store` backs every module's
+        # `module_metrics` write (Phase 85 D1 gave this engine parity with
+        # Spark's per-module write; previously it was Handoff-module-only —
+        # see `duckdb_/executor.py`'s dispatch branches). `handoff_spill_uris`
+        # is the {handoff_module_id: spill_uri} map the orchestrator
+        # resolves, still Handoff-only and a no-op for a Manifest with no
+        # Handoff module.
         "observability_store",
         "handoff_spill_uris",
         # Pass F — Probe sampling governance, genuinely consumed now.
