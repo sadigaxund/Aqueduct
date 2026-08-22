@@ -1,11 +1,11 @@
 import json
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import MagicMock, patch
 from click.testing import CliRunner
-from pathlib import Path
 
 from aqueduct.cli import cli
-from aqueduct.patch.preview import LineageGateResult, SandboxGateResult, LineageWarning
+from aqueduct.patch.preview import LineageGateResult, LineageWarning, SandboxGateResult
 
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
@@ -65,12 +65,19 @@ def test_patch_preview_text_gate2_pass(mock_g2, setup):
 
     result = runner.invoke(cli, ["patch", "preview", str(patch_path), "--blueprint", str(bp_path)])
 
+    # Running without `--sandbox` is this command's documented default, so it
+    # still exits 0: preview's exit code answers "did a gate that RAN object
+    # to this patch", and `NOT_REQUESTED` objected to nothing. The separate
+    # question — "may this apply unattended" — is `sandbox_gate_permits_auto_apply`,
+    # which DOES refuse `NOT_REQUESTED` (Phase 85 F-2); see
+    # tests/test_patch/test_gate_status.py for that half.
     assert result.exit_code == 0
     assert "Patch P001" in result.output
     assert "rationale: test" in result.output
     assert "confidence: 95%" in result.output
     assert "status: pass" in result.output
     assert "no downstream column-consumption regressions detected" in result.output
+    assert "sandbox: not requested" in result.output
 
 
 @patch("aqueduct.patch.preview.run_lineage_gate")
@@ -96,6 +103,8 @@ def test_patch_preview_text_gate2_warn(mock_g2, setup):
 
     result = runner.invoke(cli, ["patch", "preview", str(patch_path), "--blueprint", str(bp_path)])
 
+    # Same reasoning as the Gate 2 pass case above: `NOT_REQUESTED` does not
+    # block preview, and a lineage `warn` is non-blocking by design.
     assert result.exit_code == 0
     assert "status: warn" in result.output
     assert "⚠ col1 missing" in result.output

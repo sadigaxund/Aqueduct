@@ -74,8 +74,11 @@ from aqueduct.executor.models import (
     ExecutionResult,
     ExecutionStatus,
     ModuleResult,
+    _add_module_warning,
     _collect_module_warnings,
     concise_error,
+)
+from aqueduct.executor.models import (
     manifest_hash as _manifest_hash,
 )
 from aqueduct.executor.spark.assert_ import AssertError, execute_assert
@@ -183,6 +186,21 @@ def _with_retry(
                         elapsed,
                         policy.deadline_seconds,
                     )
+                    # Phase 85 F-15: also feed the per-module collector (eager
+                    # formatting is fine here — one retry event, not a hot
+                    # loop) so this rule_id is suppressible via
+                    # `warnings.suppress` and renders nested under its module
+                    # like probe/assert warnings. `_with_retry` always runs
+                    # to completion (success or raise) before the caller's
+                    # next `_mr()` call on this thread, so the collector
+                    # entry lands on the right module — see
+                    # `executor/models.py::_add_module_warning`.
+                    _add_module_warning(
+                        "runtime_retry_deadline",
+                        f"Module {module_id!r}: deadline exceeded "
+                        f"({elapsed:.0f}s elapsed, limit={policy.deadline_seconds}s); "
+                        f"not retrying.",
+                    )
                     break
 
             is_last = attempt == policy.max_attempts - 1
@@ -202,6 +220,12 @@ def _with_retry(
                             policy.max_attempts,
                             concise_error(str(exc)),
                         )
+                        _add_module_warning(
+                            "runtime_retry_exhausted",
+                            f"Module {module_id!r}: attempt {attempt + 1}/"
+                            f"{policy.max_attempts} failed "
+                            f"({concise_error(str(exc))}); giving up",
+                        )
                     else:
                         logger.warning(
                             "[runtime_retry_non_retriable] Module %r: non-retriable "
@@ -210,6 +234,12 @@ def _with_retry(
                             attempt + 1,
                             policy.max_attempts,
                             concise_error(str(exc)),
+                        )
+                        _add_module_warning(
+                            "runtime_retry_non_retriable",
+                            f"Module {module_id!r}: non-retriable error on attempt "
+                            f"{attempt + 1}/{policy.max_attempts}: "
+                            f"{concise_error(str(exc))}",
                         )
                 break
 
@@ -222,6 +252,11 @@ def _with_retry(
                 policy.max_attempts,
                 concise_error(str(exc)),
                 sleep,
+            )
+            _add_module_warning(
+                "runtime_retry_waiting",
+                f"Module {module_id!r}: attempt {attempt + 1}/{policy.max_attempts} "
+                f"failed ({concise_error(str(exc))}); retrying in {sleep:.1f}s",
             )
             time.sleep(sleep)
 
@@ -1994,11 +2029,22 @@ def _on_retry_exhausted(
         )
 
     if on_exhaustion == "alert_only":
-        logger.warning(
-            "[runtime_retry_exhausted_alert] [%s] Retry exhausted (alert_only): %s — blueprint continues.",
-            module.id,
-            exc,
-        )
+        # Phase 85 F-15: suppressible like the other `runtime_retry_*` rules,
+        # but NOT routed through `_add_module_warning` — this call happens
+        # AFTER `_mr()` already consumed the collector for this module's
+        # ModuleResult a few lines above, so a warning appended here would
+        # misattribute onto whatever module's `_mr()` runs NEXT on this
+        # thread (or vanish if this is the last module). Gating the bare
+        # `logger.warning` on suppression avoids that without reordering
+        # this function's control flow.
+        from aqueduct.warnings import is_suppressed as _is_warning_suppressed
+
+        if not _is_warning_suppressed("runtime_retry_exhausted_alert"):
+            logger.warning(
+                "[runtime_retry_exhausted_alert] [%s] Retry exhausted (alert_only): %s — blueprint continues.",
+                module.id,
+                exc,
+            )
         return True, None
     elif on_exhaustion == "trigger_agent":
         return False, _fail(blueprint_id, run_id, module_results, trigger_agent=True)

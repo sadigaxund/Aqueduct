@@ -21,6 +21,12 @@ Public surface:
     AqueductWarning  — category subclass; all engine warnings use it
     emit(rule_id, message, *, suppress=None) — primary emission helper;
                                               respects the suppress set
+    is_suppressed(rule_id, suppress=None) — the suppress-set predicate
+                                           `emit()` uses, exposed so other
+                                           warning-emission paths (the
+                                           runtime per-module collector)
+                                           can share it without going
+                                           through `warnings.warn`.
     install_cli_formatter() — replaces warnings.formatwarning so
                               AqueductWarning instances render as
                               `AQ-WARN [id] msg`. Idempotent.
@@ -79,18 +85,36 @@ def set_default_strict(strict: Iterable[str] | None) -> None:
     _DEFAULT_STRICT = set(strict or ())
 
 
+def is_suppressed(rule_id: str, suppress: Iterable[str] | None = None) -> bool:
+    """Return whether `rule_id` is silenced under the active suppress set.
+
+    Active suppress set: explicit `suppress=` arg if given, else the
+    process-global default from `set_default_suppress()`. The sentinel
+    `"*"` in that set silences every rule.
+
+    Pulled out of `emit()` (Phase 85 F-15) so every warning-emission path
+    can share ONE suppression predicate instead of three each re-deriving
+    it: `emit()` itself (Path A, `warnings.warn`), the runtime per-module
+    collector (Path B, `executor/models.py::_add_module_warning` — which
+    must stay off the `warnings` module entirely, since its thread-local
+    per-module collection is read directly by `run.py`, not gathered via
+    `warnings.catch_warnings()`), and the `runtime_retry_*` family (Path C,
+    `executor/spark/executor.py` / `executor/duckdb_/executor.py`, which
+    dispatch through Path B's collector for exactly this reason).
+    """
+    active = set(suppress) if suppress is not None else _DEFAULT_SUPPRESS
+    return _SUPPRESS_ALL in active or rule_id in active
+
+
 def emit(rule_id: str, message: str, *, suppress: Iterable[str] | None = None) -> None:
     """Emit one Aqueduct warning unless suppressed.
 
-    Active suppress set: explicit `suppress=` arg (library callers) if given,
-    else the process-global default from `set_default_suppress()`. The
-    sentinel `"*"` in that set silences every rule.
+    See `is_suppressed()` for the active suppress set this consults.
 
     Never raises.
     """
     try:
-        active = set(suppress) if suppress is not None else _DEFAULT_SUPPRESS
-        if _SUPPRESS_ALL in active or rule_id in active:
+        if is_suppressed(rule_id, suppress):
             return
         _w.warn(f"{_AQ_PREFIX}{rule_id}] {message}", category=AqueductWarning, stacklevel=3)
     except Exception:

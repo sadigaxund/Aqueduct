@@ -1275,14 +1275,39 @@ def cli(
         handler.setFormatter(StyledLogFormatter(verbose=debug))
 
         class _RuntimeNestedFilter(logging.Filter):
-            """Probe/Assert runtime warnings are displayed nested under their
-            module by `run` (the `↳ [rule_id]` lines). Drop their loose console
-            line here so they aren't printed twice. They remain in the logger
-            for `--log-format json` and pytest's caplog (separate handlers)."""
+            """Probe/Assert/Retry runtime warnings are displayed nested under
+            their module by `run` (the `↳ [rule_id]` lines). Drop their loose
+            console line here so they aren't printed twice. They remain in
+            the logger for `--log-format json` and pytest's caplog (separate
+            handlers).
+
+            Phase 85 F-15 added the four `runtime_retry_*` rule_ids that now
+            ALSO go through the per-module collector
+            (`executor/models.py::_add_module_warning`) via
+            `executor/spark/executor.py` and `executor/duckdb_/executor.py`'s
+            `_with_retry` — hence the exact (bracket-closed) matches below,
+            not a bare `"[runtime_retry"` prefix. `runtime_retry_exhausted_alert`
+            is deliberately EXCLUDED: it fires after that module's
+            `ModuleResult` has already been built (see the comment at its
+            call site in both executors), so it is never routed through the
+            collector and must keep printing here or it would vanish
+            entirely — only the four still-collected rule_ids are hidden."""
+
+            _HIDDEN_PREFIXES = ("[runtime_probe", "[runtime_assert")
+            _HIDDEN_EXACT = (
+                "[runtime_retry_deadline]",
+                "[runtime_retry_exhausted]",
+                "[runtime_retry_non_retriable]",
+                "[runtime_retry_waiting]",
+            )
 
             def filter(self, record: logging.LogRecord) -> bool:
                 m = record.getMessage()
-                return "[runtime_probe" not in m and "[runtime_assert" not in m
+                if any(p in m for p in self._HIDDEN_PREFIXES):
+                    return False
+                if any(e in m for e in self._HIDDEN_EXACT):
+                    return False
+                return True
 
         handler.addFilter(_RuntimeNestedFilter())
         root = logging.getLogger()

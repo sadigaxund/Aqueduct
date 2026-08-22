@@ -282,8 +282,9 @@ def patch_preview(
         load_patch_spec,
     )
     from aqueduct.patch.explain_gate import run_explain_gate
-    from aqueduct.patch.gate_status import GateStatus, sandbox_gate_permits_auto_apply
+    from aqueduct.patch.gate_status import GateStatus, sandbox_gate_blocks_preview
     from aqueduct.patch.preview import (
+        SandboxGateResult,
         render_unified_diff,
         run_lineage_gate,
         run_sandbox_gate,
@@ -333,7 +334,14 @@ def patch_preview(
     diff = render_unified_diff(bp_raw, bp_after)
     lineage_res = run_lineage_gate(bp_raw, bp_after, spec)
 
-    sandbox_res = None
+    # No `--sandbox` means the gate was never asked to run — a caller-level
+    # fact, not a verdict, and (unlike the old bare `None`) it now reports
+    # as an explicit status so `sandbox_gate_permits_auto_apply` fails
+    # closed instead of silently permitting a patch nothing replayed.
+    sandbox_res = SandboxGateResult(
+        status=GateStatus.NOT_REQUESTED,
+        detail="sandbox replay was not requested — pass --sandbox to replay this patch",
+    )
     explain_res = None
     if sandbox:
         from aqueduct.stores import get_stores
@@ -423,15 +431,16 @@ def patch_preview(
                 "regressions": [r.__dict__ for r in explain_res.regressions],
             }
         emit(report, fmt="json")
-        # Same predicate the heal loop's auto-apply decision uses
-        # (`patch/gate_status.py`), not a second hand-written status list:
-        # a CI job reading this exit code and the loop that applies without
-        # a human must not disagree about what "validated" means. So an
-        # `unavailable` sandbox result exits non-zero here too — the review
-        # this command exists to support could not be given a replay.
+        # `sandbox_gate_blocks_preview`, NOT the auto-apply predicate
+        # (`patch/gate_status.py` documents why they differ): this exit code
+        # answers "did a gate that ran object to this patch". An
+        # `unavailable` sandbox result still exits non-zero — the review this
+        # command exists to support could not be given a replay — but a gate
+        # that was never asked to run (no `--sandbox`, the documented default
+        # invocation) has objected to nothing and must not fail the command.
         sys.exit(
             exit_codes.SUCCESS
-            if lineage_res.status != "fail" and sandbox_gate_permits_auto_apply(sandbox_res)
+            if lineage_res.status != "fail" and not sandbox_gate_blocks_preview(sandbox_res)
             else exit_codes.DATA_OR_RUNTIME
         )
 
@@ -463,6 +472,12 @@ def patch_preview(
         elif status == GateStatus.NOT_APPLICABLE:
             # Informational only — nothing was owed, nothing blocks.
             _i(f"  {label}")
+        elif status == GateStatus.NOT_REQUESTED:
+            # Sandbox-only: the gate was deliberately never asked to run
+            # (`--sandbox` omitted), distinct from `not_applicable` (asked,
+            # nothing to check). Informational text, but it still fails
+            # closed on auto-apply — see `sandbox_gate_permits_auto_apply`.
+            _i("  sandbox: not requested")
         else:
             _i(f"  {label}")
 
@@ -503,7 +518,7 @@ def patch_preview(
         click.echo(_dim("── Sandbox gate (replay) ─────────────────────────────────────"))
         _gate_status_line(sandbox_res.status)
         click.echo(f"  detail:      {sandbox_res.detail}")
-        if sandbox_res.status == GateStatus.UNAVAILABLE:
+        if sandbox_res.status in (GateStatus.UNAVAILABLE, GateStatus.NOT_REQUESTED):
             # State the consequence, not only the fact: this is the status
             # that stops the patch, and a reviewer reading a gate block
             # should not have to infer that from the word.
@@ -540,7 +555,7 @@ def patch_preview(
     # The same predicate as the `--format json` branch above, so text and
     # json modes cannot disagree about whether this patch is reviewable as
     # validated.
-    if not sandbox_gate_permits_auto_apply(sandbox_res):
+    if sandbox_gate_blocks_preview(sandbox_res):
         exit_code = exit_codes.DATA_OR_RUNTIME
     sys.exit(exit_code)
 

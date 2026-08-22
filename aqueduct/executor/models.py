@@ -237,7 +237,27 @@ _collector = threading.local()
 
 
 def _add_module_warning(rule_id: str, message: str) -> None:
-    """Append a runtime warning to the current module's warning list."""
+    """Append a runtime warning to the current module's warning list.
+
+    Checks `aqueduct.warnings.is_suppressed()` first (Phase 85 F-15) — the
+    SAME suppress-set predicate `aqueduct.warnings.emit()` uses — so a
+    suppressed `rule_id` never enters the list at all. This is deliberately
+    NOT a call into `warnings.warn()`/`emit()` itself: this collector is
+    read directly by `run.py` (inline `↳ [rule_id]` lines nested under each
+    module, plus the end-of-run roll-up) rather than gathered via
+    `warnings.catch_warnings()`, and `run.py` installs a process-global
+    `warnings.filterwarnings("ignore", category=AqueductWarning)` partway
+    through a run (to stop already-shown compile warnings re-emitting on
+    every heal recompile) that would silently swallow anything routed
+    through the real warnings module during execution. Checking suppression
+    HERE, at the point of collection, is also what keeps
+    `ModuleResult.warnings` itself free of suppressed entries — a render-time
+    filter would still expose them to any other consumer of that tuple.
+    """
+    from aqueduct.warnings import is_suppressed
+
+    if is_suppressed(rule_id):
+        return
     if not hasattr(_collector, "warnings"):
         _collector.warnings = []
     _collector.warnings.append((rule_id, message))

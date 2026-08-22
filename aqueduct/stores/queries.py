@@ -1397,6 +1397,15 @@ def gate_rejection_rates(cfg: Any, store_dir: str | None = None) -> dict[str, in
       count therefore means heals are stalling on missing engines rather than
       on bad patches, which is an environment problem, not a model one; count
       it separately instead of reading its absence from this dict as health.
+    - `not_requested` means the sandbox gate was never invoked for that
+      preview — a caller-level fact synthesized outside this module
+      (`cli/patch.py`'s `patch preview` with no `--sandbox`), not a gate
+      verdict. It also blocks auto-apply, for the same fail-closed reason as
+      `unavailable`. Nothing currently persists a `not_requested` row to
+      `patch_simulation` (the one caller that synthesizes it never calls
+      `record_patch_simulation`), so it should not appear in this dict's
+      counts today; it is documented here so a future caller that DOES
+      persist it does not have to re-derive this partition.
 
     ⚠ Rows written before 2.1.0 may carry `skip`, the single word that used
     to cover both of the last two. It is not migrated and cannot be — the
