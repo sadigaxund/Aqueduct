@@ -151,6 +151,7 @@ def echo(
     hint: str | None = None,
     style: dict[str, Any] | None = None,
     fmt: str = "text",
+    wrap: bool = True,
 ) -> None:
     """General narrative line emitter — the funnel's TTY-aware primitive.
 
@@ -168,6 +169,16 @@ def echo(
     to route narrative through here.
     """
     eff_gutter, eff_hang = (gutter, hang) if gutter else _current_gutter()
+    if not wrap:
+        # A copy-pasteable token (a command, a path, a URL) must never be
+        # broken across lines — overflow beats an unusable split.
+        line = f"{eff_gutter}{text}"
+        if style:
+            line = click.style(line, **style)
+        if fmt == "text":
+            line = _colorize_line(line)
+        click.echo(line, err=err)
+        return
     lines = _wrap_line(
         text,
         gutter=eff_gutter,

@@ -247,7 +247,11 @@ class TestFailureHealUnreachable:
         assert "├─ tier 2 · claude-sonnet-4-6" in stderr
         assert "⊘ no credentials" in stderr
         assert "└ ⊘ healing unavailable — no agent was reached" in stderr
-        assert "↳ failure context saved · retry: aqueduct heal" in stderr
+        assert "↳ failure context saved · retry once the agent is reachable:" in stderr
+        # The command sits alone on its own non-wrapped line so it survives
+        # copy-paste on any terminal width (owner redline, 2026-08-23).
+        _cmd_lines = [ln for ln in stderr.splitlines() if ln.strip().startswith("aqueduct heal ")]
+        assert len(_cmd_lines) == 1
         assert "✗" not in stderr  # every tier here was unreachable, not rejected
         # And the inverse of the stdout assertion: none of the framed run
         # screen's own text may leak onto stderr.

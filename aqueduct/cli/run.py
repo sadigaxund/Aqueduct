@@ -2171,15 +2171,26 @@ def run(
                 # the generic "no patch to stage" note below) naming the
                 # actual command to re-run once the agent IS reachable.
                 if agent_result.stop_reason == "api_error":
-                    # Wrap-primitive-backed: `blueprint` is a real filesystem
-                    # path and can easily push this past 80 columns.
                     from aqueduct.cli.render.funnel import echo as _funnel_echo
 
+                    # The retry command must survive copy-paste: relativize
+                    # the path when it lives under the CWD and never let the
+                    # command line wrap mid-token (wrap=False overflows
+                    # instead of splitting).
+                    _rel_bp = os.path.relpath(str(blueprint))
+                    _bp_display = str(blueprint) if _rel_bp.startswith("..") else _rel_bp
                     _funnel_echo(
-                        f"failure context saved · retry: aqueduct heal {blueprint}",
+                        "failure context saved · retry once the agent is reachable:",
                         gutter="   ↳ ",
                         err=True,
                         verbose=verbosity >= 1,
+                        style={"fg": "bright_black"},
+                    )
+                    _funnel_echo(
+                        f"aqueduct heal {_bp_display}",
+                        gutter="     ",
+                        err=True,
+                        wrap=False,
                         style={"fg": "bright_black"},
                     )
                 on_hf = manifest.agent.on_heal_failure if manifest.agent else "stage"
