@@ -98,9 +98,32 @@ def test_maybe_prune_store_runs_again_after_a_day(tmp_path):
     assert remaining == set()
 
 
-def test_vacuum_store_runs_against_duckdb_without_error(tmp_path):
+def test_vacuum_store_reclaims_without_destroying_rows(tmp_path):
+    """`VACUUM` is the one operation that rewrites the store's own file, so
+    the property worth pinning is not "it did not raise" — it is that the
+    rows survive it and the store is still usable afterwards. A vacuum that
+    silently emptied the table would satisfy "no exception" perfectly."""
     obs = _store(tmp_path)
-    vacuum_store(obs)  # must not raise
+    now = datetime.now(tz=UTC)
+    _insert_run_record(obs, "keep1", now)
+    _insert_run_record(obs, "keep2", now)
+
+    vacuum_store(obs)
+
+    with obs.connect() as cur:
+        surviving = {r[0] for r in cur.execute("SELECT run_id FROM run_records").fetchall()}
+    assert surviving == {"keep1", "keep2"}
+
+    # Still writable after the file rewrite — a vacuum that left the store in
+    # a read-only or corrupt state would pass the read above.
+    _insert_run_record(obs, "after_vacuum", now)
+    with obs.connect() as cur:
+        assert (
+            cur.execute(
+                "SELECT count(*) FROM run_records WHERE run_id = 'after_vacuum'"
+            ).fetchone()[0]
+            == 1
+        )
 
 
 def test_engine_migration_idempotent_against_columnless_store(tmp_path):
