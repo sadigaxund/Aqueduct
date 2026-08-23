@@ -1160,8 +1160,19 @@ class WebhooksConfig(BaseModel):
         default=None,
         description="Endpoint for approval: ci — receives patch JSON for external PR creation.",
     )
+    on_defer: WebhookEndpointConfig | None = Field(
+        default=None,
+        description=(
+            "Endpoint to POST when a patch defers to a human (defer_to_human op). "
+            "Carries defer_reason, diagnosis/suggestions, and confidence_reason. "
+            "When unset, defer notifications fall back to on_patch_pending so "
+            "nobody loses notifications on upgrade."
+        ),
+    )
 
-    @field_validator("on_failure", "on_success", "on_patch_pending", "on_ci_patch", mode="before")
+    @field_validator(
+        "on_failure", "on_success", "on_patch_pending", "on_ci_patch", "on_defer", mode="before"
+    )
     @classmethod
     def coerce_string_url(cls, v: Any) -> Any:
         """Allow on_failure/on_success: 'https://...' as shorthand for {url: 'https://...'}."""

@@ -371,6 +371,12 @@ class Blueprint:
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
     agent: AgentConfig = field(default_factory=AgentConfig)
     udf_registry: tuple[dict[str, Any], ...] = ()
+    # Flat list of PEP 508 requirement strings (`dependencies:` block,
+    # Phase 88) — see `aqueduct.dependencies` for the parser/checker and
+    # `aqueduct/compiler/compiler.py` for the compile-time preflight that
+    # consumes this verbatim (no `${ctx.*}` resolution — a requirement
+    # string is not a Blueprint value expression).
+    dependencies: tuple[str, ...] = ()
     macros: dict[str, str] = field(default_factory=dict)
     required_context: tuple[str, ...] = ()  # Arcade sub-Blueprint: keys the caller must provide
     checkpoint: bool = False

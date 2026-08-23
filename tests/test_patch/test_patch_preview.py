@@ -58,6 +58,24 @@ class TestTouchedModuleIds:
         # to_id is the consumer side, interesting for downstream impact
         assert touched_module_ids(spec) == ["m2"]
 
+    def test_declare_dependency_returns_empty(self):
+        # Phase 88 — declare_dependency names no module, so it has no
+        # lineage/explain surface. This is the predicate Gates 2 and 4 both
+        # rely on to fall into `not_applicable` for a declare_dependency-only
+        # patch (preview.py:89-107).
+        spec = _patch({"op": "declare_dependency", "requirement": "holidays>=0.40"})
+        assert touched_module_ids(spec) == []
+
+
+def test_lineage_gate_not_applicable_for_declare_dependency_only_patch():
+    """Phase 88 — Gate 2 (lineage) has no module-lineage surface for a patch
+    whose only op is declare_dependency; asserted rather than assumed."""
+    spec = _patch({"op": "declare_dependency", "requirement": "holidays>=0.40"})
+    result = run_lineage_gate({}, {}, spec)
+    from aqueduct.patch.gate_status import GateStatus
+
+    assert result.status == GateStatus.NOT_APPLICABLE
+
 
 class TestLiveLineageRows:
     def test_empty_blueprint_returns_empty(self):

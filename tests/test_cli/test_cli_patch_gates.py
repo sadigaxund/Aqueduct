@@ -25,6 +25,10 @@ edges: []
 
     mock_patch = MagicMock()
     mock_patch.patch_id = "p_test"
+    # Phase 88 — Gate 5 (resolvability) iterates patch.operations; a bare
+    # MagicMock() auto-creates a non-iterable attribute here, so it must be
+    # set explicitly (no declare_dependency op → gate 5 is not_applicable).
+    mock_patch.operations = []
 
     mock_bundle = MagicMock()
     mock_surveyor = MagicMock()
@@ -48,7 +52,7 @@ edges: []
         ),
     ):
 
-        g2, g3, g4, passed = _run_patch_gates_inline(
+        g2, g3, g4, g5, passed = _run_patch_gates_inline(
             patch=mock_patch,
             blueprint_path=blueprint_path,
             bundle=mock_bundle,
@@ -63,19 +67,23 @@ edges: []
     assert g2 is not None
     assert g3 is not None
     assert g4 is not None
-    assert passed is True  # sandbox passed
+    assert g5 is not None
+    assert g5.status == "not_applicable"  # no declare_dependency op
+    assert passed is True  # sandbox passed, resolvability not_applicable
 
     # Check recordings
     # 1. engine_config
     # 2. lineage
     # 3. sandbox
     # 4. explain
-    assert mock_surveyor.record_patch_simulation.call_count == 4
+    # 5. resolvability
+    assert mock_surveyor.record_patch_simulation.call_count == 5
     assert [c.kwargs["gate"] for c in mock_surveyor.record_patch_simulation.call_args_list] == [
         "engine_config",
         "lineage",
         "sandbox",
         "explain",
+        "resolvability",
     ]
 
     # Check the explain gate call specifically
@@ -91,6 +99,7 @@ def test_run_patch_gates_inline_handles_explain_failure(spark, tmp_path):
     blueprint_path.write_text("aqueduct: '1.0'\nid: test\nname: test\nmodules: []\nedges: []")
 
     mock_patch = MagicMock()
+    mock_patch.operations = []  # Phase 88 — see comment in the test above
     mock_surveyor = MagicMock()
     # explain gate fails
     mock_surveyor.latest_explain_snapshots.side_effect = Exception("DB Boom!")
@@ -104,7 +113,7 @@ def test_run_patch_gates_inline_handles_explain_failure(spark, tmp_path):
         patch("aqueduct.patch.preview.run_sandbox_gate", return_value=MagicMock(status="pass")),
     ):
 
-        g2, g3, g4, passed = _run_patch_gates_inline(
+        g2, g3, g4, g5, passed = _run_patch_gates_inline(
             patch=mock_patch,
             blueprint_path=blueprint_path,
             bundle=MagicMock(),
@@ -119,4 +128,5 @@ def test_run_patch_gates_inline_handles_explain_failure(spark, tmp_path):
     assert g4 is None
     assert g2 is not None
     assert g3 is not None
+    assert g5 is not None
     assert passed is True

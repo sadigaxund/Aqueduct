@@ -172,6 +172,7 @@ def test_run_patch_gates_inline_off(tmp_path):
     blueprint_path.write_text("aqueduct: '1.0'\nid: test\nname: test\nmodules: []\nedges: []")
 
     mock_patch = MagicMock()
+    mock_patch.operations = []  # Phase 88 — Gate 5 iterates patch.operations
     mock_surveyor = MagicMock()
     mock_surveyor.latest_explain_snapshots.return_value = {}
 
@@ -186,7 +187,7 @@ def test_run_patch_gates_inline_off(tmp_path):
         ),
     ):
 
-        g2, g3, g4, passed = _run_patch_gates_inline(
+        g2, g3, g4, g5, passed = _run_patch_gates_inline(
             patch=mock_patch,
             blueprint_path=blueprint_path,
             bundle=MagicMock(),
@@ -216,6 +217,7 @@ def test_run_patch_gates_inline_preflight_and_sample(mock_run_sandbox, tmp_path)
 
     mock_patch = MagicMock()
     mock_patch.patch_id = "p-test"
+    mock_patch.operations = []  # Phase 88 — Gate 5 iterates patch.operations
     mock_surveyor = MagicMock()
     mock_surveyor.latest_explain_snapshots.return_value = {}
 

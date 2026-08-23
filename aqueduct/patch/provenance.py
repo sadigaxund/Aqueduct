@@ -221,6 +221,12 @@ def _set_module_config_key_classification(key: str | None) -> str:
 # replace_macro                engine_shaped       replaces a raw SQL macro body
 #                                                verbatim — always dialect-
 #                                                bearing.
+# declare_dependency           dialect_neutral     a PEP 508-lite requirement
+#                                                string (package name +
+#                                                version specifier) — no SQL,
+#                                                cast syntax, or session
+#                                                config; portable across
+#                                                engines unmodified.
 _STATIC_OP_CLASSIFICATION: dict[str, str] = {
     "replace_module_config": ENGINE_SHAPED,
     "replace_module_label": DIALECT_NEUTRAL,
@@ -235,6 +241,7 @@ _STATIC_OP_CLASSIFICATION: dict[str, str] = {
     "defer_to_human": DIALECT_NEUTRAL,
     "set_engine_config": ENGINE_SHAPED,
     "replace_macro": ENGINE_SHAPED,
+    "declare_dependency": DIALECT_NEUTRAL,
 }
 
 # set_module_config_key is field-sensitive (classified by which config key it

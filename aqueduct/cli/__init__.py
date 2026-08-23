@@ -585,17 +585,23 @@ def _run_patch_gates_inline(  # noqa: F811
     `forbidden_ops` / `allowed_paths` / allowlist rejection (those are
     `heal_attempts` rows, per `docs/observability_guide.md`).
 
-    Returns (lineage_res, sandbox_res, explain_res, gates_passed).
-    ``gates_passed`` is decided by ONE predicate,
-    ``patch/gate_status.py::sandbox_gate_permits_auto_apply`` — the sandbox
-    gate must have replayed the patch (`pass`) or have been owed no replay
-    at all (`not_applicable`, i.e. `agent.sandbox_mode: off`). An
-    ``unavailable`` sandbox result BLOCKS: the target engine's dependencies
-    are missing, its session would not start, or the Blueprint is polyglot,
-    so nothing about this patch was verified and a human decides. That
-    status used to be spelled `skip` and was accepted here, which let a
-    never-replayed patch auto-apply as though it had been replayed. The
-    explain gate does not hard-block from here (it is warn-only unless
+    Returns (lineage_res, sandbox_res, explain_res, resolvability_res,
+    gates_passed). ``gates_passed`` is decided by TWO predicates, ANDed:
+    ``patch/gate_status.py::sandbox_gate_permits_auto_apply`` (Gate 3) and
+    ``patch/gate_status.py::resolvability_gate_permits_auto_apply`` (Gate 5,
+    Phase 88). Gate 3's sandbox gate must have replayed the patch (`pass`)
+    or have been owed no replay at all (`not_applicable`, i.e.
+    `agent.sandbox_mode: off`). An ``unavailable`` sandbox result BLOCKS: the
+    target engine's dependencies are missing, its session would not start,
+    or the Blueprint is polyglot, so nothing about this patch was verified
+    and a human decides. That status used to be spelled `skip` and was
+    accepted here, which let a never-replayed patch auto-apply as though it
+    had been replayed. Gate 5's resolvability gate must find every declared
+    dependency already satisfied (`pass`) or owe no check at all
+    (`not_applicable` — the patch declares no `declare_dependency` op); a
+    `warn` (resolves on PyPI but not installed) or `fail`/`unavailable`
+    result BLOCKS auto-apply the same way. The explain gate does not
+    hard-block from here (it is warn-only unless
     `agent.block_on_explain_regression` is True, which the CALLER checks —
     see `cli/run.py`).
 
@@ -620,7 +626,7 @@ def _run_patch_gates_inline(  # noqa: F811
     try:
         bp_after = apply_patch_to_dict(bp_raw, patch)
     except Exception:
-        return None, None, None, False
+        return None, None, None, None, False
 
     _record_engine_config_simulation(
         patch=patch,
@@ -731,10 +737,33 @@ def _run_patch_gates_inline(  # noqa: F811
     except Exception:
         logger.warning("record_patch_simulation (explain) failed", exc_info=True)
 
-    from aqueduct.patch.gate_status import sandbox_gate_permits_auto_apply
+    # Resolvability gate (Gate 5, Phase 88) — per-requirement PyPI check for
+    # every declare_dependency op in the patch.
+    from aqueduct.patch.resolvability_gate import run_resolvability_gate
 
-    gates_passed = sandbox_gate_permits_auto_apply(sandbox_res)
-    return lineage_res, sandbox_res, explain_res, gates_passed
+    resolvability_res = run_resolvability_gate(patch)
+    try:
+        surveyor.record_patch_simulation(
+            patch_id=patch.patch_id,
+            gate="resolvability",
+            status=resolvability_res.status,
+            detail=resolvability_res.detail or None,
+            duration_ms=resolvability_res.duration_ms,
+            run_id=iteration_run_id,
+            blueprint_id=blueprint_id,
+        )
+    except Exception:
+        logger.warning("record_patch_simulation (resolvability) failed", exc_info=True)
+
+    from aqueduct.patch.gate_status import (
+        resolvability_gate_permits_auto_apply,
+        sandbox_gate_permits_auto_apply,
+    )
+
+    gates_passed = sandbox_gate_permits_auto_apply(
+        sandbox_res
+    ) and resolvability_gate_permits_auto_apply(resolvability_res)
+    return lineage_res, sandbox_res, explain_res, resolvability_res, gates_passed
 
 
 def _stage_failed_patch(

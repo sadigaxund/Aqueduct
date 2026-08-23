@@ -4,22 +4,18 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 pytestmark = pytest.mark.unit
-
-from aqueduct.patch.grammar import PatchSpec
-
 
 from aqueduct.agent import PROMPT_VERSION
 from aqueduct.agent.budget import StopReason
 from aqueduct.agent.loop import archive_patch, generate_agent_patch, stage_patch_for_human
 from aqueduct.agent.parse import _parse_patch_spec
 from aqueduct.agent.prompts import _build_guardrails_section
-
-
+from aqueduct.patch.grammar import PatchSpec
 from aqueduct.surveyor.models import FailureContext
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -449,7 +445,13 @@ class TestStageForHuman:
             patch_id="defer-1",
             rationale="out of scope",
             operations=[
-                {"op": "defer_to_human", "diagnosis": "UDF bug", "suggestions": ["check python"]}
+                {
+                    "op": "defer_to_human",
+                    "diagnosis": "UDF bug",
+                    "suggestions": ["check python"],
+                    # Phase 88 Domain 6 — now required on DeferToHumanOp.
+                    "defer_reason": "insufficient_context",
+                }
             ],
         )
         ctx = _failure_ctx()
@@ -467,6 +469,7 @@ class TestStageForHuman:
         payload = mock_fw.call_args[1]["full_payload"]
         assert payload["diagnosis"] == "UDF bug"
         assert payload["suggestions"] == ["check python"]
+        assert payload["defer_reason"] == "insufficient_context"
 
     def test_stage_patch_webhook_error_swallowed(self, tmp_path):
         """Webhook fire failure is swallowed — staging never blocks."""
@@ -493,7 +496,9 @@ class TestStageForHuman:
             mock_fw.assert_not_called()
 
 
-class TestArchivePatch:
+class TestArchivePatchDefaultPatchId:
+    """archive_patch behavior when the spec uses the default patch_id ('test-fix')."""
+
     def test_creates_applied_file(self, tmp_path):
         patches_dir = tmp_path / "patches"
         spec = _patch_spec()
@@ -505,7 +510,6 @@ class TestArchivePatch:
 
 class TestPatchFilename:
     def test_patch_filename_includes_timestamp(self, tmp_path):
-        from aqueduct.agent.prompts import _build_guardrails_section
         from aqueduct.agent.loop import _patch_filename
 
         spec = _patch_spec(patch_id="test")
@@ -516,7 +520,6 @@ class TestPatchFilename:
         assert "_test.json" in filename
 
     def test_patch_filename_ignores_seq_logic(self, tmp_path):
-        from aqueduct.agent.prompts import _build_guardrails_section
         from aqueduct.agent.loop import _patch_filename
 
         spec = _patch_spec(patch_id="test")
@@ -833,7 +836,8 @@ class TestSurveyorLlmIntegration:
 class TestLlmHelpers:
     def test_extract_failure_context_from_db(self, tmp_path):
         import duckdb
-        from aqueduct.surveyor.surveyor import Surveyor, _DDL
+
+        from aqueduct.surveyor.surveyor import _DDL
 
         def extract_failure_context(run_id: str, store_dir: Path):
             db_path = store_dir / "observability.db"
@@ -916,10 +920,8 @@ class TestLlmHelpers:
         assert call_count == 3
 
     def test_reprompt_uses_custom_llm_max_reprompts(self, monkeypatch, tmp_path):
-        from aqueduct.agent.prompts import _build_guardrails_section
-        from aqueduct.agent.loop import generate_agent_patch
-
         from aqueduct.agent.budget import BudgetConfig
+        from aqueduct.agent.loop import generate_agent_patch
 
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
 
@@ -949,7 +951,6 @@ class TestLlmHelpers:
         assert call_count == 5
 
     def test_generate_llm_patch_uses_llm_timeout(self, monkeypatch, tmp_path):
-        from aqueduct.agent.prompts import _build_guardrails_section
         from aqueduct.agent.loop import generate_agent_patch
 
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
@@ -971,7 +972,6 @@ class TestLlmHelpers:
 
 class TestBuildSystemPrompt:
     def test_engine_prompt_context_included(self, tmp_path):
-        from aqueduct.agent.prompts import _build_guardrails_section
         from aqueduct.agent.prompts import _build_system_prompt
 
         prompt = _build_system_prompt(
@@ -982,7 +982,6 @@ class TestBuildSystemPrompt:
         assert "Engine rule 1." in prompt
 
     def test_blueprint_prompt_context_included(self, tmp_path):
-        from aqueduct.agent.prompts import _build_guardrails_section
         from aqueduct.agent.prompts import _build_system_prompt
 
         prompt = _build_system_prompt(
@@ -993,7 +992,6 @@ class TestBuildSystemPrompt:
         assert "Blueprint rule 2." in prompt
 
     def test_both_contexts_included(self, tmp_path):
-        from aqueduct.agent.prompts import _build_guardrails_section
         from aqueduct.agent.prompts import _build_system_prompt
 
         prompt = _build_system_prompt(
@@ -1027,7 +1025,7 @@ class TestFailureContextBlueprintSourceYaml:
         assert ctx.to_dict()["blueprint_source_yaml"] == "id: test"
 
     def test_llm_user_prompt_includes_blueprint_source_yaml(self):
-        from aqueduct.agent.prompts import _build_guardrails_section, _build_user_prompt
+        from aqueduct.agent.prompts import _build_user_prompt
         from aqueduct.surveyor.models import FailureContext
 
         ctx = FailureContext(
@@ -1051,7 +1049,6 @@ class TestFailureContextBlueprintSourceYaml:
         # expressions" / "Do NOT hard-code the resolved literal path"
         # sentences into the table-driven Path-values rule block. Assert
         # the canonical phrasing the current prompt uses.
-        from aqueduct.agent.prompts import _build_guardrails_section
         from aqueduct.agent.prompts import _build_system_prompt
 
         prompt = _build_system_prompt(patches_dir=tmp_path)
@@ -1061,7 +1058,7 @@ class TestFailureContextBlueprintSourceYaml:
 
     def test_allow_defer_false_removes_defer_op_from_schema(self, tmp_path):
         """allow_defer=False → rendered schema contains NO DeferToHumanOp ($defs, oneOf, discriminator)."""
-        from aqueduct.agent.prompts import _build_guardrails_section, _build_system_prompt
+        from aqueduct.agent.prompts import _build_system_prompt
 
         prompt = _build_system_prompt(patches_dir=tmp_path, allow_defer=False)
         assert "DeferToHumanOp" not in prompt
@@ -1070,7 +1067,7 @@ class TestFailureContextBlueprintSourceYaml:
 
     def test_allow_defer_true_includes_defer_op_in_schema(self, tmp_path):
         """allow_defer=True → DeferToHumanOp present in schema and defer rules section rendered."""
-        from aqueduct.agent.prompts import _build_guardrails_section, _build_system_prompt
+        from aqueduct.agent.prompts import _build_system_prompt
 
         prompt = _build_system_prompt(patches_dir=tmp_path, allow_defer=True)
         assert "DeferToHumanOp" in prompt
@@ -1174,7 +1171,7 @@ class TestLoadPreviousPatches:
 class TestDoctorHintsInLLMPrompt:
     def test_doctor_hints_non_empty_includes_section(self, tmp_path):
         """doctor_hints non-empty → user prompt contains 'Blueprint issues detected' section."""
-        from aqueduct.agent.prompts import _build_guardrails_section, _build_user_prompt
+        from aqueduct.agent.prompts import _build_user_prompt
 
         ctx = _failure_ctx(
             doctor_hints=("warn: bad path /tmp/missing",),
@@ -1188,7 +1185,7 @@ class TestDoctorHintsInLLMPrompt:
 
     def test_doctor_hints_empty_section_absent(self, tmp_path):
         """doctor_hints empty → 'Blueprint issues detected' section absent."""
-        from aqueduct.agent.prompts import _build_guardrails_section, _build_user_prompt
+        from aqueduct.agent.prompts import _build_user_prompt
 
         ctx = _failure_ctx(
             doctor_hints=(),
@@ -1207,7 +1204,6 @@ class TestProviderOptionsDispatch:
     """Tests for provider_options key routing in _call_openai_compat."""
 
     def _make_mock_response(self, content="test"):
-        import json as _json
 
         mock = MagicMock()
         mock.json.return_value = {"choices": [{"message": {"content": content}}]}
@@ -1235,9 +1231,8 @@ class TestProviderOptionsDispatch:
         return _patch("httpx.Client", return_value=mock_client)
 
     def test_ollama_prefix_stripped_into_options(self):
+
         from aqueduct.agent.providers import _call_openai_compat
-        from unittest.mock import MagicMock
-        import httpx
 
         captured: dict = {}
         with self._patch_client(captured):
@@ -1255,10 +1250,8 @@ class TestProviderOptionsDispatch:
         assert "ollama_num_thread" not in captured["payload"]
 
     def test_generic_key_merged_top_level(self):
-        from aqueduct.agent.prompts import _build_guardrails_section
-        from aqueduct.agent.providers import _call_openai_compat
 
-        from unittest.mock import MagicMock
+        from aqueduct.agent.providers import _call_openai_compat
 
         captured: dict = {}
         with self._patch_client(captured):
@@ -1275,9 +1268,8 @@ class TestProviderOptionsDispatch:
         assert "options" not in captured["payload"]
 
     def test_mixed_ollama_and_generic_both_dispatched(self):
-        from aqueduct.agent.prompts import _build_guardrails_section
+
         from aqueduct.agent.providers import _call_openai_compat
-        from unittest.mock import MagicMock
 
         captured: dict = {}
         with self._patch_client(captured):
@@ -1295,9 +1287,8 @@ class TestProviderOptionsDispatch:
         assert payload["temperature"] == 0.7
 
     def test_provider_options_none_payload_unchanged(self):
-        from aqueduct.agent.prompts import _build_guardrails_section
+
         from aqueduct.agent.providers import _call_openai_compat
-        from unittest.mock import MagicMock
 
         captured: dict = {}
         with self._patch_client(captured):
@@ -1315,8 +1306,8 @@ class TestProviderOptionsDispatch:
 
     def test_ollama_options_key_rejected_at_parse(self):
         """Old ollama_options key rejected — schema has extra=forbid on AgentSchema."""
-        import yaml
         from pydantic import ValidationError
+
         from aqueduct.parser.schema import AgentSchema
 
         with pytest.raises(ValidationError):
@@ -1328,17 +1319,14 @@ class TestProviderOptionsDispatch:
 
 class TestGuardrailsSection:
     def test_none_returns_empty_string(self):
-        from aqueduct.agent.prompts import _build_guardrails_section
 
         assert _build_guardrails_section(None) == ""
 
     def test_empty_dict_returns_empty_string(self):
-        from aqueduct.agent.prompts import _build_guardrails_section
 
         assert _build_guardrails_section({}) == ""
 
     def test_dataclass_shape_live_heal_path(self):
-        from aqueduct.agent.prompts import _build_guardrails_section
         from aqueduct.parser.models import GuardrailsConfig
 
         g = GuardrailsConfig(forbidden_ops=("replace_module_config",))
@@ -1347,7 +1335,6 @@ class TestGuardrailsSection:
         assert "replace_module_config" in result
 
     def test_dict_shape_heal_from_store_path(self):
-        from aqueduct.agent.prompts import _build_guardrails_section
 
         g = {"forbidden_ops": ["x"], "allowed_paths": ["blueprints/*"]}
         result = _build_guardrails_section(g)
@@ -1358,7 +1345,6 @@ class TestGuardrailsSection:
         )
 
     def test_all_four_fields_render(self):
-        from aqueduct.agent.prompts import _build_guardrails_section
 
         g = {
             "forbidden_ops": ["f1"],
@@ -1376,7 +1362,6 @@ class TestGuardrailsSection:
         assert "- never heal these error_types (priority over heal_on): n1" in result
 
     def test_absent_fields_produce_no_bullet(self):
-        from aqueduct.agent.prompts import _build_guardrails_section
 
         g = {"forbidden_ops": ["f1"]}
         result = _build_guardrails_section(g)
@@ -1508,8 +1493,8 @@ class TestBlobExternalisationIntegration:
 
     def test_surveyor_record_stores_blob_path_in_db(self, tmp_path):
         """surveyor.record() on failure → failure_contexts columns contain blob paths, not raw JSON."""
-        from aqueduct.surveyor.surveyor import Surveyor
         from aqueduct.executor.models import ExecutionResult, ModuleResult
+        from aqueduct.surveyor.surveyor import Surveyor
 
         store_dir = tmp_path / "blob_test_a"
 
@@ -1542,8 +1527,8 @@ class TestBlobExternalisationIntegration:
 
     def test_surveyor_ctx_manifest_json_is_valid_json(self, tmp_path):
         """The FailureContext returned by record() has manifest_json as valid decompressed JSON."""
-        from aqueduct.surveyor.surveyor import Surveyor
         from aqueduct.executor.models import ExecutionResult, ModuleResult
+        from aqueduct.surveyor.surveyor import Surveyor
 
         store_dir = tmp_path / "obs5"
 

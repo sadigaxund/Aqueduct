@@ -103,19 +103,25 @@ def _gate_icon(status: str | None) -> tuple[str, str]:
     return "⚠", "yellow"  # unknown status — never silently vanish
 
 
-def _print_gate_ladder(g2, g3, g4, *, verbosity: int, gate1_ok: bool = True) -> None:
-    """Print gate 1-4 outcomes for one candidate patch as they complete.
+def _print_gate_ladder(g2, g3, g4, g5, *, verbosity: int, gate1_ok: bool = True) -> None:
+    """Print gate 1-5 outcomes for one candidate patch as they complete.
 
-    ``g2``/``g3``/``g4`` are ``lineage_res``/``sandbox_res``/``explain_res``
-    from ``_run_patch_gates_inline`` (``None`` when that gate did not run —
-    e.g. a heal-cache replay that skipped straight to sandbox). Gate 1
-    (policy/guardrails) already ran in-loop via ``_check_guardrails`` before
-    a candidate ever reaches here, so ``gate1_ok`` is a plain bool, not a
-    ``GateStatus``. Default: one compact line, collapsing to "gates 1-4
-    passed" when nothing failed or warned. ``-v``: one line per gate.
+    ``g2``/``g3``/``g4``/``g5`` are ``lineage_res``/``sandbox_res``/
+    ``explain_res``/``resolvability_res`` from ``_run_patch_gates_inline``
+    (``None`` when that gate did not run — e.g. a heal-cache replay that
+    skipped straight to sandbox). Gate 1 (policy/guardrails) already ran
+    in-loop via ``_check_guardrails`` before a candidate ever reaches here,
+    so ``gate1_ok`` is a plain bool, not a ``GateStatus``. Default: one
+    compact line, collapsing to "gates 1-5 passed" when nothing failed or
+    warned. ``-v``: one line per gate.
     """
     entries = [(1, "policy", "pass" if gate1_ok else "fail", None)]
-    for num, name, res in ((2, "lineage", g2), (3, "sandbox", g3), (4, "explain", g4)):
+    for num, name, res in (
+        (2, "lineage", g2),
+        (3, "sandbox", g3),
+        (4, "explain", g4),
+        (5, "resolvability", g5),
+    ):
         if res is None:
             continue
         entries.append((num, name, res.status, getattr(res, "detail", None)))
@@ -1437,7 +1443,7 @@ def run(
                         if effective_mode == "auto":
                             # Run the gate pyramid on the candidate NOW so a stale
                             # patch costs one sandbox pass, not a production write.
-                            _rg2, _rg3, _rg4, _rg3_passed = _aqcli._run_patch_gates_inline(
+                            _rg2, _rg3, _rg4, _rg5, _rg3_passed = _aqcli._run_patch_gates_inline(
                                 patch=_replay_patch,
                                 blueprint_path=Path(blueprint),
                                 bundle=bundle,
@@ -1461,10 +1467,20 @@ def run(
                             )
                             _announce_polyglot_sandbox_unavailable(_rg3)
                             if _rg3 is not None and not _rg3_passed:
+                                from aqueduct.patch.gate_status import (
+                                    resolvability_gate_permits_auto_apply as _rg_permits,
+                                )
+
                                 _replay_ok = False
+                                _rg_fail_gate, _rg_fail_res = (
+                                    ("resolvability", _rg5)
+                                    if not _rg_permits(_rg5)
+                                    else ("sandbox", _rg3)
+                                )
                                 click.echo(
                                     f"  ⚠ heal cache: replay candidate {_candidate.patch_id} failed "
-                                    f"sandbox replay ({_rg3.detail}) — falling through to Agent",
+                                    f"{_rg_fail_gate} gate ({_rg_fail_res.detail}) — falling "
+                                    f"through to Agent",
                                     err=True,
                                 )
                             else:
@@ -1472,7 +1488,7 @@ def run(
                                 # Same plan-regression warning the LLM path gets,
                                 # so a replayed patch's regression isn't silent.
                                 _emit_explain_regressions(_rg4)
-                                _print_gate_ladder(_rg2, _rg3, _rg4, verbosity=verbosity)
+                                _print_gate_ladder(_rg2, _rg3, _rg4, _rg5, verbosity=verbosity)
                         if _replay_ok:
                             from aqueduct.agent import AgentPatchResult as _AgentPatchResult
 
@@ -1488,10 +1504,23 @@ def run(
                                 err=True,
                             )
                             try:
+                                _replay_defer_op = next(
+                                    (
+                                        op
+                                        for op in _replay_patch.operations
+                                        if op.op == "defer_to_human"
+                                    ),
+                                    None,
+                                )
                                 surveyor.record_heal_attempt(
                                     run_id=run_id,
                                     attempt_record=_zero_token_attempt(_sig_exact),
                                     stop_reason="replayed",
+                                    defer_reason=(
+                                        getattr(_replay_defer_op, "defer_reason", None)
+                                        if _replay_defer_op is not None
+                                        else None
+                                    ),
                                 )
                             except Exception:
                                 pass  # recording the zero-token replay is best-effort; never block for audit logging
@@ -2144,10 +2173,26 @@ def run(
             # joins can answer "which axis terminated this heal".
             if agent_result.attempt_records and agent_result.stop_reason:
                 try:
+                    # Domain 6 — thread the terminal patch's defer_reason (if
+                    # any) alongside stop_reason. Only known now, once the
+                    # loop has returned the final PatchSpec.
+                    _defer_op = next(
+                        (
+                            op
+                            for op in (patch.operations if patch is not None else [])
+                            if op.op == "defer_to_human"
+                        ),
+                        None,
+                    )
                     surveyor.update_heal_attempt_stop_reason(
                         run_id=_heal_run_id,
                         attempt_num=agent_result.attempt_records[-1].attempt_num,
                         stop_reason=agent_result.stop_reason,
+                        defer_reason=(
+                            getattr(_defer_op, "defer_reason", None)
+                            if _defer_op is not None
+                            else None
+                        ),
                     )
                 except Exception:
                     pass  # updating stop_reason is best-effort; never let persistence block the loop
@@ -2303,6 +2348,7 @@ def run(
                     source=_patch_source,
                     patch_store=_patch_store,
                     obs_store=_obs_store,
+                    on_defer_webhook=cfg.webhooks.on_defer,
                 )
                 _fire_heal_hook(
                     "on_patch_pending",
@@ -2344,6 +2390,7 @@ def run(
                     source=_patch_source,
                     patch_store=_patch_store,
                     obs_store=_obs_store,
+                    on_defer_webhook=cfg.webhooks.on_defer,
                 )
                 _fire_heal_hook(
                     "on_patch_pending",
@@ -2420,6 +2467,7 @@ def run(
                     webhook_event="on_ci_patch",
                     patch_store=_patch_store,
                     obs_store=_obs_store,
+                    on_defer_webhook=cfg.webhooks.on_defer,
                 )
                 _fire_heal_hook(
                     "on_patch_pending",
@@ -2452,15 +2500,90 @@ def run(
                 break
 
             elif effective_mode == "auto":
+                # A4 — a defer-only patch makes zero Blueprint changes (Domain
+                # 6): running the sandbox/gate/apply pyramid on it is an
+                # expensive no-op. `has_defer` mirrors
+                # `aqueduct/agent/loop.py:820`'s own predicate exactly.
+                # "defer-only" (the ratified wording) means EVERY op is
+                # defer_to_human, not just any — a MIXED patch (a real op
+                # alongside a defer) still runs the full gate ladder below.
+                # In practice `has_defer` and `_defer_only` can never diverge
+                # for a validated PatchSpec — `grammar.py`'s
+                # `_reject_mixed_defer_ops` already refuses to construct a
+                # patch mixing `defer_to_human` with any other op, so a
+                # "mixed" patch can never reach this branch. The separate
+                # `all(...)` check is kept anyway as the defensive, provably-
+                # correct statement of intent (never trust a duck-typed
+                # `patch.operations` two layers removed from validation), not
+                # because it currently changes behavior.
+                # A defer-only patch instead routes straight to the same
+                # pending/defer staging path the "ci"/"human" branches use:
+                # NO sandbox, NO gate run, NO apply.
+                has_defer = any(op.op == "defer_to_human" for op in patch.operations)
+                _defer_only = has_defer and all(
+                    op.op == "defer_to_human" for op in patch.operations
+                )
+                if _defer_only:
+                    click.echo(
+                        "  ▸ defer-only patch — skipping sandbox/gate/apply, "
+                        "staging for human review",
+                        err=True,
+                    )
+                    stage_patch_for_human(
+                        patch,
+                        patches_dir,
+                        failure_ctx,
+                        on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
+                        source=_patch_source,
+                        patch_store=_patch_store,
+                        obs_store=_obs_store,
+                        on_defer_webhook=cfg.webhooks.on_defer,
+                    )
+                    _fire_heal_hook(
+                        "on_patch_pending",
+                        iter_run_id=iteration_run_id,
+                        hook_status="pending",
+                        ctx=failure_ctx,
+                    )
+                    patch_staged_for_review = True
+                    _rel_bp_defer = (
+                        Path(blueprint).relative_to(_project_root)
+                        if Path(blueprint).is_relative_to(_project_root)
+                        else Path(blueprint)
+                    )
+                    click.echo(
+                        f"  ▸ Agent patch staged → "
+                        f"{_patch_store.location_label if _patch_store is not None else patches_dir}/pending/  "
+                        f"(id={patch.patch_id})\n"
+                        f"    Review: aqueduct patch apply {patch.patch_id} --blueprint {_rel_bp_defer}",
+                        err=True,
+                    )
+                    surveyor.record_healing_outcome(
+                        run_id=iteration_run_id,
+                        failed_module=failure_ctx.failed_module,
+                        parent_run_id=run_id,
+                        failure_category=patch.category,
+                        model=_outcome_model,
+                        patch_id=patch.patch_id,
+                        confidence=patch.confidence,
+                        patch_applied=False,
+                        run_success_after_patch=False,
+                        failure_signature=_sig_exact.hash,
+                        failure_signature_coarse=_sig_coarse.hash,
+                        resolution=_resolution,
+                        model_cascade_position=_cascade_pos,
+                    )
+                    break
+
                 # Multi-patch gate validation: sandbox replay + explain gate check
                 # before writing to the blueprint.
                 # Phase 45: gates already ran on a replay candidate at the
                 # heal-cache check — skip the redundant rerun.
                 if _replay_gates_done:
                     _g3_passed = True
-                    _g2, _g3, _g4 = None, None, None
+                    _g2, _g3, _g4, _g5 = None, None, None, None
                 else:
-                    _g2, _g3, _g4, _g3_passed = _aqcli._run_patch_gates_inline(
+                    _g2, _g3, _g4, _g5, _g3_passed = _aqcli._run_patch_gates_inline(
                         patch=patch,
                         blueprint_path=Path(blueprint),
                         bundle=bundle,
@@ -2478,7 +2601,7 @@ def run(
                     _announce_polyglot_sandbox_unavailable(_g3)
                     # F-16 — print the gate ladder as it completes (SCREEN 3/7),
                     # instead of staying silent when everything passes.
-                    _print_gate_ladder(_g2, _g3, _g4, verbosity=verbosity)
+                    _print_gate_ladder(_g2, _g3, _g4, _g5, verbosity=verbosity)
                 _block_on_g4 = (
                     manifest.agent.block_on_explain_regression
                     if manifest.agent.block_on_explain_regression is not None

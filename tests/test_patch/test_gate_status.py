@@ -15,10 +15,12 @@ from types import SimpleNamespace
 import pytest
 
 from aqueduct.patch.gate_status import (
+    AUTO_APPLY_PERMITTING_RESOLVABILITY_STATUSES,
     AUTO_APPLY_PERMITTING_SANDBOX_STATUSES,
     GATE_STATUSES,
     PREVIEW_NON_BLOCKING_SANDBOX_STATUSES,
     GateStatus,
+    resolvability_gate_permits_auto_apply,
     sandbox_gate_blocks_preview,
     sandbox_gate_permits_auto_apply,
 )
@@ -154,4 +156,31 @@ def test_the_preview_non_blocking_set_is_pinned():
     command, so it must be impossible to do without editing this line."""
     assert PREVIEW_NON_BLOCKING_SANDBOX_STATUSES == frozenset(
         {GateStatus.PASS, GateStatus.NOT_APPLICABLE, GateStatus.NOT_REQUESTED}
+    )
+
+
+# ── Phase 88: Gate 5 (resolvability) ────────────────────────────────────────
+
+
+def test_resolvability_none_does_not_permit():
+    assert not resolvability_gate_permits_auto_apply(None)
+
+
+@pytest.mark.parametrize(
+    "status,permits",
+    [
+        (GateStatus.PASS, True),
+        (GateStatus.NOT_APPLICABLE, True),
+        (GateStatus.WARN, False),
+        (GateStatus.FAIL, False),
+        (GateStatus.UNAVAILABLE, False),
+    ],
+)
+def test_resolvability_permits_by_status(status, permits):
+    assert resolvability_gate_permits_auto_apply(_result(status)) is permits
+
+
+def test_resolvability_permitting_set_is_pinned():
+    assert AUTO_APPLY_PERMITTING_RESOLVABILITY_STATUSES == frozenset(
+        {GateStatus.PASS, GateStatus.NOT_APPLICABLE}
     )

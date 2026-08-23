@@ -284,6 +284,7 @@ class TestGenerateConservativeSkips:
                     "diagnosis": "x",
                     "suggestions": ["y"],
                     "confidence_reason": "z",
+                    "defer_reason": "other",
                 }
             ]
         )

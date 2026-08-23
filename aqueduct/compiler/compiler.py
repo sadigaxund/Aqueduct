@@ -52,7 +52,6 @@ from aqueduct.compiler.islands import (
 )
 from aqueduct.compiler.macros import MacroError, resolve_macros_in_config
 from aqueduct.compiler.models import Manifest
-from aqueduct.compiler.udf_attribution import attribute_udfs_to_islands
 from aqueduct.compiler.provenance import (
     ModuleProvenance,
     ProvenanceMap,
@@ -61,6 +60,7 @@ from aqueduct.compiler.provenance import (
 )
 from aqueduct.compiler.runtime import AqFunctions, resolve_tier1
 from aqueduct.compiler.type_surfaces import module_type_spellings, udf_return_type_spellings
+from aqueduct.compiler.udf_attribution import attribute_udfs_to_islands
 from aqueduct.compiler.wirer import (
     WireError,
     compile_away_regulators,
@@ -69,7 +69,8 @@ from aqueduct.compiler.wirer import (
     validate_probes,
     validate_spillway_edges,
 )
-from aqueduct.errors import CompileError, TypeSpellingError
+from aqueduct.dependencies import check_requirements, parse_requirement, requirement_status
+from aqueduct.errors import CompileError, DependencyError, TypeSpellingError
 from aqueduct.executor.capabilities import Support
 from aqueduct.executor.path_keys import CLOUD_SCHEMES, PATHLESS_INGRESS_FORMATS
 from aqueduct.parser.models import Blueprint, Edge, Module, ModuleType
@@ -165,6 +166,36 @@ def compile(  # noqa: A001
         deployment_engine=engine,
         base_dir=str(blueprint_path.parent) if blueprint_path else None,
     )
+
+    # ── 0. Dependency preflight (Phase 88) ─────────────────────────────────────
+    # `dependencies:` is NOT engine-scoped and carries no capability leaf —
+    # this is the entire runtime semantics of the block: a compile-time
+    # check of the installed environment via `importlib.metadata`, before
+    # any Tier 1 resolution or module-level work so a missing/unsatisfied
+    # requirement fails as early and cheaply as possible. Silent when every
+    # requirement is satisfied (including `unknown_version` — see
+    # `aqueduct.dependencies.requirement_status`).
+    _dep_problems = check_requirements(blueprint.dependencies)
+    if _dep_problems:
+        # Re-derive just the failing raw requirement strings for the pip
+        # command — `_dep_problems` is human-readable text (with the
+        # "(not installed)"/"(installed: X)" suffix), not directly
+        # pip-usable, and a satisfied requirement must never appear in the
+        # printed command.
+        _failing_raw = [
+            r
+            for r in blueprint.dependencies
+            if requirement_status(parse_requirement(r))[0] in ("missing", "version_conflict")
+        ]
+        _pip_args = " ".join(f"'{r}'" for r in _failing_raw)
+        raise DependencyError(
+            "Blueprint declares dependencies that are not installed in this "
+            "environment:\n"
+            + "\n".join(f"  - {p}" for p in _dep_problems)
+            + "\n\nAqueduct never installs packages. Install them yourself:\n"
+            f"  pip install {_pip_args}",
+            problems=_dep_problems,
+        )
 
     # ── 1. Resolve Tier 1 in context values ───────────────────────────────────
     try:
@@ -778,6 +809,7 @@ def compile(  # noqa: A001
         retry_policy=blueprint.retry_policy,
         agent=blueprint.agent,
         udf_registry=_resolve_udf_params_tier1(blueprint.udf_registry, registry),
+        dependencies=blueprint.dependencies,
         macros=dict(blueprint.macros),
         checkpoint=blueprint.checkpoint,
         provenance_map=prov_map,

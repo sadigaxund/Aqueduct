@@ -58,11 +58,11 @@ edges: []
 
     # Should not raise TypeError and return a tuple
     assert isinstance(res, tuple)
-    assert len(res) == 4
+    assert len(res) == 5
 
     # Print calls if it fails
     print("CALLS:", mock_surveyor.record_patch_simulation.call_args_list)
-    assert mock_surveyor.record_patch_simulation.call_count == 4
+    assert mock_surveyor.record_patch_simulation.call_count == 5
 
     # Every gate row carries the same run/blueprint attribution.
     for call in mock_surveyor.record_patch_simulation.call_args_list:
@@ -70,7 +70,7 @@ edges: []
         assert call[1]["blueprint_id"] == "test_bp"
 
     gates = [c[1]["gate"] for c in mock_surveyor.record_patch_simulation.call_args_list]
-    assert gates == ["engine_config", "lineage", "sandbox", "explain"]
+    assert gates == ["engine_config", "lineage", "sandbox", "explain", "resolvability"]
 
     # This patch touches a module, not engine config, so the engine-config
     # gate has nothing to compare — `not_applicable`, never `pass`.

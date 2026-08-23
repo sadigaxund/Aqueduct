@@ -172,6 +172,7 @@ The provenance section tells you the `source_type` of each config value. Pick th
 - SQL query wrong → `set_module_config_key` with key="query".
 {engine_rules}
 - `schema_hint field 'X' not found in source schema. Available columns: [...]` — the message lists every real column in the source. The fix is aligning the schema_hint key to a real column from that list (a rename) or removing the stale entry from schema_hint — never re-typing or re-declaring the missing key under its old name.
+- `declare_dependency` records a required package in the Blueprint's `dependencies:` block — it DECLARES, it does not install. Aqueduct never installs anything. Use it only when the root cause is a genuinely missing third-party package, never to paper over an import typo or a UDF bug. The declared requirement is checked: if it is not already installed in the environment, the patch is staged for a human to install it rather than auto-applied; if the package or version does not exist at all, the patch is rejected. Requirement strings are PEP 508 (`name`, `name>=1.2`, `name[extra]>=1.2,<2`) — environment markers are not supported.
 {engine_config_policy}
 ## Required output — complete example
 Every response MUST be a single JSON object with ALL of these fields. The `operations` field is MANDATORY — a response without it is always wrong.
@@ -898,6 +899,12 @@ def _build_system_prompt(
             "- `diagnosis`: detailed explanation of why this cannot be patched automatically\n"
             "- `suggestions`: actionable next steps for the human operator\n"
             "- `confidence_reason`: why you're confident deferral is correct, not just uncertain\n"
+            "- `defer_reason`: REQUIRED — the nearest bucket, one of `infrastructure` | "
+            "`upstream_schema_change` | `data_shape_change` | `insufficient_context` | `other`. "
+            "This enum is a queryable bucket for later triage — it does NOT replace "
+            "`diagnosis`, `suggestions`, or `confidence_reason`, which must stay honest and "
+            "specific regardless of which bucket you pick. Choose the closest fit; reach for "
+            "`other` only as a last resort when nothing else fits.\n"
             "\n"
             "Do NOT mix `defer_to_human` with other operations. If you defer, defer completely."
         )

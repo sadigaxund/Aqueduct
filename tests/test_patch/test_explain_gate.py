@@ -188,3 +188,14 @@ def test_not_applicable_detail_unchanged_when_engine_omitted():
     result = run_explain_gate({}, {"m1": {"exchange_count": 1}})
     assert result.status == "not_applicable"
     assert result.detail == "no pre-patch explain_snapshot rows; baseline not yet established"
+
+
+def test_not_applicable_for_declare_dependency_only_patch_touched_modules():
+    """Phase 88 — a declare_dependency-only patch's touched_modules is [],
+    which the CLI passes through as `touched_modules=[]`. Since `[] or
+    default` falls back to the default module set, whether Gate 4 lands on
+    `not_applicable` for such a patch is actually decided by the baseline
+    (empty here, as it always is until a Blueprint has run once) — asserted
+    rather than assumed, per the Phase 88 W2 brief."""
+    result = run_explain_gate({}, {}, touched_modules=[])
+    assert result.status == "not_applicable"

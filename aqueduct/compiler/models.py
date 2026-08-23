@@ -44,6 +44,13 @@ class Manifest:
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
     agent: AgentConfig = field(default_factory=AgentConfig)
     udf_registry: tuple[dict[str, Any], ...] = ()
+    # Flat list of PEP 508 requirement strings (Phase 88 `dependencies:`
+    # block) — copied verbatim from `Blueprint.dependencies` by the
+    # compiler, after the compile-time preflight
+    # (`aqueduct.dependencies.check_requirements`) has already verified
+    # every entry is satisfied. Carried on the Manifest purely for
+    # provenance/doctor consumption — nothing at runtime re-checks it.
+    dependencies: tuple[str, ...] = ()
     macros: dict[str, str] = field(default_factory=dict)
     checkpoint: bool = False
     provenance_map: ProvenanceMap | None = None
@@ -137,6 +144,7 @@ class Manifest:
             },
             "agent": self.agent.to_dict(),
             "udf_registry": list(self.udf_registry),
+            "dependencies": list(self.dependencies),
             "macros": self.macros,
             "checkpoint": self.checkpoint,
             "base_dir": self.base_dir,

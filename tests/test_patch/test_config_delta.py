@@ -173,7 +173,7 @@ def test_pipeline_only_patch_reports_not_applicable_never_pass():
 
 
 def test_defer_to_human_patch_reports_not_applicable():
-    spec = _spec({"op": "defer_to_human", "diagnosis": "needs a human"})
+    spec = _spec({"op": "defer_to_human", "diagnosis": "needs a human", "defer_reason": "other"})
     res = run_engine_config_delta_gate(cfg=_cfg(), blueprint_before=_bp(), patch_spec=spec)
     assert res.status == "not_applicable"
 

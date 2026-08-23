@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
-import json
 import pytest
 
 pytestmark = pytest.mark.unit
 from pydantic import ValidationError
-from aqueduct.patch.grammar import PatchSpec, RetiredPatchOpError, SetEngineConfigOp
+
+from aqueduct.patch.grammar import (
+    DeclareDependencyOp,
+    DeferToHumanOp,
+    PatchSpec,
+    RetiredPatchOpError,
+    SetEngineConfigOp,
+)
 
 
 def test_valid_patch_spec_parsing():
@@ -257,6 +263,54 @@ def test_set_spark_config_is_retired():
         )
 
 
+def test_defer_to_human_requires_defer_reason():
+    """`defer_reason` (Phase 88 Domain 6) is REQUIRED — an absent value is a
+    pydantic ValidationError, which feeds the normal reprompt loop rather
+    than hard-failing the heal (see aqueduct/agent/loop.py:751-752)."""
+    with pytest.raises(ValidationError, match="defer_reason"):
+        PatchSpec(
+            patch_id="p",
+            rationale="r",
+            operations=[
+                {
+                    "op": "defer_to_human",
+                    "diagnosis": "infra is down",
+                    "suggestions": ["restart infra"],
+                }
+            ],
+        )
+
+
+def test_defer_to_human_rejects_invalid_defer_reason():
+    """An out-of-enum value is a validation failure, not a silent coercion."""
+    with pytest.raises(ValidationError):
+        PatchSpec(
+            patch_id="p",
+            rationale="r",
+            operations=[
+                {
+                    "op": "defer_to_human",
+                    "diagnosis": "infra is down",
+                    "defer_reason": "not_a_real_bucket",
+                }
+            ],
+        )
+
+
+def test_defer_to_human_accepts_valid_defer_reason():
+    op = DeferToHumanOp(
+        op="defer_to_human",
+        diagnosis="upstream renamed a column",
+        suggestions=["contact upstream team"],
+        confidence_reason="high confidence — error is a clean schema mismatch",
+        defer_reason="upstream_schema_change",
+    )
+    assert op.defer_reason == "upstream_schema_change"
+    # Free-prose fields stay untouched by the new enum.
+    assert op.diagnosis == "upstream renamed a column"
+    assert op.confidence_reason.startswith("high confidence")
+
+
 def test_macro_alias_normalised():
     """Aliases for replace_macro are normalized to 'replace_macro'."""
     spec = PatchSpec(
@@ -269,3 +323,60 @@ def test_macro_alias_normalised():
         ],
     )
     assert all(op.op == "replace_macro" for op in spec.operations)
+
+
+# ── Phase 88: declare_dependency ────────────────────────────────────────────
+
+
+def test_declare_dependency_schema_round_trip():
+    op = DeclareDependencyOp(op="declare_dependency", requirement="holidays>=0.40")
+    spec = PatchSpec(
+        patch_id="p",
+        rationale="need holidays package",
+        operations=[op.model_dump()],
+    )
+    assert spec.operations[0].op == "declare_dependency"
+    assert spec.operations[0].requirement == "holidays>=0.40"
+    # Round-trips through JSON too.
+    spec2 = PatchSpec.model_validate_json(spec.model_dump_json())
+    assert spec2.operations[0].requirement == "holidays>=0.40"
+
+
+@pytest.mark.parametrize("alias", ["add_dependency", "require_package", "declare_dependencies"])
+def test_declare_dependency_alias_normalized(alias):
+    spec = PatchSpec(
+        patch_id="p",
+        rationale="r",
+        operations=[{"op": alias, "requirement": "holidays>=0.40"}],
+    )
+    assert spec.operations[0].op == "declare_dependency"
+
+
+def test_declare_dependency_malformed_requirement_rejected():
+    with pytest.raises(ValidationError):
+        DeclareDependencyOp(op="declare_dependency", requirement="not a valid req!!")
+
+
+def test_declare_dependency_environment_marker_rejected():
+    with pytest.raises(ValidationError):
+        DeclareDependencyOp(
+            op="declare_dependency",
+            requirement='holidays>=0.40; python_version < "3.12"',
+        )
+
+
+def test_declare_dependency_no_rationale_field():
+    # The op class does NOT carry a per-op rationale field — PatchSpec.rationale
+    # already covers the why for the whole patch (extra="forbid" enforces this).
+    with pytest.raises(ValidationError):
+        DeclareDependencyOp(
+            op="declare_dependency",
+            requirement="holidays>=0.40",
+            rationale="needs holiday calendar",
+        )
+
+
+def test_declare_dependency_present_in_json_schema():
+    schema = PatchSpec.model_json_schema()
+    schema_text = str(schema)
+    assert "declare_dependency" in schema_text

@@ -55,6 +55,9 @@ def test_sandbox_mode_sample_forwards_default_1000_rows(mock_run_sandbox, tmp_pa
 
     mock_patch = MagicMock()
     mock_patch.patch_id = "p-sample"
+    # Phase 88 — Gate 5 (resolvability) iterates patch.operations; must be
+    # an actual list (no declare_dependency op → not_applicable).
+    mock_patch.operations = []
     mock_surveyor = MagicMock()
     mock_surveyor.latest_explain_snapshots.return_value = {}
     mock_run_sandbox.return_value = MagicMock(

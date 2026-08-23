@@ -8,6 +8,7 @@ pytestmark = pytest.mark.unit
 from aqueduct.patch.grammar import (
     AddArcadeRefOp,
     AddProbeOp,
+    DeclareDependencyOp,
     InsertModuleOp,
     RemoveModuleOp,
     ReplaceContextValueOp,
@@ -359,3 +360,51 @@ def test_replace_macro_missing_macros_block_raises(base_bp):
     op = ReplaceMacroOp(op="replace_macro", name="any", value="SELECT 1")
     with pytest.raises(PatchOperationError, match="no macros"):
         apply_operation(bp, op)
+
+
+# ── Phase 88: declare_dependency ────────────────────────────────────────────
+
+
+def test_apply_declare_dependency_creates_key_when_absent(base_bp):
+    bp = dict(base_bp)  # no dependencies key
+    op = DeclareDependencyOp(op="declare_dependency", requirement="holidays>=0.40")
+    patched = apply_operation(bp, op)
+    assert list(patched["dependencies"]) == ["holidays>=0.40"]
+
+
+def test_apply_declare_dependency_appends_to_existing_list(base_bp):
+    bp = dict(base_bp)
+    bp["dependencies"] = ["requests>=2.0"]
+    op = DeclareDependencyOp(op="declare_dependency", requirement="holidays>=0.40")
+    patched = apply_operation(bp, op)
+    assert list(patched["dependencies"]) == ["requests>=2.0", "holidays>=0.40"]
+
+
+def test_apply_declare_dependency_dedups_identical_requirement(base_bp):
+    bp = dict(base_bp)
+    bp["dependencies"] = ["holidays>=0.40"]
+    op = DeclareDependencyOp(op="declare_dependency", requirement="holidays>=0.40")
+    patched = apply_operation(bp, op)
+    assert list(patched["dependencies"]) == ["holidays>=0.40"]
+
+
+def test_apply_declare_dependency_append_stable_ordering(base_bp):
+    """Ordering is append-stable — never sorted — pinned by this test."""
+    bp = dict(base_bp)
+    bp["dependencies"] = ["zeta>=1.0"]
+    for req in ("alpha>=1.0", "mid==2.0", "beta"):
+        op = DeclareDependencyOp(op="declare_dependency", requirement=req)
+        bp = apply_operation(bp, op)
+    assert list(bp["dependencies"]) == ["zeta>=1.0", "alpha>=1.0", "mid==2.0", "beta"]
+
+
+def test_apply_declare_dependency_touches_only_dependencies_key(base_bp):
+    bp = dict(base_bp)
+    before_modules = bp["modules"]
+    before_edges = bp["edges"]
+    before_context = bp["context"]
+    op = DeclareDependencyOp(op="declare_dependency", requirement="holidays>=0.40")
+    patched = apply_operation(bp, op)
+    assert patched["modules"] == before_modules
+    assert patched["edges"] == before_edges
+    assert patched["context"] == before_context

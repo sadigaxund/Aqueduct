@@ -217,6 +217,31 @@ class ScenarioError(AqueductError):
     """
 
 
+class DependencyError(CompileError):
+    """Raised when a Blueprint's ``dependencies:`` block (Phase 88) names a
+    PEP 508 requirement not satisfied by the installed environment.
+
+    A ``CompileError`` subclass — this is a compile-time PREFLIGHT (see
+    ``aqueduct/dependencies.py::check_requirements`` and its call site in
+    ``aqueduct/compiler/compiler.py``), so every existing ``except
+    CompileError:`` caller keeps working unchanged, but it is a distinct
+    type so a caller that needs to tell "missing/mismatched third-party
+    package" apart from "this Blueprint failed to compile for some other
+    reason" (e.g. a doctor check) can do so by TYPE.
+
+    Unlike the capability-leaf framework, ``dependencies:`` is NOT
+    engine-scoped and carries no allowlist — Aqueduct never installs
+    anything, so the fix is always the same shape: run the printed ``pip
+    install`` command yourself. ``problems`` carries the human-readable
+    per-requirement lines (see ``check_requirements``) so a caller can
+    report them without re-parsing the message.
+    """
+
+    def __init__(self, message: str, *, problems: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.problems = list(problems or [])
+
+
 class ExecuteError(AqueductError):
     """Raised for unrecoverable execution-setup failures — the Executor
     layer's root error, mirroring ``ParseError`` (Parser) and

@@ -781,6 +781,17 @@ udf_registry: []
   #   entry: com.myco.geo.Haversine  # fully-qualified class name
   #   return_type: double
 
+
+  # ── Dependencies ────────────────────────────────────────────────────────────
+  # Flat list of PEP 508 requirement strings. Checked at COMPILE time against
+  # the installed environment (importlib.metadata) — a missing/unsatisfied
+  # requirement fails compilation early with the exact `pip install` command.
+  # Aqueduct never installs anything; this is a preflight, not an installer.
+
+  # dependencies:
+  #   - "holidays>=0.40"
+  #   - "pandas"
+
   # ── ARCADE — reusable sub-pipeline, expanded at compile time ──────────────────
   # The referenced file is a normal Blueprint. Its modules are flattened into
   # this pipeline with namespaced IDs ({arcade_id}__{child_id}); `__` is

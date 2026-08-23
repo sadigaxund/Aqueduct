@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from aqueduct.errors import AqueductError
 
@@ -239,6 +239,16 @@ class DeferToHumanOp(BaseModel, extra="forbid"):
         default="",
         description="Why the model is confident deferral is correct (vs uncertain)",
     )
+    defer_reason: Literal[
+        "infrastructure",
+        "upstream_schema_change",
+        "data_shape_change",
+        "insufficient_context",
+        "other",
+    ] = Field(
+        ...,
+        description="Queryable bucket for why this failure was deferred to a human",
+    )
 
 
 class ReplaceMacroOp(BaseModel, extra="forbid"):
@@ -340,6 +350,45 @@ class SetEngineConfigOp(BaseModel, extra="forbid"):
     )
 
 
+class DeclareDependencyOp(BaseModel, extra="forbid"):
+    """Declare a PEP 508-lite runtime requirement in the Blueprint's
+    top-level ``dependencies:`` block (Phase 88).
+
+    ``requirement`` is validated with ``aqueduct.dependencies.
+    parse_requirement`` at construction time — a malformed PEP 508 string is
+    a pydantic ``ValidationError`` here, never something that reaches the
+    Resolvability gate or the apply path.
+
+    No ``rationale`` field: no op in this grammar carries one —
+    ``PatchSpec.rationale`` already covers the why for the whole patch.
+
+    **Patch-target invariant (absolute).** This op writes ONLY to the
+    Blueprint dict's ``dependencies:`` list
+    (``aqueduct.patch.operations.apply_declare_dependency``). It must NEVER
+    touch ``requirements.txt``, ``pyproject.toml``, the running environment,
+    or shell out to ``pip`` — Aqueduct's dependency story is declare-and-
+    check (``aqueduct/dependencies.py``), never install. Enforced by
+    construction: the apply function has no code path that reaches outside
+    the blueprint dict it is handed.
+    """
+
+    op: Literal["declare_dependency"]
+    requirement: str = Field(
+        ..., description="A PEP 508-lite requirement string, e.g. 'holidays>=0.40'"
+    )
+
+    @field_validator("requirement")
+    @classmethod
+    def _validate_requirement(cls, v: str) -> str:
+        from aqueduct.dependencies import parse_requirement
+
+        try:
+            parse_requirement(v)
+        except ValueError as exc:
+            raise ValueError(f"declare_dependency: {exc}") from exc
+        return v
+
+
 # ── Discriminated union ───────────────────────────────────────────────────────
 
 PatchOperation = Annotated[
@@ -356,7 +405,8 @@ PatchOperation = Annotated[
     | AddArcadeRefOp
     | DeferToHumanOp
     | SetEngineConfigOp
-    | ReplaceMacroOp,
+    | ReplaceMacroOp
+    | DeclareDependencyOp,
     Field(discriminator="op"),
 ]
 
@@ -378,6 +428,7 @@ VALID_PATCH_OPS = (
     "defer_to_human",
     "set_engine_config",
     "replace_macro",
+    "declare_dependency",
 )
 
 
@@ -400,6 +451,10 @@ _OP_ALIASES: dict[str, str] = {
     "set_macro": "replace_macro",
     "update_macro": "replace_macro",
     "replace_macro_body": "replace_macro",
+    # Phase 88: declare_dependency variants
+    "add_dependency": "declare_dependency",
+    "require_package": "declare_dependency",
+    "declare_dependencies": "declare_dependency",
 }
 
 

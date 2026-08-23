@@ -389,6 +389,14 @@ udf_registry:
 ```
 Call a registered UDF by name directly in Channel SQL (e.g. `clean_phone(phone)`) — every `udf_registry` entry registers session-wide, so any Channel's SQL may call any of them; there is no per-Channel scoping key. **Bodies are never inline** — always a module/jar pointer (so the healing LLM never sees code). Python `module:` resolves against a sibling `.py` file next to the blueprint before falling back to a normal import/PYTHONPATH lookup — same rule applies to Assert `custom` `fn:`, Probe `custom` `module:`, and `format: custom` DataSource `class:`.
 
+## Dependencies (compile-time preflight, never an installer)
+```yaml
+dependencies:
+  - holidays>=0.40
+  - geopy[extra]>=2.3,<3
+```
+Flat list of PEP 508-lite requirement strings (`name`, `name>=1.2`, `name[extra]>=1.2,<2`; environment markers like `; python_version < "3.12"` are rejected, not silently ignored). Top-level, sibling of `udf_registry:`, not engine-scoped, no allowlist. Checked against the installed environment at compile time via `importlib.metadata` — missing or version-conflicting requirements raise `DependencyError` naming the failing requirements and a copy-pasteable `pip install` command. **Aqueduct never installs anything** — this block only declares what must already be true of the runtime.
+
 ## Type spellings (Ingress `schema_hint`, Channel `op: cast`, UDF `return_type`)
 Every column-type string is Aqueduct's own hub vocabulary (Arrow-borrowed semantics), not a raw engine DDL string — validated at compile time, not runtime.
 

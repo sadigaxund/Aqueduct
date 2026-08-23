@@ -100,9 +100,9 @@ def test_inert_write_records_a_fail_row_and_does_not_block(tmp_path):
     result, row = _run(tmp_path, _engine_config_spec("400"), cfg)
     assert row["status"] == "fail"
     assert "has no effect" in row["detail"]
-    # Non-blocking: the three-gate tuple is untouched by this recording.
-    assert len(result) == 4
-    assert result[3] is True
+    # Non-blocking: the gate tuple is untouched by this recording.
+    assert len(result) == 5
+    assert result[4] is True
 
 
 def test_pipeline_only_patch_records_not_applicable(tmp_path):
@@ -142,5 +142,5 @@ def test_a_broken_store_never_breaks_the_gate_run(tmp_path):
         cfg=_cfg({"spark.sql.shuffle.partitions": "200"}),
         sandbox_mode="off",
     )
-    assert len(result) == 4
-    assert result[3] is True
+    assert len(result) == 5
+    assert result[4] is True

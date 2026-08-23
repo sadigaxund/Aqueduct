@@ -55,7 +55,11 @@ def test_prompt_version_bumped_for_schema_hint_rule():
     # with type/enum/range, deny entries with their `reason`) so the model is
     # told what it may write instead of discovering it through Gate 1
     # rejections. New prompt body → bump.
-    assert PROMPT_VERSION == "1.11"
+    # Phase 88 bumped 1.11 -> 1.12: one bump covering both new-domain prompt
+    # changes together — the `declare_dependency` never-installs sentence in
+    # "Other rules", and the required `defer_reason` bucket list in the
+    # runtime-assembled defer section.
+    assert PROMPT_VERSION == "1.12"
 
 
 def test_schema_hint_rule_never_leaks_defer_op_token(tmp_path: Path):

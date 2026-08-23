@@ -557,6 +557,10 @@ def parse_dict(
             for u in validated.udf_registry
         ),
         macros=resolved_macros,
+        # Verbatim — a PEP 508 requirement string is not a Blueprint value
+        # expression, so no `${ctx.*}`/@aq.* resolution applies (same
+        # treatment as `required_context` below).
+        dependencies=tuple(validated.dependencies),
         required_context=tuple(validated.required_context),
         checkpoint=validated.checkpoint,
         warning_suppress=tuple(validated.warnings.suppress),
