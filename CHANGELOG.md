@@ -14,7 +14,7 @@ versioning follows [SemVer](https://semver.org/). The stability contract
 applies from v1.0.0 — during alpha/RC, breaking changes may land in any
 release and are marked **BREAKING**.
 
-## [Unreleased]
+## [2.1.3] — 2026-08-24
 
 Phase 89 — the perf-polish workstream: session keep-alive across polyglot
 islands and spill-storage bounding.
