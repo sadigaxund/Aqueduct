@@ -46,6 +46,16 @@ _DURATION_RE = re.compile(r"\[\d+(?:\.\d+)?(?:ms|s)\]")
 _SIZE_RE = re.compile(r"\d+(?:\.\d+)?\s*[KMGT]i?B")
 _JAVA_HOME_RE = re.compile(r"JAVA_HOME=\S+")
 _JAVA_VER_RE = re.compile(r"Java \d+")
+# Phase 85 Wave 2 — the closing footer's total wall-clock time
+# ("blueprint complete · 1.3s") is real elapsed time, never deterministic.
+_ELAPSED_RE = re.compile(r"(blueprint (?:complete|patched)) · \d+(?:\.\d+)?s")
+# Phase 85 Wave 2 — the module tree's right-aligned metric column
+# (`_fmt_dur` renders a BARE "13 ms" / "0.3 s", no brackets — distinct from
+# `_DURATION_RE` above, which only matches the bracketed doctor/report
+# form). Real wall-clock time, so both the digits AND the amount of
+# right-alignment padding before them vary run to run — the whole matched
+# span (padding + number + unit) collapses to one canonical placeholder.
+_BARE_DUR_RE = re.compile(r" {2,}\d+(?:\.\d+)? (?:ms|s)\b")
 
 
 def _normalize(text: str, *, tmp_root: Path | None = None) -> str:
@@ -60,6 +70,8 @@ def _normalize(text: str, *, tmp_root: Path | None = None) -> str:
     """
     text = strip_ansi(text)
     text = _DURATION_RE.sub("[<DUR>]", text)
+    text = _ELAPSED_RE.sub(r"\1 · <EL>s", text)
+    text = _BARE_DUR_RE.sub(" <DUR>", text)
     text = _SIZE_RE.sub("<SIZE>", text)
     text = _JAVA_HOME_RE.sub("JAVA_HOME=<PATH>", text)
     text = _JAVA_VER_RE.sub("Java <N>", text)
@@ -88,7 +100,16 @@ def _invoke(args: list[str]):
 
 class TestCleanRun:
     """`aqueduct run blueprint.yml -s deployment.engine=duckdb` — healed
-    blueprint, framed screen, all-✓ module tree."""
+    blueprint, framed screen, all-✓ module tree.
+
+    Phase 85 Wave 2 redesign (SCREEN 1): metadata is a right-aligned dim
+    column (`<DUR>` here — `_normalize`'s `_BARE_DUR_RE` scrubs the real,
+    non-deterministic "13 ms" / "0.3 s" text AND its variable alignment
+    padding, since both change run to run); the egress module shows its
+    destination instead, in its OWN alignment group (never dragged into the
+    metric column's width by a long absolute path — audit-fixed 2026-08-23).
+    The closing footer gained one line: total wall-clock time.
+    """
 
     _EXPECTED_STDOUT = (
         "─" * 80
@@ -97,12 +118,12 @@ class TestCleanRun:
         + "─" * 80
         + "\n"
         + "\n"
-        + "  ✓ raw_orders\n"
-        + "  ✓ enrich\n"
-        + "  ✓ output\n"
+        + "  ✓ raw_orders <DUR>\n"
+        + "  ✓ enrich <DUR>\n"
+        + "  ✓ output      → <TMP>/data/output/orders.parquet\n"
         + "─" * 80
         + "\n"
-        + "✓ blueprint complete"
+        + "✓ blueprint complete · <EL>s"
     )
 
     def test_clean_run_piped(self, monkeypatch, tmp_path) -> None:
@@ -117,7 +138,7 @@ class TestCleanRun:
         )
 
         assert res.exit_code == 0, res.output
-        stdout = _normalize(res.stdout).rstrip("\n")
+        stdout = _normalize(res.stdout, tmp_root=dest).rstrip("\n")
         assert stdout == self._EXPECTED_STDOUT
 
     def test_clean_run_tty(self, monkeypatch, tmp_path) -> None:
@@ -143,7 +164,7 @@ class TestCleanRun:
         )
 
         assert res.exit_code == 0, res.output
-        stdout = _normalize(res.stdout).rstrip("\n")
+        stdout = _normalize(res.stdout, tmp_root=dest).rstrip("\n")
         expected = self._EXPECTED_STDOUT.replace("golden-clean", "golden-clean-tty")
         assert stdout == expected
 
@@ -163,6 +184,11 @@ class TestFailureHealUnreachable:
     (or the run screen leaks a heal line), this test goes red.
     """
 
+    # Phase 85 Wave 2 redesign (SCREENS 2/5/6): the ✗ line gets a SHORT
+    # classified label ("SQL binder error", from `FailureContext.error_class`
+    # — DuckDB's own `BinderException`), with the full message + parsed
+    # `candidates:` merged into ONE piped/grep-safe record via " — " (SCREEN
+    # 6's third case) since `AQ_FORCE_TTY=0` here.
     _EXPECTED_STDOUT = (
         "─" * 80
         + "\n"
@@ -170,8 +196,10 @@ class TestFailureHealUnreachable:
         + "─" * 80
         + "\n"
         + "\n"
-        + "  ✓ raw_orders\n"
-        + '  ✗ enrich  — [enrich] SQL execution failed: Binder Error: Referenced column "total" not found in FROM clause!\n'
+        + "  ✓ raw_orders <DUR>\n"
+        + "  ✗ enrich  SQL binder error — "
+        + '[enrich] SQL execution failed: Binder Error: Referenced column "total" '
+        + "not found in FROM clause! — candidates: total_amt, customer\n"
         + "─" * 80
         + "\n"
         + "✗ blueprint failed  run_id=golden-bug  failed_module=enrich"
@@ -208,12 +236,19 @@ class TestFailureHealUnreachable:
     def test_stderr_carries_the_whole_heal_block(self, _bugged_result) -> None:
         res = _bugged_result
         stderr = _normalize(res.stderr)
-        assert "⚠ enrich failed → agent self-healing" in stderr
-        assert "◆ cascade · 2 tier(s) · qwen2.5-coder:7b → claude-sonnet-4-6" in stderr
-        assert "tier 1 · qwen2.5-coder:7b" in stderr
-        assert "tier 2 · claude-sonnet-4-6" in stderr
-        assert "└─ ✗ all tiers unreachable" in stderr
-        assert "↑ no patch to stage" in stderr
+        # Phase 85 Wave 2 (SCREENS 2/5): the ◆ header now folds the old
+        # "⚠ … failed → agent self-healing" line and the separate "│ ◆ …"
+        # ceremony line into ONE line naming the STARTING tier; each
+        # unreachable/no-credentials tier renders ⊘ (never ✗ — a model that
+        # never ran is visually distinct from one that ran and was
+        # rejected); the close node is ⊘ too, with a retry hint.
+        assert "◆ self-healing enrich · cascade · tier 1/2 · qwen2.5-coder:7b" in stderr
+        assert "⊘ unreachable" in stderr
+        assert "├─ tier 2 · claude-sonnet-4-6" in stderr
+        assert "⊘ no credentials" in stderr
+        assert "└ ⊘ healing unavailable — no agent was reached" in stderr
+        assert "↳ failure context saved · retry: aqueduct heal" in stderr
+        assert "✗" not in stderr  # every tier here was unreachable, not rejected
         # And the inverse of the stdout assertion: none of the framed run
         # screen's own text may leak onto stderr.
         assert "blueprint failed" not in stderr

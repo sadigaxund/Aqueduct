@@ -166,7 +166,11 @@ class TestHealBlockStreamRoutingSeam:
     def test_run_py_heal_transcript_write_is_stderr(self) -> None:
         src = self._read_module_source("aqueduct.cli.run")
         assert "write=lambda s: emit(_style_heal_line(s), err=True)" in src
-        assert "emit(_style_heal_line(_cue), err=True)" in src
+        # Audit-fixed 2026-08-23: the cue moved off the non-wrapping `emit()`
+        # onto the funnel's wrap_line-backed `echo()` (a bare f-string handed
+        # to `emit()` doesn't wrap — the heal-block-overflows-80-columns
+        # defect) — still explicit stderr.
+        assert '_funnel_echo(_cue_text, gutter="│   · ", err=True' in src
         assert "_use_stream = sys.stderr.isatty()" in src
 
     def test_heal_py_transcript_write_is_stderr(self) -> None:
@@ -179,7 +183,9 @@ class TestHealBlockStreamRoutingSeam:
         calls carries an explicit `err=False`."""
         src = self._read_module_source("aqueduct.cli.run")
         assert "click.echo(_dim(_rule()), err=False)" in src
-        assert '_style_success(f"blueprint {status_label}", err=False)' in src
+        # Phase 85 Wave 2 — the success footer gained a wall-clock-time +
+        # healed-count suffix (`_footer_text`), still explicit stdout.
+        assert "_style_success(_footer_text, err=False)" in src
         assert (
             'f"  failed_module={failure_ctx.failed_module}",\n                    err=False,' in src
         )

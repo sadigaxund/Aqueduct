@@ -26,6 +26,117 @@ from aqueduct.cli.render.funnel import emit
 from aqueduct.executor.models import concise_error
 from aqueduct.models import ModuleType
 
+# ── Phase 85 Wave 2 — classified failure label (SCREEN 2/6) ─────────────────
+# `mr.error` is free text; the ✗ line wants a SHORT classified label ("SQL
+# binder error") with the full message wrapped underneath, not a bare
+# 300-char truncated one-liner. `docs/failure_taxonomy.md` catalogs
+# recurring dev-facing BUG classes for audits — it has no per-message
+# runtime classification to reuse. `FailureContext.error_class` DOES: it is
+# the SAME structured field `_extract_structured_error`
+# (`aqueduct/surveyor/error_extraction.py` for Spark,
+# `aqueduct/executor/duckdb_/error_extraction.py` for DuckDB) already
+# populates from the concrete exception class name (DuckDB) or Spark
+# condition string. This table maps that existing field to a short label —
+# no parallel taxonomy, just a display lookup over data Aqueduct already
+# extracts.
+_ERROR_CLASS_LABELS: dict[str, str] = {
+    "BinderException": "SQL binder error",
+    "CatalogException": "missing table or column",
+    "ParserException": "SQL syntax error",
+    "SyntaxException": "SQL syntax error",
+    "ConversionException": "type conversion error",
+    "ConstraintException": "constraint violation",
+    "IOException": "I/O error",
+    "TransactionException": "transaction error",
+    "AnalysisException": "analysis error",
+}
+
+
+def _classify_error_label(error_class: str | None) -> str:
+    """Short classified label for the ✗ failure line. See the module-level
+    note above ``_ERROR_CLASS_LABELS`` for where ``error_class`` comes from
+    and why no new taxonomy was invented."""
+    ec = (error_class or "").strip()
+    if ec in _ERROR_CLASS_LABELS:
+        return _ERROR_CLASS_LABELS[ec]
+    if ec.startswith("UNRESOLVED_COLUMN"):
+        return "unresolved column"
+    if ec == "PREDICTED_SCHEMA_DRIFT":
+        return "schema drift detected"
+    if ec:
+        import re as _re
+
+        words = _re.findall(r"[A-Z][a-z0-9]*|[A-Z0-9]+", ec.replace(".", " "))
+        if words:
+            return " ".join(w.lower() for w in words[:4])
+    return "execution error"
+
+
+# ── F-16 — print validation gates AS THEY RUN (SCREEN 3/7's numbered
+# ladder) ────────────────────────────────────────────────────────────────
+# Display-only: `_run_patch_gates_inline` (`aqueduct/cli/__init__.py`, W7-
+# owned — not edited here) already computes lineage/sandbox/explain
+# results; this only renders them. Copies `cli/patch.py::_gate_status_line`
+# icon-per-`GateStatus` PATTERN (dict-dispatch, not an import from
+# patch.py, which Wave 2 does not own) — with an explicit fallback for an
+# unrecognised status so a future `GateStatus` member (e.g. the sandbox
+# tri-state `NOT_REQUESTED`) never crashes or silently vanishes
+# (AGENTS.md "no silent no-ops").
+_GATE_ICON: dict[str, tuple[str, str]] = {
+    "pass": ("✓", "green"),
+    "warn": ("⚠", "yellow"),
+    "fail": ("✗", "red"),
+    "not_applicable": ("·", "bright_black"),
+    "unavailable": ("⊘", "yellow"),
+    "observed": ("·", "bright_black"),
+    "not_requested": ("·", "bright_black"),
+}
+
+
+def _gate_icon(status: str | None) -> tuple[str, str]:
+    if status in _GATE_ICON:
+        return _GATE_ICON[status]
+    return "⚠", "yellow"  # unknown status — never silently vanish
+
+
+def _print_gate_ladder(g2, g3, g4, *, verbosity: int, gate1_ok: bool = True) -> None:
+    """Print gate 1-4 outcomes for one candidate patch as they complete.
+
+    ``g2``/``g3``/``g4`` are ``lineage_res``/``sandbox_res``/``explain_res``
+    from ``_run_patch_gates_inline`` (``None`` when that gate did not run —
+    e.g. a heal-cache replay that skipped straight to sandbox). Gate 1
+    (policy/guardrails) already ran in-loop via ``_check_guardrails`` before
+    a candidate ever reaches here, so ``gate1_ok`` is a plain bool, not a
+    ``GateStatus``. Default: one compact line, collapsing to "gates 1-4
+    passed" when nothing failed or warned. ``-v``: one line per gate.
+    """
+    entries = [(1, "policy", "pass" if gate1_ok else "fail", None)]
+    for num, name, res in ((2, "lineage", g2), (3, "sandbox", g3), (4, "explain", g4)):
+        if res is None:
+            continue
+        entries.append((num, name, res.status, getattr(res, "detail", None)))
+
+    all_clean = all(status in ("pass", "not_applicable", "observed") for _, _, status, _ in entries)
+    if verbosity < 1:
+        if all_clean:
+            click.echo(
+                click.style(f"  ✓ gates {entries[0][0]}-{entries[-1][0]} passed", fg="green"),
+                err=True,
+            )
+            return
+        bits = []
+        for num, name, status, _detail in entries:
+            icon, color = _gate_icon(status)
+            bits.append(click.style(f"{num} {name} {icon}", fg=color))
+        click.echo("  · gates: " + "  ".join(bits), err=True)
+        return
+    for num, name, status, detail in entries:
+        icon, color = _gate_icon(status)
+        line = click.style(f"  {num} {name}", fg=color) + f"  {click.style(icon, fg=color)}"
+        if detail and status not in ("pass", "not_applicable", "observed"):
+            line += f"  {detail}"
+        click.echo(line, err=True)
+
 
 @cli.command()
 @click.argument("blueprint", type=click.Path(exists=True, dir_okay=False))
@@ -1264,6 +1375,15 @@ def run(
     # used again below this point; every consumer reads `verbosity`.
     verbosity = resolve_verbosity(local=verbose)
 
+    # Phase 85 Wave 2 — total wall-clock time on the closing footer (SCREEN
+    # 1/2's "one added line vs today"). Wall-clock deliberately, not a sum of
+    # per-module `duration_ms` — those are best-effort obs-store reads (empty
+    # on DuckDB today, see `_render_module_summary`'s docstring) and never
+    # include heal/gate time between iterations anyway.
+    import time as _time85
+
+    _run_started_at = _time85.monotonic()
+
     # ── Anchor CWD to project root ────────────────────────────────────────────
     # Resolve all CLI-supplied paths to absolute BEFORE chdir so that relative
     # flags like --config ../shared/aqueduct.yml keep their original meaning.
@@ -1617,8 +1737,16 @@ def run(
             m.id: m.config for m in manifest.modules if m.type == ModuleType.Handoff
         }
 
-        def _render_module_summary(_result) -> None:
+        def _render_module_summary(
+            _result, failure_ctx=None, *, healed_module=None, healed_patch_num=None
+        ) -> None:
             """Print the per-module ✓/✗ status block for one execution result.
+
+            ``failure_ctx`` (optional) is the ``FailureContext`` the surveyor
+            just recorded for THIS result — carries ``error_class`` and
+            ``suggested_columns`` for the classified ✗ failure line (SCREEN
+            2/6). Only its ``failed_module`` row uses it; other rows fall
+            back to the generic label.
 
             Called once per heal iteration right after the result is recorded, so
             module outcomes print BEFORE that iteration's agent/heal output —
@@ -1664,6 +1792,16 @@ def run(
                 for m in manifest.modules
                 if getattr(m, "disabled_reason", None)
             }
+
+            # Phase 85 Wave 2 — egress rows show their destination instead of
+            # rows/time metadata (SCREEN 1). `m.config` is dict-like (same
+            # access pattern `_handoff_info` above already relies on).
+            _egress_dest: dict[str, str] = {}
+            for _m in manifest.modules:
+                if _m.type == ModuleType.Egress:
+                    _dest = _m.config.get("path") or _m.config.get("table") or _m.config.get("key")
+                    if _dest:
+                        _egress_dest[_m.id] = str(_dest)
 
             click.echo(err=False)
 
@@ -1711,14 +1849,157 @@ def run(
                 default=0,
             )
 
+            # Phase 85 Wave 2 — right-aligned metadata column (SCREEN 1).
+            # Two passes: first compute each row's (left, tail) unpadded,
+            # find the widest `left + 2sp + tail` among rows that HAVE a
+            # tail, then pad every such row's left side out to that width
+            # so every tail starts (or, since tails vary in length, ENDS)
+            # at the same column. Degrades to the old left-packed
+            # `name.ljust(pad)` layout when the terminal is too narrow for
+            # that column to fit without negative padding.
+            from aqueduct.cli.render.width import display_width as _dw
+            from aqueduct.cli.render.width import terminal_width as _term_width
+
+            _pending_rows: list[dict] = []  # collected before any printing
+
+            def _queue_row(
+                mr, left_plain, left_styled, tail_plain, tail_styled, warn_prefix, kind="metric"
+            ):
+                # `kind` separates the right-aligned METRIC column (rows ·
+                # time, bytes · duration — short, comparable) from a "path"
+                # tail (an egress destination — long, variable, free text).
+                # Audit-fixed 2026-08-23: an egress row used to join the
+                # SAME right-alignment group as metric rows, so one long
+                # absolute path inflated the natural width and dragged
+                # every metric row's gap out to match it (`raw_orders` with
+                # 60+ spaces before a bare "14 ms").
+                _pending_rows.append(
+                    {
+                        "mr": mr,
+                        "left_plain": left_plain,
+                        "left_styled": left_styled,
+                        "tail_plain": tail_plain,
+                        "tail_styled": tail_styled,
+                        "warn_prefix": warn_prefix,
+                        "kind": kind,
+                    }
+                )
+
+            def _flush_rows():
+                _tw = _term_width()
+                _metric_rows = [
+                    r for r in _pending_rows if r["tail_plain"] and r["kind"] == "metric"
+                ]
+                _natural = (
+                    max(_dw(r["left_plain"]) + 2 + _dw(r["tail_plain"]) for r in _metric_rows)
+                    if _metric_rows
+                    else 0
+                )
+                _fits = bool(_metric_rows) and _natural <= _tw
+                # Path rows align among THEMSELVES (and with the metric
+                # rows' name column, for a tidy shared left edge) — never
+                # against the metric column's own width.
+                _name_width = max((_dw(r["left_plain"]) for r in _pending_rows), default=0)
+                for r in _pending_rows:
+                    mr, warn_prefix = r["mr"], r["warn_prefix"]
+                    if not r["tail_plain"]:
+                        line = r["left_styled"]
+                    elif r["kind"] == "path":
+                        pad = max(2, _name_width - _dw(r["left_plain"]) + 2)
+                        line = r["left_styled"] + (" " * pad) + r["tail_styled"]
+                    elif _fits:
+                        pad = max(2, _natural - _dw(r["left_plain"]) - _dw(r["tail_plain"]))
+                        line = r["left_styled"] + (" " * pad) + r["tail_styled"]
+                    else:
+                        # Narrow terminal — fall back to a simple 2-space gap
+                        # rather than compute a negative/degenerate pad.
+                        line = f"{r['left_styled']}  {r['tail_styled']}"
+                    click.echo(line, err=False)
+                    for rule_id, msg in mr.warnings:
+                        from aqueduct.cli.render.funnel import warn as _output_warn
+
+                        _output_warn(rule_id, msg, prefix=warn_prefix, err=False)
+                    _notes = tuple(getattr(mr, "notes", ()) or ())
+                    _cap = len(_notes) if verbosity >= 1 else 10
+                    from aqueduct.cli.render.style import dim as _dim2
+
+                    for note in _notes[:_cap]:
+                        click.echo(_dim2(f"{warn_prefix}{note}"), err=False)
+                    if len(_notes) > _cap:
+                        click.echo(
+                            _dim2(
+                                f"{warn_prefix}· {len(_notes) - _cap} more  ·  -v for full output"
+                            ),
+                            err=False,
+                        )
+                _pending_rows.clear()
+
+            def _print_failure_block(mr, name_or_boundary, lead):
+                """Classified label + wrapped detail + candidates + hint
+                (SCREEN 2/6). TTY: multi-line, structured. Piped/CI: ONE
+                merged logical record (grep-safe) — built explicitly here
+                rather than via `wrap_line`'s newline-splitting, since the
+                piped shape (label — detail — candidates all on one line)
+                differs from the TTY shape (candidates always its own
+                line) and `wrap_line` alone can't express that difference."""
+                from aqueduct.cli.render.width import is_tty as _is_tty
+                from aqueduct.cli.render.wrap import wrap_line as _wrap_line
+
+                _is_failed_module = (
+                    failure_ctx is not None and mr.module_id == failure_ctx.failed_module
+                )
+                _ec = failure_ctx.error_class if _is_failed_module else None
+                _label = _classify_error_label(_ec)
+                _candidates = (
+                    list(failure_ctx.suggested_columns)
+                    if _is_failed_module and getattr(failure_ctx, "suggested_columns", None)
+                    else []
+                )
+                _detail = concise_error(mr.error, limit=100_000) if mr.error else ""
+                _cand_text = f"candidates: {', '.join(_candidates)}" if _candidates else ""
+
+                if _is_tty(err=False):
+                    click.echo(
+                        f"{lead}{_icon(mr)} {name_or_boundary}  " + click.style(_label, fg="red"),
+                        err=False,
+                    )
+                    for line in _wrap_line(
+                        _detail,
+                        gutter="      ",
+                        err=False,
+                        verbose=verbosity >= 1,
+                        max_lines=None if verbosity >= 1 else 3,
+                        hint="full error text",
+                    ):
+                        click.echo(line, err=False)
+                    if _cand_text:
+                        for line in _wrap_line(
+                            _cand_text, gutter="      ", err=False, verbose=True
+                        ):
+                            click.echo(line, err=False)
+                else:
+                    _parts = [_label]
+                    if _detail:
+                        _parts.append(_detail)
+                    if _cand_text:
+                        _parts.append(_cand_text)
+                    _combined = " — ".join(_parts)
+                    for line in _wrap_line(_combined, gutter="", err=False, verbose=True):
+                        click.echo(f"{lead}{_icon(mr)} {name_or_boundary}  {line}", err=False)
+
             def _mr_line(mr, name, pad, lead, warn_prefix):
                 from aqueduct.cli.render.style import dim as _dim
 
                 if mr.status == ExecutionStatus.ERROR and mr.error:
-                    line = f"{lead}{_icon(mr)} {name}  {click.style('— ' + concise_error(mr.error), fg='red')}"
+                    _flush_rows()  # preserve chronological order vs queued rows
+                    _print_failure_block(mr, name, lead)
+                    return
+                _m = _metrics.get(mr.module_id, {})
+                rows, dur = _m.get("records_written"), _m.get("duration_ms")
+                if mr.module_id in _egress_dest:
+                    tail_plain = f"→ {_egress_dest[mr.module_id]}"
+                    tail_styled = tail_plain
                 else:
-                    _m = _metrics.get(mr.module_id, {})
-                    rows, dur = _m.get("records_written"), _m.get("duration_ms")
                     meta = []
                     if mr.status == ExecutionStatus.SKIPPED and mr.module_id in _disabled_reason:
                         meta.append(_disabled_reason[mr.module_id])
@@ -1726,60 +2007,58 @@ def run(
                         meta.append(f"{rows:,} rows")
                     if _fmt_dur(dur):
                         meta.append(_fmt_dur(dur))
-                    if mr.module_id in _module_engine:
-                        meta.append(_module_engine[mr.module_id])
-                    tail = _dim("  ·  ".join(meta)) if meta else ""
-                    line = f"{lead}{_icon(mr)} {name.ljust(pad)}   {tail}".rstrip()
-                click.echo(line, err=False)
-                for rule_id, msg in mr.warnings:
-                    from aqueduct.cli.render.funnel import warn as _output_warn
-
-                    _output_warn(rule_id, msg, prefix=warn_prefix, err=False)
-                # Probe `report: stdout` lines — informational, dim, never in
-                # the warning roll-up. Capped unless -v.
-                _notes = tuple(getattr(mr, "notes", ()) or ())
-                _cap = len(_notes) if verbosity >= 1 else 10
-                for note in _notes[:_cap]:
-                    click.echo(_dim(f"{warn_prefix}{note}"), err=False)
-                if len(_notes) > _cap:
-                    click.echo(
-                        _dim(f"{warn_prefix}· {len(_notes) - _cap} more  ·  -v for full output"),
-                        err=False,
-                    )
+                    if healed_module is not None and mr.module_id == healed_module:
+                        meta.append(
+                            f"healed patch #{healed_patch_num}"
+                            if healed_patch_num is not None
+                            else "healed"
+                        )
+                    tail_plain = "  ·  ".join(meta)
+                    tail_styled = _dim(tail_plain) if tail_plain else ""
+                left_styled = f"{lead}{_icon(mr)} {name}"
+                _kind = "path" if mr.module_id in _egress_dest else "metric"
+                _queue_row(
+                    mr,
+                    f"{lead}{name}",
+                    left_styled,
+                    tail_plain,
+                    tail_styled,
+                    warn_prefix,
+                    kind=_kind,
+                )
 
             def _handoff_line(mr, pad, lead, warn_prefix):
                 """First-class rendering for a synthetic Handoff module's
-                result — the boundary it bridges (from → to, spark→duckdb),
-                bytes transferred, and duration, distinct from an ordinary
-                module row so a cross-engine transport step reads as what it
-                is rather than an anonymous module id."""
+                result — a dedicated engine-boundary line (SCREEN 1 notes:
+                "engine appears ONLY at a polyglot handover boundary"),
+                distinct from an ordinary module row."""
                 from aqueduct.cli.render.funnel import format_bytes as _format_bytes
                 from aqueduct.cli.render.style import dim as _dim
 
                 _cfg = _handoff_info[mr.module_id]
-                _boundary = (
-                    f"{_cfg.get('from_module')} → {_cfg.get('to_module')}  "
-                    f"({_cfg.get('from_engine')}→{_cfg.get('to_engine')})"
-                )
+                _boundary = f"handoff · {_cfg.get('from_engine')} → {_cfg.get('to_engine')}"
                 if mr.status == ExecutionStatus.ERROR and mr.error:
-                    line = f"{lead}{_icon(mr)} ⇄ {_boundary}  {click.style('— ' + concise_error(mr.error), fg='red')}"
-                else:
-                    _m = _metrics.get(mr.module_id, {})
-                    meta = []
-                    _bw, _br = _m.get("bytes_written"), _m.get("bytes_read")
-                    if _bw is not None:
-                        meta.append(f"{_format_bytes(_bw)} written")
-                    if _br is not None:
-                        meta.append(f"{_format_bytes(_br)} read")
-                    if _fmt_dur(_m.get("duration_ms")):
-                        meta.append(_fmt_dur(_m.get("duration_ms")))
-                    tail = _dim("  ·  ".join(meta)) if meta else ""
-                    line = f"{lead}{_icon(mr)} ⇄ {_boundary}   {tail}".rstrip()
-                click.echo(line, err=False)
-                for rule_id, msg in mr.warnings:
-                    from aqueduct.cli.render.funnel import warn as _output_warn
-
-                    _output_warn(rule_id, msg, prefix=warn_prefix, err=False)
+                    _flush_rows()
+                    _print_failure_block(mr, f"⇄ {_boundary}", lead)
+                    return
+                _m = _metrics.get(mr.module_id, {})
+                meta = []
+                _bw, _br = _m.get("bytes_written"), _m.get("bytes_read")
+                _fmt = _cfg.get("format")
+                if _fmt:
+                    meta.append(str(_fmt))
+                if _bw is not None:
+                    meta.append(f"{_format_bytes(_bw)} written")
+                if _br is not None:
+                    meta.append(f"{_format_bytes(_br)} read")
+                if _fmt_dur(_m.get("duration_ms")):
+                    meta.append(_fmt_dur(_m.get("duration_ms")))
+                tail_plain = "  ·  ".join(meta)
+                tail_styled = _dim(tail_plain) if tail_plain else ""
+                left_styled = f"{lead}{_icon(mr)} ⇄ {_boundary}"
+                _queue_row(
+                    mr, f"{lead}⇄ {_boundary}", left_styled, tail_plain, tail_styled, warn_prefix
+                )
 
             for kind, item in _rows:
                 if kind == "module":
@@ -1796,6 +2075,7 @@ def run(
                     _p_icon = click.style("✓", fg="green")
                 else:
                     _p_icon = click.style("⏭", fg="cyan")
+                _flush_rows()
                 click.echo(f"  {_p_icon} {item}", err=False)
                 for _i, _kid in enumerate(_kids):
                     _glyph = "└─" if _i == len(_kids) - 1 else "├─"
@@ -1803,6 +2083,9 @@ def run(
                     _mr_line(
                         _kid, _kid.module_id.split("__", 1)[1], _w - _CHILD_PAD, _lead, "       ↳ "
                     )
+                _flush_rows()
+
+            _flush_rows()  # trailing queued metric rows
 
         def _announce_polyglot_sandbox_unavailable(_gate_result) -> None:
             """Gate 3 could not replay a patch against this polyglot
@@ -2036,7 +2319,7 @@ def run(
             # Chronological output: render THIS iteration's module outcomes now,
             # before any agent/heal block below. Replaces the old single post-loop
             # summary so a heal attempt always reads after the result it heals.
-            _render_module_summary(result)
+            _render_module_summary(result, failure_ctx)
 
             if result.status == ExecutionStatus.SUCCESS:
                 break
@@ -2268,6 +2551,7 @@ def run(
                                 # Same plan-regression warning the LLM path gets,
                                 # so a replayed patch's regression isn't silent.
                                 _emit_explain_regressions(_rg4)
+                                _print_gate_ladder(_rg2, _rg3, _rg4, verbosity=verbosity)
                         if _replay_ok:
                             from aqueduct.agent import AgentPatchResult as _AgentPatchResult
 
@@ -2319,26 +2603,27 @@ def run(
             # go straight to applying it. Only a real LLM heal gets the tree.
             _is_replay = _resolution == "replayed"
             if not _is_replay:
-                # Styled section header — boundary between the run result above
-                # and the agent/heal block below.
-                click.echo(
-                    click.style(
-                        f"⚠ {failure_ctx.failed_module} failed → agent self-healing"
-                        + (f" (patch {_attempt_display})" if max_patches > 1 else ""),
-                        fg="yellow",
-                    ),
-                    err=True,
-                )
-                # Ceremony — surface which agent/model is on the job (solo/cascade).
+                # Phase 85 Wave 2 — one ◆ header line replaces the old
+                # "⚠ … failed → agent self-healing" line PLUS the separate
+                # "│  ◆ …" ceremony line (SCREENS 2-5). ORANGE/yellow per
+                # the owner ruling; `tier N/M · model` for a cascade names
+                # the STARTING tier (known at heal start regardless of
+                # outcome — `_open_tier_if_new` in transcript.py only
+                # prints a `├─` node on a LATER escalation, since this line
+                # already announced tier 1).
                 if resolved_agent_cascade:
-                    _models = " → ".join(t.model for t in resolved_agent_cascade)
-                    _agent_info = f"cascade · {len(resolved_agent_cascade)} tier(s) · {_models}"
+                    _n_tiers = len(resolved_agent_cascade)
+                    _tier0_model = resolved_agent_cascade[0].model
+                    _agent_info = f"cascade · tier 1/{_n_tiers} · {_tier0_model}"
                 else:
                     _agent_info = (
                         f"{resolved_agent_model} · {resolved_agent_provider} "
                         f"· ≤{resolved_agent_max_reprompts} reprompts"
                     )
-                click.echo(_style_heal_line(f"│  ◆ {_agent_info}"), err=True)
+                _header_text = f"◆ self-healing {failure_ctx.failed_module} · {_agent_info}"
+                if max_patches > 1:
+                    _header_text += f" (patch {_attempt_display})"
+                click.echo(click.style(_header_text, fg="yellow"), err=True)
                 _transcript.header(
                     patch_count + 1 if max_patches > 1 else 1,
                     resolved_agent_max_reprompts,
@@ -2347,12 +2632,18 @@ def run(
                 # Immediate cue — the stream meter only appears once the FIRST
                 # token arrives, and a reasoning model can digest a big prompt for
                 # a while first, so without this the open branch looks hung.
-                _cue = (
-                    "│   · waiting for first token… (reasoning models digest the prompt before replying)"
+                # Routed through the funnel's `echo()` (wrap_line-backed), not
+                # `emit()` — `emit()` is the structured-result entry point and
+                # does not wrap; a bare f-string handed to it is exactly the
+                # heal-block-overflows-80-columns defect this fixes.
+                from aqueduct.cli.render.funnel import echo as _funnel_echo
+
+                _cue_text = (
+                    "waiting for first token… (reasoning models digest the prompt before replying)"
                     if _use_stream
-                    else "│   · contacting agent… (first response can be slow — big prompt / local cold-start)"
+                    else "contacting agent… (first response can be slow — big prompt / local cold-start)"
                 )
-                emit(_style_heal_line(_cue), err=True)
+                _funnel_echo(_cue_text, gutter="│   · ", err=True, verbose=verbosity >= 1)
 
             # Run blueprint doctor checks against the compiled Manifest (all modules resolved,
             # arcades expanded — no need to re-parse or recurse into sub-blueprints).
@@ -2969,10 +3260,26 @@ def run(
                 )
 
             if patch is None:
-                # The transcript's └─ close node already states the outcome
-                # (✗ <reason> · N turn(s)); here we only note what happened next.
+                # The transcript's └ close node already states the outcome
+                # (✓/✗/⊘ <reason> · N turn(s)); here we only note what
+                # happened next. SCREEN 5 — every tier unreachable/no
+                # credentials — gets its own retry hint (`↳`, distinct from
+                # the generic "no patch to stage" note below) naming the
+                # actual command to re-run once the agent IS reachable.
+                if agent_result.stop_reason == "api_error":
+                    # Wrap-primitive-backed: `blueprint` is a real filesystem
+                    # path and can easily push this past 80 columns.
+                    from aqueduct.cli.render.funnel import echo as _funnel_echo
+
+                    _funnel_echo(
+                        f"failure context saved · retry: aqueduct heal {blueprint}",
+                        gutter="   ↳ ",
+                        err=True,
+                        verbose=verbosity >= 1,
+                        style={"fg": "bright_black"},
+                    )
                 on_hf = manifest.agent.on_heal_failure if manifest.agent else "stage"
-                if on_hf == "stage":
+                if on_hf == "stage" and agent_result.stop_reason != "api_error":
                     click.echo(
                         click.style(
                             "   ↑ no patch to stage — failure context saved to the observability store",
@@ -3254,6 +3561,9 @@ def run(
                         timezone=cfg.timezone,
                     )
                     _announce_polyglot_sandbox_unavailable(_g3)
+                    # F-16 — print the gate ladder as it completes (SCREEN 3/7),
+                    # instead of staying silent when everything passes.
+                    _print_gate_ladder(_g2, _g3, _g4, verbosity=verbosity)
                 _block_on_g4 = (
                     manifest.agent.block_on_explain_regression
                     if manifest.agent.block_on_explain_regression is not None
@@ -3487,6 +3797,20 @@ def run(
                             # Best-effort: never let artifact generation break a
                             # successful heal.
                             _ra_info(f"regression artifact generation failed: {_ra_exc}", err=True)
+                    # Phase 85 Wave 2 — re-list the (now fixed) tree so a
+                    # piped log tells the whole story without cross-
+                    # referencing the heal block above (SCREEN 2 notes).
+                    _healed_attempt_num = (
+                        agent_result.attempt_records[-1].attempt_num
+                        if agent_result.attempt_records
+                        else agent_result.attempts
+                    )
+                    _render_module_summary(
+                        result2,
+                        failure_ctx2,
+                        healed_module=failure_ctx.failed_module,
+                        healed_patch_num=_healed_attempt_num,
+                    )
                     result = result2
                     failure_ctx = failure_ctx2
                     break
@@ -3645,8 +3969,24 @@ def run(
         from aqueduct.cli.render.style import dim as _dim
         from aqueduct.cli.render.style import success as _style_success
 
+        # Phase 85 Wave 2 — total wall-clock time (one added line vs today,
+        # SCREEN 1 notes) + healed-module count + pending-review hint when
+        # this run auto-applied a patch (SCREEN 2). `patch_count` is the
+        # number of patches actually applied this run (multi-patch loop).
+        _elapsed_s = _time85.monotonic() - _run_started_at
+        _footer_text = f"blueprint {status_label} · {_elapsed_s:.1f}s"
+        if status_label == "patched" and patch_count:
+            _footer_text += (
+                f" · {patch_count} module{'s' if patch_count != 1 else ''} healed"
+                " · pending review"
+            )
         click.echo(_dim(_rule()), err=False)
-        _style_success(f"blueprint {status_label}", err=False)
+        _style_success(_footer_text, err=False)
+        if status_label == "patched" and patch_count:
+            # Q5 ruling: ONE line, not a multi-line patch-id + command block.
+            click.echo(
+                click.style(f"  ⓘ review: aqueduct patch pull {run_id}", fg="cyan"), err=False
+            )
 
         # on_success hooks — chained blueprints / webhooks / gated commands.
         # A hooks section closes with its own `run complete` footer.
