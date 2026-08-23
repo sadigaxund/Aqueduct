@@ -1,14 +1,15 @@
 from __future__ import annotations
+
 import pytest
 
 pytestmark = pytest.mark.spark
-import duckdb
-from pathlib import Path
-from unittest.mock import MagicMock
-from aqueduct.executor.spark.executor import (
-    _write_stage_metrics,
-    _update_metric,
+
+import duckdb  # noqa: E402
+
+from aqueduct.executor.spark.executor import (  # noqa: E402
     _MODULE_METRICS_DDL,
+    _update_metric,
+    _write_stage_metrics,
 )
 
 
@@ -63,3 +64,22 @@ def test_update_metric_success(tmp_path):
 def test_write_stage_metrics_no_store_dir():
     # store_dir=None → silent no-op: returns None, persists nothing
     assert _write_stage_metrics("m1", "r1", {}, None) is None
+
+
+def test_module_metrics_ddl_creates_run_id_index(tmp_path):
+    """Phase 85 W9 follow-up — the Spark copy of MODULE_METRICS_DDL
+    (deliberately duplicated from ``executor/models.py``, see this module's
+    docstring) must carry the same ``idx_module_metrics_run`` index W8 added
+    to the ``executor/models.py`` copy — `report --profile <run_id>`
+    (aqueduct/stores/queries.py) filters by run_id, not module_id."""
+    conn = duckdb.connect(str(tmp_path / "o.db"))
+    conn.execute(_MODULE_METRICS_DDL)
+    names = {
+        r[0]
+        for r in conn.execute(
+            "SELECT index_name FROM duckdb_indexes() WHERE table_name = 'module_metrics'"
+        ).fetchall()
+    }
+    conn.close()
+    assert "idx_module_metrics_module" in names
+    assert "idx_module_metrics_run" in names

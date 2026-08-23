@@ -226,7 +226,7 @@ leaves:
     hint: "A remote handoff.root (s3://, gs://, ...) is reached the same way any other remote path is on this engine — DuckDB's httpfs extension, autoloaded on first touch, plus engine.duckdb.s3_* credentials if the target requires authentication. Not reachable before httpfs work landed; now genuinely probed (aqueduct doctor's handoff-access:duckdb check attempts a real round trip, no longer a blanket skip)."
   config.metrics.use_observe:
     support: unsupported
-    hint: "use_observe toggles Spark's Observation API (a SparkListener-driven zero-cost row-count mechanism); DuckDB has no equivalent listener hook. This engine does not yet collect per-module runtime metrics (rows/bytes) outside the Handoff module at all (see executor/models.py's module_metrics writer), so there is no existing collection path for this flag to toggle either way — the key is inert here, not superseded by an always-on alternative."
+    hint: "use_observe toggles Spark's Observation API (a SparkListener-driven zero-cost row-count mechanism); DuckDB has no equivalent listener hook. This engine writes per-module module_metrics (see observability.module_metrics.per_module) via a direct write after each dispatch branch, not a listener callback, so there is no existing collection path for this flag to toggle either way — the key is inert here, not superseded by an always-on alternative."
   config.probes.default_sample_fraction:
     support: supported
     hint: "Genuinely consumed by the DuckDB Probe implementation (Pass F, duckdb_/probe.py's ProbeSampling) — the default fraction for null_rates/value_distribution/distinct_count/data_freshness sampled queries when a signal omits its own fraction:."
@@ -331,7 +331,7 @@ leaves:
     hint: "lang: java UDFs require a JVM UDF registry (Spark-only). Not applicable to DuckDB."
   feature.metrics_boundary:
     support: unsupported
-    hint: "metrics_boundary works around Spark's stage-fusion by forcing a shuffle boundary so SparkListener attributes metrics per module — a fix for a problem specific to that collection mechanism. DuckDB has no stage-fusion concept to work around, but this engine's executor does not yet collect per-module runtime metrics (rows/bytes) at all outside the Handoff module (see executor/models.py's module_metrics writer), so there is no per-module attribution for this flag to configure either way."
+    hint: "metrics_boundary works around Spark's stage-fusion by forcing a shuffle boundary so SparkListener attributes metrics per module — a fix for a problem specific to that collection mechanism. DuckDB has no stage-fusion concept to work around; this engine's executor writes per-module module_metrics directly after each dispatch branch (see observability.module_metrics.per_module), with no fusion/attribution ambiguity for this flag to configure either way."
   feature.python_udf:
     support: supported
     hint: "conn.create_function(name, fn, parameters=None, return_type) defaults to NATIVE (row-at-a-time) execution, matching Spark's UDF semantics — measured: a per-row call log shows one call per input row, not a batch. null_handling='special' is set explicitly (DuckDB's own default silently skips the call on a NULL argument instead of invoking the function — measured, the opposite of Spark's always-call behavior). Exception propagation is DuckDB's default (an uncaught exception aborts the query, matching Spark). return_type renders through the same Arrow type hub as schema_hint/schema_match. Parameterized (factory) UDFs via params: are supported, same contract as Spark. deterministic maps onto DuckDB's side_effects (inverted) — Spark's own udf.py never reads this field either, so this is a strict improvement, not a divergence. lang: java/scala UDFs stay unsupported — see feature.java_udf; DuckDB is not on the JVM."
@@ -736,7 +736,7 @@ leaves:
         - tests/test_executor_duckdb/test_incremental.py::test_incremental_two_runs_real_incremental_behavior
   channel.field.metrics_boundary:
       support: unsupported
-      hint: "DuckDB's executor does not yet collect per-module runtime metrics outside the Handoff module — see feature.metrics_boundary."
+      hint: "See feature.metrics_boundary — DuckDB has no stage-fusion concept for this key to configure a boundary around."
   channel.field.num:
       support: unsupported
       hint: "op: repartition/coalesce is unimplemented on DuckDB — see channel.op.repartition / channel.op.coalesce."
@@ -925,9 +925,10 @@ leaves:
     hint: >-
       Warn-only perf-attribution provenance — recorded by core from run_records
       wall-clock time, no engine executes it. The input-volume proxy it carries
-      comes from module_metrics, which the DuckDB executor writes only for
-      Handoff modules, so the note reports volume as unavailable on this engine
-      and says so in its own caveats rather than reporting a zero.
+      comes from module_metrics, which the DuckDB executor now writes for every
+      real module type (see observability.module_metrics.per_module), not
+      only Handoff; patch/perf_attribution.py's own VOLUME_UNAVAILABLE wiring
+      predates that landing and has not yet been revisited to consume it.
   healed_by.field.perf_observations:
     support: supported
     hint: >-
@@ -965,3 +966,31 @@ leaves:
     support: supported
     tests:
       - tests/test_executor_duckdb/test_executor.py::test_read_ingress_parquet
+
+  # ── tooling.* / observability.* (Phase 85 Wave 4) ──────────────────────
+  # Tooling/host capabilities — no Blueprint field spells one of these ids;
+  # see capability_leaves.py's "Tooling/host leaves" note. Excluded from
+  # execution_leaves(), so `tests:` here is voluntary evidence, not enforced
+  # by test_verdict_test_links.py.
+  tooling.test_runner:
+    support: unsupported
+    hint: "There is no DuckDB test runner — aqueduct/executor/duckdb_ has no test_runner.py at all. aqueduct test's test_cmd (aqueduct/cli/project.py) unconditionally imports aqueduct.executor.spark.test_runner/make_spark_session regardless of deployment.engine, so today it runs module unit tests against Spark's SQL/type semantics even for a duckdb-deployed project. Until a native DuckDB test runner ships, treat `aqueduct test` results for a DuckDB project as Spark-semantics results, not DuckDB-accurate ones."
+  tooling.drift_schema_read:
+    support: supported
+    hint: "aqueduct.executor.duckdb_.schema_reader.read_source_schema implements the ExecutorProtocol read_source_schema seam aqueduct drift needs (metadata-only — no query execution). Not yet wired into aqueduct/cli/drift.py, which still hardcodes the Spark reader regardless of manifest engine; the capability itself is real and tested."
+    tests:
+      - tests/test_agent/test_toolbox_engine_routing.py::TestDuckDBRoutesThroughDuckDB::test_get_source_schema_reads_via_duckdb_not_spark
+  tooling.doctor.table_exists:
+    support: unsupported
+    hint: "No DuckDB table-existence probe exists — aqueduct doctor's check unconditionally builds a SparkSession and calls spark.catalog.tableExists(), with no branch for a duckdb-resolved module, and reports pyspark-not-installed rather than 'not implemented for duckdb' when it fails. A real check would be an information_schema.tables query over the project's engine.duckdb.* connection; not built yet."
+  tooling.doctor.cloud_preflight:
+    support: unsupported
+    hint: "No DuckDB object-existence preflight exists — aqueduct doctor --preflight's cloud-URI check unconditionally builds a SparkSession and probes via Spark's Hadoop FileSystem using engine.spark.conf credentials, even for a module that resolves to duckdb (which would need engine.duckdb.s3_*/httpfs instead). A DuckDB-native probe using duckdb_/extensions.py's ensure_extension + httpfs is not built yet; until it is, --preflight gives no coverage for duckdb-resolved sources."
+  tooling.doctor.session_preflight:
+    support: unsupported
+    hint: "There is no check_duckdb()/session-preflight analog to check_java()+check_spark(preflight=True) — DuckDB session/extension/S3-secret verification only happens incidentally inside _probe_duckdb_handoff, gated on handoff.root being remote with credentials configured. A blueprint whose DuckDB Ingress/Egress modules read/write s3:// while handoff.root stays local gets zero doctor-time verification that httpfs can install/load; that failure only surfaces mid-run. Not built yet."
+  observability.module_metrics.per_module:
+    support: supported
+    hint: "The DuckDB executor writes a module_metrics row (duration_ms + row/byte counts where cheaply derivable) for every real module type (Ingress, Channel, Junction, Funnel, Egress), not only the synthetic Handoff module, via the same generic write_module_metrics used by Handoff. records_read is left NULL for every type (DuckDB relations re-execute per consumer, so counting would be a genuine extra source scan); records_written/bytes_written are left NULL for mode=append onto an existing path and for depot/table targets with no filesystem path — a number core cannot derive honestly is left NULL, never guessed."
+    tests:
+      - tests/test_executor_duckdb/test_module_metrics.py::test_multi_module_run_writes_one_module_metrics_row_per_module

@@ -565,6 +565,92 @@ class ProbesConfig(BaseModel):
     # Full probe actions are gated by `danger.allow_full_probe_actions` (inverted polarity).
 
 
+class ObservabilityRetentionConfig(BaseModel):
+    """Phase 85 B1 — per-table retention windows for the observability store.
+
+    Core (never engine-scoped): pruning is a store-level housekeeping
+    concern, identical regardless of which engine produced the rows —
+    exactly the same reasoning `webhooks`/`secrets`/`stores` already use
+    (see ``aqueduct/executor/config_leaves.py``'s Q4 scoping note). Every
+    field below is tagged ``engine_scoped: False`` accordingly.
+
+    Applied by ``aqueduct.surveyor.retention.prune_store()``, called
+    throttled (at most once per day per store, via a ``store_maintenance``
+    marker row) at the end of every run, and by the explicit
+    ``aqueduct report-prune`` CLI verb for an on-demand deep clean.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    run_records_days: int = Field(
+        default=90,
+        ge=1,
+        description="Delete run_records rows older than this many days.",
+        json_schema_extra={"engine_scoped": False},
+    )
+    failure_contexts_days: int = Field(
+        default=90,
+        ge=1,
+        description="Delete failure_contexts rows older than this many days.",
+        json_schema_extra={"engine_scoped": False},
+    )
+    healing_outcomes_days: int = Field(
+        default=180,
+        ge=1,
+        description="Delete healing_outcomes rows older than this many days.",
+        json_schema_extra={"engine_scoped": False},
+    )
+    heal_attempts_days: int = Field(
+        default=180,
+        ge=1,
+        description="Delete heal_attempts rows older than this many days.",
+        json_schema_extra={"engine_scoped": False},
+    )
+    patch_simulation_days: int = Field(
+        default=90,
+        ge=1,
+        description="Delete patch_simulation rows older than this many days.",
+        json_schema_extra={"engine_scoped": False},
+    )
+    column_lineage_days: int = Field(
+        default=90,
+        ge=1,
+        description="Delete column_lineage rows older than this many days.",
+        json_schema_extra={"engine_scoped": False},
+    )
+    probe_signals_days: int = Field(
+        default=90,
+        ge=1,
+        description=(
+            "Delete probe_signals rows older than this many days (all "
+            "signal types — an age-based backstop). sample_rows also gets "
+            "its own tighter per-probe cap below, applied at write time."
+        ),
+        json_schema_extra={"engine_scoped": False},
+    )
+    sample_rows_keep_last_n: int = Field(
+        default=20,
+        ge=1,
+        description=(
+            "Per-probe retention cap for the sample_rows Probe signal — "
+            "keeps only the most recent N sample_rows rows per probe_id, "
+            "enforced at write time regardless of probe_signals_days above. "
+            "sample_rows is the one signal type that persists real data "
+            "rows (redacted, but still row content), so it gets a tighter, "
+            "count-based cap on top of the age-based one."
+        ),
+        json_schema_extra={"engine_scoped": False},
+    )
+
+
+class ObservabilityConfig(BaseModel):
+    """Phase 85 B1 — observability-store housekeeping (retention/pruning)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    retention: ObservabilityRetentionConfig = Field(default_factory=ObservabilityRetentionConfig)
+
+
 class DangerConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
@@ -1365,7 +1451,7 @@ class DuckDBEngineConfig(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def _validate_s3_credential_pair(self) -> "DuckDBEngineConfig":
+    def _validate_s3_credential_pair(self) -> DuckDBEngineConfig:
         has_key = bool(self.s3_key_id_secret)
         has_secret = bool(self.s3_secret_access_key_secret)
         if has_key != has_secret:
@@ -1462,9 +1548,9 @@ def _freeze_for_hash(value: Any) -> Any:
         return (type(value), _freeze_for_hash(value.__dict__))
     if isinstance(value, dict):
         return tuple(sorted((k, _freeze_for_hash(v)) for k, v in value.items()))
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list | tuple):
         return tuple(_freeze_for_hash(v) for v in value)
-    if isinstance(value, (set, frozenset)):
+    if isinstance(value, set | frozenset):
         return frozenset(_freeze_for_hash(v) for v in value)
     return value
 
@@ -1491,6 +1577,7 @@ class AqueductConfig(BaseModel):
     stores: StoresConfig = Field(default_factory=StoresConfig)
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
     probes: ProbesConfig = Field(default_factory=ProbesConfig)
+    observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     danger: DangerConfig = Field(default_factory=DangerConfig)
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
     webhooks: WebhooksConfig = Field(default_factory=WebhooksConfig)

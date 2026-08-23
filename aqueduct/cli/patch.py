@@ -24,7 +24,8 @@ from aqueduct.cli import (
     cli,
     style,
 )
-from aqueduct.cli.output import emit
+from aqueduct.cli.render.funnel import emit
+from aqueduct.cli.render.tables import Column, render_table
 
 
 def _patch_index_obs_store(blueprint_path: Path | None = None):
@@ -174,19 +175,31 @@ def _list_from_store(ps, filter_status: str, out_format: str, obs_store: Any = N
         return
     # `file` is the UNIQUE key (`<ts>_<patch_id>.json`) — shown in FULL so it can
     # be copied verbatim into `apply`/`reject` (the embedded slug is the model's
-    # non-unique patch_id, so no separate column). Width is the longest filename;
-    # ljust never truncates, so a long name prints whole.
-    _fw = max((len(r.get("file") or "") for r in rows), default=4)
-    click.echo(f"\n  {'file':<{_fw}}  {'status':<9} {'blueprint':<22} rationale")
-    click.echo(f"  {'-' * _fw}  {'-' * 9} {'-' * 22} {'-' * 20}")
-    has_pending = False
-    for r in rows:
-        st = r["status"]
-        has_pending = has_pending or st == "pending"
-        fn = r.get("file") or ""
-        bp = (r.get("blueprint_id") or "")[:22]
-        rationale = (r.get("rationale") or "").replace("\n", " ")[:60]
-        click.echo(f"  {fn:<{_fw}}  {st:<9} {bp:<22} {rationale}")
+    # non-unique patch_id, so no separate column). `rationale` is the ONE flex
+    # column (highest length variance) — it absorbs remaining terminal width
+    # and truncates with `…` on a narrow TTY; -v/piping always print it whole.
+    from aqueduct.cli.verbosity import resolve_verbosity
+
+    click.echo("")
+    render_table(
+        [
+            Column("file"),
+            Column("status"),
+            Column("blueprint"),
+            Column("rationale", flex=True),
+        ],
+        [
+            [
+                r.get("file") or "",
+                r["status"],
+                r.get("blueprint_id") or "",
+                (r.get("rationale") or "").replace("\n", " "),
+            ]
+            for r in rows
+        ],
+        verbose=resolve_verbosity() >= 1,
+    )
+    has_pending = any(r["status"] == "pending" for r in rows)
     if has_pending:
         click.echo("\n  Apply:  aqueduct patch apply <patch_id|file> --blueprint <blueprint.yml>")
         click.echo("  Reject: aqueduct patch reject <patch_id|file> --reason '<reason>'")
@@ -238,6 +251,18 @@ def patch() -> None:
     show_default=True,
     help="Output format. `text` (default) renders diff + gate findings. `json` emits a machine-readable report.",
 )
+@click.option(
+    "-s",
+    "--set",
+    "set_items",
+    multiple=True,
+    metavar="PATH=VALUE",
+    help="Override an aqueduct.yml value for this preview only (repeatable, "
+    "in-memory, never persisted). Dotted path — e.g. "
+    "--set engine.spark.master_url=spark://h:7077. Same precedence as "
+    "`aqueduct run`'s --set: pins the effective session config the "
+    "engine-config gate and --sandbox replay measure against.",
+)
 @_env_options
 def patch_preview(
     patch_file: str,
@@ -246,6 +271,7 @@ def patch_preview(
     sample_rows: int,
     config_path: str | None,
     out_format: str,
+    set_items: tuple[str, ...],
     env_file: str | None,
     cli_env: tuple[str, ...],
 ) -> None:
@@ -269,8 +295,9 @@ def patch_preview(
         load_patch_spec,
     )
     from aqueduct.patch.explain_gate import run_explain_gate
-    from aqueduct.patch.gate_status import GateStatus, sandbox_gate_permits_auto_apply
+    from aqueduct.patch.gate_status import GateStatus, sandbox_gate_blocks_preview
     from aqueduct.patch.preview import (
+        SandboxGateResult,
         render_unified_diff,
         run_lineage_gate,
         run_sandbox_gate,
@@ -301,12 +328,23 @@ def patch_preview(
         click.echo(f"✗ config error: {exc}", err=True)
         sys.exit(exit_codes.CONFIG_ERROR)
 
+    # ── -s/--set overrides (config-only; the patch itself is not re-routed) ────
+    if set_items:
+        from aqueduct.overrides import OverrideError, apply_to_model, route_overrides
+
+        try:
+            _cfg_set_nested, _ = route_overrides(set_items, allow_blueprint=False)
+            cfg = apply_to_model(cfg, _cfg_set_nested)
+        except OverrideError as exc:
+            click.echo(f"✗ {exc}", err=True)
+            sys.exit(exit_codes.CONFIG_ERROR)
+
     # Guardrails gate — deterministic. Identical enforcement used by
     # `patch apply`; surfaced here so reviewers see violations up front.
     try:
         config_delta_res = _check_guardrails(spec, bp_raw, provenance_map=None, cfg=cfg)
     except PatchError as exc:
-        from aqueduct.cli.style import error as _style_error
+        from aqueduct.cli.render.style import error as _style_error
 
         _style_error(f"guardrails gate blocked: {exc}")
         sys.exit(exit_codes.DATA_OR_RUNTIME)
@@ -320,7 +358,14 @@ def patch_preview(
     diff = render_unified_diff(bp_raw, bp_after)
     lineage_res = run_lineage_gate(bp_raw, bp_after, spec)
 
-    sandbox_res = None
+    # No `--sandbox` means the gate was never asked to run — a caller-level
+    # fact, not a verdict, and (unlike the old bare `None`) it now reports
+    # as an explicit status so `sandbox_gate_permits_auto_apply` fails
+    # closed instead of silently permitting a patch nothing replayed.
+    sandbox_res = SandboxGateResult(
+        status=GateStatus.NOT_REQUESTED,
+        detail="sandbox replay was not requested — pass --sandbox to replay this patch",
+    )
     explain_res = None
     if sandbox:
         from aqueduct.stores import get_stores
@@ -385,9 +430,9 @@ def patch_preview(
                 "detail": config_delta_res.detail,
                 "delta": config_delta_res.delta,
                 "write_targets": {k: list(v) for k, v in config_delta_res.write_targets.items()},
-                # Always present, normally `{}`. `patch preview` takes no
-                # `-s/--set`, so it measures with no CLI layer at all —
-                # emitting the key unconditionally is what lets a consumer
+                # Always present, normally `{}` — non-empty only when this
+                # invocation passed `-s/--set engine.<name>.<key>=...`.
+                # Emitting the key unconditionally is what lets a consumer
                 # tell "measured without pins" apart from "the field does
                 # not exist in this version".
                 "cli_pinned": {k: list(v) for k, v in config_delta_res.cli_pinned.items()},
@@ -410,28 +455,29 @@ def patch_preview(
                 "regressions": [r.__dict__ for r in explain_res.regressions],
             }
         emit(report, fmt="json")
-        # Same predicate the heal loop's auto-apply decision uses
-        # (`patch/gate_status.py`), not a second hand-written status list:
-        # a CI job reading this exit code and the loop that applies without
-        # a human must not disagree about what "validated" means. So an
-        # `unavailable` sandbox result exits non-zero here too — the review
-        # this command exists to support could not be given a replay.
+        # `sandbox_gate_blocks_preview`, NOT the auto-apply predicate
+        # (`patch/gate_status.py` documents why they differ): this exit code
+        # answers "did a gate that ran object to this patch". An
+        # `unavailable` sandbox result still exits non-zero — the review this
+        # command exists to support could not be given a replay — but a gate
+        # that was never asked to run (no `--sandbox`, the documented default
+        # invocation) has objected to nothing and must not fail the command.
         sys.exit(
             exit_codes.SUCCESS
-            if lineage_res.status != "fail" and sandbox_gate_permits_auto_apply(sandbox_res)
+            if lineage_res.status != "fail" and not sandbox_gate_blocks_preview(sandbox_res)
             else exit_codes.DATA_OR_RUNTIME
         )
 
     # Text report — headers dim (structural), gate status lines use the
     # shared ✓/✗/⚠/· vocabulary (style.py) so `patch preview`'s gate pyramid
     # reads consistently with the rest of the CLI's output.
-    from aqueduct.cli.style import dim as _dim
+    from aqueduct.cli.render.style import dim as _dim
 
     def _gate_status_line(status: str) -> None:
-        from aqueduct.cli.style import error as _e
-        from aqueduct.cli.style import info as _i
-        from aqueduct.cli.style import success as _s
-        from aqueduct.cli.style import warn as _w
+        from aqueduct.cli.render.style import error as _e
+        from aqueduct.cli.render.style import info as _i
+        from aqueduct.cli.render.style import success as _s
+        from aqueduct.cli.render.style import warn as _w
 
         label = f"status: {status}"
         if status == GateStatus.PASS:
@@ -450,6 +496,12 @@ def patch_preview(
         elif status == GateStatus.NOT_APPLICABLE:
             # Informational only — nothing was owed, nothing blocks.
             _i(f"  {label}")
+        elif status == GateStatus.NOT_REQUESTED:
+            # Sandbox-only: the gate was deliberately never asked to run
+            # (`--sandbox` omitted), distinct from `not_applicable` (asked,
+            # nothing to check). Informational text, but it still fails
+            # closed on auto-apply — see `sandbox_gate_permits_auto_apply`.
+            _i("  sandbox: not requested")
         else:
             _i(f"  {label}")
 
@@ -490,7 +542,7 @@ def patch_preview(
         click.echo(_dim("── Sandbox gate (replay) ─────────────────────────────────────"))
         _gate_status_line(sandbox_res.status)
         click.echo(f"  detail:      {sandbox_res.detail}")
-        if sandbox_res.status == GateStatus.UNAVAILABLE:
+        if sandbox_res.status in (GateStatus.UNAVAILABLE, GateStatus.NOT_REQUESTED):
             # State the consequence, not only the fact: this is the status
             # that stops the patch, and a reviewer reading a gate block
             # should not have to infer that from the word.
@@ -527,7 +579,7 @@ def patch_preview(
     # The same predicate as the `--format json` branch above, so text and
     # json modes cannot disagree about whether this patch is reviewable as
     # validated.
-    if not sandbox_gate_permits_auto_apply(sandbox_res):
+    if sandbox_gate_blocks_preview(sandbox_res):
         exit_code = exit_codes.DATA_OR_RUNTIME
     sys.exit(exit_code)
 
@@ -656,11 +708,19 @@ def patch_policy(engine_name: str | None, out_format: str) -> None:
     style.info(POLICY_NARROWING_NOTE)
 
 
-def _patch_store_from(patches_root, config_path, env_file, cli_env):
+def _patch_store_from(patches_root, config_path, env_file, cli_env, set_items=()):
     """Build the configured PatchStore (local OR object backend), or None.
 
     Resolves aqueduct.yml (CWD walk-up / --config) + .env, so the body lifecycle
-    (apply/reject move) acts on the same store `patch list` shows."""
+    (apply/reject move) acts on the same store `patch list` shows.
+
+    *set_items* (``-s/--set``, config-only) overlays on top — e.g.
+    `--set stores.blob.backend=s3` — so a caller that resolved its engine
+    config under an override finds the SAME patch store. Never touches
+    anything but this internally-loaded ``cfg``; a caller with its own
+    ``cfg`` (e.g. `patch revert`'s prior-values equality check) is
+    unaffected by this pin.
+    """
     from pathlib import Path
 
     try:
@@ -672,6 +732,12 @@ def _patch_store_from(patches_root, config_path, env_file, cli_env):
             env_file=env_file,
             cli_env=cli_env or (),
         )
+        if set_items:
+            from aqueduct.overrides import apply_to_model as _apply_to_model
+            from aqueduct.overrides import route_overrides
+
+            _cfg_set_nested, _ = route_overrides(set_items, allow_blueprint=False)
+            cfg = _apply_to_model(cfg, _cfg_set_nested)
         return make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, Path(patches_root))
     except Exception:
         return None
@@ -846,7 +912,7 @@ def patch_apply(
 
 
 def _applied_patch_operations(
-    patches_root, config_path, env_file, cli_env, patch_id: str
+    patches_root, config_path, env_file, cli_env, patch_id: str, set_items=()
 ) -> list | None:
     """Operations of the APPLIED patch body carrying *patch_id*, or None.
 
@@ -854,10 +920,15 @@ def _applied_patch_operations(
     (``aqueduct/patch/revert.py::_require_config_only``); the ``healed_by``
     record alone cannot tell a config-only patch from a mixed one. None means
     "no such applied body", which the planner turns into its own refusal.
+
+    *set_items* is forwarded to ``_patch_store_from`` only (which patch
+    store to read the applied body from) — it never touches the caller's
+    own ``cfg``, so `patch revert`'s prior-values equality check stays
+    unpinned regardless of what this resolves.
     """
     from aqueduct.patch.revert import RevertError
 
-    ps = _patch_store_from(patches_root, config_path, env_file, cli_env)
+    ps = _patch_store_from(patches_root, config_path, env_file, cli_env, set_items=set_items)
     if ps is None:
         return None
     matches = [
@@ -909,6 +980,20 @@ def _applied_patch_operations(
     show_default=True,
     help="Output format. `text` (default) renders the restore list. `json` emits the plan.",
 )
+@click.option(
+    "-s",
+    "--set",
+    "set_items",
+    multiple=True,
+    metavar="PATH=VALUE",
+    help="Override an aqueduct.yml value for this invocation only (repeatable, "
+    "in-memory, never persisted) — e.g. --set stores.blob.backend=s3 to read "
+    "the applied patch body from a different patch store. Does NOT affect the "
+    "prior-values safety check: that check always compares against the "
+    "UNPINNED effective config, exactly as `aqueduct run` (no --set) would "
+    "resolve it, so a --set can never make a legitimate revert abort nor let "
+    "a genuinely diverged one falsely pass.",
+)
 @_env_options
 def patch_revert(
     patch_id: str,
@@ -917,6 +1002,7 @@ def patch_revert(
     config_path: str | None,
     dry_run: bool,
     out_format: str,
+    set_items: tuple[str, ...],
     env_file: str | None,
     cli_env: tuple[str, ...],
 ) -> None:
@@ -953,6 +1039,12 @@ def patch_revert(
             _Path(config_path) if config_path else blueprint_path,
             cli_env=cli_env,
         )
+        # `cfg` here is what feeds `plan_revert`'s prior-values equality
+        # check (`resolve_effective_engine_configs(cfg, ...)`), and MUST
+        # stay the UNPINNED resolution — see the `-s/--set` help text above
+        # and `aqueduct/patch/revert.py`'s module docstring. `--set` still
+        # reaches this command (via `_applied_patch_operations`'s patch-store
+        # resolution below), it just never touches this `cfg`.
         cfg = load_config(_Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
@@ -962,7 +1054,7 @@ def patch_revert(
     bp_raw = _yaml_load(blueprint_path)
     try:
         operations = _applied_patch_operations(
-            patches_root, config_path, env_file, cli_env, patch_id
+            patches_root, config_path, env_file, cli_env, patch_id, set_items=set_items
         )
         plan = plan_revert(cfg=cfg, blueprint=bp_raw, patch_id=patch_id, operations=operations)
     except RevertError as exc:
@@ -1661,18 +1753,25 @@ def patch_list(
             continue
 
         click.echo(f"\n  [{status_label}]  {d}")
-        click.echo(f"  {'file':<55} {'patch_id':<36} {'rationale'}")
-        click.echo(f"  {'-'*55} {'-'*36} {'-'*40}")
-
+        group_rows = []
         for f in files:
             try:
                 data = json.loads(f.read_text(encoding="utf-8"))
             except Exception:
                 data = {}
             pid = data.get("patch_id", f.stem)
-            rationale = (data.get("rationale") or "").replace("\n", " ")[:60]
-            click.echo(f"  {f.name:<55} {pid:<36} {rationale}")
+            rationale = (data.get("rationale") or "").replace("\n", " ")
+            group_rows.append([f.name, pid, rationale])
             total += 1
+        # `rationale` is the flex column — it has by far the highest length
+        # variance of the three; `file`/`patch_id` are fixed-format tokens.
+        from aqueduct.cli.verbosity import resolve_verbosity
+
+        render_table(
+            [Column("file"), Column("patch_id"), Column("rationale", flex=True)],
+            group_rows,
+            verbose=resolve_verbosity() >= 1,
+        )
 
     if total == 0:
         click.echo(f"No {filter_status} patches found in {patches_root}")
@@ -1778,11 +1877,21 @@ def log_cmd(blueprint: str, fmt: str) -> None:
         click.echo("No commits found.")
         return
 
-    click.echo(f"  {'hash':<10} {'date':<20} {'patches':<40} {'ops'}")
-    click.echo(f"  {'-'*10} {'-'*20} {'-'*40} {'-'*30}")
-    for e in entries:
-        patches_col = e["patches"][:38] + ".." if len(e["patches"]) > 40 else e["patches"]
-        click.echo(f"  {e['hash']:<10} {e['date']:<20} {patches_col:<40} {e['ops']}")
+    # `patches` is the flex column — a comma-joined list of patch_ids (or the
+    # "(manual change)" fallback) with far more length variance than `ops`,
+    # which is a single short commit-trailer descriptor.
+    from aqueduct.cli.verbosity import resolve_verbosity
+
+    render_table(
+        [
+            Column("hash"),
+            Column("date"),
+            Column("patches", flex=True),
+            Column("ops"),
+        ],
+        [[e["hash"], e["date"], e["patches"], e["ops"]] for e in entries],
+        verbose=resolve_verbosity() >= 1,
+    )
 
 
 # ── aqueduct rollback ─────────────────────────────────────────────────────────

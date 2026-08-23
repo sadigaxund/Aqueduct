@@ -424,11 +424,20 @@ def run_sandbox_gate(
                           ``cli/__init__.py`` synthesises one for
                           ``agent.sandbox_mode: off``, where the operator
                           declared the check unowed.
+      ``not_requested``  this gate was never invoked at all. This function
+                          never returns it either — a CALLER that chose not
+                          to invoke this gate (``aqueduct patch preview``
+                          with no ``--sandbox``) synthesises it instead of
+                          leaving the result ``None``, so
+                          ``sandbox_gate_permits_auto_apply`` has an
+                          explicit status to fail closed on rather than a
+                          bare ``None``.
 
     ``unavailable`` and ``not_applicable`` were both spelled ``skip`` until
     the split: "I could not check this" and "there was nothing to check"
     are opposite facts, and reporting them with one word let a patch that
-    was never replayed auto-apply as though it had been.
+    was never replayed auto-apply as though it had been. ``not_requested``
+    is a third, later fact again: "nobody asked" is neither of those two.
     """
     t0 = time.monotonic()
     egress_targets: list[dict[str, Any]] = []

@@ -78,7 +78,7 @@ def write_egress(
     con: duckdb.DuckDBPyConnection,
     depot: Any = None,
     base_dir: str | None = None,
-) -> None:
+) -> int | None:
     """Write rel to the target described by module.config.
 
     Args:
@@ -88,6 +88,23 @@ def write_egress(
         depot:  Optional DepotStore instance for ``format: depot`` writes.
         base_dir: Accepted for signature parity; unused (format: custom is
                   UNSUPPORTED — Spark-only Python DataSource API).
+
+    Returns:
+        The number of rows actually written this call (``records_written``
+        for ``module_metrics`` — Phase 85 D1), or ``None`` when that number
+        genuinely isn't available: a ``table:``/path write skipped by
+        ``mode=ignore`` (nothing was written), ``format: depot`` (not a row
+        write), or ``mode=append`` onto an EXISTING path target (DuckDB has
+        no native append — this engine rewrites existing+new combined via
+        ``UNION ALL BY NAME``, so the ``COPY``'s own row count is the file's
+        new TOTAL, not the rows added this run; recovering just the delta
+        would need a second count over already-executed data, which this
+        task's spec says not to add). Every other path returns a REAL
+        count read off the write statement's own result — no extra scan:
+        DuckDB's ``COPY``/``CREATE TABLE AS``/``INSERT INTO`` all return the
+        row count as part of the write itself, including a genuine ``0``
+        for an empty relation (Phase 85 D3 — a zero-row write is
+        distinguishable from "not measured").
 
     Raises:
         EgressError: Config invalid, format/mode not implemented this stage,
@@ -113,7 +130,7 @@ def write_egress(
                 f"[{module.id}] mode={mode!r} is not implemented for the DuckDB engine in "
                 f"Stage A. Supported: {sorted(SUPPORTED_MODES)}. See docs/compatibility.md."
             )
-        _write_table(rel, module, con, str(table), mode)
+        _records_written = _write_table(rel, module, con, str(table), mode)
         register_as: str | None = cfg.get("register_as_table")
         if register_as:
             # Same "ignored, not silently dropped" treatment as Spark's
@@ -132,7 +149,7 @@ def write_egress(
                 f"register_as_table={register_as!r} ignored — module already writes to a "
                 "catalog table via 'table:'. Use 'table:' to write directly.",
             )
-        return
+        return _records_written
 
     if not fmt:
         raise EgressError(f"[{module.id}] 'format' is required in Egress config")
@@ -140,7 +157,7 @@ def write_egress(
     # ── Depot pseudo-format ────────────────────────────────────────────────
     if fmt == "depot":
         _write_depot(rel, module, depot)
-        return
+        return None
 
     if fmt not in SUPPORTED_FORMATS:
         raise EgressError(
@@ -171,7 +188,7 @@ def write_egress(
         logger.info(
             "[%s] write target %r already exists (mode=ignore); skipping write.", module.id, path
         )
-        return
+        return None
 
     if cfg.get("on_new_columns") and exists:
         _enforce_on_new_columns(module, rel, con, fmt, path, str(cfg["on_new_columns"]))
@@ -189,10 +206,11 @@ def write_egress(
     # serves in Stage A; documented as non-atomic in the capability hint.
     input_name = "__egress_input__"
     combined_name: str | None = None
+    is_append_union = mode == "append" and exists
     con.register(input_name, rel)
     try:
         write_rel_name = input_name
-        if mode == "append" and exists:
+        if is_append_union:
             reader = _reader_function(fmt)
             combined_name = "__egress_append__"
             try:
@@ -212,7 +230,12 @@ def write_egress(
         options = _copy_options(fmt, cfg, partition_by)
         copy_sql = f"COPY {write_rel_name} TO '{_escape(path)}' ({options})"
         try:
-            con.sql(copy_sql)
+            # `con.execute` (not `con.sql`) — a COPY statement's result set
+            # (one row, column "Count") only comes back through the cursor
+            # API; `con.sql(...)` on a COPY returns None. This is the SAME
+            # execution the write already does — reading the count back is
+            # free, not a second pass over the data.
+            copy_result = con.execute(copy_sql)
         except Exception as exc:
             raise EgressError(f"[{module.id}] write failed to {path!r}: {exc}") from exc
     finally:
@@ -229,6 +252,16 @@ def write_egress(
     register_as: str | None = cfg.get("register_as_table")
     if register_as:
         _register_as_table(con, module.id, str(register_as), fmt, path)
+
+    if is_append_union:
+        # See the docstring: the COPY above just wrote existing+new combined,
+        # so its row count is the file's new TOTAL, not this run's delta.
+        return None
+    try:
+        _row = copy_result.fetchone()
+        return int(_row[0]) if _row is not None else None
+    except Exception:
+        return None
 
 
 def _enforce_on_new_columns(
@@ -387,7 +420,7 @@ def _write_table(
     con: duckdb.DuckDBPyConnection,
     table: str,
     mode: str,
-) -> None:
+) -> int | None:
     """Write ``rel`` into an existing-or-new catalog table named ``table``.
 
     Mode semantics map onto DuckDB's own DDL guards rather than a manual
@@ -434,7 +467,14 @@ def _write_table(
                 f"on the DuckDB engine. Supported: {sorted(SUPPORTED_MODES)}."
             )
         try:
-            con.execute(stmt)
+            # `con.execute` (not `con.sql`) — see the matching comment in
+            # `write_egress` above: CREATE TABLE AS / INSERT INTO both
+            # return a one-row "Count" result through the cursor API for
+            # free, as part of the write that already happened. For
+            # `mode=ignore` when the table already existed (skipped write,
+            # empty result set), `fetchone()` returns None below — reported
+            # as None (no write attempted), not a fabricated 0.
+            table_result = con.execute(stmt)
         except EgressError:
             raise
         except Exception as exc:
@@ -444,6 +484,12 @@ def _write_table(
             con.unregister(input_name)
         except Exception:
             pass  # best-effort cleanup
+
+    try:
+        _row = table_result.fetchone()
+        return int(_row[0]) if _row is not None else None
+    except Exception:
+        return None
 
 
 def _table_exists(con: duckdb.DuckDBPyConnection, table: str) -> bool:

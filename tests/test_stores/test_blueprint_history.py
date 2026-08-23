@@ -34,7 +34,7 @@ def _seed_history_store(path):
     c.execute(PATCH_INDEX_DDL)
     c.execute(
         "INSERT INTO run_records VALUES "
-        "('run1','bp1','error','2026-01-01T00:00:00','2026-01-01T00:01:00', '[]', NULL)"
+        "('run1','bp1','error','2026-01-01T00:00:00','2026-01-01T00:01:00', '[]', NULL, NULL)"
     )
     c.execute(
         "INSERT INTO heal_attempts (id, run_id, attempt_num, recorded_at) "

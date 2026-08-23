@@ -20,9 +20,12 @@ import pytest
 
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
-from click.testing import CliRunner
+# Imports follow the `pytestmark` assignment above deliberately: this module is
+# spark-marked, and keeping the marker first lets a `-m "not spark"` collection
+# skip it without importing the CLI (and transitively pyspark) at all.
+from click.testing import CliRunner  # noqa: E402
 
-from aqueduct.cli import cli
+from aqueduct.cli import cli  # noqa: E402
 
 
 def test_polyglot_run_succeeds_and_renders_engines_and_handoff(spark, tmp_path):
@@ -75,17 +78,18 @@ stores:
     assert result.exit_code == 0, result.output
 
     # ── Header names every engine involved, not the single nominal default ──
-    header_line = next(l for l in result.output.splitlines() if "polyglot_cli_test" in l)
+    header_line = next(ln for ln in result.output.splitlines() if "polyglot_cli_test" in ln)
     assert "spark" in header_line
     assert "duckdb" in header_line
     assert "islands" in header_line
 
-    # ── Per-module engine tag in the transcript ──────────────────────────────
-    assert "duckdb" in result.output  # 'out' module's own engine tag
+    # ── Phase 85 Wave 2 ruling: NO per-module engine tag any more — engine
+    # only appears at the dedicated handoff-boundary line below. `duckdb`
+    # still appears in `result.output` via that line, not a per-module tag.
 
     # ── Handoff step rendered first-class (distinct marker + transport info) ─
     assert "⇄" in result.output
-    assert "in → out" in result.output
+    assert "handoff · spark → duckdb" in result.output
     assert "written" in result.output
 
     # Real data actually landed via the handoff + duckdb egress. DuckDB's

@@ -20,6 +20,7 @@ from aqueduct.cli import (
     cli,
 )
 from aqueduct.cli.output import emit
+from aqueduct.cli.render.funnel import echo as _funnel_echo
 from aqueduct.cli.style import error as _error
 from aqueduct.surveyor.scenario import SCENARIO_DOMAINS
 
@@ -125,13 +126,9 @@ def benchmark(
     """
     target = scenarios_pos or scenarios_dir
     if not target:
-        click.echo(
-            "✗ provide a scenario file or directory (positional, or --scenarios)",
-            err=True,
-        )
+        _error("provide a scenario file or directory (positional, or --scenarios)")
         sys.exit(exit_codes.USAGE_ERROR)
     scenarios_dir = target
-    from aqueduct.cli.style import error as _error
     from aqueduct.config import ConfigError, load_config
     from aqueduct.surveyor.scenario import (
         format_benchmark_table,
@@ -180,13 +177,10 @@ def benchmark(
 
     model_list = list(models) if models else ([resolved_model] if resolved_model else None)
     if not model_list:
-        click.echo(
-            "✗ no models specified — use --model <model> or set agent.model in aqueduct.yml",
-            err=True,
-        )
+        _error("no models specified — use --model <model> or set agent.model in aqueduct.yml")
         sys.exit(exit_codes.CONFIG_ERROR)
 
-    click.echo(
+    _funnel_echo(
         f"↻ benchmark  scenarios={scenarios_dir}"
         + (f"  domains={list(domains)}" if domains else "")
         + f"  models={model_list}  provider={resolved_provider}",
@@ -241,7 +235,7 @@ def benchmark(
     # value already resolved two lines above.
     _floor_calls = _pair_count
     _ceiling_calls = _pair_count * _budget.max_reprompts
-    click.echo(
+    _funnel_echo(
         f"[benchmark] {_scn_count} scenarios × {len(model_list)} models = "
         f"{_pair_count} pairs · LLM calls: {_floor_calls} floor / "
         f"{_ceiling_calls} ceiling (max_reprompts={_budget.max_reprompts}; "
@@ -273,7 +267,7 @@ def benchmark(
         # __exit__ propagates the KeyboardInterrupt; in-flight HTTP calls
         # close their socket via the `with httpx.Client():` context
         # manager, signalling the LLM server to abort generation.
-        click.echo(
+        _funnel_echo(
             "\n↑ interrupted — completed pairs persisted to benchmark store",
             err=True,
         )
@@ -324,8 +318,10 @@ def benchmark(
                 }
         emit(output, fmt="json")
     else:
+        # format_benchmark_table (surveyor/scenario.py) hand-rolls its own
+        # box-drawing table — a pre-rendered result string, printed verbatim.
         _table = format_benchmark_table(results, model_list)
-        click.echo(_table)
+        click.echo(_table, err=False)
         # Mirror to stderr when stdout is redirected/piped so the user sees
         # the table in the terminal AND captures it in `> file`. Skip when
         # stdout is a TTY (avoid duplicate output in interactive runs).
@@ -338,7 +334,7 @@ def benchmark(
     )
     failed = total - passed
     if failed and fmt != "json":
-        click.echo(
+        _funnel_echo(
             f"({failed} failed — rerun with --format json for failure "
             f"detail + the generated patch)",
             err=True,
@@ -370,7 +366,7 @@ def benchmark(
     if _persist:
         written = persist_results(results, bench_store)
         if written and fmt != "json":
-            click.echo(f"↳ persisted {written} benchmark row(s) → {bench_store.label}")
+            _funnel_echo(f"↳ persisted {written} benchmark row(s) → {bench_store.label}", err=False)
         if _gate:
             diff_entries = diff_latest(results, bench_store)
             if fmt == "json":
@@ -393,18 +389,17 @@ def benchmark(
                     fmt="json",
                 )
             else:
-                click.echo("")
-                click.echo("Regression diff vs baseline:")
-                click.echo(format_diff_table(diff_entries))
+                _funnel_echo("", err=False)
+                _funnel_echo("Regression diff vs baseline:", err=False)
+                # format_diff_table already renders through render_table_str
+                # (the shared table helper) — printed verbatim.
+                click.echo(format_diff_table(diff_entries), err=False)
             if has_regressions(diff_entries):
                 regression_exit = True
                 if fmt != "json":
-                    click.echo(
-                        "✗ regression(s) detected vs baseline — failing the gate",
-                        err=True,
-                    )
+                    _error("regression(s) detected vs baseline — failing the gate")
     elif _gate and fmt != "json":
-        click.echo(
+        _funnel_echo(
             "(regression gate ignored: persistence is off)",
             err=True,
         )
@@ -567,7 +562,9 @@ def benchmark_diff_cmd(
             fmt="json",
         )
     else:
-        click.echo(format_diff_table(entries))
+        # format_diff_table already renders through render_table_str (the
+        # shared table helper) — printed verbatim.
+        click.echo(format_diff_table(entries), err=False)
 
     if has_regressions(entries):
         if fmt != "json":
@@ -660,4 +657,6 @@ def benchmark_stats_cmd(
     if fmt == "json":
         emit(stats, fmt="json")
     else:
-        click.echo(format_stats(stats))
+        # format_stats (surveyor/benchmark_store.py) hand-rolls its own
+        # aligned text — a pre-rendered result string, printed verbatim.
+        click.echo(format_stats(stats), err=False)

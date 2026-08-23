@@ -43,7 +43,10 @@ def completion_cmd(shell: str) -> None:
     if comp_cls is None:
         raise click.ClickException(f"Unsupported shell: {shell!r}")
     comp = comp_cls(cli, {}, "aqueduct", "_AQUEDUCT_COMPLETE")
-    click.echo(comp.source())
+    # Structured result the user redirects straight into a shell completion
+    # file (`aqueduct completion bash > ...`) — never wrapped/truncated, so
+    # this stays raw click.echo (explicit err=False) rather than funnel.echo.
+    click.echo(comp.source(), err=False)
 
 
 # ── aqueduct test ────────────────────────────────────────────────────────────
@@ -119,8 +122,6 @@ def test_cmd(
     from aqueduct.cli.style import error as _error
     from aqueduct.cli.style import success as _success
     from aqueduct.config import ConfigError, load_config
-    from aqueduct.executor.spark.session import make_spark_session, stop_spark_session
-    from aqueduct.executor.spark.test_runner import TestSchemaError, run_test_file
 
     try:
         _resolve_and_load_env(
@@ -138,6 +139,26 @@ def test_cmd(
         _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
+    # `aqueduct test` only has a real test runner on Spark today
+    # (`tooling.test_runner` in capabilities.yml). Route through
+    # `cfg.deployment.engine` and refuse loudly for any other engine instead
+    # of silently substituting Spark's SQL/type semantics for whatever the
+    # project actually deploys on — the bug this branch replaced (see
+    # tmp/phase85/engine_parity_audit.md, category (c) finding #1).
+    from aqueduct.executor.capabilities import Support, get_capabilities
+
+    engine = cfg.deployment.engine
+    _leaf = get_capabilities(engine).verdict("tooling.test_runner")
+    if _leaf.support != Support.SUPPORTED:
+        _error(
+            f"aqueduct test does not support engine {engine!r}: "
+            f"{_leaf.hint or 'tooling.test_runner is unsupported for this engine'}"
+        )
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    from aqueduct.executor.spark.session import make_spark_session, stop_spark_session
+    from aqueduct.executor.spark.test_runner import TestSchemaError, run_test_file
+
     merged_spark_config = dict(cfg.engine.spark.conf)
 
     # aqtests are isolated unit tests over inline data — they run local by
@@ -150,7 +171,9 @@ def test_cmd(
         master_url = "local[*]"
         config_master = cfg.engine.spark.master_url
         if config_master and not config_master.startswith("local"):
-            click.echo(
+            from aqueduct.cli.render.funnel import echo as _funnel_echo
+
+            _funnel_echo(
                 f"(test: ignoring engine.spark.master_url={config_master!r}; "
                 f"running on {master_url} — pass --master to override)",
                 err=True,
@@ -187,19 +210,23 @@ def test_cmd(
         stop_spark_session(spark)
 
     # ── Print results ─────────────────────────────────────────────────────────
-    click.echo(f"\nTest suite: {test_file}")
-    click.echo(f"  {suite.total} tests  |  {suite.passed} passed  |  {suite.failed} failed\n")
+    from aqueduct.cli.render.funnel import echo as _funnel_echo
+
+    _funnel_echo(f"\nTest suite: {test_file}", err=False)
+    _funnel_echo(
+        f"  {suite.total} tests  |  {suite.passed} passed  |  {suite.failed} failed\n", err=False
+    )
 
     for result in suite.results:
         icon = "✓" if result.passed else "✗"
-        click.echo(f"  {icon} {result.test_id}")
+        _funnel_echo(f"  {icon} {result.test_id}", err=False)
         if result.error:
-            click.echo(f"      error: {result.error}")
+            _funnel_echo(f"      error: {result.error}", err=False)
         for ar in result.assertion_results:
             a_icon = "  ✓" if ar.passed else "  ✗"
-            click.echo(f"      {a_icon} [{ar.assertion_type}] {ar.message}")
+            _funnel_echo(f"      {a_icon} [{ar.assertion_type}] {ar.message}", err=False)
 
-    click.echo()
+    _funnel_echo("", err=False)
     if suite.failed > 0:
         _error(f"{suite.failed} test(s) failed")
         sys.exit(exit_codes.DATA_OR_RUNTIME)
@@ -256,10 +283,14 @@ def init() -> None:
         "aqscenarios/aqscenario.yml.template", cwd / "aqscenarios" / "aqscenario.yml.template"
     )
 
+    from aqueduct.cli.render.funnel import echo as _funnel_echo
+    from aqueduct.cli.render.funnel import success as _funnel_success
+    from aqueduct.cli.render.funnel import warn_line as _funnel_warn_line
+
     for f in created:
-        click.echo(f"  create  {f}")
+        _funnel_echo(f"  create  {f}", err=False)
     for f in skipped:
-        click.echo(f"  skip    {f}  (already exists)")
+        _funnel_echo(f"  skip    {f}  (already exists)", err=False)
 
     # Git
     try:
@@ -275,9 +306,9 @@ def init() -> None:
         if not in_git:
             r = subprocess.run(["git", "init"], capture_output=True, text=True, cwd=cwd)
             if r.returncode == 0:
-                click.echo("  git init")
+                _funnel_echo("  git init", err=False)
             else:
-                click.echo(f"  ⚠ git init failed: {r.stderr.strip()}")
+                _funnel_warn_line(f"git init failed: {r.stderr.strip()}", err=False)
 
         # Initial commit
         add = subprocess.run(["git", "add", "."], capture_output=True, cwd=cwd)
@@ -289,16 +320,18 @@ def init() -> None:
                 cwd=cwd,
             )
             if commit.returncode == 0:
-                click.echo("  git commit  init: aqueduct project")
+                _funnel_echo("  git commit  init: aqueduct project", err=False)
             elif "nothing to commit" in commit.stdout + commit.stderr:
                 pass  # already clean
             else:
-                click.echo(f"  ⚠ git commit failed: {commit.stderr.strip()}")
+                _funnel_warn_line(f"git commit failed: {commit.stderr.strip()}", err=False)
     except FileNotFoundError:
-        click.echo("  ⚠ git not found — skipping version control setup")
+        _funnel_warn_line("git not found — skipping version control setup", err=False)
 
-    click.echo(f"\n✓ {project_name} ready")
-    click.echo("\nNext steps:")
-    click.echo("  1. Create blueprints/<name>.yml  (see blueprint.template.yml for reference)")
-    click.echo("  2. aqueduct validate blueprints/<name>.yml")
-    click.echo("  3. aqueduct run blueprints/<name>.yml")
+    _funnel_success(f"{project_name} ready", err=False)
+    _funnel_echo("\nNext steps:", err=False)
+    _funnel_echo(
+        "  1. Create blueprints/<name>.yml  (see blueprint.template.yml for reference)", err=False
+    )
+    _funnel_echo("  2. aqueduct validate blueprints/<name>.yml", err=False)
+    _funnel_echo("  3. aqueduct run blueprints/<name>.yml", err=False)

@@ -110,7 +110,7 @@ def test_call_tool_redacts_secret_in_run_detail(tmp_path):
         "INSERT INTO run_records VALUES ('run1','bp1','error',"
         "'2026-01-01T00:00:00','2026-01-01T00:01:00',"
         '\'[{"module_id":"m1","status":"error",'
-        '"error":"connect failed with token supersecrettoken123456"}]\', NULL)'
+        '"error":"connect failed with token supersecrettoken123456"}]\', NULL, NULL)'
     )
     conn.close()
 
@@ -135,7 +135,7 @@ def test_list_runs_tool_returns_json_serializable_rows(tmp_path):
     conn.execute(_DDL)
     conn.execute(
         "INSERT INTO run_records VALUES ('run1','bp1','success',"
-        "'2026-01-01T00:00:00','2026-01-01T00:01:00','[]', NULL)"
+        "'2026-01-01T00:00:00','2026-01-01T00:01:00','[]', NULL, NULL)"
     )
     conn.close()
 

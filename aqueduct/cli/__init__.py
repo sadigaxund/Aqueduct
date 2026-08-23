@@ -59,7 +59,7 @@ def _compile_with_warnings(
         return result, list(caught)
     from aqueduct.cli.style import emit_warnings
 
-    emit_warnings(caught, verbose=_verbose, label="compile:")
+    emit_warnings(caught, verbose=_verbose, err=True, label="compile:")
     return result
 
 
@@ -1199,7 +1199,28 @@ class _AqueductCLIGroup(click.Group):
     prog_name="aqueduct",
     message="%(prog)s %(version)s",
 )
-@click.option("-v", "--verbose", is_flag=True, default=False, help="Enable DEBUG logging.")
+@click.option(
+    "-v",
+    "--verbose",
+    "verbosity",
+    count=True,
+    help=(
+        "Increase Aqueduct-side output detail. Repeatable: -v = full narrative "
+        "(untruncated errors/warnings, uncollapsed doctor rows, uncapped probe "
+        "notes, transcript detail); -vv = also show the raw layer (engine/Spark "
+        "startup + log4j output, prompt text, streamed model text). Placed "
+        "before OR after the subcommand (`aqueduct -v run bp.yml` / "
+        "`aqueduct run -v bp.yml`) — the effective level is the max of both. "
+        "Does NOT enable DEBUG logging; use --debug for that."
+    ),
+)
+@click.option(
+    "--debug",
+    is_flag=True,
+    default=False,
+    help="Enable Python DEBUG logging (root logger — library/framework internals, "
+    "distinct from -v's Aqueduct-side output tiers).",
+)
 @click.option(
     "--log-format",
     "log_format",
@@ -1227,7 +1248,8 @@ class _AqueductCLIGroup(click.Group):
 @click.pass_context
 def cli(
     ctx: click.Context,
-    verbose: bool,
+    verbosity: int,
+    debug: bool,
     log_format: str,
     suppress_warnings: tuple[str, ...],
 ) -> None:
@@ -1236,7 +1258,7 @@ def cli(
 
     from aqueduct.warnings import install_cli_formatter, set_default_suppress
 
-    level = logging.DEBUG if verbose else logging.WARNING
+    level = logging.DEBUG if debug else logging.WARNING
 
     if log_format.lower() == "json":
         handler = logging.StreamHandler()
@@ -1250,17 +1272,42 @@ def cli(
         from aqueduct.cli.style import StyledLogFormatter
 
         handler = logging.StreamHandler()
-        handler.setFormatter(StyledLogFormatter(verbose=verbose))
+        handler.setFormatter(StyledLogFormatter(verbose=debug))
 
         class _RuntimeNestedFilter(logging.Filter):
-            """Probe/Assert runtime warnings are displayed nested under their
-            module by `run` (the `↳ [rule_id]` lines). Drop their loose console
-            line here so they aren't printed twice. They remain in the logger
-            for `--log-format json` and pytest's caplog (separate handlers)."""
+            """Probe/Assert/Retry runtime warnings are displayed nested under
+            their module by `run` (the `↳ [rule_id]` lines). Drop their loose
+            console line here so they aren't printed twice. They remain in
+            the logger for `--log-format json` and pytest's caplog (separate
+            handlers).
+
+            Phase 85 F-15 added the four `runtime_retry_*` rule_ids that now
+            ALSO go through the per-module collector
+            (`executor/models.py::_add_module_warning`) via
+            `executor/spark/executor.py` and `executor/duckdb_/executor.py`'s
+            `_with_retry` — hence the exact (bracket-closed) matches below,
+            not a bare `"[runtime_retry"` prefix. `runtime_retry_exhausted_alert`
+            is deliberately EXCLUDED: it fires after that module's
+            `ModuleResult` has already been built (see the comment at its
+            call site in both executors), so it is never routed through the
+            collector and must keep printing here or it would vanish
+            entirely — only the four still-collected rule_ids are hidden."""
+
+            _HIDDEN_PREFIXES = ("[runtime_probe", "[runtime_assert")
+            _HIDDEN_EXACT = (
+                "[runtime_retry_deadline]",
+                "[runtime_retry_exhausted]",
+                "[runtime_retry_non_retriable]",
+                "[runtime_retry_waiting]",
+            )
 
             def filter(self, record: logging.LogRecord) -> bool:
                 m = record.getMessage()
-                return "[runtime_probe" not in m and "[runtime_assert" not in m
+                if any(p in m for p in self._HIDDEN_PREFIXES):
+                    return False
+                if any(e in m for e in self._HIDDEN_EXACT):
+                    return False
+                return True
 
         handler.addFilter(_RuntimeNestedFilter())
         root = logging.getLogger()
@@ -1276,6 +1323,7 @@ def cli(
     set_default_suppress(suppress=list(suppress_warnings))
     ctx.ensure_object(dict)
     ctx.obj["suppress_warnings_cli"] = list(suppress_warnings)
+    ctx.obj["verbosity"] = verbosity
 
     _install_secret_redaction_hooks()
 
@@ -1286,8 +1334,8 @@ def cli(
 
     # Bare `aqueduct` (no subcommand) → branded banner above the help.
     if ctx.invoked_subcommand is None:
-        click.echo(_render_banner())
-        click.echo(ctx.get_help())
+        click.echo(_render_banner(), err=False)
+        click.echo(ctx.get_help(), err=False)
         ctx.exit()
 
 
@@ -1424,6 +1472,7 @@ if __name__ == "__main__":
 # ── extracted command families (registered + re-exported) ──────────────────────
 from .benchmark import benchmark, benchmark_diff_cmd, benchmark_stats_cmd  # noqa: E402,F401
 from .blueprint import blueprint_group, blueprint_history_cmd  # noqa: E402,F401
+from .compile_cmd import compile  # noqa: E402,F401
 from .dev import (  # noqa: E402,F401
     capabilities_check,
     capabilities_docs,
@@ -1435,6 +1484,7 @@ from .dev import (  # noqa: E402,F401
 )
 from .diagnostics import doctor, lint_cmd, schema, validate  # noqa: E402,F401
 from .drift import drift  # noqa: E402,F401
+from .handoff import handoff, handoff_sweep  # noqa: E402,F401
 from .heal import heal  # noqa: E402,F401
 from .mcp import mcp_group, mcp_serve  # noqa: E402,F401
 from .observability import lineage, report, runs, signal  # noqa: E402,F401
@@ -1451,5 +1501,5 @@ from .patch import (  # noqa: E402,F401,F811
     rollback_cmd,
 )
 from .project import completion_cmd, init, test_cmd  # noqa: E402,F401
-from .run import compile, run  # noqa: E402,F401
+from .run import run  # noqa: E402,F401
 from .stores import stores_group, stores_info, stores_migrate  # noqa: E402,F401

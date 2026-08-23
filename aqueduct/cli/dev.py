@@ -26,6 +26,7 @@ import click
 
 from aqueduct import exit_codes
 from aqueduct.cli import cli, style
+from aqueduct.cli.render.funnel import echo as _funnel_echo
 from aqueduct.dev import scaffolds
 from aqueduct.executor import capability_tooling as tooling
 
@@ -68,11 +69,13 @@ def capabilities_check() -> None:
             bad = True
             style.error(_fmt_path(r.path))
             for leaf in r.missing:
-                click.echo(f"    MISSING     {leaf}  (no verdict declared)")
+                _funnel_echo(f"    MISSING     {leaf}  (no verdict declared)", err=False)
             for leaf in r.undeclared:
-                click.echo(f"    UNDECLARED  {leaf}  (needs a real verdict)")
+                _funnel_echo(f"    UNDECLARED  {leaf}  (needs a real verdict)", err=False)
             for leaf in r.orphaned:
-                click.echo(f"    ORPHANED    {leaf}  (not a real leaf — renamed/removed?)")
+                _funnel_echo(
+                    f"    ORPHANED    {leaf}  (not a real leaf — renamed/removed?)", err=False
+                )
 
         # Verdict-test links (Phase 79) — reported, but NOT part of `.ok`/exit
         # code: the build-breaking gate for these lives in the pytest closure
@@ -83,14 +86,18 @@ def capabilities_check() -> None:
         if r.missing_test_links or r.dangling_test_links:
             style.warn(f"{_fmt_path(r.path)} — verdict-test links incomplete:")
             for leaf in r.missing_test_links:
-                click.echo(f"    NO TEST     {leaf}  (supported execution leaf has no tests: id)")
+                _funnel_echo(
+                    f"    NO TEST     {leaf}  (supported execution leaf has no tests: id)",
+                    err=False,
+                )
             for leaf, test_id, reason in r.dangling_test_links:
-                click.echo(f"    DANGLING    {leaf} -> {test_id}  ({reason})")
+                _funnel_echo(f"    DANGLING    {leaf} -> {test_id}  ({reason})", err=False)
 
     if bad:
-        click.echo(
+        _funnel_echo(
             "\nRun `aqueduct dev capabilities sync`, then replace each `undeclared` "
-            "with a real verdict."
+            "with a real verdict.",
+            err=False,
         )
         sys.exit(exit_codes.CONFIG_ERROR)
 
@@ -130,16 +137,17 @@ def capabilities_sync(no_prune: bool) -> None:
         else:
             style.info(f"{rel} — appended {len(r.missing)} leaf/leaves as `undeclared`:")
             for leaf in r.missing:
-                click.echo(f"    {leaf}")
+                _funnel_echo(f"    {leaf}", err=False)
         if r.orphaned:
             verb = "reported (NOT removed — --no-prune)" if no_prune else "removed"
             style.warn(f"{rel} — {len(r.orphaned)} orphaned row(s) {verb}:")
             for leaf in r.orphaned:
-                click.echo(f"    {leaf}")
+                _funnel_echo(f"    {leaf}", err=False)
 
-    click.echo(
+    _funnel_echo(
         "\nNow replace each `undeclared` with a real verdict "
-        "(supported | unsupported | ignored_with_warning)."
+        "(supported | unsupported | ignored_with_warning).",
+        err=False,
     )
 
 
@@ -172,14 +180,19 @@ def capabilities_scaffold(engine: str, out: str | None, force: bool) -> None:
         sys.exit(exit_codes.CONFIG_ERROR)
 
     style.success(f"wrote {_fmt_path(result.path)}")
-    click.echo(
+    _funnel_echo(
         f"  {result.leaves} leaves, ALL `undeclared` "
-        f"({result.grammar_leaves} grammar + {result.config_leaves} config)"
+        f"({result.grammar_leaves} grammar + {result.config_leaves} config)",
+        err=False,
     )
-    click.echo("")
-    click.echo(f"  The build will REFUSE to register engine {engine!r} until every row is a")
-    click.echo("  real verdict (supported | unsupported | ignored_with_warning).")
-    click.echo("  Spark's capabilities.yml is a reference to read, not a file to copy.")
+    _funnel_echo("", err=False)
+    _funnel_echo(
+        f"  The build will REFUSE to register engine {engine!r} until every row is a", err=False
+    )
+    _funnel_echo("  real verdict (supported | unsupported | ignored_with_warning).", err=False)
+    _funnel_echo(
+        "  Spark's capabilities.yml is a reference to read, not a file to copy.", err=False
+    )
 
 
 @dev_capabilities.command("docs")
@@ -254,9 +267,12 @@ def dev_scaffold(
         sys.exit(exit_codes.CONFIG_ERROR)
 
     style.success(f"wrote {_fmt_path(path)}  ({scaffold.kind} → {scaffold.name})")
-    click.echo("")
-    click.echo(f"Add this to your {scaffold.config_target}:")
-    click.echo("")
-    click.echo(scaffold.config_snippet)
+    _funnel_echo("", err=False)
+    _funnel_echo(f"Add this to your {scaffold.config_target}:", err=False)
+    _funnel_echo("", err=False)
+    # Structured result the user copies verbatim into a config file — never
+    # wrapped/truncated, so it stays raw click.echo (explicit err=False)
+    # rather than funnel.echo.
+    click.echo(scaffold.config_snippet, err=False)
     for step in scaffold.next_steps:
         style.info(step)

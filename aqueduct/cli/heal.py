@@ -28,13 +28,13 @@ from aqueduct.cli.output import emit
 def _print_prompt(prompt: dict, fmt: str) -> None:
     """Print system+user prompt to stdout in the requested format."""
     if fmt == "json":
-        emit(prompt, fmt="json")
+        emit(prompt, fmt="json", err=False)
     else:
         sep = "─" * 72
-        click.echo(f"## SYSTEM PROMPT\n{sep}")
-        click.echo(prompt["system"])
-        click.echo(f"\n## USER PROMPT\n{sep}")
-        click.echo(prompt["user"])
+        click.echo(f"## SYSTEM PROMPT\n{sep}", err=False)
+        click.echo(prompt["system"], err=False)
+        click.echo(f"\n## USER PROMPT\n{sep}", err=False)
+        click.echo(prompt["user"], err=False)
 
 
 @cli.command()
@@ -114,7 +114,10 @@ def heal(
     from aqueduct.config import ConfigError, load_config
 
     if not run_id:
-        _error("RUN_ID is required — `aqueduct heal <run_id>` (find ids via `aqueduct runs`)")
+        _error(
+            "RUN_ID is required — `aqueduct heal <run_id>` (find ids via `aqueduct runs`)",
+            err=True,
+        )
         sys.exit(exit_codes.USAGE_ERROR)
 
     try:
@@ -126,7 +129,7 @@ def heal(
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
-        _error(f"config error: {exc}")
+        _error(f"config error: {exc}", err=True)
         sys.exit(exit_codes.CONFIG_ERROR)
 
     # ── -s/--set overrides (config-only) ───────────────────────────────────────
@@ -137,7 +140,7 @@ def heal(
             _cfg_set_nested, _ = route_overrides(set_items, allow_blueprint=False)
             cfg = apply_to_model(cfg, _cfg_set_nested)
         except OverrideError as exc:
-            _error(f"{exc}")
+            _error(f"{exc}", err=True)
             sys.exit(exit_codes.CONFIG_ERROR)
 
     eng = cfg.agent
@@ -296,14 +299,22 @@ def heal(
 
     click.echo(
         f"↻ heal  run={run_id}  module={target_module}  "
-        f"provider={resolved_provider}  model={resolved_model}"
+        f"provider={resolved_provider}  model={resolved_model}",
+        err=True,
     )
 
     from aqueduct.agent import resolve_budget as _resolve_budget
     from aqueduct.agent.transcript import TranscriptWriter
     from aqueduct.cli.style import colorize_line as _style_heal_line
+    from aqueduct.cli.verbosity import resolve_verbosity
 
-    _transcript = TranscriptWriter(verbose=False, write=lambda s: emit(_style_heal_line(s)))
+    _verbosity = resolve_verbosity()
+    # The heal transcript is narrative, same rule as `aqueduct run`'s
+    # self-healing block — stderr, always (see the identical fix at
+    # run.py's TranscriptWriter construction).
+    _transcript = TranscriptWriter(
+        verbose=_verbosity >= 1, write=lambda s: emit(_style_heal_line(s), err=True)
+    )
 
     _budget = _resolve_budget(
         getattr(cfg.agent, "budget", None),
@@ -431,5 +442,8 @@ def heal(
 
     _patch_store = make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, patches_path)
     stage_patch_for_human(patch, patches_path, failure_ctx, patch_store=_patch_store)
-    click.echo(f"✓ patch staged → {_patch_store.location_label}/pending/  (id={patch.patch_id})")
-    click.echo(f"  apply with: aqueduct patch apply {patch.patch_id} --blueprint <path>")
+    click.echo(
+        f"✓ patch staged → {_patch_store.location_label}/pending/  (id={patch.patch_id})",
+        err=False,
+    )
+    click.echo(f"  apply with: aqueduct patch apply {patch.patch_id} --blueprint <path>", err=False)

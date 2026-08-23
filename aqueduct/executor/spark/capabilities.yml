@@ -715,3 +715,38 @@ leaves:
     support: supported
     tests:
       - tests/test_executor/test_executor_ingress.py::test_ingress_valid_parquet
+
+  # ── tooling.* / observability.* (Phase 85 Wave 4) ──────────────────────
+  # Tooling/host capabilities — no Blueprint field spells one of these ids;
+  # see capability_leaves.py's "Tooling/host leaves" note. Excluded from
+  # execution_leaves(), so `tests:` here is voluntary evidence, not enforced
+  # by test_verdict_test_links.py.
+  tooling.test_runner:
+    support: supported
+    hint: "aqueduct test (test_cmd, aqueduct/cli/project.py) runs module unit tests against inline data via aqueduct.executor.spark.test_runner.run_test_file over a real (local by default) SparkSession."
+    tests:
+      - tests/test_executor/test_executor_spark_test_runner.py
+  tooling.drift_schema_read:
+    support: supported
+    hint: "aqueduct drift reads a live source schema via the ExecutorProtocol read_source_schema seam, backed by aqueduct.executor.spark.ingress.read_source_schema."
+    tests:
+      - tests/test_agent/test_toolbox_engine_routing.py::TestSparkPathUnchanged::test_get_source_schema_still_routes_through_spark_for_spark_engine
+  tooling.doctor.table_exists:
+    support: supported
+    hint: "aqueduct doctor's Ingress/Egress table-existence check builds a SparkSession and calls spark.catalog.tableExists(table_val) for any module with a table: config key."
+  tooling.doctor.cloud_preflight:
+    support: supported
+    hint: "aqueduct doctor --preflight's cloud-URI object-existence check builds a SparkSession and probes s3a/gs/abfss paths via Spark's Hadoop FileSystem, using engine.spark.conf credentials."
+    tests:
+      - tests/test_cli/test_cli_doctor_preflight.py::test_preflight_ingress_object_exists
+      - tests/test_cli/test_cli_doctor_preflight.py::test_preflight_ingress_object_missing
+  tooling.doctor.session_preflight:
+    support: supported
+    hint: "check_java()/check_spark(preflight=True) (aqueduct/doctor/__init__.py) build a real SparkSession with the project's engine.spark.conf and run spark.range(1).count(), verifying the session actually builds before a run starts."
+    tests:
+      - tests/test_cli/test_cli_doctor_new.py::test_preflight_spark_session_failure
+  observability.module_metrics.per_module:
+    support: supported
+    hint: "The Spark executor writes a module_metrics row (duration, row/byte counts) for every real module dispatch (_write_stage_metrics, spark/executor.py), not only Handoff."
+    tests:
+      - tests/test_executor/test_executor_spark_metrics.py::test_egress_writes_module_metrics_on_success

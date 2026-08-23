@@ -921,6 +921,13 @@ def generate_agent_patch(
                     escalated=escalate_next,
                     model_cascade_position=model_cascade_position,
                 )
+                # Transcript display data (transient — not persisted to
+                # heal_attempts). `sig.normalized_message` is hash-normalised
+                # (digits→N, quotes→"X") and unreadable as gate-ladder detail;
+                # `vfeedback` is the real "Lineage gate: ... | Sandbox gate:
+                # ..." string this closure/seam just built, same pattern as
+                # the provider-error and parse-error `_aq_detail` sites above.
+                rec._aq_detail = (vfeedback or "").strip()[:200] or None
                 _fire_turn(rec)
 
                 stop = tracker.check_stop()

@@ -6,7 +6,6 @@ commands register onto `cli` when imported at the bottom of __init__.
 
 from __future__ import annotations
 
-import json
 import sys
 from typing import Any
 
@@ -15,1108 +14,146 @@ import click
 import aqueduct.cli as _aqcli  # noqa: E402  (monkeypatch-able helpers)
 from aqueduct import exit_codes
 from aqueduct.cli import (
-    _apply_warnings_from_cfg,
     _check_heal_guardrails,
-    _compile_with_warnings,
     _env_options,
     _rule,
     cli,
 )
-from aqueduct.cli.output import emit
+from aqueduct.cli.render.funnel import emit
+from aqueduct.cli.run_setup import (
+    _do_compile,
+    _emit_explain_regressions,
+    _load_engine_config,
+    _setup_surveyor,
+    _zero_token_attempt,
+)
 from aqueduct.executor.models import concise_error
 from aqueduct.models import ModuleType
 
+# ── Phase 85 Wave 2 — classified failure label (SCREEN 2/6) ─────────────────
+# `mr.error` is free text; the ✗ line wants a SHORT classified label ("SQL
+# binder error") with the full message wrapped underneath, not a bare
+# 300-char truncated one-liner. `docs/failure_taxonomy.md` catalogs
+# recurring dev-facing BUG classes for audits — it has no per-message
+# runtime classification to reuse. `FailureContext.error_class` DOES: it is
+# the SAME structured field `_extract_structured_error`
+# (`aqueduct/surveyor/error_extraction.py` for Spark,
+# `aqueduct/executor/duckdb_/error_extraction.py` for DuckDB) already
+# populates from the concrete exception class name (DuckDB) or Spark
+# condition string. This table maps that existing field to a short label —
+# no parallel taxonomy, just a display lookup over data Aqueduct already
+# extracts.
+_ERROR_CLASS_LABELS: dict[str, str] = {
+    "BinderException": "SQL binder error",
+    "CatalogException": "missing table or column",
+    "ParserException": "SQL syntax error",
+    "SyntaxException": "SQL syntax error",
+    "ConversionException": "type conversion error",
+    "ConstraintException": "constraint violation",
+    "IOException": "I/O error",
+    "TransactionException": "transaction error",
+    "AnalysisException": "analysis error",
+}
 
-@cli.command()
-@click.argument("blueprint", type=click.Path(exists=True, dir_okay=False))
-@click.option("-o", "--output", default="-", show_default=True, help="Output path (- = stdout)")
-@click.option("-p", "--profile", default=None, help="Context profile to activate")
-@click.option(
-    "--ctx",
-    multiple=True,
-    metavar="KEY=VALUE",
-    help="Context override. Repeatable.",
-)
-@click.option(
-    "--execution-date",
-    "execution_date_str",
-    default=None,
-    metavar="YYYY-MM-DD",
-    help="Logical execution date for @aq.date.* functions",
-)
-@click.option(
-    "--show",
-    "show",
-    type=click.Choice(["manifest", "provenance", "inputs", "all"], case_sensitive=False),
-    default="manifest",
-    show_default=True,
-    help=(
-        "Which section of the compiled artefact to emit. "
-        "manifest=full Manifest JSON (current default); provenance=just the "
-        "ProvenanceMap as a readable table; inputs=just the inputs_fingerprint; "
-        "all=the full Manifest plus the rendered provenance + inputs tables."
-    ),
-)
-def compile(
-    blueprint: str,
-    output: str,
-    profile: str | None,
-    ctx: tuple[str, ...],
-    execution_date_str: str | None,
-    show: str,
-) -> None:
-    """Parse and compile a Blueprint to a fully-resolved Manifest JSON.
 
-    Use --show provenance to inspect where every config value came from
-    (literal vs ${ctx.*} vs @aq.* vs arcade context_override) — useful when
-    debugging which Blueprint expression resolved to which runtime value.
+def _classify_error_label(error_class: str | None) -> str:
+    """Short classified label for the ✗ failure line. See the module-level
+    note above ``_ERROR_CLASS_LABELS`` for where ``error_class`` comes from
+    and why no new taxonomy was invented."""
+    ec = (error_class or "").strip()
+    if ec in _ERROR_CLASS_LABELS:
+        return _ERROR_CLASS_LABELS[ec]
+    if ec.startswith("UNRESOLVED_COLUMN"):
+        return "unresolved column"
+    if ec == "PREDICTED_SCHEMA_DRIFT":
+        return "schema drift detected"
+    if ec:
+        import re as _re
+
+        words = _re.findall(r"[A-Z][a-z0-9]*|[A-Z0-9]+", ec.replace(".", " "))
+        if words:
+            return " ".join(w.lower() for w in words[:4])
+    return "execution error"
+
+
+# ── F-16 — print validation gates AS THEY RUN (SCREEN 3/7's numbered
+# ladder) ────────────────────────────────────────────────────────────────
+# Display-only: `_run_patch_gates_inline` (`aqueduct/cli/__init__.py`, W7-
+# owned — not edited here) already computes lineage/sandbox/explain
+# results; this only renders them. Copies `cli/patch.py::_gate_status_line`
+# icon-per-`GateStatus` PATTERN (dict-dispatch, not an import from
+# patch.py, which Wave 2 does not own) — with an explicit fallback for an
+# unrecognised status so a future `GateStatus` member (e.g. the sandbox
+# tri-state `NOT_REQUESTED`) never crashes or silently vanishes
+# (AGENTS.md "no silent no-ops").
+_GATE_ICON: dict[str, tuple[str, str]] = {
+    "pass": ("✓", "green"),
+    "warn": ("⚠", "yellow"),
+    "fail": ("✗", "red"),
+    "not_applicable": ("·", "bright_black"),
+    "unavailable": ("⊘", "yellow"),
+    "observed": ("·", "bright_black"),
+    "not_requested": ("·", "bright_black"),
+}
+
+
+def _gate_icon(status: str | None) -> tuple[str, str]:
+    if status in _GATE_ICON:
+        return _GATE_ICON[status]
+    return "⚠", "yellow"  # unknown status — never silently vanish
+
+
+def _print_gate_ladder(g2, g3, g4, *, verbosity: int, gate1_ok: bool = True) -> None:
+    """Print gate 1-4 outcomes for one candidate patch as they complete.
+
+    ``g2``/``g3``/``g4`` are ``lineage_res``/``sandbox_res``/``explain_res``
+    from ``_run_patch_gates_inline`` (``None`` when that gate did not run —
+    e.g. a heal-cache replay that skipped straight to sandbox). Gate 1
+    (policy/guardrails) already ran in-loop via ``_check_guardrails`` before
+    a candidate ever reaches here, so ``gate1_ok`` is a plain bool, not a
+    ``GateStatus``. Default: one compact line, collapsing to "gates 1-4
+    passed" when nothing failed or warned. ``-v``: one line per gate.
     """
-    from pathlib import Path
-
-    from aqueduct.cli import _load_config_with_env
-    from aqueduct.compiler.compiler import CompileError
-    from aqueduct.compiler.compiler import compile as compiler_compile
-    from aqueduct.config import ConfigError
-    from aqueduct.parser.parser import ParseError, parse
-
-    try:
-        # Auto-discover aqueduct.yml (CWD walk-up) like every other command.
-        _cfg = _load_config_with_env(None, quiet=True)
-        _apply_warnings_from_cfg(_cfg)
-    except ConfigError:
-        _cfg = None  # missing/invalid aqueduct.yml is OK for `aqueduct compile`
-
-    cli_overrides: dict[str, str] = {}
-    for item in ctx:
-        if "=" not in item:
-            click.echo(f"--ctx flag must be KEY=VALUE, got: {item!r}", err=True)
-            sys.exit(exit_codes.USAGE_ERROR)
-        k, _, v = item.partition("=")
-        cli_overrides[k.strip()] = v
-
-    execution_date = None
-    if execution_date_str:
-        from datetime import date as _date
-
-        try:
-            execution_date = _date.fromisoformat(execution_date_str)
-        except ValueError:
-            click.echo(
-                f"✗ --execution-date must be YYYY-MM-DD, got: {execution_date_str!r}", err=True
-            )
-            sys.exit(exit_codes.USAGE_ERROR)
-
-    try:
-        bp = parse(blueprint, profile=profile, cli_overrides=cli_overrides or None)
-    except ParseError as exc:
-        click.echo(f"✗ {exc}", err=True)
-        sys.exit(exit_codes.CONFIG_ERROR)
-
-    try:
-        _dep = getattr(_cfg, "deployment", None) if _cfg is not None else None
-        manifest = _compile_with_warnings(
-            compiler_compile,
-            bp,
-            blueprint_path=Path(blueprint),
-            execution_date=execution_date,
-            deployment_env=getattr(_dep, "env", None),
-            deployment_target=getattr(_dep, "target", None),
-            engine=getattr(_dep, "engine", None) or "spark",
-        )
-    except CompileError as exc:
-        click.echo(f"✗ {exc}", err=True)
-        sys.exit(exit_codes.CONFIG_ERROR)
-
-    rendered = _render_compile_show(manifest, show.lower())
-
-    if output == "-":
-        click.echo(rendered)
-    else:
-        Path(output).write_text(rendered, encoding="utf-8")
-        click.echo(f"Compile artefact written → {output}  (--show={show})")
-
-
-def _render_compile_show(manifest: Any, show: str) -> str:
-    """Render the compile output for the chosen --show selector."""
-    manifest_dict = manifest.to_dict()
-
-    if show == "manifest":
-        return json.dumps(manifest_dict, indent=2, ensure_ascii=False)
-
-    if show == "inputs":
-        return _format_inputs_fingerprint(manifest_dict.get("inputs_fingerprint") or {})
-
-    if show == "provenance":
-        return _format_provenance_table(manifest_dict.get("provenance_map") or {})
-
-    # "all" — full manifest + readable tables appended
-    return "\n".join(
-        [
-            json.dumps(manifest_dict, indent=2, ensure_ascii=False),
-            "",
-            "── Provenance ────────────────────────────────────────────────────────",
-            _format_provenance_table(manifest_dict.get("provenance_map") or {}),
-            "",
-            "── Inputs fingerprint ────────────────────────────────────────────────",
-            _format_inputs_fingerprint(manifest_dict.get("inputs_fingerprint") or {}),
-        ]
-    )
-
-
-def _format_inputs_fingerprint(fingerprint: dict) -> str:
-    """Render inputs_fingerprint as a per-module table."""
-    if not fingerprint:
-        return "(no Ingress modules; inputs_fingerprint is empty)"
-    rows: list[tuple[str, str, str, str]] = []
-    for module_id, entry in fingerprint.items():
-        path = str(entry.get("path") or "")
-        size_b = entry.get("size_bytes")
-        mtime = entry.get("last_modified") or "—"
-        size = f"{size_b:,} B" if isinstance(size_b, int) else "—"
-        rows.append((module_id, path, size, str(mtime)))
-    widths = [
-        max(len(r[c]) for r in rows + [("module_id", "path", "size", "last_modified")])
-        for c in range(4)
-    ]
-    header = (
-        "module_id".ljust(widths[0])
-        + "  "
-        + "path".ljust(widths[1])
-        + "  "
-        + "size".ljust(widths[2])
-        + "  "
-        + "last_modified"
-    )
-    sep = "  ".join("-" * w for w in widths)
-    body = "\n".join(
-        r[0].ljust(widths[0])
-        + "  "
-        + r[1].ljust(widths[1])
-        + "  "
-        + r[2].ljust(widths[2])
-        + "  "
-        + r[3]
-        for r in rows
-    )
-    return "\n".join([header, sep, body])
-
-
-def _format_provenance_table(provenance_map: dict) -> str:
-    """Render ProvenanceMap as a readable per-module / per-context table."""
-    out: list[str] = []
-
-    context_section = provenance_map.get("context") or {}
-    if context_section:
-        out.append("# Context")
-        out.append(_format_provenance_rows((key, prov) for key, prov in context_section.items()))
-        out.append("")
-
-    modules_section = provenance_map.get("modules") or {}
-    for module_id, module_prov in modules_section.items():
-        out.append(f"# Module: {module_id}")
-        cfg_prov = (module_prov or {}).get("config") or {}
-        if not cfg_prov:
-            out.append("  (no config entries — module had empty config block)")
-            out.append("")
+    entries = [(1, "policy", "pass" if gate1_ok else "fail", None)]
+    for num, name, res in ((2, "lineage", g2), (3, "sandbox", g3), (4, "explain", g4)):
+        if res is None:
             continue
-        out.append(_format_provenance_rows((key, prov) for key, prov in cfg_prov.items()))
-        out.append("")
-    if not out:
-        return "(provenance_map is empty — compile from source first)"
-    return "\n".join(out).rstrip()
+        entries.append((num, name, res.status, getattr(res, "detail", None)))
 
-
-def _format_provenance_rows(pairs) -> str:
-    """Helper: render an iterable of (key, ValueProvenance-dict) into aligned rows."""
-    rows: list[tuple[str, str, str, str]] = []
-    for key, prov in pairs:
-        src_type = str((prov or {}).get("source_type") or "?")
-        original = str((prov or {}).get("original_expression") or "")
-        resolved = (prov or {}).get("resolved_value")
-        rows.append((str(key), src_type, original, "" if resolved is None else str(resolved)))
-    if not rows:
-        return "  (empty)"
-    headers = ("key", "source_type", "original_expression", "resolved_value")
-    widths = [max(len(r[c]) for r in [headers] + rows) for c in range(4)]
-    header = "  " + "  ".join(h.ljust(widths[i]) for i, h in enumerate(headers))
-    sep = "  " + "  ".join("-" * w for w in widths)
-    body = "\n".join("  " + "  ".join(r[i].ljust(widths[i]) for i in range(4)) for r in rows)
-    return "\n".join([header, sep, body])
-
-
-def _zero_token_attempt(sig_exact):
-    """Return a synthetic ``SimpleNamespace`` attempt record for a zero‑token resolution.
-
-    Used by the pending‑cache‑hit and exact‑replay paths so a single factory
-    produces the record rather than two duplicated inline constructors.
-    """
-    from types import SimpleNamespace
-
-    return SimpleNamespace(
-        attempt_num=0,
-        signature=sig_exact,
-        tokens_in=0,
-        tokens_out=0,
-        latency_ms=0,
-        gate_that_rejected=None,
-        escalated=False,
-    )
-
-
-from dataclasses import dataclass as _dc_frozen  # noqa: E402  (intentional mid-file import)
-from typing import TYPE_CHECKING as _t  # noqa: E402  (intentional mid-file import)
-
-if _t:
-    from aqueduct.config import AqueductConfig, WebhookEndpointConfig
-    from aqueduct.executor.spark.probe import ProbeSampling as _PS
-
-
-@_dc_frozen(frozen=True)
-class _LoadConfigResult:
-    """Return-type bundle for ``_load_engine_config`` — all values derived from
-    config/env/CLI resolution, before parse/compile/execute."""
-
-    cfg: AqueductConfig
-    resolved_store_dir: str | None
-    resolved_webhook: WebhookEndpointConfig | None
-    engine: str
-    master_url: str
-    probe_sampling: _PS
-    blueprint_set_nested: dict
-    _using_default_obs_path: bool
-    _obs_routing_base: str
-    execute: object  # get_executor callable — deferred type
-    blueprint_str: str  # = str(blueprint_abs)
-    danger_pairs: tuple = ()  # (rule_id, message) — emitted by the caller after
-    # the `· env/overrides/secrets ·` preamble so info lines stay grouped
-
-
-def _load_engine_config(
-    blueprint_abs,
-    config_path_abs,
-    store_dir_abs,
-    webhook,
-    set_items,
-    env_file,
-    cli_env,
-    _project_root,
-):
-    """Phase 1 — config load + env + --set overrides → ``_LoadConfigResult``.
-
-    Extracted from the ``run()`` god-function (T18).  No behaviour change.
-    """
-    import sys as _sys
-
-    from aqueduct.cli import _resolve_and_load_env as _renv
-    from aqueduct.cli.style import error as _err
-    from aqueduct.cli.style import warn as _warn
-
-    # ── .env loading ───────────────────────────────────────────────────────────
-    _renv(env_file, _project_root / blueprint_abs.name, cli_env=cli_env)
-    blueprint_str = str(blueprint_abs)
-
-    # ── Load engine config ─────────────────────────────────────────────────────
-    try:
-        from aqueduct.config import ConfigError, WebhookEndpointConfig
-        from aqueduct.config import load_config as _load_cfg
-
-        cfg = _load_cfg(config_path_abs)
-        from aqueduct.cli import _apply_warnings_from_cfg
-
-        _apply_warnings_from_cfg(cfg)
-    except ConfigError as exc:
-        _err(f"config error: {exc}")
-        _sys.exit(exit_codes.CONFIG_ERROR)
-
-    # ── -s/--set overrides (top precedence, in-memory) ──────────────────────────
-    blueprint_set_nested: dict = {}
-    if set_items:
-        from aqueduct.overrides import OverrideError, apply_to_model, route_overrides
-
-        try:
-            _config_set_nested, blueprint_set_nested = route_overrides(
-                set_items, allow_blueprint=True
+    all_clean = all(status in ("pass", "not_applicable", "observed") for _, _, status, _ in entries)
+    if verbosity < 1:
+        if all_clean:
+            click.echo(
+                click.style(f"  ✓ gates {entries[0][0]}-{entries[-1][0]} passed", fg="green"),
+                err=True,
             )
-            cfg = apply_to_model(cfg, _config_set_nested)
-            if _config_set_nested:
-                # `--set` overlays AFTER `load_config()` already ran its own
-                # governance gates, so it bypasses both: re-run them here so
-                # `--set stores.observability.backend=postgres` without the
-                # extra installed gets the same ConfigError + install hint the
-                # file-based path gets (not a bare ImportError at first
-                # store use), and an engine-ignored `--set engine.<x>.*` key
-                # still emits the suppressible `engine_key_ignored` warning.
-                from aqueduct.config import _validate_store_backends, _warn_ignored_config_keys
-
-                _validate_store_backends(cfg.stores)
-                _warn_ignored_config_keys(cfg)
-        except OverrideError as exc:
-            _err(str(exc))
-            _sys.exit(exit_codes.CONFIG_ERROR)
-        except ConfigError as exc:
-            _err(f"config error: {exc}")
-            _sys.exit(exit_codes.CONFIG_ERROR)
-        if _config_set_nested.get("danger"):
-            _warn(
-                f"--set DANGER override(s) (single-run, NOT persisted): "
-                f"{_config_set_nested['danger']}"
-            )
-
-    # ── Store dir resolution ───────────────────────────────────────────────────
-    # 2.0: the duckdb observability path is a routing DIRECTORY only (config
-    # load rejects `.db`-suffixed paths) — per-blueprint files always live at
-    # `<base>/<blueprint_id>/observability.db`. `--store-dir` bypasses routing.
-    from aqueduct.config import DEFAULT_OBS_ROUTING_ROOT
-
-    _using_default_obs_path = False
-    _obs_routing_base = DEFAULT_OBS_ROUTING_ROOT
-    if store_dir_abs:
-        resolved_store_dir = store_dir_abs
-    else:
-        resolved_store_dir = None
-        _observability_path = cfg.stores.observability.path
-        if cfg.stores.observability.backend == "duckdb":
-            _using_default_obs_path = True
-            if _observability_path is not None:
-                _obs_routing_base = _observability_path
-
-    resolved_webhook = WebhookEndpointConfig(url=webhook) if webhook else cfg.webhooks.on_failure
-    engine = cfg.deployment.engine
-    master_url = cfg.engine.spark.master_url
-
-    # ── Danger settings startup warning ──────────────────────────────────────
-    danger_pairs = []
-    if cfg.danger.allow_full_probe_actions:
-        danger_pairs.append(
-            (
-                "danger-full-probe-actions",
-                "allow_full_probe_actions=true — full Spark actions in Probes enabled",
-            )
-        )
-    if cfg.danger.allow_multi_patch:
-        danger_pairs.append(
-            (
-                "danger-multi-patch",
-                "allow_multi_patch=true — successive LLM patches without human review",
-            )
-        )
-    if cfg.danger.allow_full_preflight:
-        danger_pairs.append(
-            (
-                "danger-full-preflight",
-                "allow_full_preflight=true — full-dataset sandbox replay (no Egress writes)",
-            )
-        )
-    if cfg.danger.allow_skip_sandbox:
-        danger_pairs.append(
-            (
-                "danger-skip-sandbox",
-                "allow_skip_sandbox=true — patches go straight to production, no sandbox",
-            )
-        )
-    if cfg.danger.allow_command_hooks:
-        danger_pairs.append(
-            (
-                "danger-command-hooks",
-                "allow_command_hooks=true — blueprint `command:` hooks run arbitrary subprocesses",
-            )
-        )
-    # Emission deferred to the caller (after the info-line preamble) so the
-    # `⚠ danger` block doesn't interleave the dim `· env/overrides/secrets ·` lines.
-
-    # ── Executor resolve ──────────────────────────────────────────────────────
-    # Phase 78 Step 2: get_executor() resolves through the aqueduct.engines
-    # registry (ExecutorProtocol) and raises UnknownEngineError (an
-    # AqueductError) for an unregistered engine — kept alongside
-    # NotImplementedError/ValueError so any pre-registration-seam caller that
-    # still raises those (or a future engine that does) reports the same
-    # clean CONFIG_ERROR exit instead of an unhandled crash.
-    try:
-        from aqueduct.errors import AqueductError
-        from aqueduct.executor import get_executor
-
-        execute = get_executor(engine)
-    except (NotImplementedError, ValueError, AqueductError) as exc:
-        _err(f"engine error: {exc}")
-        _sys.exit(exit_codes.CONFIG_ERROR)
-
-    # ── Probe sampling ────────────────────────────────────────────────────────
-    from aqueduct.executor.spark.probe import ProbeSampling
-
-    probes_cfg = cfg.probes
-    probe_sampling = ProbeSampling(
-        max_sample_rows=probes_cfg.max_sample_rows,
-        default_sample_fraction=probes_cfg.default_sample_fraction,
-    )
-
-    return _LoadConfigResult(
-        cfg=cfg,
-        resolved_store_dir=resolved_store_dir,
-        resolved_webhook=resolved_webhook,
-        engine=engine,
-        master_url=master_url,
-        probe_sampling=probe_sampling,
-        blueprint_set_nested=blueprint_set_nested,
-        _using_default_obs_path=_using_default_obs_path,
-        _obs_routing_base=_obs_routing_base,
-        execute=execute,
-        blueprint_str=blueprint_str,
-        danger_pairs=tuple(danger_pairs),
-    )
-
-
-@_dc_frozen(frozen=True)
-class _CompileResult:
-    """Return-type bundle for ``_do_compile`` — parse + compile → manifest + store wiring."""
-
-    manifest: object  # Manifest
-    bundle: object  # StoreBundle
-    depot: object  # DepotStore
-    depots_wrapped: dict
-    execution_date: object
-    cli_overrides: dict
-    compile_warnings: list  # captured AQ-WARN records, emitted after the run header
-
-
-def _emit_explain_regressions(g4) -> None:
-    """Surface explain-gate plan regressions as rule_id'd warnings.
-
-    Standardised (``⚠ [explain_regression] …`` via the output funnel, greppable +
-    suppressible) and called on BOTH the LLM-apply and the zero-token replay
-    paths, so a replayed patch's plan regression is no longer silently dropped
-    while the LLM path printed it."""
-    if g4 is None or getattr(g4, "status", None) != "warn":
+            return
+        bits = []
+        for num, name, status, _detail in entries:
+            icon, color = _gate_icon(status)
+            bits.append(click.style(f"{num} {name} {icon}", fg=color))
+        click.echo("  · gates: " + "  ".join(bits), err=True)
         return
-    from aqueduct.cli.output import warn as _warn
-
-    for _r in getattr(g4, "regressions", ()) or ():
-        _warn("explain_regression", _r.detail)
-
-
-def _do_compile(
-    blueprint,
-    profile,
-    ctx,
-    execution_date_str,
-    store_dir_abs,
-    cfg,
-    verbose,
-    blueprint_set_nested,
-):
-    """Phase 2 — parse blueprint + build stores + compile → ``_CompileResult``."""
-    try:
-        import sys as _sys
-        from pathlib import Path as _P
-
-        from aqueduct.cli import _compile_with_warnings
-        from aqueduct.cli.style import error as _err
-        from aqueduct.compiler.compiler import CompileError
-        from aqueduct.compiler.compiler import compile as compiler_compile
-        from aqueduct.depot.depot import DepotStore as _DS
-        from aqueduct.parser.parser import ParseError
-        from aqueduct.parser.parser import parse as _parse
-    except ImportError as exc:
-        raise RuntimeError(f"compile dependencies missing: {exc}") from exc
-
-    cli_overrides: dict[str, str] = {}
-    for item in ctx:
-        if "=" not in item:
-            click.echo(f"--ctx flag must be KEY=VALUE, got: {item!r}", err=True)
-            _sys.exit(exit_codes.USAGE_ERROR)
-        k, _, v = item.partition("=")
-        cli_overrides[k.strip()] = v
-
-    # ── Parse --execution-date ─────────────────────────────────────────────────
-    execution_date = None
-    if execution_date_str:
-        from datetime import date as _date
-
-        try:
-            execution_date = _date.fromisoformat(execution_date_str)
-        except ValueError:
-            click.echo(
-                f"\u2717 --execution-date must be YYYY-MM-DD, got: {execution_date_str!r}", err=True
-            )
-            _sys.exit(exit_codes.USAGE_ERROR)
-
-    # ── Parse ──────────────────────────────────────────────────────────────────
-    try:
-        if blueprint_set_nested:
-            import yaml as _yaml
-
-            from aqueduct.overrides import deep_merge as _deep_merge
-            from aqueduct.parser.parser import parse_dict
-
-            _raw_bp = _yaml.safe_load(_P(blueprint).read_text(encoding="utf-8")) or {}
-            _raw_bp = _deep_merge(_raw_bp, blueprint_set_nested)
-            bp = parse_dict(
-                _raw_bp,
-                base_dir=_P(blueprint).parent,
-                profile=profile,
-                cli_overrides=cli_overrides or None,
-            )
-        else:
-            bp = _parse(blueprint, profile=profile, cli_overrides=cli_overrides or None)
-    except ParseError as exc:
-        _err(f"parse error: {exc}")
-        _sys.exit(exit_codes.CONFIG_ERROR)
-
-    # ── Build per-run store bundle ─────────────────────────────────────────────
-    from aqueduct.stores import get_stores
-
-    bundle = get_stores(cfg, store_dir_override=store_dir_abs, blueprint_id=bp.id)
-    depot = _DS(backend=bundle.depot)
-    depots_wrapped = {n: _DS(backend=s) for n, s in bundle.depots.items()}
-
-    # ── Compile ────────────────────────────────────────────────────────────────
-    try:
-        manifest, compile_warnings = _compile_with_warnings(
-            compiler_compile,
-            bp,
-            blueprint_path=_P(blueprint),
-            depot=depot,
-            depots=depots_wrapped,
-            execution_date=execution_date,
-            secrets_provider=cfg.secrets.provider,
-            secrets_region=cfg.secrets.region,
-            secrets_resolver=cfg.secrets.resolver,
-            deployment_env=getattr(cfg.deployment, "env", None),
-            deployment_target=getattr(cfg.deployment, "target", None),
-            engine=getattr(cfg.deployment, "engine", "spark"),
-            _verbose=verbose,
-            _defer=True,  # emit after the run header (tier-2 blueprint warnings)
-        )
-    except CompileError as exc:
-        _err(f"compile error: {exc}")
-        _sys.exit(exit_codes.CONFIG_ERROR)
-
-    return _CompileResult(
-        manifest=manifest,
-        bundle=bundle,
-        depot=depot,
-        depots_wrapped=depots_wrapped,
-        execution_date=execution_date,
-        cli_overrides=cli_overrides,
-        compile_warnings=compile_warnings,
-    )
+    for num, name, status, detail in entries:
+        icon, color = _gate_icon(status)
+        line = click.style(f"  {num} {name}", fg=color) + f"  {click.style(icon, fg=color)}"
+        if detail and status not in ("pass", "not_applicable", "observed"):
+            line += f"  {detail}"
+        click.echo(line, err=True)
 
 
-class _SessionHolder:
-    """Mutable single-slot box for the run's CURRENT single-engine session,
-    plus the fingerprint of the config it was built from.
-
-    ``_execute_target`` (below) rebuilds the session whenever the manifest it
-    is about to execute would resolve a DIFFERENT ``engine_config`` than the
-    one the LIVE session carries — never execute a Manifest on a session
-    built from a different Manifest (cross-engine remediation; see
-    ``session_config_fingerprint`` in ``aqueduct/executor/session_config.py``
-    for what goes into that comparison and why). This subsumes the earlier
-    Phase 82 fix (``_rebuild_session_for_patch``, since removed), which only
-    rebuilt before a PATCHED retry — it never caught the matching bug in the
-    other direction: the outer heal loop's baseline re-execution of the
-    ORIGINAL manifest, at the top of ``while True:``, running on whatever
-    session a FAILED patch left behind. Two independent consumers need to
-    observe whichever session is CURRENT at the moment they run, never the
-    one that existed when they were defined:
-
-      - the ``atexit`` closer registered in ``_setup_surveyor`` — a plain
-        ``atexit.register(lambda: close(session))`` closing over a local
-        variable would freeze on whatever session existed when
-        ``_setup_surveyor`` returned (that function's own ``session`` name
-        is a dead alias by the time a heal retry rebuilds one), so the
-        pre-patch session would leak (never closed) and the rebuilt one
-        would double-close nothing;
-      - every session consumer inside the ``run`` command itself
-        (``_execute_target``, the terminal ``on_success``/``on_failure``
-        hooks, the agentic ``ToolBox``) — reading a bare local ``session``
-        variable would work for these (ordinary late-binding closure
-        semantics inside the SAME function), but mixing "read the holder"
-        and "read the local var" is the kind of inconsistency this class
-        exists to rule out; every consumer reads ``.session`` off ONE
-        shared instance instead.
-
-    A frozen dataclass field (``_SurveyorSetupResult.session_holder``) can
-    hold a reference to this mutable object without violating that
-    dataclass's own immutability — only the REFERENCE is frozen, not what
-    it points at.
-    """
-
-    __slots__ = ("session", "engine_config_fingerprint")
-
-    def __init__(
-        self, session: object = None, engine_config_fingerprint: str | None = None
-    ) -> None:
-        self.session = session
-        # The fingerprint the CURRENT `.session` was built from — `None`
-        # until a single-engine session is actually built (never set for a
-        # polyglot run, which never builds one through this holder at all).
-        self.engine_config_fingerprint = engine_config_fingerprint
+# The `compile` command and its four private rendering helpers
+# (`_render_compile_show`, `_format_inputs_fingerprint`,
+# `_format_provenance_table`, `_format_provenance_rows`) moved to
+# `aqueduct/cli/compile_cmd.py` (Phase 85 Wave 5 split) — self-contained,
+# never called from `run()`.
 
 
-@_dc_frozen(frozen=True)
-class _SurveyorSetupResult:
-    """Return-type bundle for ``_setup_surveyor`` — surveyor, session, agent config, etc."""
-
-    resolved_store_dir: object
-    patches_dir: object
-    run_id: str
-    approval_mode: str
-    max_patches: int
-    _is_multi_patch: bool
-    resolved_agent_provider: str | None
-    resolved_agent_base_url: str | None
-    resolved_agent_model: str | None
-    resolved_agent_provider_options: object | None
-    resolved_agent_timeout: int | None
-    resolved_agent_max_reprompts: int | None
-    resolved_agent_api_key: str | None
-    resolved_agent_engine_prompt_context: str | None
-    resolved_agent_blueprint_prompt_context: str | None
-    resolved_agent_cascade: object | None
-    resolved_agent_mode: str | None
-    resolved_agent_max_tool_calls: int | None
-    resolved_agent_supports_tools: object | None
-    resolved_agent_progressive: bool | None
-    resolved_agent_max_chain: int | None
-    resolved_sandbox_master_url: str | None
-    surveyor: object
-    _obs_store: object
-    _patch_store: object
-    session_holder: object  # _SessionHolder — see class docstring above
-    bundle: object
-    depot: object
-    _r: object  # click.style rule for banner
-
-
-# `resolve_session_engine_config`/`session_secrets_options` moved to
-# `aqueduct/executor/session_config.py` (Phase 82 remediation) so the patch
-# preview sandbox gate (`aqueduct/patch/preview.py::run_sandbox_gate`) can
-# build a ``SessionSpec`` through the SAME resolver this module uses, instead
-# of a second engine-config resolution path that only ever saw Spark's
-# merged conf. Imported at each use site below (`_setup_surveyor`,
-# `_execute_target`) per this file's existing lazy-import convention.
-
-
-def _setup_surveyor(
-    resolved_store_dir,
-    manifest,
-    cfg,
-    _obs_routing_base,
-    _using_default_obs_path,
-    verbose,
-    allow_multi_patch_flag,
-    _project_root,
-    blueprint_str,
-    run_id,
-    from_module,
-    to_module,
-    execution_date,
-    engine,
-    master_url,
-    resolved_webhook,
-    bundle,
-    depot,
-    compile_warnings,
-):
-    """Phase 3 — warnings, gates, surveyor creation, engine session → ``_SurveyorSetupResult``."""
-    import sys as _sys
-    import uuid as _uuid
-    import warnings as _w
-    from pathlib import Path as _P
-
-    with _w.catch_warnings(record=True) as _setup_caught:
-        _w.simplefilter("always")
-
-        # ── Resolve per-pipeline store dir (needs blueprint_id from manifest) ──
-        if resolved_store_dir is None:
-            resolved_store_dir = _P(_obs_routing_base) / manifest.blueprint_id
-            resolved_store_dir.mkdir(parents=True, exist_ok=True)
-
-        # ── Cluster-mode store path warning ───────────────────────────────────────
-        if (
-            cfg.deployment.env in ("cluster", "cloud")
-            and cfg.stores.observability.backend == "duckdb"
-            and not resolved_store_dir.is_absolute()
-        ):
-            from aqueduct.warnings import emit as _emit_warning
-
-            _emit_warning(
-                "cluster_store_path_relative",
-                f"relative store dir {str(resolved_store_dir)!r} on env="
-                f"{cfg.deployment.env!r} — lost on driver restart (ephemeral CWD on "
-                "YARN/K8s). Set stores.observability.path to an absolute shared-FS path.",
-            )
-
-        # ── Multi-patch danger gate ───────────────────────────────────────────────
-        _max_patches = manifest.agent.max_patches if manifest.agent else 1
-        _mode = manifest.agent.approval_mode if manifest.agent else "disabled"
-        _is_multi_patch = _mode == "auto" and _max_patches > 1
-        if _is_multi_patch and not allow_multi_patch_flag:
-            if not cfg.danger.allow_multi_patch:
-                click.echo(
-                    f"\u2717 max_patches={_max_patches} (>1) requires danger.allow_multi_patch: true "
-                    "in aqueduct.yml, or pass --allow-multi-patch for this run.",
-                    err=True,
-                )
-                _sys.exit(exit_codes.CONFIG_ERROR)
-
-        # ── Sandbox-mode danger gates ─────────────────────────────────────────────
-        _sandbox_mode = manifest.agent.sandbox_mode if manifest.agent else "sample"
-        if _sandbox_mode == "preflight" and not cfg.danger.allow_full_preflight:
-            click.echo(
-                "\u2717 agent.sandbox_mode: preflight requires danger.allow_full_preflight: true "
-                "in aqueduct.yml (full-dataset sandbox replay).",
-                err=True,
-            )
-            _sys.exit(exit_codes.CONFIG_ERROR)
-        if _sandbox_mode == "off" and not cfg.danger.allow_skip_sandbox:
-            click.echo(
-                "\u2717 agent.sandbox_mode: off requires danger.allow_skip_sandbox: true "
-                "in aqueduct.yml (skips pre-apply validation; patches hit real data).",
-                err=True,
-            )
-            _sys.exit(exit_codes.CONFIG_ERROR)
-        if _sandbox_mode == "preflight":
-            click.echo(
-                "\u26a0 sandbox mode: preflight (full-dataset replay, no Egress) \u2014 slow but conclusive",
-                err=True,
-            )
-        elif _sandbox_mode == "off":
-            click.echo(
-                "\u26a0 DANGER: sandbox mode = off (skipping pre-apply replay; patches apply to real data)",
-                err=True,
-            )
-        if _sandbox_mode == "off" and _is_multi_patch:
-            click.echo(
-                "\u26a0 DANGER COMBO: sandbox_mode=off + max_patches > 1 \u2014 every Agent patch "
-                f"applies to real data without pre-validation, up to max_patches="
-                f"{_max_patches} times per failure. Use only when you "
-                "fully trust the model and blueprint scope is tiny.",
-                err=True,
-            )
-
-        # ── Pending patch check ────────────────────────────────────────────────────
-        patches_dir = _project_root / "patches"
-        pending_dir = patches_dir / "pending"
-        pending_patches = list(pending_dir.glob("*.json")) if pending_dir.exists() else []
-        if pending_patches:
-            policy = manifest.agent.on_pending_patches
-            _np = len(pending_patches)
-            _noun = "patch" if _np == 1 else "patches"
-            if policy == "block":
-                names = ", ".join(p.stem for p in pending_patches)
-                click.echo(
-                    f"\u2717 blocked \u2014 {_np} pending {_noun} unreviewed: {names}\n"
-                    f"  Review: aqueduct patch apply <file> --blueprint {blueprint_str}\n"
-                    f"  Reject: aqueduct patch reject <patch_id> --reason '...'",
-                    err=True,
-                )
-                _sys.exit(exit_codes.CONFIG_ERROR)
-            elif policy == "warn":
-                click.echo(
-                    click.style(f"\u26a0 {_np} pending {_noun} unreviewed", fg="yellow", bold=True)
-                    + click.style("  \u00b7  aqueduct patch list", dim=True),
-                    err=True,
-                )
-                if verbose:
-                    for p in pending_patches:
-                        click.echo(f"  \u00b7 {p.stem}", err=True)
-
-        # ── Uncommitted applied patch warning ──────────────────────────────────────
-        from aqueduct.cli import _uncommitted_applied_patches
-
-        uncommitted_applied = _uncommitted_applied_patches(
-            _P(blueprint_str), patches_dir, blueprint_id=manifest.blueprint_id
-        )
-        if uncommitted_applied:
-            n_uc = len(uncommitted_applied)
-            _noun = "patch" if n_uc == 1 else "patches"
-            click.echo(
-                click.style(f"\u26a0 {n_uc} applied {_noun} uncommitted", fg="yellow", bold=True)
-                + click.style(
-                    f"  \u00b7  aqueduct patch commit --blueprint {_P(blueprint_str).name}",
-                    dim=True,
-                ),
-                err=True,
-            )
-
-        run_id = run_id or str(_uuid.uuid4())
-        selector_note = ""
-        if from_module or to_module:
-            parts = []
-            if from_module:
-                parts.append(f"from={from_module}")
-            if to_module:
-                parts.append(f"to={to_module}")
-            selector_note = "  [" + ", ".join(parts) + "]"
-        exec_date_note = f"  exec_date={execution_date}" if execution_date else ""
-        from aqueduct.cli import _rule
-        from aqueduct.cli.style import dim as _dim
-
-        _r = _dim(_rule())
-    from aqueduct.cli.style import emit_warnings as _emit_warnings
-
-    # \u2500\u2500 Header \u2014 the divider between engine/setup context (above) and this run \u2500\u2500
-    click.echo(_r)
-    _arrow = click.style("\u25b6", fg="cyan", bold=True)
-    _bp_label = click.style(manifest.blueprint_id, bold=True)
-    # A polyglot Manifest (>1 island) names every engine actually involved,
-    # not the single `deployment.engine` default \u2014 `master_url` is a
-    # single-session concept (each island's own session may ignore it, e.g.
-    # DuckDB) so it's dropped from this line for a polyglot run rather than
-    # implying it applies uniformly. Single-engine (the common case) is
-    # untouched: same `{engine} {master_url}` this line has always shown.
-    if len(manifest.islands) > 1:
-        _island_engines_hdr = "+".join(sorted({isl.engine for isl in manifest.islands}))
-        _engine_desc = f"{_island_engines_hdr}  ({len(manifest.islands)} islands)"
-    else:
-        _engine_desc = f"{engine} {master_url}"
-    click.echo(
-        f"{_arrow} "
-        f"{_bp_label}  \u00b7  "
-        f"{len(manifest.modules)} modules  \u00b7  run {run_id}  \u00b7  {_engine_desc}"
-        f"{selector_note}{exec_date_note}"
-    )
-    click.echo(_r)
-
-    # Tier 2 \u2014 blueprint + session warnings AFTER the header (the header names the
-    # blueprint they are about). Engine/config-level warnings already printed
-    # above the header; runtime probe/assert warnings come later, during execution.
-    _emit_warnings(compile_warnings, verbose=verbose, label="compile:")
-    _emit_warnings(_setup_caught, verbose=verbose, label="session:")
-
-    # The blueprint's compile warnings are now shown once (grouped). The run
-    # re-parses/re-compiles the SAME blueprint several times after this point —
-    # heal re-runs, zero-token replay, sandbox/explain gates — each of which would
-    # otherwise re-emit those identical warnings through the raw `AQ-WARN [...]`
-    # fallback formatter (they escape the initial catch_warnings block). Suppress
-    # AqueductWarning for the rest of this run so they never leak mid-execution.
-    # Runtime probe/assert warnings use logger.warning (not AqueductWarning) and
-    # are unaffected.
-    #
-    # KNOWN SCOPING GAP (audit 2026-08-01): this is a category-wide, process-global
-    # filter with no matching restore, so it also swallows any AqueductWarning a
-    # LATER phase raises for a genuinely new reason (not a re-emission of the
-    # already-shown compile warnings) — e.g. a patch that introduces a new compiler
-    # warning during a heal re-compile. A correct fix scopes this to "already-shown
-    # message text only" or wraps the remainder of `run()` in
-    # `warnings.catch_warnings()` so the filter reverts when the command ends; both
-    # require either re-indenting the rest of this (very long) function or changing
-    # how heal/gates/sandbox (`aqueduct/agent/`, `aqueduct/patch/preview.py` — both
-    # outside this batch's surface) capture their own recompile warnings, so it is
-    # not done here. `filterwarnings` (used below) is at least non-destructive to
-    # OTHER pre-existing filters, unlike `simplefilter`, which clears the entire
-    # filter list first.
-    import warnings as _wmod
-
-    from aqueduct.warnings import AqueductWarning as _AqWarning
-
-    _wmod.filterwarnings("ignore", category=_AqWarning)
-
-    # ── Resolve agent connection (engine defaults \u2190 blueprint overrides) ────
-    from aqueduct.cli import resolve_agent_connection
-
-    _rac = resolve_agent_connection(cfg.agent, manifest.agent)
-    resolved_agent_provider = _rac.provider
-    resolved_agent_base_url = _rac.base_url
-    resolved_agent_model = _rac.model
-    resolved_agent_provider_options = _rac.provider_options
-    resolved_agent_timeout = _rac.timeout
-    resolved_agent_max_reprompts = _rac.max_reprompts
-    resolved_agent_api_key = _rac.api_key
-    resolved_agent_engine_prompt_context = _rac.engine_prompt_context
-    resolved_agent_blueprint_prompt_context = _rac.blueprint_prompt_context
-    resolved_agent_cascade = _rac.cascade
-    # Phase 75 — agentic mode + tool-use capability, same engine←blueprint
-    # inheritance shape as every other resolved_agent_* field above.
-    resolved_agent_mode = _rac.mode
-    resolved_agent_max_tool_calls = _rac.max_tool_calls
-    resolved_agent_supports_tools = _rac.supports_tools
-    # Phase 77 — progressive (chained) multi-patch healing, same inheritance
-    # shape as mode/supports_tools above.
-    resolved_agent_progressive = _rac.progressive
-    resolved_agent_max_chain = _rac.max_chain
-    resolved_sandbox_master_url = cfg.agent.sandbox_master_url
-
-    # ── Progressive healing requires per-link sandbox validation ─────────────
-    if resolved_agent_progressive:
-        from aqueduct.agent.progressive import require_sandbox_for_progressive
-        from aqueduct.errors import ConfigError as _ConfigError
-
-        _prog_sandbox_mode = manifest.agent.sandbox_mode if manifest.agent else "sample"
-        try:
-            require_sandbox_for_progressive(resolved_agent_progressive, _prog_sandbox_mode)
-        except _ConfigError as _prog_exc:
-            click.echo(f"✗ {_prog_exc}", err=True)
-            sys.exit(exit_codes.CONFIG_ERROR)
-
-    # ── Self-healing reachability pre-check (upfront) ────────────────────────────
-    # Surface a misconfigured agent at startup rather than only at heal time. Gated
-    # on the blueprint actually OPTING INTO healing — `agent.approval` is set to a
-    # non-disabled mode (human/auto/ci). The default is `disabled` (healing off),
-    # so a blueprint with no `agent:` block — or one that only configures budget/
-    # memory/connection without `approval:` — never triggers this. `agent.model`
-    # always has a default value, so it is NOT a signal of intent.
-    _heal_mode = manifest.agent.approval_mode if manifest.agent else "disabled"
-    import aqueduct.cli as _aqcli
-
-    # Cascade connectivity counts: a cascade tier carries its own base_url/api_key
-    # (falling back to the flat agent.* defaults). If ANY tier is reachable, healing
-    # works even when the flat agent.base_url/api_key are unset (ISSUE-045).
-    _agent_reachable = _aqcli._agent_usable(
-        resolved_agent_provider, resolved_agent_base_url, resolved_agent_api_key
-    ) or _aqcli._agent_usable_with_cascade(
-        resolved_agent_provider,
-        resolved_agent_base_url,
-        resolved_agent_api_key,
-        resolved_agent_cascade,
-    )
-    if _heal_mode != "disabled" and not _agent_reachable:
-        from aqueduct.cli.style import warn as _style_warn
-
-        _style_warn(
-            f"self-healing is enabled (agent.approval={_heal_mode}) but the agent is not "
-            f"reachable (provider={resolved_agent_provider}, no API key / base_url, and no "
-            "usable cascade tier) — failures will NOT be auto-healed. Set the API key env "
-            "var, agent.base_url, or a cascade tier base_url.",
-        )
-
-    # ── Register agent API key for redaction ─────────────────────────────────────
-    if resolved_agent_api_key:
-        from aqueduct.redaction import register as _register_secret
-
-        _register_secret(resolved_agent_api_key, key_hint="agent.api_key")
-
-    # ── Multi-patch disclaimer ────────────────────────────────────────────────────
-    approval_mode = manifest.agent.approval_mode
-    max_patches = manifest.agent.max_patches
-    if approval_mode == "auto" and max_patches > 1:
-        click.echo(
-            f"\u26a0  multi-patch mode \u2014 Agent will attempt up to {max_patches} patch(es). "
-            "Each patch is validated in-memory before being written to Blueprint. "
-            "Review patches/applied/ after the run.",
-            err=True,
-        )
-
-    # ── Surveyor \u2014 start ───────────────────────────────────────────────────────
-    from aqueduct.depot.depot import DepotStore as _DS
-    from aqueduct.surveyor.surveyor import Surveyor as _Surveyor
-
-    if _using_default_obs_path and cfg.stores.observability.backend == "duckdb":
-        from aqueduct.stores import StoreBundle
-        from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
-
-        bundle = StoreBundle(
-            observability=DuckDBObservabilityStore(resolved_store_dir / "observability.db"),
-            depot=bundle.depot,
-        )
-        depot = _DS(backend=bundle.depot)
-    surveyor = _Surveyor(
-        manifest,
-        store_dir=resolved_store_dir,
-        engine=engine,
-        webhook_config=resolved_webhook,
-        blueprint_path=_P(blueprint_str),
-        patches_dir=patches_dir,
-        stores=bundle,
-        blob_config=(cfg.stores.blob.backend, cfg.stores.blob.path),
-        lineage_config=(
-            (cfg.lineage.openlineage_url, cfg.lineage.openlineage_namespace)
-            if cfg.lineage.openlineage_url
-            else None
-        ),
-    )
-    surveyor.start(run_id)
-    _obs_store = surveyor.observability
-    _patch_store = surveyor.patch_store()
-
-    # ── Engine session ────────────────────────────────────────────────────────────
-    # Built THROUGH THE PROTOCOL REGISTRY, not a per-engine branch. The old
-    # `if engine == "spark": make_spark_session() else: raise NotImplementedError`
-    # meant the CLI could never reach any engine but Spark regardless of which
-    # handlers existed; `get_protocol(engine).make_session(SessionSpec(...))`
-    # dispatches by contract. An engine registered without a session factory
-    # raises a clean EnginePluginError (naming the engine) via session_factory(),
-    # the AqueductError replacement for the bare NotImplementedError.
-    #
-    # A polyglot Manifest (>1 island) does NOT build this eager session at
-    # all — `run_polyglot()` opens one session PER ISLAND, lazily, in
-    # topological order, and closes each immediately after its island
-    # finishes (see `aqueduct/executor/orchestrator.py`). Building one more
-    # session here for `deployment.engine` (the run's nominal default, not
-    # necessarily any island's actual engine) would be wasted work at best
-    # and a stray, never-closed-until-atexit session at worst.
-    # `_session_holder.session` stays None for the rest of this run — every
-    # downstream consumer (hooks' in-process fallback, the agentic ToolBox's
-    # `spark_session`) already treats a missing session as "no live session
-    # to reuse", the same fallback a single-engine run never exercises.
-    _session_holder = _SessionHolder(None)
-    if len(manifest.islands) <= 1:
-        from aqueduct.executor.protocol import SessionSpec, get_protocol
-        from aqueduct.executor.session_config import (
-            resolve_session_engine_config,
-            session_config_fingerprint,
-            session_secrets_options,
-        )
-
-        _protocol = get_protocol(engine)
-        _session_holder.engine_config_fingerprint = session_config_fingerprint(
-            cfg, engine, manifest
-        )
-        _session_holder.session = _protocol.session_factory()(
-            SessionSpec(
-                blueprint_id=manifest.blueprint_id,
-                engine_config=resolve_session_engine_config(cfg, engine, manifest),
-                master_url=master_url,
-                quiet_startup=not verbose,
-                timezone=cfg.timezone,
-                engine_options=session_secrets_options(cfg, manifest),
-            )
-        )
-
-        import atexit
-
-        _close_session = _protocol.session_closer()
-        # Closes over `_session_holder`, not `session` — a later
-        # `_execute_target` rebuild (see its docstring below) mutates the
-        # holder's `.session`/`.engine_config_fingerprint` attributes from a
-        # DIFFERENT function's scope (this function has already returned by
-        # then), so reading `_session_holder.session` here at exit time is
-        # the only way this closer ever sees a rebuilt session instead of
-        # the original one.
-        atexit.register(lambda: _close_session(_session_holder.session))
-
-    return _SurveyorSetupResult(
-        resolved_store_dir=resolved_store_dir,
-        patches_dir=patches_dir,
-        run_id=run_id,
-        approval_mode=approval_mode,
-        max_patches=max_patches,
-        _is_multi_patch=_is_multi_patch,
-        resolved_agent_provider=resolved_agent_provider,
-        resolved_agent_base_url=resolved_agent_base_url,
-        resolved_agent_model=resolved_agent_model,
-        resolved_agent_provider_options=resolved_agent_provider_options,
-        resolved_agent_timeout=resolved_agent_timeout,
-        resolved_agent_max_reprompts=resolved_agent_max_reprompts,
-        resolved_agent_api_key=resolved_agent_api_key,
-        resolved_agent_engine_prompt_context=resolved_agent_engine_prompt_context,
-        resolved_agent_blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
-        resolved_agent_cascade=resolved_agent_cascade,
-        resolved_agent_mode=resolved_agent_mode,
-        resolved_agent_max_tool_calls=resolved_agent_max_tool_calls,
-        resolved_agent_supports_tools=resolved_agent_supports_tools,
-        resolved_agent_progressive=resolved_agent_progressive,
-        resolved_agent_max_chain=resolved_agent_max_chain,
-        resolved_sandbox_master_url=resolved_sandbox_master_url,
-        surveyor=surveyor,
-        _obs_store=_obs_store,
-        _patch_store=_patch_store,
-        session_holder=_session_holder,
-        bundle=bundle,
-        depot=depot,
-        _r=_r,
-    )
+# `_zero_token_attempt`, `_LoadConfigResult`, `_load_engine_config`,
+# `_CompileResult`, `_emit_explain_regressions`, `_do_compile`,
+# `_SessionHolder`, `_SurveyorSetupResult`, `_setup_surveyor` moved to
+# `aqueduct/cli/run_setup.py` (Phase 85 Wave 5 split) — module-level
+# functions with no closure over run()'s locals, imported below.
 
 
 @cli.command()
@@ -1186,11 +223,15 @@ def _setup_surveyor(
 @click.option(
     "-v",
     "--verbose",
-    is_flag=True,
-    default=False,
-    help="Show the full Spark/JVM startup banner (incubator notice, log4j init, "
-    "NativeCodeLoader). Suppressed by default for cleaner output; runtime Spark "
-    "warnings always print.",
+    "verbose",
+    count=True,
+    help="Increase output detail (repeatable: -v, -vv). Also honoured when "
+    "given on the root group instead (`aqueduct -v run ...`) — the effective "
+    "level is the max of both. -v = full Aqueduct-side story (untruncated "
+    "errors/warnings, uncapped probe notes, transcript detail); -vv = also "
+    "show the raw layer (full Spark/JVM startup banner — incubator notice, "
+    "log4j init, NativeCodeLoader — plus prompt text and streamed model "
+    "text). See `aqueduct --help` for the full tier description.",
 )
 @click.option(
     "--sandbox",
@@ -1231,7 +272,7 @@ def run(
     from_module: str | None,
     to_module: str | None,
     execution_date_str: str | None,
-    verbose: bool = False,
+    verbose: int = 0,
     allow_multi_patch_flag: bool = False,
     env_file: str | None = None,
     cli_env: tuple[str, ...] = (),
@@ -1245,8 +286,24 @@ def run(
     import uuid
     from pathlib import Path
 
+    from aqueduct.cli.verbosity import resolve_verbosity
     from aqueduct.executor import ExecuteError
     from aqueduct.executor.models import ExecutionResult, ExecutionStatus, ModuleResult
+
+    # Effective verbosity = max(root `-v` count, this command's own `-v`
+    # count) — see aqueduct/cli/verbosity.py for the tier semantics. `verbose`
+    # (the local count, kept for Click's postfix `run -v` support) is not
+    # used again below this point; every consumer reads `verbosity`.
+    verbosity = resolve_verbosity(local=verbose)
+
+    # Phase 85 Wave 2 — total wall-clock time on the closing footer (SCREEN
+    # 1/2's "one added line vs today"). Wall-clock deliberately, not a sum of
+    # per-module `duration_ms` — those are best-effort obs-store reads (empty
+    # on DuckDB today, see `_render_module_summary`'s docstring) and never
+    # include heal/gate time between iterations anyway.
+    import time as _time85
+
+    _run_started_at = _time85.monotonic()
 
     # ── Anchor CWD to project root ────────────────────────────────────────────
     # Resolve all CLI-supplied paths to absolute BEFORE chdir so that relative
@@ -1327,7 +384,7 @@ def run(
         # ── Resolution preamble — surface the non-default inputs shaping this run
         # (dim info lines next to the `· env ·` notice). Keys only for --set:
         # values may embed secrets that were never registered for redaction.
-        from aqueduct.cli.style import info as _preamble_info
+        from aqueduct.cli.render.style import info as _preamble_info
 
         _over_parts = []
         if set_items:
@@ -1342,7 +399,7 @@ def run(
         if cfg.secrets.provider != "env":
             _preamble_info(f"· secrets  ·  provider: {cfg.secrets.provider}", err=True)
         if _lcr.danger_pairs:
-            from aqueduct.cli.style import emit_warning_pairs
+            from aqueduct.cli.render.style import emit_warning_pairs
 
             emit_warning_pairs(list(_lcr.danger_pairs), label="danger:", err=True)
 
@@ -1353,7 +410,7 @@ def run(
             execution_date_str=execution_date_str,
             store_dir_abs=store_dir_abs,
             cfg=cfg,
-            verbose=verbose,
+            verbosity=verbosity,
             blueprint_set_nested=blueprint_set_nested,
         )
         manifest = _cr.manifest
@@ -1423,7 +480,7 @@ def run(
                 manifest.blueprint_id,
                 merged_spark_config,
                 master_url=master_url,
-                quiet_startup=not verbose,
+                quiet_startup=(verbosity < 2),
             )
             atexit.register(session.stop)
 
@@ -1452,17 +509,18 @@ def run(
                 detail = (
                     f" — first error in {failing.module_id!r}: {failing.error}" if failing else ""
                 )
-                from aqueduct.cli.style import error as _style_error
+                from aqueduct.cli.render.style import error as _style_error
 
-                _style_error(f"sandbox run status={result.status}{detail}")
+                _style_error(f"sandbox run status={result.status}{detail}", err=False)
                 sys.exit(exit_codes.DATA_OR_RUNTIME)
 
             _ran = sum(1 for r in result.module_results if r.status == ExecutionStatus.SUCCESS)
-            from aqueduct.cli.style import success as _style_success
+            from aqueduct.cli.render.style import success as _style_success
 
             _style_success(
                 f"sandbox run succeeded — {_ran} module(s) executed, "
-                f"{len(egress_targets)} Egress skipped"
+                f"{len(egress_targets)} Egress skipped",
+                err=False,
             )
             for tgt in egress_targets:
                 click.echo(
@@ -1478,7 +536,7 @@ def run(
             cfg=cfg,
             _obs_routing_base=_obs_routing_base,
             _using_default_obs_path=_using_default_obs_path,
-            verbose=verbose,
+            verbosity=verbosity,
             allow_multi_patch_flag=allow_multi_patch_flag,
             _project_root=_project_root,
             blueprint_str=blueprint,
@@ -1600,8 +658,16 @@ def run(
             m.id: m.config for m in manifest.modules if m.type == ModuleType.Handoff
         }
 
-        def _render_module_summary(_result) -> None:
+        def _render_module_summary(
+            _result, failure_ctx=None, *, healed_module=None, healed_patch_num=None
+        ) -> None:
             """Print the per-module ✓/✗ status block for one execution result.
+
+            ``failure_ctx`` (optional) is the ``FailureContext`` the surveyor
+            just recorded for THIS result — carries ``error_class`` and
+            ``suggested_columns`` for the classified ✗ failure line (SCREEN
+            2/6). Only its ``failed_module`` row uses it; other rows fall
+            back to the generic label.
 
             Called once per heal iteration right after the result is recorded, so
             module outcomes print BEFORE that iteration's agent/heal output —
@@ -1648,7 +714,17 @@ def run(
                 if getattr(m, "disabled_reason", None)
             }
 
-            click.echo()
+            # Phase 85 Wave 2 — egress rows show their destination instead of
+            # rows/time metadata (SCREEN 1). `m.config` is dict-like (same
+            # access pattern `_handoff_info` above already relies on).
+            _egress_dest: dict[str, str] = {}
+            for _m in manifest.modules:
+                if _m.type == ModuleType.Egress:
+                    _dest = _m.config.get("path") or _m.config.get("table") or _m.config.get("key")
+                    if _dest:
+                        _egress_dest[_m.id] = str(_dest)
+
+            click.echo(err=False)
 
             def _icon(mr):
                 if mr.status == ExecutionStatus.SUCCESS:
@@ -1694,14 +770,157 @@ def run(
                 default=0,
             )
 
+            # Phase 85 Wave 2 — right-aligned metadata column (SCREEN 1).
+            # Two passes: first compute each row's (left, tail) unpadded,
+            # find the widest `left + 2sp + tail` among rows that HAVE a
+            # tail, then pad every such row's left side out to that width
+            # so every tail starts (or, since tails vary in length, ENDS)
+            # at the same column. Degrades to the old left-packed
+            # `name.ljust(pad)` layout when the terminal is too narrow for
+            # that column to fit without negative padding.
+            from aqueduct.cli.render.width import display_width as _dw
+            from aqueduct.cli.render.width import terminal_width as _term_width
+
+            _pending_rows: list[dict] = []  # collected before any printing
+
+            def _queue_row(
+                mr, left_plain, left_styled, tail_plain, tail_styled, warn_prefix, kind="metric"
+            ):
+                # `kind` separates the right-aligned METRIC column (rows ·
+                # time, bytes · duration — short, comparable) from a "path"
+                # tail (an egress destination — long, variable, free text).
+                # Audit-fixed 2026-08-23: an egress row used to join the
+                # SAME right-alignment group as metric rows, so one long
+                # absolute path inflated the natural width and dragged
+                # every metric row's gap out to match it (`raw_orders` with
+                # 60+ spaces before a bare "14 ms").
+                _pending_rows.append(
+                    {
+                        "mr": mr,
+                        "left_plain": left_plain,
+                        "left_styled": left_styled,
+                        "tail_plain": tail_plain,
+                        "tail_styled": tail_styled,
+                        "warn_prefix": warn_prefix,
+                        "kind": kind,
+                    }
+                )
+
+            def _flush_rows():
+                _tw = _term_width()
+                _metric_rows = [
+                    r for r in _pending_rows if r["tail_plain"] and r["kind"] == "metric"
+                ]
+                _natural = (
+                    max(_dw(r["left_plain"]) + 2 + _dw(r["tail_plain"]) for r in _metric_rows)
+                    if _metric_rows
+                    else 0
+                )
+                _fits = bool(_metric_rows) and _natural <= _tw
+                # Path rows align among THEMSELVES (and with the metric
+                # rows' name column, for a tidy shared left edge) — never
+                # against the metric column's own width.
+                _name_width = max((_dw(r["left_plain"]) for r in _pending_rows), default=0)
+                for r in _pending_rows:
+                    mr, warn_prefix = r["mr"], r["warn_prefix"]
+                    if not r["tail_plain"]:
+                        line = r["left_styled"]
+                    elif r["kind"] == "path":
+                        pad = max(2, _name_width - _dw(r["left_plain"]) + 2)
+                        line = r["left_styled"] + (" " * pad) + r["tail_styled"]
+                    elif _fits:
+                        pad = max(2, _natural - _dw(r["left_plain"]) - _dw(r["tail_plain"]))
+                        line = r["left_styled"] + (" " * pad) + r["tail_styled"]
+                    else:
+                        # Narrow terminal — fall back to a simple 2-space gap
+                        # rather than compute a negative/degenerate pad.
+                        line = f"{r['left_styled']}  {r['tail_styled']}"
+                    click.echo(line, err=False)
+                    for rule_id, msg in mr.warnings:
+                        from aqueduct.cli.render.funnel import warn as _output_warn
+
+                        _output_warn(rule_id, msg, prefix=warn_prefix, err=False)
+                    _notes = tuple(getattr(mr, "notes", ()) or ())
+                    _cap = len(_notes) if verbosity >= 1 else 10
+                    from aqueduct.cli.render.style import dim as _dim2
+
+                    for note in _notes[:_cap]:
+                        click.echo(_dim2(f"{warn_prefix}{note}"), err=False)
+                    if len(_notes) > _cap:
+                        click.echo(
+                            _dim2(
+                                f"{warn_prefix}· {len(_notes) - _cap} more  ·  -v for full output"
+                            ),
+                            err=False,
+                        )
+                _pending_rows.clear()
+
+            def _print_failure_block(mr, name_or_boundary, lead):
+                """Classified label + wrapped detail + candidates + hint
+                (SCREEN 2/6). TTY: multi-line, structured. Piped/CI: ONE
+                merged logical record (grep-safe) — built explicitly here
+                rather than via `wrap_line`'s newline-splitting, since the
+                piped shape (label — detail — candidates all on one line)
+                differs from the TTY shape (candidates always its own
+                line) and `wrap_line` alone can't express that difference."""
+                from aqueduct.cli.render.width import is_tty as _is_tty
+                from aqueduct.cli.render.wrap import wrap_line as _wrap_line
+
+                _is_failed_module = (
+                    failure_ctx is not None and mr.module_id == failure_ctx.failed_module
+                )
+                _ec = failure_ctx.error_class if _is_failed_module else None
+                _label = _classify_error_label(_ec)
+                _candidates = (
+                    list(failure_ctx.suggested_columns)
+                    if _is_failed_module and getattr(failure_ctx, "suggested_columns", None)
+                    else []
+                )
+                _detail = concise_error(mr.error, limit=100_000) if mr.error else ""
+                _cand_text = f"candidates: {', '.join(_candidates)}" if _candidates else ""
+
+                if _is_tty(err=False):
+                    click.echo(
+                        f"{lead}{_icon(mr)} {name_or_boundary}  " + click.style(_label, fg="red"),
+                        err=False,
+                    )
+                    for line in _wrap_line(
+                        _detail,
+                        gutter="      ",
+                        err=False,
+                        verbose=verbosity >= 1,
+                        max_lines=None if verbosity >= 1 else 3,
+                        hint="full error text",
+                    ):
+                        click.echo(line, err=False)
+                    if _cand_text:
+                        for line in _wrap_line(
+                            _cand_text, gutter="      ", err=False, verbose=True
+                        ):
+                            click.echo(line, err=False)
+                else:
+                    _parts = [_label]
+                    if _detail:
+                        _parts.append(_detail)
+                    if _cand_text:
+                        _parts.append(_cand_text)
+                    _combined = " — ".join(_parts)
+                    for line in _wrap_line(_combined, gutter="", err=False, verbose=True):
+                        click.echo(f"{lead}{_icon(mr)} {name_or_boundary}  {line}", err=False)
+
             def _mr_line(mr, name, pad, lead, warn_prefix):
-                from aqueduct.cli.style import dim as _dim
+                from aqueduct.cli.render.style import dim as _dim
 
                 if mr.status == ExecutionStatus.ERROR and mr.error:
-                    line = f"{lead}{_icon(mr)} {name}  {click.style('— ' + concise_error(mr.error), fg='red')}"
+                    _flush_rows()  # preserve chronological order vs queued rows
+                    _print_failure_block(mr, name, lead)
+                    return
+                _m = _metrics.get(mr.module_id, {})
+                rows, dur = _m.get("records_written"), _m.get("duration_ms")
+                if mr.module_id in _egress_dest:
+                    tail_plain = f"→ {_egress_dest[mr.module_id]}"
+                    tail_styled = tail_plain
                 else:
-                    _m = _metrics.get(mr.module_id, {})
-                    rows, dur = _m.get("records_written"), _m.get("duration_ms")
                     meta = []
                     if mr.status == ExecutionStatus.SKIPPED and mr.module_id in _disabled_reason:
                         meta.append(_disabled_reason[mr.module_id])
@@ -1709,59 +928,58 @@ def run(
                         meta.append(f"{rows:,} rows")
                     if _fmt_dur(dur):
                         meta.append(_fmt_dur(dur))
-                    if mr.module_id in _module_engine:
-                        meta.append(_module_engine[mr.module_id])
-                    tail = _dim("  ·  ".join(meta)) if meta else ""
-                    line = f"{lead}{_icon(mr)} {name.ljust(pad)}   {tail}".rstrip()
-                click.echo(line)
-                for rule_id, msg in mr.warnings:
-                    from aqueduct.cli.output import warn as _output_warn
-
-                    _output_warn(rule_id, msg, prefix=warn_prefix, err=False)
-                # Probe `report: stdout` lines — informational, dim, never in
-                # the warning roll-up. Capped unless -v.
-                _notes = tuple(getattr(mr, "notes", ()) or ())
-                _cap = len(_notes) if verbose else 10
-                for note in _notes[:_cap]:
-                    click.echo(_dim(f"{warn_prefix}{note}"))
-                if len(_notes) > _cap:
-                    click.echo(
-                        _dim(f"{warn_prefix}· {len(_notes) - _cap} more  ·  -v for full output")
-                    )
+                    if healed_module is not None and mr.module_id == healed_module:
+                        meta.append(
+                            f"healed patch #{healed_patch_num}"
+                            if healed_patch_num is not None
+                            else "healed"
+                        )
+                    tail_plain = "  ·  ".join(meta)
+                    tail_styled = _dim(tail_plain) if tail_plain else ""
+                left_styled = f"{lead}{_icon(mr)} {name}"
+                _kind = "path" if mr.module_id in _egress_dest else "metric"
+                _queue_row(
+                    mr,
+                    f"{lead}{name}",
+                    left_styled,
+                    tail_plain,
+                    tail_styled,
+                    warn_prefix,
+                    kind=_kind,
+                )
 
             def _handoff_line(mr, pad, lead, warn_prefix):
                 """First-class rendering for a synthetic Handoff module's
-                result — the boundary it bridges (from → to, spark→duckdb),
-                bytes transferred, and duration, distinct from an ordinary
-                module row so a cross-engine transport step reads as what it
-                is rather than an anonymous module id."""
-                from aqueduct.cli.output import format_bytes as _format_bytes
-                from aqueduct.cli.style import dim as _dim
+                result — a dedicated engine-boundary line (SCREEN 1 notes:
+                "engine appears ONLY at a polyglot handover boundary"),
+                distinct from an ordinary module row."""
+                from aqueduct.cli.render.funnel import format_bytes as _format_bytes
+                from aqueduct.cli.render.style import dim as _dim
 
                 _cfg = _handoff_info[mr.module_id]
-                _boundary = (
-                    f"{_cfg.get('from_module')} → {_cfg.get('to_module')}  "
-                    f"({_cfg.get('from_engine')}→{_cfg.get('to_engine')})"
-                )
+                _boundary = f"handoff · {_cfg.get('from_engine')} → {_cfg.get('to_engine')}"
                 if mr.status == ExecutionStatus.ERROR and mr.error:
-                    line = f"{lead}{_icon(mr)} ⇄ {_boundary}  {click.style('— ' + concise_error(mr.error), fg='red')}"
-                else:
-                    _m = _metrics.get(mr.module_id, {})
-                    meta = []
-                    _bw, _br = _m.get("bytes_written"), _m.get("bytes_read")
-                    if _bw is not None:
-                        meta.append(f"{_format_bytes(_bw)} written")
-                    if _br is not None:
-                        meta.append(f"{_format_bytes(_br)} read")
-                    if _fmt_dur(_m.get("duration_ms")):
-                        meta.append(_fmt_dur(_m.get("duration_ms")))
-                    tail = _dim("  ·  ".join(meta)) if meta else ""
-                    line = f"{lead}{_icon(mr)} ⇄ {_boundary}   {tail}".rstrip()
-                click.echo(line)
-                for rule_id, msg in mr.warnings:
-                    from aqueduct.cli.output import warn as _output_warn
-
-                    _output_warn(rule_id, msg, prefix=warn_prefix, err=False)
+                    _flush_rows()
+                    _print_failure_block(mr, f"⇄ {_boundary}", lead)
+                    return
+                _m = _metrics.get(mr.module_id, {})
+                meta = []
+                _bw, _br = _m.get("bytes_written"), _m.get("bytes_read")
+                _fmt = _cfg.get("format")
+                if _fmt:
+                    meta.append(str(_fmt))
+                if _bw is not None:
+                    meta.append(f"{_format_bytes(_bw)} written")
+                if _br is not None:
+                    meta.append(f"{_format_bytes(_br)} read")
+                if _fmt_dur(_m.get("duration_ms")):
+                    meta.append(_fmt_dur(_m.get("duration_ms")))
+                tail_plain = "  ·  ".join(meta)
+                tail_styled = _dim(tail_plain) if tail_plain else ""
+                left_styled = f"{lead}{_icon(mr)} ⇄ {_boundary}"
+                _queue_row(
+                    mr, f"{lead}⇄ {_boundary}", left_styled, tail_plain, tail_styled, warn_prefix
+                )
 
             for kind, item in _rows:
                 if kind == "module":
@@ -1778,13 +996,17 @@ def run(
                     _p_icon = click.style("✓", fg="green")
                 else:
                     _p_icon = click.style("⏭", fg="cyan")
-                click.echo(f"  {_p_icon} {item}")
+                _flush_rows()
+                click.echo(f"  {_p_icon} {item}", err=False)
                 for _i, _kid in enumerate(_kids):
                     _glyph = "└─" if _i == len(_kids) - 1 else "├─"
                     _lead = "    " + click.style(_glyph, fg="bright_black") + " "
                     _mr_line(
                         _kid, _kid.module_id.split("__", 1)[1], _w - _CHILD_PAD, _lead, "       ↳ "
                     )
+                _flush_rows()
+
+            _flush_rows()  # trailing queued metric rows
 
         def _announce_polyglot_sandbox_unavailable(_gate_result) -> None:
             """Gate 3 could not replay a patch against this polyglot
@@ -1814,9 +1036,9 @@ def run(
                 and _gate_result.status == _GateStatus.UNAVAILABLE
             ):
                 _polyglot_sandbox_unavailable_warned = True
-                from aqueduct.cli.style import warn as _style_warn
+                from aqueduct.cli.render.style import warn as _style_warn
 
-                _style_warn(_gate_result.detail)
+                _style_warn(_gate_result.detail, err=True)
 
         def _execute_target(
             target_manifest, *, run_id: str, resume_run_id: str | None = None, **kw
@@ -1902,7 +1124,7 @@ def run(
                                 cfg, engine, target_manifest
                             ),
                             master_url=master_url,
-                            quiet_startup=not verbose,
+                            quiet_startup=(verbosity < 2),
                             timezone=cfg.timezone,
                             engine_options=session_secrets_options(cfg, target_manifest),
                         )
@@ -1959,7 +1181,7 @@ def run(
                 warnings_suppress=cfg.warnings.suppress,
                 engine_configs=_engine_configs,
                 master_url=master_url,
-                quiet_startup=not verbose,
+                quiet_startup=(verbosity < 2),
                 timezone=cfg.timezone,
                 secrets_config=session_secrets_options(cfg, target_manifest)["secrets"],
                 block_full_actions=kw.get("block_full_actions", False),
@@ -2018,7 +1240,7 @@ def run(
             # Chronological output: render THIS iteration's module outcomes now,
             # before any agent/heal block below. Replaces the old single post-loop
             # summary so a heal attempt always reads after the result it heals.
-            _render_module_summary(result)
+            _render_module_summary(result, failure_ctx)
 
             if result.status == ExecutionStatus.SUCCESS:
                 break
@@ -2250,6 +1472,7 @@ def run(
                                 # Same plan-regression warning the LLM path gets,
                                 # so a replayed patch's regression isn't silent.
                                 _emit_explain_regressions(_rg4)
+                                _print_gate_ladder(_rg2, _rg3, _rg4, verbosity=verbosity)
                         if _replay_ok:
                             from aqueduct.agent import AgentPatchResult as _AgentPatchResult
 
@@ -2282,14 +1505,16 @@ def run(
             _attempt_display = (
                 f"{patch_count + 1}/{max_patches}" if max_patches > 1 else f"{patch_count + 1}"
             )
-            from aqueduct.cli.style import colorize_line as _style_heal_line
+            from aqueduct.cli.render.style import colorize_line as _style_heal_line
 
             # Live SSE streaming is interactive-TTY-only (piped/CI keep the
-            # non-streaming POST path).
-            _use_stream = sys.stdout.isatty()
+            # non-streaming POST path). The ENTIRE heal block — including this
+            # stream — is narrative (stderr), so the TTY check is against
+            # stderr, not stdout.
+            _use_stream = sys.stderr.isatty()
             _transcript = TranscriptWriter(
-                verbose=verbose,
-                write=lambda s: emit(_style_heal_line(s)),
+                verbose=verbosity >= 1,
+                write=lambda s: emit(_style_heal_line(s), err=True),
                 streamed=_use_stream,
             )
 
@@ -2299,26 +1524,27 @@ def run(
             # go straight to applying it. Only a real LLM heal gets the tree.
             _is_replay = _resolution == "replayed"
             if not _is_replay:
-                # Styled section header — boundary between the run result above
-                # and the agent/heal block below.
-                click.echo(
-                    click.style(
-                        f"⚠ {failure_ctx.failed_module} failed → agent self-healing"
-                        + (f" (patch {_attempt_display})" if max_patches > 1 else ""),
-                        fg="yellow",
-                    ),
-                    err=True,
-                )
-                # Ceremony — surface which agent/model is on the job (solo/cascade).
+                # Phase 85 Wave 2 — one ◆ header line replaces the old
+                # "⚠ … failed → agent self-healing" line PLUS the separate
+                # "│  ◆ …" ceremony line (SCREENS 2-5). ORANGE/yellow per
+                # the owner ruling; `tier N/M · model` for a cascade names
+                # the STARTING tier (known at heal start regardless of
+                # outcome — `_open_tier_if_new` in transcript.py only
+                # prints a `├─` node on a LATER escalation, since this line
+                # already announced tier 1).
                 if resolved_agent_cascade:
-                    _models = " → ".join(t.model for t in resolved_agent_cascade)
-                    _agent_info = f"cascade · {len(resolved_agent_cascade)} tier(s) · {_models}"
+                    _n_tiers = len(resolved_agent_cascade)
+                    _tier0_model = resolved_agent_cascade[0].model
+                    _agent_info = f"cascade · tier 1/{_n_tiers} · {_tier0_model}"
                 else:
                     _agent_info = (
                         f"{resolved_agent_model} · {resolved_agent_provider} "
                         f"· ≤{resolved_agent_max_reprompts} reprompts"
                     )
-                click.echo(_style_heal_line(f"│  ◆ {_agent_info}"), err=True)
+                _header_text = f"◆ self-healing {failure_ctx.failed_module} · {_agent_info}"
+                if max_patches > 1:
+                    _header_text += f" (patch {_attempt_display})"
+                click.echo(click.style(_header_text, fg="yellow"), err=True)
                 _transcript.header(
                     patch_count + 1 if max_patches > 1 else 1,
                     resolved_agent_max_reprompts,
@@ -2327,12 +1553,18 @@ def run(
                 # Immediate cue — the stream meter only appears once the FIRST
                 # token arrives, and a reasoning model can digest a big prompt for
                 # a while first, so without this the open branch looks hung.
-                _cue = (
-                    "│   · waiting for first token… (reasoning models digest the prompt before replying)"
+                # Routed through the funnel's `echo()` (wrap_line-backed), not
+                # `emit()` — `emit()` is the structured-result entry point and
+                # does not wrap; a bare f-string handed to it is exactly the
+                # heal-block-overflows-80-columns defect this fixes.
+                from aqueduct.cli.render.funnel import echo as _funnel_echo
+
+                _cue_text = (
+                    "waiting for first token… (reasoning models digest the prompt before replying)"
                     if _use_stream
-                    else "│   · contacting agent… (first response can be slow — big prompt / local cold-start)"
+                    else "contacting agent… (first response can be slow — big prompt / local cold-start)"
                 )
-                emit(_style_heal_line(_cue))
+                _funnel_echo(_cue_text, gutter="│   · ", err=True, verbose=verbosity >= 1)
 
             # Run blueprint doctor checks against the compiled Manifest (all modules resolved,
             # arcades expanded — no need to re-parse or recurse into sub-blueprints).
@@ -2372,23 +1604,25 @@ def run(
             _stream_state = {"chars": 0, "kind": None, "active": False}
 
             def _on_token(kind: str, text: str) -> None:
+                # Heal-block narrative — stderr, like everything else in this
+                # block (see the stream-routing note on `_use_stream` above).
                 _stream_state["active"] = True
-                if verbose:
+                if verbosity >= 1:
                     if kind != _stream_state["kind"]:
                         head = "· thinking" if kind == "thinking" else "▸ answer"
-                        sys.stdout.write(f"\n│   {head}:\n│   ┆ ")
+                        sys.stderr.write(f"\n│   {head}:\n│   ┆ ")
                         _stream_state["kind"] = kind
-                    sys.stdout.write(text.replace("\n", "\n│   ┆ "))
+                    sys.stderr.write(text.replace("\n", "\n│   ┆ "))
                 else:
                     _stream_state["chars"] += len(text)
                     label = "thinking" if kind == "thinking" else "writing"
-                    sys.stdout.write(f"\r│   · {label}… {_stream_state['chars']} chars")
-                sys.stdout.flush()
+                    sys.stderr.write(f"\r│   · {label}… {_stream_state['chars']} chars")
+                sys.stderr.flush()
 
             def _close_stream() -> None:
                 if _stream_state["active"]:
-                    sys.stdout.write("\n")
-                    sys.stdout.flush()
+                    sys.stderr.write("\n")
+                    sys.stderr.flush()
                     _stream_state.update(chars=0, kind=None, active=False)
 
             def _on_attempt(rec):
@@ -2495,48 +1729,31 @@ def run(
             _any_deep_loop = _deep_loop or any(bool(t.deep_loop) for t in (_cascade_tiers or []))
             _validate_cb = None
             if _any_deep_loop:
-                _bp_path_for_vc = Path(blueprint)
-                _vc_bundle = bundle
-                _vc_surveyor = surveyor
-                _vc_failed_module = failure_ctx.failed_module
-                _vc_rid = iteration_run_id
-                _vc_bid = manifest.blueprint_id
-                _vc_sandbox_mode = manifest.agent.sandbox_mode if manifest.agent else "sample"
+                # Phase 85 F-17 — was an inline closure capturing ~12 locals;
+                # extracted to aqueduct/agent/gate_validation.py (the agent
+                # boundary: this exists only to feed the deep-loop
+                # validate_callback protocol). The captured locals are now
+                # explicit `partial` keyword args instead of closure state.
+                from functools import partial
 
-                def _validate_cb(patch_spec: Any) -> tuple:
-                    try:
-                        _g2, _g3, _g4, _g3_passed = _aqcli._run_patch_gates_inline(
-                            patch=patch_spec,
-                            blueprint_path=_bp_path_for_vc,
-                            bundle=_vc_bundle,
-                            surveyor=_vc_surveyor,
-                            failed_module=_vc_failed_module,
-                            iteration_run_id=_vc_rid,
-                            blueprint_id=_vc_bid,
-                            engine=(failure_ctx.engine or engine),
-                            cfg=cfg,
-                            sandbox_mode=_vc_sandbox_mode,
-                            sandbox_master_url=resolved_sandbox_master_url,
-                            warnings_suppress=cfg.warnings.suppress,
-                            timezone=cfg.timezone,
-                        )
-                        _announce_polyglot_sandbox_unavailable(_g3)
-                        failures: list[str] = []
-                        if _g2 is not None and _g2.status == "fail":
-                            failures.append(
-                                f"Lineage gate: {_g2.detail or 'column impact detected'}"
-                            )
-                        if _g3 is not None and _g3.status == "fail":
-                            failures.append(f"Sandbox gate: {_g3.detail}")
-                        if _g4 is not None and _g4.status == "fail":
-                            failures.append(
-                                f"Explain gate: {_g4.detail or 'plan regression detected'}"
-                            )
-                        if failures:
-                            return False, " | ".join(failures)
-                        return True, ""
-                    except Exception as exc:
-                        return False, f"Validation error: {exc}"
+                from aqueduct.agent.gate_validation import validate_patch_via_gates
+
+                _validate_cb = partial(
+                    validate_patch_via_gates,
+                    blueprint_path=Path(blueprint),
+                    bundle=bundle,
+                    surveyor=surveyor,
+                    failed_module=failure_ctx.failed_module,
+                    iteration_run_id=iteration_run_id,
+                    blueprint_id=manifest.blueprint_id,
+                    engine=(failure_ctx.engine or engine),
+                    cfg=cfg,
+                    sandbox_mode=(manifest.agent.sandbox_mode if manifest.agent else "sample"),
+                    sandbox_master_url=resolved_sandbox_master_url,
+                    warnings_suppress=cfg.warnings.suppress,
+                    timezone=cfg.timezone,
+                    announce_unavailable=_announce_polyglot_sandbox_unavailable,
+                )
 
             # Phase 75 — agentic mode: build a per-heal ToolBox when this
             # blueprint (or the engine default) opted in. `session` is the
@@ -2582,7 +1799,7 @@ def run(
                 effective_mode == "auto" and not _cascade_tiers and _replay_result is None
             ):
                 if _replay_result is not None:
-                    from aqueduct.cli.style import info as _prog_info
+                    from aqueduct.cli.render.style import info as _prog_info
 
                     _prog_info(
                         "progressive chain not started — replay-cache hit served "
@@ -2591,7 +1808,7 @@ def run(
                     )
                 elif not _progressive_scope_warned:
                     _progressive_scope_warned = True
-                    from aqueduct.cli.output import warn as _output_warn
+                    from aqueduct.cli.render.funnel import warn as _output_warn
 
                     if effective_mode != "auto":
                         _scope_reason = (
@@ -2610,6 +1827,7 @@ def run(
                         f"agent.progressive: true is set but progressive healing "
                         f"is skipped for this run — {_scope_reason}. Falling back "
                         "to the standard heal loop.",
+                        err=True,
                     )
             if (
                 resolved_agent_progressive
@@ -2946,10 +2164,37 @@ def run(
                 )
 
             if patch is None:
-                # The transcript's └─ close node already states the outcome
-                # (✗ <reason> · N turn(s)); here we only note what happened next.
+                # The transcript's └ close node already states the outcome
+                # (✓/✗/⊘ <reason> · N turn(s)); here we only note what
+                # happened next. SCREEN 5 — every tier unreachable/no
+                # credentials — gets its own retry hint (`↳`, distinct from
+                # the generic "no patch to stage" note below) naming the
+                # actual command to re-run once the agent IS reachable.
+                if agent_result.stop_reason == "api_error":
+                    from aqueduct.cli.render.funnel import echo as _funnel_echo
+
+                    # The retry command must survive copy-paste: relativize
+                    # the path when it lives under the CWD and never let the
+                    # command line wrap mid-token (wrap=False overflows
+                    # instead of splitting).
+                    _rel_bp = os.path.relpath(str(blueprint))
+                    _bp_display = str(blueprint) if _rel_bp.startswith("..") else _rel_bp
+                    _funnel_echo(
+                        "failure context saved · retry once the agent is reachable:",
+                        gutter="   ↳ ",
+                        err=True,
+                        verbose=verbosity >= 1,
+                        style={"fg": "bright_black"},
+                    )
+                    _funnel_echo(
+                        f"aqueduct heal {_bp_display}",
+                        gutter="     ",
+                        err=True,
+                        wrap=False,
+                        style={"fg": "bright_black"},
+                    )
                 on_hf = manifest.agent.on_heal_failure if manifest.agent else "stage"
-                if on_hf == "stage":
+                if on_hf == "stage" and agent_result.stop_reason != "api_error":
                     click.echo(
                         click.style(
                             "   ↑ no patch to stage — failure context saved to the observability store",
@@ -3231,6 +2476,9 @@ def run(
                         timezone=cfg.timezone,
                     )
                     _announce_polyglot_sandbox_unavailable(_g3)
+                    # F-16 — print the gate ladder as it completes (SCREEN 3/7),
+                    # instead of staying silent when everything passes.
+                    _print_gate_ladder(_g2, _g3, _g4, verbosity=verbosity)
                 _block_on_g4 = (
                     manifest.agent.block_on_explain_regression
                     if manifest.agent.block_on_explain_regression is not None
@@ -3441,8 +2689,8 @@ def run(
                         from aqueduct.agent.regression_artifact import (
                             generate as _gen_regression_artifact,
                         )
-                        from aqueduct.cli.style import info as _ra_info
-                        from aqueduct.cli.style import success as _ra_success
+                        from aqueduct.cli.render.style import info as _ra_info
+                        from aqueduct.cli.render.style import success as _ra_success
 
                         try:
                             _ra_result = _gen_regression_artifact(
@@ -3452,7 +2700,9 @@ def run(
                             # None — never wrap them in click.echo (stray blank
                             # line + message on the wrong stream).
                             if _ra_result.written:
-                                _ra_success(f"regression test written → {_ra_result.path}")
+                                _ra_success(
+                                    f"regression test written → {_ra_result.path}", err=True
+                                )
                             else:
                                 _ra_info(
                                     f"regression artifact skipped: {_ra_result.skip_reason}",
@@ -3462,6 +2712,20 @@ def run(
                             # Best-effort: never let artifact generation break a
                             # successful heal.
                             _ra_info(f"regression artifact generation failed: {_ra_exc}", err=True)
+                    # Phase 85 Wave 2 — re-list the (now fixed) tree so a
+                    # piped log tells the whole story without cross-
+                    # referencing the heal block above (SCREEN 2 notes).
+                    _healed_attempt_num = (
+                        agent_result.attempt_records[-1].attempt_num
+                        if agent_result.attempt_records
+                        else agent_result.attempts
+                    )
+                    _render_module_summary(
+                        result2,
+                        failure_ctx2,
+                        healed_module=failure_ctx.failed_module,
+                        healed_patch_num=_healed_attempt_num,
+                    )
                     result = result2
                     failure_ctx = failure_ctx2
                     break
@@ -3520,26 +2784,32 @@ def run(
             for rid, msg in mr.warnings
         ]
         if _runtime_pairs:
-            from aqueduct.cli.style import emit_warning_pairs
+            from aqueduct.cli.render.style import emit_warning_pairs
 
-            emit_warning_pairs(_runtime_pairs, label="runtime:", verbose=verbose)
+            emit_warning_pairs(_runtime_pairs, label="runtime:", verbose=verbosity >= 1, err=True)
 
         if result.status not in (ExecutionStatus.SUCCESS, ExecutionStatus.PATCHED):
             # Print the outer (user-visible) run_id — that's the join key for
             # heal_attempts and `healing_outcomes.parent_run_id`. In multi-patch
             # mode `result.run_id` would be the LAST iteration's per-iteration
             # uuid, which can't be used to retrieve the full heal history.
-            from aqueduct.cli.style import dim as _dim
-            from aqueduct.cli.style import error as _style_error
+            from aqueduct.cli.render.style import dim as _dim
+            from aqueduct.cli.render.style import error as _style_error
 
-            click.echo(_dim(_rule()), err=True)
+            # Stdout, explicitly: the closing divider + verdict are part of
+            # the SAME framed result block as the header/tree above (must
+            # survive `> run.log` piped alone) — `style.error` defaults to
+            # stderr, so the destination is overridden here rather than
+            # fought around.
+            click.echo(_dim(_rule()), err=False)
             if failure_ctx:
                 _style_error(
                     f"blueprint failed  run_id={run_id}"
-                    f"  failed_module={failure_ctx.failed_module}"
+                    f"  failed_module={failure_ctx.failed_module}",
+                    err=False,
                 )
             else:
-                _style_error(f"blueprint failed  run_id={run_id}")
+                _style_error(f"blueprint failed  run_id={run_id}", err=False)
             # on_failure hooks — after the verdict line, before the exit code.
             # Hook outcomes never alter the exit code below.
             from aqueduct.cli.hooks import run_hooks as _run_hooks
@@ -3585,11 +2855,11 @@ def run(
             ):
                 if _obs.get("status") != "observed":
                     continue
-                from aqueduct.cli.output import emit_info as _emit_info
+                from aqueduct.cli.render.funnel import emit_info as _emit_info
 
-                _emit_info(f"perf vs pre-patch baseline: {_obs['detail']}")
+                _emit_info(f"perf vs pre-patch baseline: {_obs['detail']}", err=True)
                 for _caveat in _obs.get("caveats") or []:
-                    _emit_info(f"  {_caveat}")
+                    _emit_info(f"  {_caveat}", err=True)
         except Exception:
             pass  # provenance stamping must never affect a successful run
 
@@ -3611,11 +2881,27 @@ def run(
             )
 
         status_label = "patched" if result.status == ExecutionStatus.PATCHED else "complete"
-        from aqueduct.cli.style import dim as _dim
-        from aqueduct.cli.style import success as _style_success
+        from aqueduct.cli.render.style import dim as _dim
+        from aqueduct.cli.render.style import success as _style_success
 
-        click.echo(_dim(_rule()))
-        _style_success(f"blueprint {status_label}")
+        # Phase 85 Wave 2 — total wall-clock time (one added line vs today,
+        # SCREEN 1 notes) + healed-module count + pending-review hint when
+        # this run auto-applied a patch (SCREEN 2). `patch_count` is the
+        # number of patches actually applied this run (multi-patch loop).
+        _elapsed_s = _time85.monotonic() - _run_started_at
+        _footer_text = f"blueprint {status_label} · {_elapsed_s:.1f}s"
+        if status_label == "patched" and patch_count:
+            _footer_text += (
+                f" · {patch_count} module{'s' if patch_count != 1 else ''} healed"
+                " · pending review"
+            )
+        click.echo(_dim(_rule()), err=False)
+        _style_success(_footer_text, err=False)
+        if status_label == "patched" and patch_count:
+            # Q5 ruling: ONE line, not a multi-line patch-id + command block.
+            click.echo(
+                click.style(f"  ⓘ review: aqueduct patch pull {run_id}", fg="cyan"), err=False
+            )
 
         # on_success hooks — chained blueprints / webhooks / gated commands.
         # A hooks section closes with its own `run complete` footer.
@@ -3632,6 +2918,6 @@ def run(
             session=_session_holder.session,
             engine=engine,
         ):
-            _style_success("run complete")
+            _style_success("run complete", err=False)
     finally:
         os.chdir(_original_cwd)

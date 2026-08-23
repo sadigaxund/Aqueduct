@@ -420,8 +420,17 @@ def failure_context(store: Any, run_id: str) -> FailureContext | None:
 def lineage(
     store: Any, blueprint_id: str | None = None, run_id: str | None = None, limit: int = 500
 ) -> list[LineageRow]:
-    """Column-level lineage rows (empty if the table is absent)."""
-    q = "SELECT channel_id, output_column, source_table, source_column FROM column_lineage"
+    """Column-level lineage rows (empty if the table is absent).
+
+    Phase 85 B2 — when ``run_id`` is not given, the read is scoped to the
+    LATEST run in scope (optionally within ``blueprint_id``) instead of an
+    unscoped ``LIMIT 500`` across every historical run: `column_lineage` has
+    no `DISTINCT`/`ORDER BY`/latest-run filter by construction (append-only,
+    one row per `(channel, output_column)` per compile), so an unscoped read
+    used to mix stale and current lineage up to an arbitrary cap. ``DISTINCT``
+    also guards against any accidental duplicate row at the same
+    ``captured_at``.
+    """
     params: list[Any] = []
     clauses: list[str] = []
     if blueprint_id:
@@ -430,12 +439,29 @@ def lineage(
     if run_id:
         clauses.append("run_id = ?")
         params.append(run_id)
-    if clauses:
-        q += " WHERE " + " AND ".join(clauses)
-    q += " LIMIT ?"
-    params.append(limit)
+
     try:
         with store.connect() as cur:
+            if not run_id:
+                sub_where = " WHERE blueprint_id = ?" if blueprint_id else ""
+                sub_params = [blueprint_id] if blueprint_id else []
+                cur.execute(
+                    f"SELECT run_id FROM column_lineage{sub_where} "
+                    "ORDER BY captured_at DESC LIMIT 1",
+                    sub_params,
+                )
+                latest = cur.fetchone()
+                if not latest or not latest[0]:
+                    return []
+                clauses.append("run_id = ?")
+                params.append(latest[0])
+
+            where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+            q = (
+                "SELECT DISTINCT channel_id, output_column, source_table, source_column "
+                f"FROM column_lineage{where} ORDER BY channel_id, output_column LIMIT ?"
+            )
+            params.append(limit)
             cur.execute(q, params)
             rows = cur.fetchall()
     except Exception:
@@ -726,12 +752,26 @@ def runs_over_time(cfg: Any, store_dir: str | None = None, days: int = 30) -> li
 
 
 def failure_categories(cfg: Any, store_dir: str | None = None) -> dict[str, int]:
-    """Failure-category distribution across the fleet (best-effort)."""
+    """Failure-category distribution across the fleet (best-effort).
+
+    Phase 85 E1 — the second fallback query used to select a `category`
+    column from `failure_contexts` that has never existed in the DDL
+    (`aqueduct/surveyor/ddl.py`; the real column is `error_class`). It was
+    silently dead: wrapped in `except Exception: continue`, and unreachable
+    in practice besides — `healing_outcomes` is created by the SAME `_DDL`
+    string as `failure_contexts` (both `CREATE TABLE IF NOT EXISTS` in one
+    execute()), so the first query in this loop always succeeds (even
+    against an empty table) and `break`s before the second ever runs. The
+    fallback's real purpose is a genuinely pre-`healing_outcomes` legacy
+    store (one created before that table existed) — fixed to use the real
+    column name so that legacy-store case actually works instead of always
+    silently no-op'ing via the except clause.
+    """
     dist: dict[str, int] = {}
     for h in discover_stores(cfg, store_dir=store_dir):
         for sql in (
             "SELECT failure_category, COUNT(*) FROM healing_outcomes GROUP BY failure_category",
-            "SELECT category, COUNT(*) FROM failure_contexts GROUP BY category",
+            "SELECT error_class, COUNT(*) FROM failure_contexts GROUP BY error_class",
         ):
             try:
                 with h.store.connect() as cur:
@@ -787,6 +827,96 @@ def heal_stop_vs_success(cfg: Any, store_dir: str | None = None) -> list[dict[st
         except Exception:
             continue
     return rows
+
+
+def cascade_position_outcomes(cfg: Any, store_dir: str | None = None) -> list[dict[str, Any]]:
+    """Model-cascade-tier vs outcome (Phase 85 C1).
+
+    ``healing_outcomes.model_cascade_position`` is written by every cascade
+    step (the 0-based tier index of the model that produced this outcome —
+    0 = the cheap/fast model tried first, 1+ = escalation tiers) but was
+    never selected by any reader — cascade-tier-vs-outcome correlation was
+    unqueryable despite the data existing. One row per
+    ``(model_cascade_position, resolution, run_success_after_patch)``
+    combination with a count, merged across every discovered store.
+    """
+    agg: dict[tuple[Any, Any, Any], int] = {}
+    for h in discover_stores(cfg, store_dir=store_dir):
+        try:
+            with h.store.connect() as cur:
+                cur.execute(
+                    """
+                    SELECT model_cascade_position, resolution, run_success_after_patch,
+                           COUNT(*) AS cnt
+                    FROM healing_outcomes
+                    WHERE model_cascade_position IS NOT NULL
+                    GROUP BY model_cascade_position, resolution, run_success_after_patch
+                    """
+                )
+                for position, resolution, success, cnt in cur.fetchall():
+                    key = (position, resolution, success)
+                    agg[key] = agg.get(key, 0) + int(cnt)
+        except Exception:
+            continue
+    return [
+        {
+            "model_cascade_position": position,
+            "resolution": resolution,
+            "run_success_after_patch": "success" if success else "failed",
+            "count": cnt,
+        }
+        for (position, resolution, success), cnt in sorted(agg.items(), key=lambda kv: kv[0][0])
+    ]
+
+
+def heal_costs(cfg: Any, store_dir: str | None = None) -> list[dict[str, Any]]:
+    """Token cost per blueprint per month (Phase 85 D7).
+
+    Raw data was already fully captured in ``heal_attempts.tokens_in``/
+    ``tokens_out`` (per LLM turn) but had no aggregation query — only a flat,
+    un-grouped 100-row detail list (``heal_attempt_details``). Groups by
+    ``(blueprint_id, month)`` where month is the ``YYYY-MM`` prefix of
+    ``heal_attempts.recorded_at`` (a VARCHAR ISO-8601 timestamp — lexical
+    prefix slicing works identically on DuckDB and Postgres, no
+    backend-specific date-trunc function needed). ``blueprint_id`` comes via
+    a join to ``run_records`` — ``heal_attempts`` itself carries only
+    ``run_id``.
+    """
+    agg: dict[tuple[str, str], dict[str, int]] = {}
+    for h in discover_stores(cfg, store_dir=store_dir):
+        try:
+            with h.store.connect() as cur:
+                cur.execute(
+                    """
+                    SELECT r.blueprint_id,
+                           SUBSTR(CAST(ha.recorded_at AS VARCHAR), 1, 7) AS month,
+                           SUM(ha.tokens_in) AS tokens_in,
+                           SUM(ha.tokens_out) AS tokens_out,
+                           COUNT(*) AS attempts
+                    FROM heal_attempts ha
+                    JOIN run_records r ON r.run_id = ha.run_id
+                    GROUP BY r.blueprint_id, month
+                    """
+                )
+                for blueprint_id, month, tokens_in, tokens_out, attempts in cur.fetchall():
+                    key = (blueprint_id, month)
+                    slot = agg.setdefault(key, {"tokens_in": 0, "tokens_out": 0, "attempts": 0})
+                    slot["tokens_in"] += int(tokens_in or 0)
+                    slot["tokens_out"] += int(tokens_out or 0)
+                    slot["attempts"] += int(attempts or 0)
+        except Exception:
+            continue
+    return [
+        {
+            "blueprint_id": bp,
+            "month": month,
+            "tokens_in": v["tokens_in"],
+            "tokens_out": v["tokens_out"],
+            "tokens_total": v["tokens_in"] + v["tokens_out"],
+            "attempts": v["attempts"],
+        }
+        for (bp, month), v in sorted(agg.items(), key=lambda kv: (kv[0][1], kv[0][0]))
+    ]
 
 
 def heal_attempt_details(
@@ -1397,6 +1527,15 @@ def gate_rejection_rates(cfg: Any, store_dir: str | None = None) -> dict[str, in
       count therefore means heals are stalling on missing engines rather than
       on bad patches, which is an environment problem, not a model one; count
       it separately instead of reading its absence from this dict as health.
+    - `not_requested` means the sandbox gate was never invoked for that
+      preview — a caller-level fact synthesized outside this module
+      (`cli/patch.py`'s `patch preview` with no `--sandbox`), not a gate
+      verdict. It also blocks auto-apply, for the same fail-closed reason as
+      `unavailable`. Nothing currently persists a `not_requested` row to
+      `patch_simulation` (the one caller that synthesizes it never calls
+      `record_patch_simulation`), so it should not appear in this dict's
+      counts today; it is documented here so a future caller that DOES
+      persist it does not have to re-derive this partition.
 
     ⚠ Rows written before 2.1.0 may carry `skip`, the single word that used
     to cover both of the last two. It is not migrated and cannot be — the

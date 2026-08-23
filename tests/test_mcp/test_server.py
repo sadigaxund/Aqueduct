@@ -154,7 +154,7 @@ def _seed_store(store_dir: Path, error_text: str = "boom") -> None:
     conn.execute(
         "INSERT INTO run_records VALUES ('run1','bp1','error',"
         "'2026-01-01T00:00:00','2026-01-01T00:01:00',"
-        f'\'[{{"module_id":"m1","status":"error","error":"{error_text}"}}]\', NULL)'
+        f'\'[{{"module_id":"m1","status":"error","error":"{error_text}"}}]\', NULL, NULL)'
     )
     conn.close()
 

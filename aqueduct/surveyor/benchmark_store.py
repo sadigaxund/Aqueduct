@@ -480,12 +480,26 @@ def has_regressions(entries: list[DiffEntry]) -> bool:
 
 
 def format_diff_table(entries: list[DiffEntry]) -> str:
-    """Terminal-friendly summary of a list of DiffEntry."""
+    """Terminal-friendly summary of a list of DiffEntry.
+
+    Renders through the shared ``render/tables`` helper (Phase 85) — was
+    the cautionary example the survey called out for its hardcoded
+    ``:<32``/``:<24``/``:<12`` widths and manual ``[:30] + ".."``
+    truncation. Kept STRING-RETURNING (rather than switching to a
+    direct-print ``render_table`` call) because both CLI call sites
+    (``aqueduct/cli/benchmark.py:398`` and ``:570``) already do
+    ``click.echo(format_diff_table(...))`` — changing the signature would
+    ripple into two files this worker does not own beyond their
+    table-rendering blocks. ``notes`` is the flex column: it's a
+    semicolon-joined list of regression/improvement descriptions with far
+    more length variance than ``scenario``/``model``/``status``.
+    """
     if not entries:
         return "(no diff entries — store empty or no current results)"
-    lines: list[str] = []
-    lines.append(f"  {'scenario':<32} {'model':<24} {'status':<12} notes")
-    lines.append("  " + "─" * 90)
+
+    from aqueduct.cli.render.tables import Column, render_table_str
+
+    rows: list[list[str]] = []
     for e in entries:
         if e.baseline is None:
             status = "NEW"
@@ -503,10 +517,17 @@ def format_diff_table(entries: list[DiffEntry]) -> str:
             notes = ""
             if e.baseline_prompt_mismatch:
                 notes = "[baseline prompt_version differs]"
-        sid = (e.scenario_id[:30] + "..") if len(e.scenario_id) > 32 else e.scenario_id
-        model = (e.model[:22] + "..") if len(e.model) > 24 else e.model
-        lines.append(f"  {sid:<32} {model:<24} {status:<12} {notes}")
-    return "\n".join(lines)
+        rows.append([e.scenario_id, e.model, status, notes])
+
+    return render_table_str(
+        [
+            Column("scenario"),
+            Column("model"),
+            Column("status"),
+            Column("notes", flex=True),
+        ],
+        rows,
+    )
 
 
 # ── Aggregation / stats views ───────────────────────────────────────────────────

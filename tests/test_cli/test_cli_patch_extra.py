@@ -208,8 +208,12 @@ class TestPatchList:
         assert "PA" in result.output
         assert "PR" in result.output
 
-    def test_rationale_truncated_to_60_chars(self, setup):
-        """Rationale longer than 60 chars is truncated in output."""
+    def test_rationale_full_text_in_piped_output(self, setup):
+        """Phase 85: piped/non-TTY output (which is what ``CliRunner``
+        captures) never truncates — the shared table helper
+        (``aqueduct.cli.render.tables``) only truncates the flex
+        (``rationale``) column on an actual narrow TTY. The old hardcoded
+        ``[:60]`` cut is gone; full rationale text is expected here."""
         project, bp_path, patches_dir, patch_file = setup
         runner = CliRunner()
 
@@ -218,9 +222,7 @@ class TestPatchList:
 
         result = runner.invoke(cli, ["patch", "list", "--blueprint", str(bp_path)])
         assert result.exit_code == 0
-        # Only 60 chars visible, the extra 20 should be cut
-        assert "A" * 60 in result.output
-        assert "A" * 80 not in result.output
+        assert "A" * 80 in result.output
 
     def test_apply_reject_hints_after_pending_table(self, setup):
         """Hint lines are printed after the pending table."""
