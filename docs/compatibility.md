@@ -34,8 +34,8 @@ Each engine declares a verdict for every capability leaf in a YAML data file shi
 
 | Engine | Leaves declared | Supported | Version-gated | Ignored with warning | Unsupported |
 |---|---|---|---|---|---|
-| `duckdb` | 320 | 261 | 0 | 4 | 55 |
-| `spark` | 312 | 311 | 7 | 0 | 1 |
+| `duckdb` | 321 | 262 | 0 | 4 | 55 |
+| `spark` | 313 | 312 | 7 | 0 | 1 |
 
 ### Conditional and refused capabilities
 
