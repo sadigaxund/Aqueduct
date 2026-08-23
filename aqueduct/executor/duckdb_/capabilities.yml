@@ -80,9 +80,8 @@
 #   applicable to DuckDB at all.
 #   Delta / JDBC / Depot ingress+egress, egress.mode.overwrite_partitions,
 #   feature.{delta_write,delta_time_travel,parallel_mode}: DEFERRED, not
-#   architecturally blocked. See docs/roadmap.md "DuckDB: Delta, JDBC,
-#   Depot ingress/egress and related features" for the implementation path
-#   per leaf (delta-rs / postgres scanner / httpfs / per-thread cursor).
+#   architecturally blocked. Implementation path per leaf if ever picked
+#   up: delta-rs / postgres scanner / httpfs / per-thread cursor.
 #   Grouped in their own comment blocks below so the verdict flip is a
 #   one-line edit per leaf once a later stage picks one up.
 

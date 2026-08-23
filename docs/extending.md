@@ -560,7 +560,7 @@ assuming a group works.
 | `aqueduct.engines` | **Live.** Declared in `pyproject.toml`, resolved by `executor/capabilities.py::load_engines`. This guide is about writing one. |
 | `aqueduct.probe_signals` | **Resolved but unused.** `executor/probe_plugins.py` reads it; no package declares it. The `module:`/`entry:` pointer path carries the real load today. |
 | `aqueduct.tools` | **Reserved, not resolved.** The constant exists (`tools/registry.py`) and nothing reads it. Deliberate: a tool is code running on the driver, so custom-tool loading needs config allowlisting first. Do not implement loading without that gate. |
-| `aqueduct.actuators` | **Planned, not in code.** Phase 82 domains 3/5. |
+| `aqueduct.actuators` | **Reserved, not in code.** No loader exists and none is currently planned. |
 
 Anywhere plugin code executes on the driver, discovery alone is never
 authorization: an allowlist gates it.

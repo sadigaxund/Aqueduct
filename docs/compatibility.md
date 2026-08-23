@@ -150,10 +150,9 @@ Aqueduct is **not tested or supported against `spark.remote(...)` (Spark
 Connect) sessions.** The engine assumes a classic driver-embedded
 `SparkSession` with a local JVM gateway (py4j). The table below documents
 today's *actual* behavior if a Connect session were substituted, produced by
-running `skills/aqskill-audit-connect.md`'s detection commands against the
-tree and tracing each hit's exception path. This is a snapshot of current
-incompatibilities, not a roadmap; no Connect support is scheduled (see
-`docs/roadmap.md` if that changes).
+running Connect-specific detection commands against the tree and tracing each
+hit's exception path. This is a snapshot of current incompatibilities, not a
+roadmap; no Connect support is scheduled.
 
 | Call site | Feature it powers | Behavior under Connect | Fallback / current mitigation |
 |---|---|---|---|

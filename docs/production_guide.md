@@ -18,9 +18,9 @@ What Aqueduct supports in production, and what it does not.
 **Out of scope:**
 
 - **Databricks remote-submit deployment.** Removed from this release; Databricks is no longer a supported `deployment.target`.
-- **Spark Connect** (`spark.remote(...)`). Several call sites depend on classic-session internals (`SparkContext`, `_jdf`) and degrade gracefully rather than working under a Connect session. Revisit if Connect becomes the default batch path; see the roadmap.
+- **Spark Connect** (`spark.remote(...)`). Several call sites depend on classic-session internals (`SparkContext`, `_jdf`) and degrade gracefully rather than working under a Connect session.
 - **MotherDuck.** No support, and no code trace, for MotherDuck-hosted DuckDB.
-- **Delta write on DuckDB.** DuckDB has no Delta writer; every Delta write leaf is `unsupported` on that engine. Implementable via `delta-rs`; see the roadmap for the deferred design.
+- **Delta write on DuckDB.** DuckDB has no Delta writer; every Delta write leaf is `unsupported` on that engine. Implementable via `delta-rs` if demand appears.
 
 ---
 
@@ -345,9 +345,9 @@ agent:
 
 In `cluster` or `cloud` mode, `aqueduct doctor` warns when a Blueprint contains paths without a URI scheme.
 
-**Checkpoints require a driver+worker-visible filesystem.** `checkpoint: true` writes module checkpoints under the local observability store directory (`.aqueduct/observability/<blueprint_id>/checkpoints/<run_id>/`) by default. When Spark workers run in containers or on remote hosts that don't share the driver's filesystem (Docker-based Standalone, k8s), the checkpoint write fails per-module and degrades to a `runtime_checkpoint_write_failed` warning, the run still succeeds, but the recompute-avoidance benefit (and `--resume` for that module) is lost. Either mount the project directory into the worker containers so the path resolves on both sides, or drop `checkpoint: true` and accept the recompute (for small data the cost is negligible). A remote checkpoint root (`s3a://`) is a roadmap item (see `roadmap.md`).
+**Checkpoints require a driver+worker-visible filesystem.** `checkpoint: true` writes module checkpoints under the local observability store directory (`.aqueduct/observability/<blueprint_id>/checkpoints/<run_id>/`) by default. When Spark workers run in containers or on remote hosts that don't share the driver's filesystem (Docker-based Standalone, k8s), the checkpoint write fails per-module and degrades to a `runtime_checkpoint_write_failed` warning, the run still succeeds, but the recompute-avoidance benefit (and `--resume` for that module) is lost. Either mount the project directory into the worker containers so the path resolves on both sides, or drop `checkpoint: true` and accept the recompute (for small data the cost is negligible). A remote checkpoint root (`s3a://`) is not yet supported.
 
-**`checkpoint_root` override (2.8).** Set the top-level `checkpoint_root` key in `aqueduct.yml` to point checkpoints at a directory other than the derived `<store_dir>/checkpoints/`, e.g. a volume explicitly mounted into every worker container, or faster local disk on a single-node deployment. Local filesystem paths only; a `s3://`/`s3a://`/`gs://`/`hdfs://`/`abfss://` value is rejected at config-load (see the roadmap item above). Example:
+**`checkpoint_root` override (2.8).** Set the top-level `checkpoint_root` key in `aqueduct.yml` to point checkpoints at a directory other than the derived `<store_dir>/checkpoints/`, e.g. a volume explicitly mounted into every worker container, or faster local disk on a single-node deployment. Local filesystem paths only; a `s3://`/`s3a://`/`gs://`/`hdfs://`/`abfss://` value is rejected at config-load (see the note above). Example:
 
 ```yaml
 checkpoint_root: "/mnt/shared/aqueduct-checkpoints"

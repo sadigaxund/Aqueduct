@@ -133,7 +133,7 @@ One row per LLM turn inside the unified reprompt loop, finer-grained than
 | `error_class`       | VARCHAR             | Mirrors `failure_contexts.error_class` when available |
 | `where_field`       | VARCHAR             | Pydantic location string for validation errors |
 | `normalized_message`| VARCHAR             | Normalised error text: used to compute a signature at match time (`error_class`/`where`/`normalized_message` together identify a repeat failure); digits, quoted (`'…'`/`"…"`) values, backtick-quoted identifiers (`` `col` ``, Spark 4 `UNRESOLVED_COLUMN` style), and filesystem paths are collapsed to placeholders so failures differing only in specifics match identically |
-| `signature_hash`    | VARCHAR             | **No longer populated (2.85+, C1).** Column stays for schema compatibility (no migration) but every write leaves it NULL: it was found write-only in the Phase 85 observability audit (never selected by any reader; use `error_class`/`where_field`/`normalized_message` directly instead) |
+| `signature_hash`    | VARCHAR             | **No longer populated (2.85+).** Column stays for schema compatibility (no migration) but every write leaves it NULL: an observability-store audit found it write-only (never selected by any reader; use `error_class`/`where_field`/`normalized_message` directly instead) |
 | `tokens_in`         | INTEGER NOT NULL    | Prompt tokens; 0 when provider does not report usage |
 | `tokens_out`        | INTEGER NOT NULL    | Completion tokens |
 | `latency_ms`        | INTEGER NOT NULL    | Per-attempt wall clock |

@@ -1602,8 +1602,8 @@ class AqueductConfig(BaseModel):
             "Local filesystem path overriding the derived "
             "<store_dir>/checkpoints/ location for module checkpoint/resume "
             "state. LOCAL PATHS ONLY — remote URI schemes (s3://, s3a://, "
-            "gs://, hdfs://, abfss://, ...) are rejected at config-load; see "
-            "docs/roadmap.md 'Remote-Filesystem Checkpoint Root'."
+            "gs://, hdfs://, abfss://, ...) are rejected at config-load; "
+            "remote checkpoint roots are not supported."
         ),
         json_schema_extra={"engine_scoped": True},
     )
@@ -1710,11 +1710,10 @@ class AqueductConfig(BaseModel):
             scheme = v.split("://", 1)[0]
             raise ValueError(
                 f"checkpoint_root={v!r} uses a remote URI scheme ({scheme!r}://) "
-                "— checkpoint_root only supports local filesystem paths today. "
-                "Remote checkpoint roots (S3/GCS/HDFS/ABFSS) are tracked as a "
-                "roadmap item ('Remote-Filesystem Checkpoint Root' in "
-                "docs/roadmap.md). Use a local path, or omit checkpoint_root "
-                "to fall back to the derived <store_dir>/checkpoints/ default."
+                "— checkpoint_root only supports local filesystem paths today; "
+                "remote checkpoint roots (S3/GCS/HDFS/ABFSS) are not supported. "
+                "Use a local path, or omit checkpoint_root to fall back to the "
+                "derived <store_dir>/checkpoints/ default."
             )
         return v
 

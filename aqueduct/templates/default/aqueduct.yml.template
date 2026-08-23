@@ -242,7 +242,7 @@ stores:
 #
 # LOCAL FILESYSTEM PATHS ONLY — remote URI schemes (s3://, s3a://, gs://,
 # hdfs://, abfss://, ...) are rejected at config-load. Remote checkpoint
-# roots are a roadmap item (see docs/roadmap.md).
+# roots are not supported.
 #
 # checkpoint_root: "/mnt/fast-local/aqueduct-checkpoints"
 

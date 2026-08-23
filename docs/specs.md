@@ -12,7 +12,6 @@ Blueprint · Module · Ingress · Channel · Egress · Junction · Funnel · Pro
 > - **[Spark Guide](spark_guide.md)**: Compiler warnings, performance, tuning
 > - **[Observability Guide](observability_guide.md)**: Store schemas and diagnostic query cookbook
 > - **[Production Guide](production_guide.md)**: Cluster deployment, security, Delta operations
-> - **[Roadmap](roadmap.md)**: Deferred features and future plans
 
 **Contents:** [1. Introduction](#1-introduction) · [2. Naming Glossary](#2-naming-glossary) · [3. System Architecture](#3-system-architecture) · [4. Blueprint Format](#4-blueprint-format) · [5. Context Registry](#5-context-registry) · [6. Observability, Probes & Flow Report](#6-observability-probes--flow-report) · [7. Lineage](#7-lineage) · [8. Self-Healing & LLM Agent Loop](#8-self-healing--llm-agent-loop) · [9. Type System](#9-type-system) · [10. Deployment & Engine Integration](#10-deployment--engine-integration) · [11. Engine Scope & Boundaries](#11-engine-scope--boundaries)
 
@@ -365,7 +364,7 @@ Every spillway row carries the system columns `_aq_error_module`, `_aq_error_typ
 
 | Config field | Description |
 | :- | :- |
-| **format** | Spark data source format. Supports: parquet, delta, iceberg, hudi, csv, json, orc, avro, jdbc, kafka. `iceberg`/`hudi` require the matching `spark.jars.packages` and (Iceberg) a `spark.sql.catalog.*` in `engine.spark.conf`, see the Spark Guide. `format: custom` + `class:` registers a user Python DataSource (Spark 4.0+, see below). The `dataframe` format (Arcade cross-pipeline reference) is documented on the roadmap and not yet implemented. Not required when `table:` is set and mutual-exclusive with `table:` (set one or the other). |
+| **format** | Spark data source format. Supports: parquet, delta, iceberg, hudi, csv, json, orc, avro, jdbc, kafka. `iceberg`/`hudi` require the matching `spark.jars.packages` and (Iceberg) a `spark.sql.catalog.*` in `engine.spark.conf`, see the Spark Guide. `format: custom` + `class:` registers a user Python DataSource (Spark 4.0+, see below). The `dataframe` format (Arcade cross-pipeline reference) is not yet implemented. Not required when `table:` is set and mutual-exclusive with `table:` (set one or the other). |
 | **table** | Catalog table identifier (`catalog.schema.table`): passthrough to an external catalog. Read via `spark.read.table(table)`. The catalog is configured entirely through `engine.spark.conf` (e.g. `spark.sql.catalog.*` keys), external to Aqueduct. Mutually exclusive with `path:`, if both are set the engine raises an error. When `table:` is set, `format:` is not required. On DuckDB, resolved via `con.table(table)` against that engine's own catalog (`memory.main` for an unqualified name, unless a prior step in the same session changed the current catalog/schema, or `ATTACH`ed for a three-part name: Aqueduct never performs an implicit `ATTACH`); an unresolvable name raises naming the module and the table (see §10.9's `feature.table_addressing`). |
 | **path** | Source path or URL. Context Registry references allowed. Optional for `format: custom` and the pathless formats (jdbc/kafka/depot). Mutually exclusive with `table:`. |
 | **class** | For `format: custom`. Fully-qualified `module.Class` pointing at a `pyspark.sql.datasource.DataSource` subclass. |
@@ -1682,7 +1681,7 @@ into the single-model (`agent.approval: auto`, non-cascade) heal path.
 Multi-model cascade (§8's cascade model) interaction with progressive
 chaining is deferred: a cascade tier's escalation semantics and a chain
 link's advancement semantics are two independent axes that have not yet
-been reconciled; see `docs/roadmap.md`.
+been reconciled.
 
 ---
 
@@ -1908,7 +1907,7 @@ directory** (2.0: the earlier single-shared-file layout was removed; a
 - DuckDB takes an **exclusive lock** per file. Launching the *same* blueprint twice concurrently (one routed file) will block/fail, rare, but real.
 - Want **one merged store for every blueprint** (shared file semantics)? Use the **Postgres** backend (MVCC, concurrent writers). Cross-blueprint *reads* over routed DuckDB files already work, the fleet commands (`report`, `runs`) aggregate across `<base>/*/observability.db`.
 - **Reading while running:** `aqueduct report`/`runs`/`dashboard` open short-lived read-only connections, so they don't block writers; a file mid-write is momentarily skipped by the fleet view. You do **not** need to stop pipelines to inspect, but for conflict-free continuous monitoring, use Postgres.
-- *Planned:* dynamic templating in the path (e.g. `.aqueduct/obs-@aq.date.month().db` for time-partitioned stores), see `docs/roadmap.md`.
+- *Planned:* dynamic templating in the path (e.g. `.aqueduct/obs-@aq.date.month().db` for time-partitioned stores).
 
 ### **10.4.2 Checkpoint root override (2.8)**
 
@@ -1928,8 +1927,7 @@ Standalone cluster.
 **LOCAL FILESYSTEM PATHS ONLY.** A `checkpoint_root` value containing a remote
 URI scheme (`s3://`, `s3a://`, `gs://`, `hdfs://`, `abfss://`, ...) is rejected
 at config-load with an actionable error: remote checkpoint roots require
-Hadoop-FS-API bookkeeping that Aqueduct does not yet implement (tracked as
-"Remote-Filesystem Checkpoint Root" in `docs/roadmap.md`). A relative path is
+Hadoop-FS-API bookkeeping that Aqueduct does not yet implement. A relative path is
 resolved against the project root (the `aqueduct.yml` directory).
 
 **Resume is permissive, not strict.** Every checkpointed run writes a
