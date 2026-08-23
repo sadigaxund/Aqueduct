@@ -11,6 +11,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from aqueduct.dependencies import parse_requirement
 from aqueduct.parser.fs_path import FsPath
 from aqueduct.parser.models import ModuleType
 
@@ -1150,6 +1151,14 @@ class BlueprintSchema(BaseModel):
     retry_policy: RetryPolicySchema = Field(default_factory=RetryPolicySchema)
     agent: AgentSchema = Field(default_factory=AgentSchema)
     udf_registry: list[UdfSchema] = Field(default_factory=list)
+    # Flat list of PEP 508 requirement strings (Phase 88) — checked against
+    # the installed environment at COMPILE time (see
+    # `aqueduct.dependencies.check_requirements`, called from
+    # `aqueduct/compiler/compiler.py`). NOT engine-scoped, no capability
+    # leaf, no allowlist — Aqueduct never installs anything, so the only
+    # boundary is whatever is already importable. Left as-authored (no
+    # dedup) — that is the compile-time preflight's job, not the schema's.
+    dependencies: list[str] = Field(default_factory=list)
     macros: dict[str, str] = Field(default_factory=dict)
     required_context: list[str] = Field(default_factory=list)  # Arcade sub-Blueprint
     checkpoint: bool = False
@@ -1172,6 +1181,20 @@ class BlueprintSchema(BaseModel):
     def validate_blueprint_id(cls, v: str) -> str:
         if not v.strip():
             raise ValueError("Blueprint id must not be empty")
+        return v
+
+    @field_validator("dependencies")
+    @classmethod
+    def validate_dependencies(cls, v: list[str]) -> list[str]:
+        """Parse every `dependencies:` entry at PARSE time (not compile
+        time) — a malformed PEP 508 requirement string is a Blueprint
+        authoring mistake, so it must fail fast with the bad string named,
+        same as any other schema-level typo."""
+        for entry in v:
+            try:
+                parse_requirement(entry)
+            except ValueError as exc:
+                raise ValueError(f"invalid dependency requirement {entry!r}: {exc}") from exc
         return v
 
     @field_validator("modules", mode="before")
