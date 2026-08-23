@@ -856,28 +856,7 @@ def check_blueprint_sources_from_manifest(
         # ── Table-addressed Ingress/Egress (catalog.schema.table) ──────────────
         table_val: str | None = cfg.get("table")
         if table_val:
-            try:
-                from pyspark.sql import SparkSession
-
-                spark = SparkSession.builder.getOrCreate()
-                exists = spark.catalog.tableExists(table_val)
-                if exists:
-                    results.append(CheckResult(name, "ok", f"table exists: {table_val}", _ms(t)))
-                else:
-                    results.append(
-                        CheckResult(name, "fail", f"table not found: {table_val}", _ms(t))
-                    )
-            except ModuleNotFoundError:
-                results.append(
-                    CheckResult(
-                        name,
-                        "skip",
-                        "pyspark not installed — cannot verify table existence",
-                        _ms(t),
-                    )
-                )
-            except Exception as exc:
-                results.append(CheckResult(name, "warn", f"table {table_val!r}: {exc}", _ms(t)))
+            results.append(_table_exists_check(name, table_val, module.engine or "spark", t))
             continue
 
         # ── JDBC ──────────────────────────────────────────────────────────────
@@ -904,7 +883,16 @@ def check_blueprint_sources_from_manifest(
 
         # ── Cloud URIs — defer to storage check, or verify object under --preflight ─
         if path_val and re.match(r"(s3a?|gs|abfss?)://", path_val):
-            results.append(_cloud_uri_check(name, path_val, module.type, t, preflight=preflight))
+            results.append(
+                _cloud_uri_check(
+                    name,
+                    path_val,
+                    module.type,
+                    t,
+                    preflight=preflight,
+                    engine=module.engine or "spark",
+                )
+            )
             continue
 
         # ── Local / relative path (already fully resolved — no ${ctx.*} refs) ─
@@ -1313,16 +1301,78 @@ def check_cascade_tiers(
     return results
 
 
+def _table_exists_check(name: str, table_val: str, engine: str, t: float) -> CheckResult:
+    """Probe an Ingress/Egress ``table:`` config for existence, per the
+    module's RESOLVED engine — never unconditionally through Spark.
+
+    Only Spark implements a real probe today (``spark.catalog.tableExists``).
+    Any other engine (a DuckDB-resolved module, or any future engine) gets an
+    honest "not implemented for engine X" skip sourced from that engine's
+    ``tooling.doctor.table_exists`` capability-leaf hint, instead of the
+    Spark path's ``ModuleNotFoundError`` being misreported as "pyspark not
+    installed" for a module that was never going to use Spark in the first
+    place (``tmp/phase85/engine_parity_audit.md``, category (c) finding #3).
+    A real DuckDB ``information_schema``-based probe is explicitly deferred,
+    not built here — see the leaf hint.
+    """
+    if engine != "spark":
+        from aqueduct.executor.capabilities import Support, get_capabilities
+
+        leaf = get_capabilities(engine).verdict("tooling.doctor.table_exists")
+        if leaf.support == Support.SUPPORTED:
+            # No non-Spark engine implements this probe yet. A future engine
+            # that declares the leaf supported still needs its own branch
+            # wired in here — this must never silently claim coverage.
+            return CheckResult(
+                name,
+                "skip",
+                f"table-existence probe not implemented for engine {engine!r} in this "
+                "doctor build, though the engine declares tooling.doctor.table_exists "
+                "supported",
+                _ms(t),
+            )
+        return CheckResult(
+            name,
+            "skip",
+            f"table-existence check not implemented for engine {engine!r}: "
+            f"{leaf.hint or 'no probe implemented for this engine'}",
+            _ms(t),
+        )
+    try:
+        from pyspark.sql import SparkSession
+
+        spark = SparkSession.builder.getOrCreate()
+        exists = spark.catalog.tableExists(table_val)
+        if exists:
+            return CheckResult(name, "ok", f"table exists: {table_val}", _ms(t))
+        return CheckResult(name, "fail", f"table not found: {table_val}", _ms(t))
+    except ModuleNotFoundError:
+        return CheckResult(
+            name, "skip", "pyspark not installed — cannot verify table existence", _ms(t)
+        )
+    except Exception as exc:
+        return CheckResult(name, "warn", f"table {table_val!r}: {exc}", _ms(t))
+
+
 def _cloud_uri_check(
-    name: str, path_val: str, module_type: Any, t: float, *, preflight: bool
+    name: str, path_val: str, module_type: Any, t: float, *, preflight: bool, engine: str = "spark"
 ) -> CheckResult:
     """Probe a cloud-URI (s3a/gs/abfss) Ingress/Egress source.
 
     Default (no ``--preflight``): skip — only the storage check's endpoint
-    reachability runs. With ``--preflight`` a Spark session already exists, so
-    verify the object via Spark's own Hadoop ``FileSystem`` — reusing the exact
-    s3a/gcs/adls credentials the run will use (no separate SDK/cred setup, no
-    credential translation). pyspark is imported lazily so top-level
+    reachability runs. With ``--preflight``, only a module resolved to
+    **Spark** is actually verified — via a live Spark session's own Hadoop
+    ``FileSystem``, reusing the exact s3a/gcs/adls credentials the run will
+    use (no separate SDK/cred setup, no credential translation). A module
+    resolved to any OTHER engine is NEVER probed with Spark's Hadoop
+    credentials — doing so would validate the object against the WRONG
+    engine's credentials, exactly the cross-engine-credential mismatch
+    ``check_handoff_engine_access`` exists to prevent
+    (``tmp/phase85/engine_parity_audit.md``, category (c) finding #4).
+    Instead it gets an honest skip sourced from that engine's
+    ``tooling.doctor.cloud_preflight`` capability-leaf hint — a real
+    DuckDB-native httpfs/``engine.duckdb.s3_*``-based probe is future work,
+    not built here. pyspark is imported lazily so top-level
     ``import aqueduct.doctor`` stays pyspark-free.
     """
     if not preflight:
@@ -1331,6 +1381,27 @@ def _cloud_uri_check(
             "skip",
             f"cloud URI — endpoint reachability covered by storage check; "
             f"--preflight verifies the object exists: {path_val}",
+            _ms(t),
+        )
+    if engine != "spark":
+        from aqueduct.executor.capabilities import Support, get_capabilities
+
+        leaf = get_capabilities(engine).verdict("tooling.doctor.cloud_preflight")
+        if leaf.support == Support.SUPPORTED:
+            return CheckResult(
+                name,
+                "skip",
+                f"cloud-object preflight not implemented for engine {engine!r} in this "
+                "doctor build, though the engine declares tooling.doctor.cloud_preflight "
+                "supported",
+                _ms(t),
+            )
+        return CheckResult(
+            name,
+            "skip",
+            f"cloud-object preflight not implemented for engine {engine!r} — never "
+            f"validated with Spark Hadoop credentials for a non-Spark module: "
+            f"{leaf.hint or 'no probe implemented for this engine'}",
             _ms(t),
         )
     try:
@@ -1539,6 +1610,7 @@ def check_blueprint_sources(
     *,
     preflight: bool = False,
     _visited: frozenset[Path] | None = None,
+    default_engine: str = "spark",
 ) -> list[CheckResult]:
     """Parse a Blueprint and probe every Ingress/Egress path or JDBC endpoint.
 
@@ -1548,7 +1620,8 @@ def check_blueprint_sources(
     Cloud URIs (s3a://, gs://, abfss://): without ``preflight`` only the storage
     check's endpoint reachability runs; with ``preflight`` (a live Spark session)
     the object's existence is verified via Spark's Hadoop FileSystem, reusing the
-    run's exact s3a/gcs/adls credentials.
+    run's exact s3a/gcs/adls credentials — but only for a module that RESOLVES
+    to Spark; see ``_cloud_uri_check``/``_table_exists_check``.
     JDBC URLs: TCP socket probe to host:port (3s timeout — checks reachability,
                not credentials or schema).
     _context_override: caller-provided context injected when checking Arcade sub-blueprints.
@@ -1559,9 +1632,16 @@ def check_blueprint_sources(
               a visited-set here catches a cycle at ANY depth, not just past 10,
               and reports it as a CheckResult instead of a RecursionError that
               aborts the whole doctor run and loses every other check's results).
+    default_engine: ``cfg.deployment.engine`` — the fallback engine for any
+        module with no explicit ``engine:`` pin and no resolvable parent (this
+        function parses a raw Blueprint, not a compiled Manifest, so engine
+        resolution is redone here via ``resolve_module_engines`` rather than
+        reading an already-resolved ``Module.engine``).
     """
     import re
     import socket
+
+    from aqueduct.compiler.islands import resolve_module_engines
 
     _resolved_self = blueprint_path.resolve()
     _visited = _visited or frozenset()
@@ -1595,6 +1675,16 @@ def check_blueprint_sources(
         bp = parse(str(blueprint_path), cli_overrides=_context_override or {})
     except Exception as exc:
         return [CheckResult("blueprint", "fail", f"could not parse {blueprint_path}: {exc}")]
+
+    try:
+        _module_engines = resolve_module_engines(list(bp.modules), list(bp.edges), default_engine)
+    except Exception:
+        # A doctor check must never abort the whole run over an engine-
+        # resolution ambiguity the compiler itself will report properly at
+        # `aqueduct run`/`aqueduct validate` time — fall back to each
+        # module's own unresolved pin (or default_engine) so source checks
+        # below still get SOME engine to branch on.
+        _module_engines = {m.id: (m.engine or default_engine) for m in bp.modules}
 
     for module in bp.modules:
         cfg = module.config if isinstance(module.config, dict) else {}
@@ -1646,28 +1736,11 @@ def check_blueprint_sources(
         # ── Table-addressed Ingress/Egress (catalog.schema.table) ──────────────
         table_val: str | None = cfg.get("table")
         if table_val:
-            try:
-                from pyspark.sql import SparkSession
-
-                spark = SparkSession.builder.getOrCreate()
-                exists = spark.catalog.tableExists(table_val)
-                if exists:
-                    results.append(CheckResult(name, "ok", f"table exists: {table_val}", _ms(t)))
-                else:
-                    results.append(
-                        CheckResult(name, "fail", f"table not found: {table_val}", _ms(t))
-                    )
-            except ModuleNotFoundError:
-                results.append(
-                    CheckResult(
-                        name,
-                        "skip",
-                        "pyspark not installed — cannot verify table existence",
-                        _ms(t),
-                    )
+            results.append(
+                _table_exists_check(
+                    name, table_val, _module_engines.get(module.id, default_engine), t
                 )
-            except Exception as exc:
-                results.append(CheckResult(name, "warn", f"table {table_val!r}: {exc}", _ms(t)))
+            )
             continue
 
         # ── JDBC ──────────────────────────────────────────────────────────────
@@ -1695,7 +1768,16 @@ def check_blueprint_sources(
 
         # ── Cloud URIs — defer to storage check, or verify object under --preflight ─
         if path_val and re.match(r"(s3a?|gs|abfss?)://", path_val):
-            results.append(_cloud_uri_check(name, path_val, module.type, t, preflight=preflight))
+            results.append(
+                _cloud_uri_check(
+                    name,
+                    path_val,
+                    module.type,
+                    t,
+                    preflight=preflight,
+                    engine=_module_engines.get(module.id, default_engine),
+                )
+            )
             continue
 
         # ── Local / relative path ──────────────────────────────────────────
@@ -1779,6 +1861,7 @@ def check_blueprint_sources(
             _context_override=module.context_override or {},
             preflight=preflight,
             _visited=_visited,
+            default_engine=default_engine,
         )
         # Prefix each result name so the user knows which arcade it came from
         for r in sub_results:
@@ -2195,7 +2278,9 @@ def run_doctor(
         results.append(CheckResult("spark", "skip", "--skip-spark flag set", group="spark"))
         results.append(check_storage(cfg.engine.spark.conf, spark_ok=False, skipped=True))
         if blueprint_path is not None:
-            results.extend(check_blueprint_sources(blueprint_path))
+            results.extend(
+                check_blueprint_sources(blueprint_path, default_engine=cfg.deployment.engine)
+            )
             results.extend(check_capabilities(blueprint_path, engine=cfg.deployment.engine))
         if aqtest_path is not None:
             results.extend(check_aqtest(aqtest_path))
@@ -2219,6 +2304,7 @@ def run_doctor(
             check_blueprint_sources(
                 blueprint_path,
                 preflight=preflight and spark_result.status != "fail",
+                default_engine=cfg.deployment.engine,
             )
         )
         results.extend(check_capabilities(blueprint_path, engine=cfg.deployment.engine))

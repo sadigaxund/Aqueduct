@@ -6,7 +6,10 @@ self-heal is the **reactive arm** (fix after a failure), `drift` is the
 is caught and healed *before* the pipeline ever fails.
 
 Flow per Ingress:
-  1. Read the live source schema metadata-only (zero Spark actions).
+  1. Read the live source schema metadata-only (zero actions), through each
+     module's OWN resolved engine — a polyglot Blueprint's DuckDB-resolved
+     Ingress modules are read via DuckDB, its Spark-resolved ones via Spark;
+     never a single hardcoded engine for the whole run.
   2. Diff against the self-owned baseline (last-seen schema in `drift_checks`).
      No baseline yet → store it, report `baseline_set`, no heal.
   3. Classify: dropped/type-changed = breaking; added = benign.
@@ -99,6 +102,16 @@ def drift(
             blueprint_path=Path(blueprint),
             deployment_env=getattr(cfg.deployment, "env", None),
             deployment_target=getattr(cfg.deployment, "target", None),
+            # `compile()` defaults `engine="spark"` when not given — omitting
+            # this meant EVERY module resolved to Spark regardless of
+            # `cfg.deployment.engine`, silently defeating the per-module
+            # engine routing below no matter how it read `mod.engine`. Same
+            # root cause as the audit's finding #2 (tmp/phase85/
+            # engine_parity_audit.md, category (c)), one layer up: the
+            # hardcoded engine was here, at compile time, not just in the
+            # session-building code that consumed the (always-"spark")
+            # result.
+            engine=cfg.deployment.engine,
         )
     except (ParseError, CompileError) as exc:
         _funnel_error(f"could not compile {blueprint!r}: {exc}")
@@ -121,15 +134,41 @@ def drift(
 
     manifest_json = _json.dumps(manifest.to_dict(), ensure_ascii=False)
 
-    # ── Spark session (metadata-only reads — no actions) ───────────────────────
-    from aqueduct.executor.session_config import resolve_session_engine_config
-    from aqueduct.executor.spark.ingress import read_source_schema
-    from aqueduct.executor.spark.session import make_spark_session
-
-    merged_spark_config = resolve_session_engine_config(cfg, "spark", manifest)
-    session = make_spark_session(
-        manifest.blueprint_id, merged_spark_config, master_url=cfg.engine.spark.master_url
+    # ── Per-module engine session (metadata-only reads — no actions) ───────────
+    # Route through EACH module's own resolved engine (`mod.engine`, set by
+    # `resolve_module_engines` at compile time), not a hardcoded "spark" —
+    # a DuckDB-deployed pipeline used to read schemas via a Spark session
+    # regardless of what actually runs it (tmp/phase85/engine_parity_audit.md,
+    # category (c) finding #2). `read_source_schema` is an `ExecutorProtocol`
+    # seam built for exactly this (`aqueduct/executor/protocol.py`), and both
+    # shipped engines declare `tooling.drift_schema_read: supported`
+    # (capabilities.yml) — this is a routing fix, not a capability gate.
+    # Sessions are built lazily, one per DISTINCT engine among the checked
+    # Ingress modules (a single-engine Blueprint never pays for more than
+    # one), and all closed in the top-level `finally` below.
+    from aqueduct.executor.protocol import SessionSpec, get_protocol
+    from aqueduct.executor.session_config import (
+        resolve_session_engine_config,
+        session_secrets_options,
     )
+
+    _protocols: dict[str, Any] = {}
+    _sessions: dict[str, Any] = {}
+
+    def _session_for(engine: str) -> tuple[Any, Any]:
+        if engine not in _sessions:
+            protocol = get_protocol(engine)
+            _protocols[engine] = protocol
+            _sessions[engine] = protocol.session_factory()(
+                SessionSpec(
+                    blueprint_id=manifest.blueprint_id,
+                    engine_config=resolve_session_engine_config(cfg, engine, manifest),
+                    master_url=cfg.engine.spark.master_url if engine == "spark" else "",
+                    timezone=cfg.timezone,
+                    engine_options=session_secrets_options(cfg, manifest),
+                )
+            )
+        return _protocols[engine], _sessions[engine]
 
     results: list[dict[str, Any]] = []
     undiffable = False
@@ -137,8 +176,15 @@ def drift(
 
     try:
         for mod in ingress:
+            mod_engine = mod.engine or cfg.deployment.engine
             try:
-                live = read_source_schema(mod, session)
+                protocol, session = _session_for(mod_engine)
+                if protocol.read_source_schema is None:
+                    raise RuntimeError(
+                        f"engine {mod_engine!r} does not support reading a live source schema "
+                        "(ExecutorProtocol.read_source_schema is None for this engine)"
+                    )
+                live = protocol.read_source_schema(mod, session)
             except Exception as exc:
                 undiffable = True
                 results.append({"module": mod.id, "status": "undiffable", "error": str(exc)})
@@ -206,10 +252,11 @@ def drift(
             )
             _echo_result(mod.id, result, patch_id)
     finally:
-        try:
-            session.stop()
-        except Exception:
-            pass  # session.stop() is best-effort cleanup in a finally; the process is about to exit
+        for _engine, _session in _sessions.items():
+            try:
+                _protocols[_engine].session_closer()(_session)
+            except Exception:
+                pass  # best-effort cleanup in a finally; the process is about to exit
 
     if fmt == "json":
         emit({"blueprint_id": manifest.blueprint_id, "checks": results}, fmt="json")

@@ -30,8 +30,13 @@ Deliberately NOT unified with Spark's jar-availability machinery
 (``executor/spark/warnings/jar_availability.py``) — see AGENTS.md: jars ship
 to an executor FLEET at session creation, extensions ``INSTALL``/``LOAD``
 per-connection, in-process. Different lifecycles, same DIAGNOSTIC SHAPE only
-(a per-engine "pluggable binary dependency may be missing" warning +
-``aqueduct doctor`` row) — see ``duckdb_/warnings/httpfs_availability.py``.
+(a per-engine "pluggable binary dependency may be missing" session-startup
+warning) — see ``duckdb_/warnings/httpfs_availability.py``. NOTE: neither
+engine's version of this warning pairs with an ``aqueduct doctor`` row today
+— no ``jar_availability``/``httpfs_availability`` doctor check exists for
+either engine (a prior version of this docstring claimed one existed for
+this warning; it did not — see ``tmp/phase85/engine_parity_audit.md``,
+category (b) closing note).
 """
 
 from __future__ import annotations
@@ -65,7 +70,7 @@ class DuckDBExtensionError(AqueductError):
 
 
 def ensure_extension(
-    conn: "duckdb.DuckDBPyConnection",
+    conn: duckdb.DuckDBPyConnection,
     name: str,
     *,
     extension_repository: str | None = None,
@@ -103,7 +108,7 @@ def ensure_extension(
 
 
 def configure_s3_secret(
-    conn: "duckdb.DuckDBPyConnection",
+    conn: duckdb.DuckDBPyConnection,
     *,
     key_id: str,
     secret: str,

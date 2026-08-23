@@ -13,6 +13,7 @@ Two properties, and both are load-bearing in OPPOSITE directions:
 
 from __future__ import annotations
 
+import ast
 import re
 import tomllib
 from pathlib import Path
@@ -519,7 +520,7 @@ def _file_marker_groups(text: str) -> list[frozenset[str]]:
     return list(groups)
 
 
-def _parse_pytest_command(cmd: str) -> tuple[list[str], "str | None"]:
+def _parse_pytest_command(cmd: str) -> tuple[list[str], str | None]:
     """One `pytest ...` line -> (its `tests/...` path args, its `-m` marker
     expression or None). Sibling of `_positive_coverage` above, but keeps
     each command's path list and marker expression paired instead of pooling
@@ -538,7 +539,7 @@ def _parse_pytest_command(cmd: str) -> tuple[list[str], "str | None"]:
     return paths, marker_expr
 
 
-def _marker_expr_selects_group(marker_expr: "str | None", group: frozenset[str]) -> bool:
+def _marker_expr_selects_group(marker_expr: str | None, group: frozenset[str]) -> bool:
     """True if a lane whose `-m` clause is `marker_expr` (None = no filter)
     would run a test carrying EXACTLY the marker combination `group`.
     Restricted to the flat `<term>` / `not <term>` grammar every `-m` clause
@@ -965,4 +966,109 @@ def test_pyproject_dev_tooling_extras_stay_out_of_all():
         assert leaked not in all_members, (
             f"dev-tooling extra '{name}' appears inside [all] — dev-tooling "
             "extras are documented as staying OUT of all/the runtime axes."
+        )
+
+
+# ── Spark-import quarantine (Phase 85 Wave 4) ───────────────────────────────
+#
+# The engine-parity audit (tmp/phase85/engine_parity_audit.md, category (c))
+# found `aqueduct/cli/project.py` and `aqueduct/cli/drift.py` hardcoding a
+# Spark import with NO branch on `deployment.engine`/the module's resolved
+# engine — a DuckDB project silently got Spark-flavored test/drift results.
+# Both were fixed to route through `ExecutorProtocol`/`get_capabilities`
+# instead of importing `aqueduct.executor.spark` by name. This test keeps
+# that fix from regressing: any NEW `aqueduct.executor.spark` import
+# anywhere under `aqueduct/cli/` or `aqueduct/doctor/` must be an explicit,
+# reasoned addition to `_SPARK_IMPORT_ALLOWLIST` below, not a silent
+# reintroduction of the same bug family.
+#
+# Deliberately file-scoped, not line-scoped: every current site in the
+# allowlisted files is already gated behind an explicit engine check or is a
+# genuinely Spark-only capability with no cross-engine seam (`check_java`/
+# `check_spark`, the `format: custom` DataSource probe) — see the reason
+# strings. A new import added to an ALREADY-allowlisted file still needs a
+# human to notice it in review; the bar this test enforces is "no new FILE
+# joins the allowlist without a reason," matching this repo's other
+# allowlist-shaped meta-tests (e.g. `_MAIN_ONLY_TEST_DIR_ALLOWLIST` above).
+_SPARK_IMPORT_ALLOWLIST: dict[str, str] = {
+    "aqueduct/cli/project.py": (
+        "test_cmd's Spark session/test-runner import is gated behind an "
+        "explicit cfg.deployment.engine check against the "
+        "tooling.test_runner capability leaf (Phase 85 Wave 4 P1) — DuckDB "
+        "has no test runner at all, so there is no protocol seam to route "
+        "through yet; the import only happens on the engine=='spark' path."
+    ),
+    "aqueduct/cli/run.py": (
+        "the --sandbox dry-run path and its ProbeSampling import are each "
+        "preceded by an explicit `if engine != 'spark': ... sys.exit(...)` "
+        "guard (see the --sandbox refusal) — never reached for a "
+        "non-Spark-resolved run. Owned by a concurrent Phase 85 worker; not "
+        "touched by this file."
+    ),
+    "aqueduct/doctor/__init__.py": (
+        "check_java/check_spark(preflight=...) are genuinely Spark-only "
+        "diagnostics (JVM, cluster master) with no DuckDB analog by design "
+        "(tmp/phase85/engine_parity_audit.md category (b)); the "
+        "format=='custom' custom-DataSource probe is a governed Spark-only "
+        "capability (egress/ingress format leaves), gated on `fmt == "
+        '"custom"` before the import — never reached for any other format.'
+    ),
+}
+
+
+def _spark_imports_under(root: Path) -> dict[str, list[int]]:
+    """Return {repo-relative posix path: [line numbers]} for every
+    `aqueduct.executor.spark`(.*) import found via AST (not a text grep —
+    a grep would also flag the string appearing in a comment/docstring,
+    which several files in this quarantine legitimately do)."""
+    hits: dict[str, list[int]] = {}
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        lines: list[int] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "aqueduct.executor.spark" or alias.name.startswith(
+                        "aqueduct.executor.spark."
+                    ):
+                        lines.append(node.lineno)
+            elif isinstance(node, ast.ImportFrom):
+                mod = node.module or ""
+                if mod == "aqueduct.executor.spark" or mod.startswith("aqueduct.executor.spark."):
+                    lines.append(node.lineno)
+        if lines:
+            hits[str(path.relative_to(_REPO).as_posix())] = lines
+    return hits
+
+
+def test_no_stray_spark_imports_under_cli_or_doctor():
+    """Fails loudly, naming the offending file, if any module under
+    `aqueduct/cli/` or `aqueduct/doctor/` imports `aqueduct.executor.spark`
+    (directly or a submodule of it) from OUTSIDE the small, reasoned
+    `_SPARK_IMPORT_ALLOWLIST` above. See that allowlist's comment for why
+    each currently-allowlisted file is legitimate and why this is
+    file-scoped rather than line-scoped.
+    """
+    hits: dict[str, list[int]] = {}
+    for root in (_REPO / "aqueduct" / "cli", _REPO / "aqueduct" / "doctor"):
+        hits.update(_spark_imports_under(root))
+
+    unexplained = {f: lines for f, lines in hits.items() if f not in _SPARK_IMPORT_ALLOWLIST}
+    assert not unexplained, (
+        "aqueduct.executor.spark imported outside the reasoned allowlist "
+        f"(tests/test_meta_ci.py::_SPARK_IMPORT_ALLOWLIST): {unexplained!r}. "
+        "Route through ExecutorProtocol/get_capabilities per "
+        "aqueduct/executor/protocol.py instead of importing Spark by name — "
+        "or, if this really is a new legitimate site, add it to "
+        "_SPARK_IMPORT_ALLOWLIST with a reason."
+    )
+
+    # Every allowlisted file must actually still import Spark somewhere —
+    # an entry that stops matching anything is dead allowlist, not evidence
+    # of a fix; catches the allowlist quietly drifting out of sync with the
+    # code the same way an unused lint-suppression comment would.
+    for f in _SPARK_IMPORT_ALLOWLIST:
+        assert f in hits, (
+            f"{f!r} is in _SPARK_IMPORT_ALLOWLIST but no longer imports "
+            "aqueduct.executor.spark — remove the stale allowlist entry."
         )

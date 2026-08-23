@@ -122,8 +122,6 @@ def test_cmd(
     from aqueduct.cli.style import error as _error
     from aqueduct.cli.style import success as _success
     from aqueduct.config import ConfigError, load_config
-    from aqueduct.executor.spark.session import make_spark_session, stop_spark_session
-    from aqueduct.executor.spark.test_runner import TestSchemaError, run_test_file
 
     try:
         _resolve_and_load_env(
@@ -140,6 +138,26 @@ def test_cmd(
     except ConfigError as exc:
         _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
+
+    # `aqueduct test` only has a real test runner on Spark today
+    # (`tooling.test_runner` in capabilities.yml). Route through
+    # `cfg.deployment.engine` and refuse loudly for any other engine instead
+    # of silently substituting Spark's SQL/type semantics for whatever the
+    # project actually deploys on — the bug this branch replaced (see
+    # tmp/phase85/engine_parity_audit.md, category (c) finding #1).
+    from aqueduct.executor.capabilities import Support, get_capabilities
+
+    engine = cfg.deployment.engine
+    _leaf = get_capabilities(engine).verdict("tooling.test_runner")
+    if _leaf.support != Support.SUPPORTED:
+        _error(
+            f"aqueduct test does not support engine {engine!r}: "
+            f"{_leaf.hint or 'tooling.test_runner is unsupported for this engine'}"
+        )
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    from aqueduct.executor.spark.session import make_spark_session, stop_spark_session
+    from aqueduct.executor.spark.test_runner import TestSchemaError, run_test_file
 
     merged_spark_config = dict(cfg.engine.spark.conf)
 

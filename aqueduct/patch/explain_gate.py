@@ -108,11 +108,38 @@ def capture_plan_snapshot(df: Any) -> dict[str, Any]:
 # ── explain gate ────────────────────────────────────────────────────────────────────
 
 
+def _not_applicable_detail(engine: str | None) -> str:
+    """Word Gate 4's ``NOT_APPLICABLE`` detail for the real reason there is
+    no baseline: "hasn't run yet" (a Spark project's first heal) vs. "this
+    engine will never produce one" (DuckDB — no plan-snapshot capture
+    implemented at all). Contrast `perf_attribution.py`'s ``VOLUME_UNAVAILABLE``,
+    which names the engine gap explicitly rather than reading as transient.
+
+    ``engine`` is optional and best-effort: existing callers that predate
+    this parameter (and any future engine this repo has never heard of) keep
+    the original, engine-agnostic wording rather than erroring.
+    """
+    if engine and engine != "spark":
+        try:
+            from aqueduct.executor.capabilities import Support, get_capabilities
+
+            leaf = get_capabilities(engine).verdict("agent.field.block_on_explain_regression")
+            if leaf.support != Support.SUPPORTED:
+                return (
+                    f"not implemented on {engine!r}: "
+                    f"{leaf.hint or 'this engine has no plan-snapshot capture'}"
+                )
+        except Exception:
+            pass  # unknown/unregistered engine — fall through to the generic wording
+    return "no pre-patch explain_snapshot rows; baseline not yet established"
+
+
 def run_explain_gate(
     baseline_by_module: dict[str, dict],
     after_by_module: dict[str, dict],
     *,
     touched_modules: list[str] | None = None,
+    engine: str | None = None,
 ) -> ExplainGateResult:
     """Compare post-patch plan counts against pre-patch baseline.
 
@@ -124,6 +151,11 @@ def run_explain_gate(
                              after a sandbox/compile run.
         touched_modules:     Optional restriction — only diff these modules.
                              Default = all modules present in both maps.
+        engine:              The resolved execution engine (``"spark"``,
+                             ``"duckdb"``, ...), used ONLY to word the
+                             ``not_applicable`` detail honestly — see
+                             ``_not_applicable_detail``. Optional; omitting
+                             it keeps the original engine-agnostic wording.
 
     Status:
       ``pass``            no regression on any compared module
@@ -153,7 +185,7 @@ def run_explain_gate(
 
     if not baseline_by_module:
         result.status = GateStatus.NOT_APPLICABLE
-        result.detail = "no pre-patch explain_snapshot rows; baseline not yet established"
+        result.detail = _not_applicable_detail(engine)
         result.duration_ms = int((time.monotonic() - t0) * 1000)
         return result
 

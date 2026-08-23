@@ -151,3 +151,40 @@ def test_run_explain_gate_real_regression_still_warns():
     result = run_explain_gate(baseline, after, touched_modules=["m1"])
     assert result.status == "warn"
     assert result.regressions[0].metric == "broadcast"
+
+
+# ── NOT_APPLICABLE detail wording (Phase 85 Wave 4 P6) ─────────────────────
+
+
+def test_not_applicable_detail_names_duckdb_when_engine_is_the_cause():
+    """DuckDB will NEVER produce an explain_snapshot baseline (no plan-
+    snapshot capture implemented at all — agent.field.block_on_explain_
+    regression: unsupported). The detail text must say so explicitly rather
+    than reading as "hasn't run yet.\" """
+    result = run_explain_gate({}, {"m1": {"exchange_count": 1}}, engine="duckdb")
+    assert result.status == "not_applicable"
+    assert "not implemented on 'duckdb'" in result.detail
+
+    from aqueduct.executor.capabilities import get_capabilities
+
+    hint = get_capabilities("duckdb").verdict("agent.field.block_on_explain_regression").hint
+    assert hint, "agent.field.block_on_explain_regression must declare a hint when unsupported"
+    assert hint in result.detail
+
+
+def test_not_applicable_detail_unchanged_for_spark_no_baseline_yet():
+    """On Spark, no baseline really does just mean "hasn't run yet" — the
+    original engine-agnostic wording must be preserved, not replaced with a
+    false "not implemented" claim."""
+    result = run_explain_gate({}, {"m1": {"exchange_count": 1}}, engine="spark")
+    assert result.status == "not_applicable"
+    assert result.detail == "no pre-patch explain_snapshot rows; baseline not yet established"
+
+
+def test_not_applicable_detail_unchanged_when_engine_omitted():
+    """Existing callers (aqueduct/cli/patch.py, aqueduct/cli/__init__.py)
+    predate the `engine` kwarg — omitting it must keep the exact original
+    wording, not error or silently guess."""
+    result = run_explain_gate({}, {"m1": {"exchange_count": 1}})
+    assert result.status == "not_applicable"
+    assert result.detail == "no pre-patch explain_snapshot rows; baseline not yet established"
