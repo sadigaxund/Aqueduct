@@ -1472,6 +1472,7 @@ if __name__ == "__main__":
 # ── extracted command families (registered + re-exported) ──────────────────────
 from .benchmark import benchmark, benchmark_diff_cmd, benchmark_stats_cmd  # noqa: E402,F401
 from .blueprint import blueprint_group, blueprint_history_cmd  # noqa: E402,F401
+from .compile_cmd import compile  # noqa: E402,F401
 from .dev import (  # noqa: E402,F401
     capabilities_check,
     capabilities_docs,
@@ -1483,6 +1484,7 @@ from .dev import (  # noqa: E402,F401
 )
 from .diagnostics import doctor, lint_cmd, schema, validate  # noqa: E402,F401
 from .drift import drift  # noqa: E402,F401
+from .handoff import handoff, handoff_sweep  # noqa: E402,F401
 from .heal import heal  # noqa: E402,F401
 from .mcp import mcp_group, mcp_serve  # noqa: E402,F401
 from .observability import lineage, report, runs, signal  # noqa: E402,F401
@@ -1499,5 +1501,5 @@ from .patch import (  # noqa: E402,F401,F811
     rollback_cmd,
 )
 from .project import completion_cmd, init, test_cmd  # noqa: E402,F401
-from .run import compile, run  # noqa: E402,F401
+from .run import run  # noqa: E402,F401
 from .stores import stores_group, stores_info, stores_migrate  # noqa: E402,F401
