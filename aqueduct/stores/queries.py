@@ -829,6 +829,96 @@ def heal_stop_vs_success(cfg: Any, store_dir: str | None = None) -> list[dict[st
     return rows
 
 
+def cascade_position_outcomes(cfg: Any, store_dir: str | None = None) -> list[dict[str, Any]]:
+    """Model-cascade-tier vs outcome (Phase 85 C1).
+
+    ``healing_outcomes.model_cascade_position`` is written by every cascade
+    step (the 0-based tier index of the model that produced this outcome —
+    0 = the cheap/fast model tried first, 1+ = escalation tiers) but was
+    never selected by any reader — cascade-tier-vs-outcome correlation was
+    unqueryable despite the data existing. One row per
+    ``(model_cascade_position, resolution, run_success_after_patch)``
+    combination with a count, merged across every discovered store.
+    """
+    agg: dict[tuple[Any, Any, Any], int] = {}
+    for h in discover_stores(cfg, store_dir=store_dir):
+        try:
+            with h.store.connect() as cur:
+                cur.execute(
+                    """
+                    SELECT model_cascade_position, resolution, run_success_after_patch,
+                           COUNT(*) AS cnt
+                    FROM healing_outcomes
+                    WHERE model_cascade_position IS NOT NULL
+                    GROUP BY model_cascade_position, resolution, run_success_after_patch
+                    """
+                )
+                for position, resolution, success, cnt in cur.fetchall():
+                    key = (position, resolution, success)
+                    agg[key] = agg.get(key, 0) + int(cnt)
+        except Exception:
+            continue
+    return [
+        {
+            "model_cascade_position": position,
+            "resolution": resolution,
+            "run_success_after_patch": "success" if success else "failed",
+            "count": cnt,
+        }
+        for (position, resolution, success), cnt in sorted(agg.items(), key=lambda kv: kv[0][0])
+    ]
+
+
+def heal_costs(cfg: Any, store_dir: str | None = None) -> list[dict[str, Any]]:
+    """Token cost per blueprint per month (Phase 85 D7).
+
+    Raw data was already fully captured in ``heal_attempts.tokens_in``/
+    ``tokens_out`` (per LLM turn) but had no aggregation query — only a flat,
+    un-grouped 100-row detail list (``heal_attempt_details``). Groups by
+    ``(blueprint_id, month)`` where month is the ``YYYY-MM`` prefix of
+    ``heal_attempts.recorded_at`` (a VARCHAR ISO-8601 timestamp — lexical
+    prefix slicing works identically on DuckDB and Postgres, no
+    backend-specific date-trunc function needed). ``blueprint_id`` comes via
+    a join to ``run_records`` — ``heal_attempts`` itself carries only
+    ``run_id``.
+    """
+    agg: dict[tuple[str, str], dict[str, int]] = {}
+    for h in discover_stores(cfg, store_dir=store_dir):
+        try:
+            with h.store.connect() as cur:
+                cur.execute(
+                    """
+                    SELECT r.blueprint_id,
+                           SUBSTR(CAST(ha.recorded_at AS VARCHAR), 1, 7) AS month,
+                           SUM(ha.tokens_in) AS tokens_in,
+                           SUM(ha.tokens_out) AS tokens_out,
+                           COUNT(*) AS attempts
+                    FROM heal_attempts ha
+                    JOIN run_records r ON r.run_id = ha.run_id
+                    GROUP BY r.blueprint_id, month
+                    """
+                )
+                for blueprint_id, month, tokens_in, tokens_out, attempts in cur.fetchall():
+                    key = (blueprint_id, month)
+                    slot = agg.setdefault(key, {"tokens_in": 0, "tokens_out": 0, "attempts": 0})
+                    slot["tokens_in"] += int(tokens_in or 0)
+                    slot["tokens_out"] += int(tokens_out or 0)
+                    slot["attempts"] += int(attempts or 0)
+        except Exception:
+            continue
+    return [
+        {
+            "blueprint_id": bp,
+            "month": month,
+            "tokens_in": v["tokens_in"],
+            "tokens_out": v["tokens_out"],
+            "tokens_total": v["tokens_in"] + v["tokens_out"],
+            "attempts": v["attempts"],
+        }
+        for (bp, month), v in sorted(agg.items(), key=lambda kv: (kv[0][1], kv[0][0]))
+    ]
+
+
 def heal_attempt_details(
     cfg: Any, store_dir: str | None = None, limit: int = 100
 ) -> list[dict[str, Any]]:

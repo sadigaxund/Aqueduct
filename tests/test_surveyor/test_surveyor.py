@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+
 import pytest
 
 pytestmark = pytest.mark.unit
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch  # noqa: E402
 
 try:
     from aqueduct.executor.models import ExecutionResult, ModuleResult
 except ImportError:
     pytest.skip("pyspark required", allow_module_level=True)
-from aqueduct.surveyor.surveyor import Surveyor
-from aqueduct.config import WebhookEndpointConfig
+from datetime import UTC  # noqa: E402
+
+from aqueduct.config import WebhookEndpointConfig  # noqa: E402
+from aqueduct.surveyor.surveyor import Surveyor  # noqa: E402
 
 
 def test_surveyor_record_fires_webhook():
@@ -78,6 +81,7 @@ class TestEvaluateRegulatorSignalOverride:
 
     def _make_manifest(self, probe_id="probe1", regulator_id="reg1"):
         from unittest.mock import MagicMock
+
         from aqueduct.compiler.models import Manifest
 
         edge = MagicMock()
@@ -90,9 +94,11 @@ class TestEvaluateRegulatorSignalOverride:
         return manifest
 
     def test_override_false_blocks_even_if_probe_says_true(self, tmp_path):
+        from datetime import datetime
+
         import duckdb
-        from datetime import datetime, timezone
-        from aqueduct.surveyor.surveyor import Surveyor, _SIGNAL_OVERRIDES_DDL
+
+        from aqueduct.surveyor.surveyor import _SIGNAL_OVERRIDES_DDL, Surveyor
 
         manifest = self._make_manifest()
         store = tmp_path / "signals"
@@ -102,7 +108,7 @@ class TestEvaluateRegulatorSignalOverride:
         conn.execute(_SIGNAL_OVERRIDES_DDL)
         conn.execute(
             "INSERT INTO signal_overrides VALUES (?, ?, ?, ?)",
-            ["probe1", False, None, datetime.now(tz=timezone.utc).isoformat()],
+            ["probe1", False, None, datetime.now(tz=UTC).isoformat()],
         )
         conn.close()
 
@@ -124,9 +130,9 @@ class TestEvaluateRegulatorSignalOverride:
 class TestSurveyorBlueprintSourceYaml:
     def test_surveyor_populates_blueprint_source_yaml_when_file_exists(self, tmp_path):
         """Surveyor reads blueprint YAML and sets blueprint_source_yaml on FailureContext."""
-        from aqueduct.surveyor.surveyor import Surveyor
         from aqueduct.compiler.models import Manifest
         from aqueduct.executor.models import ExecutionResult, ModuleResult
+        from aqueduct.surveyor.surveyor import Surveyor
 
         bp_path = tmp_path / "blueprint.yml"
         bp_path.write_text("id: my_blueprint\nname: Test", encoding="utf-8")
@@ -157,9 +163,9 @@ class TestSurveyorBlueprintSourceYaml:
 
     def test_surveyor_sets_blueprint_source_yaml_none_when_file_missing(self, tmp_path):
         """Surveyor sets blueprint_source_yaml=None when blueprint_path is None."""
-        from aqueduct.surveyor.surveyor import Surveyor
         from aqueduct.compiler.models import Manifest
         from aqueduct.executor.models import ExecutionResult, ModuleResult
+        from aqueduct.surveyor.surveyor import Surveyor
 
         manifest = Manifest(
             blueprint_id="b1",
@@ -187,10 +193,10 @@ class TestSurveyorBlueprintSourceYaml:
 
 class TestSurveyorStores:
     def test_surveyor_uses_injected_stores(self, tmp_path):
-        from aqueduct.surveyor.surveyor import Surveyor
         from aqueduct.compiler.models import Manifest
         from aqueduct.stores import StoreBundle
-        from aqueduct.stores.duckdb_ import DuckDBObservabilityStore, DuckDBDepotStore
+        from aqueduct.stores.duckdb_ import DuckDBDepotStore, DuckDBObservabilityStore
+        from aqueduct.surveyor.surveyor import Surveyor
 
         manifest = Manifest(
             blueprint_id="b1",
@@ -211,9 +217,9 @@ class TestSurveyorStores:
         assert surveyor._observability is obs
 
     def test_surveyor_default_store(self, tmp_path):
-        from aqueduct.surveyor.surveyor import Surveyor
         from aqueduct.compiler.models import Manifest
         from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+        from aqueduct.surveyor.surveyor import Surveyor
 
         manifest = Manifest(
             blueprint_id="b1",
@@ -262,8 +268,9 @@ class TestSurveyorSpendCap:
         assert s.count_recent_heal_attempts(within_minutes=60) == 1
 
     def test_count_recent_heal_attempts_excludes_old(self, tmp_path):
-        from aqueduct.surveyor.surveyor import Surveyor
         import datetime as _dt
+
+        from aqueduct.surveyor.surveyor import Surveyor
 
         manifest = MagicMock()
         manifest.blueprint_id = "test-bp"
@@ -271,7 +278,7 @@ class TestSurveyorSpendCap:
         s.start("r1")
 
         # Manually insert an old row
-        old_ts = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(minutes=120)).isoformat()
+        old_ts = (_dt.datetime.now(_dt.UTC) - _dt.timedelta(minutes=120)).isoformat()
         with s._observability.connect() as cur:
             cur.execute(
                 "INSERT INTO healing_outcomes (id, run_id, applied_at) VALUES (?, ?, ?)",
@@ -296,10 +303,10 @@ class TestSurveyorSpendCap:
 
 class TestRecordHealAttempt:
     def test_record_heal_attempt_writes_row(self, tmp_path):
-        from aqueduct.surveyor.surveyor import Surveyor
-        from aqueduct.compiler.models import Manifest
         from aqueduct.agent.budget import AttemptRecord, StopReason
         from aqueduct.agent.signature import make_signature
+        from aqueduct.compiler.models import Manifest
+        from aqueduct.surveyor.surveyor import Surveyor
 
         s = Surveyor(
             Manifest(
@@ -330,16 +337,21 @@ class TestRecordHealAttempt:
             ).fetchone()
 
         assert row[0] == 1
-        assert row[1] == sig.hash
+        # Phase 85 C1 — signature_hash/escalated are no longer populated
+        # (found write-only in the observability audit: neither was ever
+        # selected by any reader). The DDL columns stay — nullable
+        # signature_hash reads back NULL, escalated (NOT NULL DEFAULT
+        # FALSE) reads back False — no migration needed.
+        assert row[1] is None
         assert row[2] == 10
         assert row[3] == "schema"
-        assert row[4] is True
+        assert row[4] is False
         assert row[5] == StopReason.STUCK_SIGNATURE
 
     def test_record_heal_attempt_success_row_writes_nulls(self, tmp_path):
-        from aqueduct.surveyor.surveyor import Surveyor
-        from aqueduct.compiler.models import Manifest
         from aqueduct.agent.budget import AttemptRecord, StopReason
+        from aqueduct.compiler.models import Manifest
+        from aqueduct.surveyor.surveyor import Surveyor
 
         s = Surveyor(
             Manifest(
@@ -361,10 +373,11 @@ class TestRecordHealAttempt:
         assert row == (None, None, None, None)
 
     def test_record_heal_attempt_db_exception_swallowed(self, tmp_path):
-        from aqueduct.surveyor.surveyor import Surveyor
-        from aqueduct.compiler.models import Manifest
-        from aqueduct.agent.budget import AttemptRecord
         from unittest.mock import patch
+
+        from aqueduct.agent.budget import AttemptRecord
+        from aqueduct.compiler.models import Manifest
+        from aqueduct.surveyor.surveyor import Surveyor
 
         s = Surveyor(
             Manifest(
@@ -381,11 +394,52 @@ class TestRecordHealAttempt:
             # DB error during persistence is swallowed — returns None, never raises
             assert s.record_heal_attempt(run_id="run1", attempt_record=rec) is None
 
-    def test_record_heal_attempt_prompt_version_default(self, tmp_path):
-        from aqueduct.surveyor.surveyor import Surveyor
-        from aqueduct.compiler.models import Manifest
+    def test_record_heal_attempt_tool_calls_json_strips_args_and_result_payloads(self, tmp_path):
+        """Phase 85 C1 — tool_calls_json keeps op name + duration only; the
+        `args_summary`/`result_preview` string previews (real, if truncated,
+        argument/result content — the observability audit's single largest
+        per-row bloat risk) must never reach the store."""
+        import json as _json
+
         from aqueduct.agent.budget import AttemptRecord
+        from aqueduct.compiler.models import Manifest
+        from aqueduct.surveyor.surveyor import Surveyor
+
+        s = Surveyor(
+            Manifest(
+                blueprint_id="bp1", name="name", context={}, modules=(), edges=(), engine_config={}
+            ),
+            tmp_path,
+            engine="spark",
+        )
+        s.start("run1")
+
+        rec = AttemptRecord(attempt_num=1, signature=None)
+        rec._aq_tool_calls = [
+            {
+                "name": "read_source_sample",
+                "args_summary": "path=/data/customers_pii.csv",
+                "duration_ms": 42,
+                "result_preview": "alice@example.com, 555-1234, ...",
+            }
+        ]
+        s.record_heal_attempt(run_id="run1", attempt_record=rec)
+
+        with s._observability.connect() as cur:
+            row = cur.execute("SELECT tool_calls_json FROM heal_attempts").fetchone()
+
+        calls = _json.loads(row[0])
+        assert calls == [{"name": "read_source_sample", "duration_ms": 42}]
+        assert "args_summary" not in row[0]
+        assert "result_preview" not in row[0]
+        assert "customers_pii" not in row[0]
+        assert "alice@example.com" not in row[0]
+
+    def test_record_heal_attempt_prompt_version_default(self, tmp_path):
         from aqueduct.agent import PROMPT_VERSION
+        from aqueduct.agent.budget import AttemptRecord
+        from aqueduct.compiler.models import Manifest
+        from aqueduct.surveyor.surveyor import Surveyor
 
         s = Surveyor(
             Manifest(
@@ -405,10 +459,9 @@ class TestRecordHealAttempt:
         assert row[0] == PROMPT_VERSION
 
 
-from aqueduct.surveyor.surveyor import (
+from aqueduct.surveyor.surveyor import (  # noqa: E402
     _extract_structured_error,
     _parse_suggested_columns,
-    _PY4J_CAUSE_HOP_LIMIT,
 )
 
 
@@ -615,8 +668,8 @@ class TestPhase35SurveyorMigration:
             )
 
     def test_fresh_db_includes_new_columns(self, tmp_path):
-        from aqueduct.surveyor.surveyor import Surveyor
         from aqueduct.compiler.models import Manifest
+        from aqueduct.surveyor.surveyor import Surveyor
 
         s = Surveyor(
             Manifest(
@@ -720,8 +773,8 @@ class TestPhase35ExtractStructuredErrorExtra:
 
 class TestPhase35SurveyorMigrationFresh:
     def test_fresh_db_has_five_phase35_columns(self, tmp_path):
-        from aqueduct.surveyor.surveyor import Surveyor
         from aqueduct.compiler.models import Manifest
+        from aqueduct.surveyor.surveyor import Surveyor
 
         s = Surveyor(
             Manifest(
@@ -744,8 +797,8 @@ class TestPhase35SurveyorMigrationFresh:
 
 
 def _make_surveyor(tmp_path):
-    from aqueduct.surveyor.surveyor import Surveyor
     from aqueduct.compiler.models import Manifest
+    from aqueduct.surveyor.surveyor import Surveyor
 
     s = Surveyor(
         Manifest(

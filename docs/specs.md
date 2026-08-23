@@ -106,7 +106,7 @@ Aqueduct has four processing layers and three persistent stores. Each layer has 
 
 | Store | Description |
 | :- | :- |
-| **Observability Store** | Append-only log of all runtime signals: Probe readings, stage metrics, errors. Per-pipeline routing (1.1.0+): `.aqueduct/observability/<blueprint_id>/observability.db`. Pruned automatically, throttled to once/day/store, per the `observability.retention:` windows (2.65, §10.1) — `VACUUM`/disk reclaim stays manual (`aqueduct report prune --vacuum`). |
+| **Observability Store** | Append-only log of all runtime signals: Probe readings, stage metrics, errors. Per-pipeline routing (1.1.0+): `.aqueduct/observability/<blueprint_id>/observability.db`. Pruned automatically, throttled to once/day/store, per the `observability.retention:` windows (2.65, §10.1) — `VACUUM`/disk reclaim stays manual (`aqueduct report-prune --vacuum`). |
 | **Column Lineage** | Column lineage graphs and Flow Reports live in the `column_lineage` table **inside the observability store** (no separate store). The former `stores.lineage` config option has been **removed**; a legacy block in `aqueduct.yml` raises a `ConfigError` (2.0). |
 | **Depot (KV Store)** | Persistent key-value store for pipeline state across runs: watermarks, last-run metadata. Configured under `stores.depots` (a name-keyed map of mounts; a `default` mount always exists). Keys are **per-blueprint isolated** by default, transparently prefixed with `blueprint_id`, so blueprints don't collide on a shared depot; opt a mount into cross-blueprint sharing with `shared: true` (read via `@aq.depot.<name>.get`). Incremental Channels persist their watermark to the Depot (if configured); without a Depot the watermark is lost between runs and every run re-scans all source data. The compiler emits `perf_incremental_watermark_scan` when an incremental Channel has no upstream cache/checkpoint, because computing `MAX(watermark_column)` on the output requires a second full scan. |
 | **Object Store** (1.3+) | Transport for driver-side **blobs** and the **patch lifecycle**, configured under `stores.blob`. A single backend (`local` default, or `s3` / `gcs` / `adls` via one `fsspec` handle, the `object-store` extra, folded into `[stores]`) serves two semantic stores: a **BlobStore** (zstd-externalised `manifest_json` / `stack_trace` / `provenance_json`) and a **PatchStore** (the `pending` / `applied` / `rejected` patch directories). The `local` backend is byte-identical to the historical on-disk layout, so the git-diff review workflow is unchanged; the cloud backends let a run on an ephemeral pod leave no local-FS artefacts under its cwd. |
@@ -1809,7 +1809,7 @@ for the automatic, throttled (once/day/store) prune that runs at the end of
 every `aqueduct run`, plus a count-based cap for the Probe `sample_rows`
 signal type. See `docs/observability_guide.md`'s "Retention & pruning"
 section for the full table-by-table defaults and the separate, never-automatic
-`aqueduct report prune --vacuum` deep-clean verb.
+`aqueduct report-prune --vacuum` deep-clean verb.
 
 ```yaml
 observability:

@@ -349,7 +349,7 @@ probes:
 # check a single indexed SELECT, so it's cheap on the runs that no-op).
 # Pruning only DELETEs rows past their window; it never reclaims disk space
 # (VACUUM) — that is a separate, NEVER-automatic step via the explicit
-# `aqueduct report prune --vacuum` command.
+# `aqueduct report-prune --vacuum` command.
 
 observability:
   retention:

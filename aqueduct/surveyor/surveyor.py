@@ -735,8 +735,23 @@ class Surveyor:
         sig = getattr(attempt_record, "signature", None)
         # Phase 75 — per-call tool telemetry, if any (transient _aq_tool_calls
         # attached by loop.py's _fire_turn; absent/empty in oneshot mode).
+        #
+        # Phase 85 C1 — `tool_calls_json` was found write-only and, per the
+        # observability audit, was the single largest per-row bloat risk in
+        # the schema: each logged call also carried `args_summary` and
+        # `result_preview` string previews of the actual tool call/result
+        # content. Kept for post-mortems (op name + how long it took), but
+        # trimmed to `{name, duration_ms}` only — no argument or result
+        # content reaches the store.
         tool_calls_log = getattr(attempt_record, "_aq_tool_calls", None) or []
-        tool_calls_json = _json.dumps(tool_calls_log, default=str) if tool_calls_log else None
+        tool_calls_trimmed = [
+            {"name": call.get("name"), "duration_ms": call.get("duration_ms")}
+            for call in tool_calls_log
+            if isinstance(call, dict)
+        ]
+        tool_calls_json = (
+            _json.dumps(tool_calls_trimmed, default=str) if tool_calls_trimmed else None
+        )
         # Phase 77 — chain link index, stamped by the progressive
         # orchestrator's on_attempt wrapper. isinstance-guarded (not a bare
         # getattr) so an unconfigured mock attribute in a caller's test
@@ -749,10 +764,10 @@ class Surveyor:
                     """
                     INSERT INTO heal_attempts
                     (id, run_id, attempt_num, error_class, where_field,
-                     normalized_message, signature_hash, tokens_in, tokens_out,
-                     latency_ms, gate_that_rejected, escalated, stop_reason,
+                     normalized_message, tokens_in, tokens_out,
+                     latency_ms, gate_that_rejected, stop_reason,
                      prompt_version, recorded_at, tool_calls_json, chain_link, engine)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         str(_uuid.uuid4()),
@@ -761,12 +776,16 @@ class Surveyor:
                         sig.error_class if sig else None,
                         sig.where if sig else None,
                         sig.normalized_message if sig else None,
-                        sig.hash if sig else None,
+                        # Phase 85 C1 — `signature_hash` and `escalated` are
+                        # no longer populated (found write-only in the
+                        # observability audit, never selected by any
+                        # reader). The DDL columns stay (nullable /
+                        # DEFAULT FALSE) so no migration is needed — this
+                        # row simply omits them, leaving both NULL/FALSE.
                         int(getattr(attempt_record, "tokens_in", 0) or 0),
                         int(getattr(attempt_record, "tokens_out", 0) or 0),
                         int(getattr(attempt_record, "latency_ms", 0) or 0),
                         getattr(attempt_record, "gate_that_rejected", None),
-                        bool(getattr(attempt_record, "escalated", False)),
                         stop_reason,
                         prompt_version,
                         _dt.datetime.now(_dt.UTC).isoformat(),

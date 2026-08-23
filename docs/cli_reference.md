@@ -203,6 +203,7 @@ aqueduct run bp.yml \
 | `aqueduct runs` | List recent runs |
 | `aqueduct runs --failed` | Show only failed runs |
 | `aqueduct runs --heal-coverage` | Zero-token heal coverage (heals resolved by the signature memory cache vs the LLM) |
+| `aqueduct runs --cascade` | Model-cascade-tier vs outcome (`healing_outcomes.model_cascade_position`, 0-based: 0 = first model tried) — which tier produced which resolution/success |
 | `aqueduct runs --format text\|json` | `text\|json` only: the global `table\|json\|csv` does not apply to `runs` |
 | `aqueduct report <run_id>` | Detailed flow report for a run |
 | `aqueduct report <run_id> --format json` | Since 2.37: also carries a top-level `engines` list (every engine this run's modules actually used — one entry for a single-engine run, more for a polyglot one) and a per-module `engine` field on each `module_results` entry |
@@ -210,6 +211,9 @@ aqueduct run bp.yml \
 | `aqueduct report <run_id> --profile` | Per-module resource profile for one run (duration + I/O over `module_metrics`), heaviest module first, with each module's share of run time/bytes |
 | `aqueduct report --profile --blueprint <id> [--last N]` | Cross-run resource trend per module over the last N runs (default 10): runs count, avg/max/last duration, flags a module whose latest run is >1.5× its window average as a slowdown |
 | `aqueduct report <run_id> --format html > run.html` | Self-contained single-file HTML run report (status, module results, resource profile); no server, renders offline |
+| `aqueduct report-prune [--blueprint <id>] [--store-dir <d>]` | Delete observability rows past their configured `observability.retention:` window (`aqueduct.yml`), in every discovered store or just one; prints rows deleted per table. Same DELETEs the throttled auto-prune already runs at the end of every `aqueduct run` (at most once/day/store) — this is the on-demand deep clean. `--format table\|json` (default `table`) |
+| `aqueduct report-prune --vacuum` | Also reclaims the freed DuckDB disk space (`VACUUM`; a no-op on Postgres). The **only** way to trigger `VACUUM` — never automatic, never implied by a plain `report-prune` |
+| `aqueduct report-costs [--blueprint <id>] [--store-dir <d>]` | LLM token cost per blueprint per month, aggregated from `heal_attempts.tokens_in`/`tokens_out` (previously stored but unqueryable except as a flat, un-grouped detail list). `--format table\|json` (default `table`) |
 | `aqueduct lineage <blueprint>` | Column-level lineage graph |
 | `aqueduct lineage <blueprint.yml> --chain <column> [--types]` | Vertical source→output trace for one column; `--types` annotates each hop with the sqlglot-inferred SQL type and marks type changes (computed on demand from the blueprint; needs a file path, not an id) |
 | `aqueduct signal <signal_id> --blueprint <id>` | View or override Probe gates. `--blueprint` is required with the duckdb backend (unless `--store-dir` is given), the override lives in that blueprint's routed store, `<base>/<blueprint_id>/observability.db`; ignored for postgres (one shared schema) |

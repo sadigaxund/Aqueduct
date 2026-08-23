@@ -577,7 +577,7 @@ class ObservabilityRetentionConfig(BaseModel):
     Applied by ``aqueduct.surveyor.retention.prune_store()``, called
     throttled (at most once per day per store, via a ``store_maintenance``
     marker row) at the end of every run, and by the explicit
-    ``aqueduct report prune`` CLI verb for an on-demand deep clean.
+    ``aqueduct report-prune`` CLI verb for an on-demand deep clean.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

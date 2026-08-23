@@ -112,7 +112,7 @@ def vacuum_store(store: ObservabilityStore) -> None:
     """Reclaim disk space freed by ``prune_store()``'s deletes.
 
     **NEVER called automatically** — this is the deep-clean half of the
-    ``aqueduct report prune --vacuum`` CLI verb only. DuckDB: issues
+    ``aqueduct report-prune --vacuum`` CLI verb only. DuckDB: issues
     ``VACUUM``. Postgres: no-op (TOAST + autovacuum already reclaim space;
     see ``docs/observability_guide.md``'s "Blob externalisation" note for
     the parallel reasoning on why Postgres doesn't need the externalisation

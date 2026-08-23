@@ -132,17 +132,17 @@ One row per LLM turn inside the unified reprompt loop, finer-grained than
 | `attempt_num`       | INTEGER NOT NULL    | 1-based |
 | `error_class`       | VARCHAR             | Mirrors `failure_contexts.error_class` when available |
 | `where_field`       | VARCHAR             | Pydantic location string for validation errors |
-| `normalized_message`| VARCHAR             | Normalised error text used to compute `signature_hash`, digits, quoted (`'…'`/`"…"`) values, backtick-quoted identifiers (`` `col` ``, Spark 4 `UNRESOLVED_COLUMN` style), and filesystem paths are collapsed to placeholders so failures differing only in specifics hash identically |
-| `signature_hash`    | VARCHAR             | Stable 16-char sha1 over `(error_class, where, normalized_message)` |
+| `normalized_message`| VARCHAR             | Normalised error text — used to compute a signature at match time (`error_class`/`where`/`normalized_message` together identify a repeat failure); digits, quoted (`'…'`/`"…"`) values, backtick-quoted identifiers (`` `col` ``, Spark 4 `UNRESOLVED_COLUMN` style), and filesystem paths are collapsed to placeholders so failures differing only in specifics match identically |
+| `signature_hash`    | VARCHAR             | **No longer populated (2.85+, C1).** Column stays for schema compatibility (no migration) but every write leaves it NULL — it was found write-only in the Phase 85 observability audit (never selected by any reader; use `error_class`/`where_field`/`normalized_message` directly instead) |
 | `tokens_in`         | INTEGER NOT NULL    | Prompt tokens; 0 when provider does not report usage |
 | `tokens_out`        | INTEGER NOT NULL    | Completion tokens |
 | `latency_ms`        | INTEGER NOT NULL    | Per-attempt wall clock |
 | `gate_that_rejected`| VARCHAR             | `schema` \| `apply` \| `validate` (deep-loop gates) \| `provider` \| `budget` \| `defer_rejected` \| NULL on success |
-| `escalated`         | BOOLEAN NOT NULL    | TRUE when the attempt ran with bumped temperature + skeleton template after `same_error_consecutive` tripped |
+| `escalated`         | BOOLEAN NOT NULL DEFAULT FALSE | **No longer populated (2.85+, C1).** Column stays (defaults FALSE) but every write leaves it at the default — also found write-only, never selected by any reader |
 | `stop_reason`       | VARCHAR             | Filled only on the loop's terminal row (UPDATE post-loop); NULL on intermediate rows |
 | `prompt_version`    | VARCHAR             | `aqueduct.agent.PROMPT_VERSION` at attempt time |
 | `recorded_at`       | VARCHAR NOT NULL    | ISO-8601 |
-| `tool_calls_json`   | VARCHAR             | Agentic mode only (`agent.mode: agentic`): JSON array of `{name, args_summary, duration_ms, result_preview}` for every tool call made during this attempt; NULL/absent in oneshot mode |
+| `tool_calls_json`   | VARCHAR             | Agentic mode only (`agent.mode: agentic`): JSON array of `{name, duration_ms}` for every tool call made during this attempt; NULL/absent in oneshot mode. **Trimmed at write time since 2.85 (C1)** — the in-memory log also carries `args_summary`/`result_preview` string previews of real argument/result content (the observability audit's single largest per-row bloat/sensitivity risk); only the op name and duration reach the store |
 | `chain_link`        | INTEGER             | Progressive healing only (`agent.progressive: true`): 1-based link index within the chain this attempt belongs to; NULL for a normal (non-progressive) heal attempt. Orthogonal to `attempt_num`, which still counts reprompts *within* one link |
 | `engine`            | VARCHAR             | Execution engine this attempt targeted (`spark` \| `duckdb`) |
 
@@ -183,6 +183,19 @@ without calling the LLM at all.
 
 Zero-token heal coverage: `aqueduct runs --heal-coverage` aggregates
 `resolution` counts across discovered observability DBs.
+
+Cascade-tier vs outcome: `aqueduct runs --cascade` (2.85+, C1) — before this,
+`model_cascade_position` was written by every cascade step but never
+selected anywhere:
+
+```console
+$ aqueduct runs --cascade --store-dir .aqueduct
+  tier  outcome  count  resolution
+  ----  -------  -----  ----------
+     0  success      12  llm
+     1  success       4  llm
+     1  failed        2  llm
+```
 
 When the unified loop exits with `patch=None` (every attempt rejected, or a
 budget axis tripped before a valid patch landed), the CLI synthesises one
@@ -361,8 +374,33 @@ disk space — it only deletes rows.
 deletes free up is a deliberately separate, deliberately manual step:
 `aqueduct.surveyor.retention.vacuum_store(store)` issues DuckDB's `VACUUM`
 (a no-op on Postgres, whose autovacuum already reclaims space), wired only to
-the explicit `aqueduct report prune --vacuum` CLI verb — never triggered by
+the explicit `aqueduct report-prune --vacuum` CLI verb — never triggered by
 `aqueduct run`.
+
+**On-demand deep clean: `aqueduct report-prune`.** The same age windows apply
+— `report-prune` just runs them now instead of waiting for the next throttled
+`aqueduct run`, and reports what it deleted:
+
+```console
+$ aqueduct report-prune --store-dir .aqueduct
+pruned 1 store(s):
+  table             rows_deleted
+  ----------------  ------------
+  column_lineage               0
+  failure_contexts             0
+  heal_attempts                3
+  healing_outcomes             0
+  patch_simulation             0
+  probe_signals                0
+  run_records                  1
+
+$ aqueduct report-prune --store-dir .aqueduct --vacuum   # also reclaims disk space
+$ aqueduct report-prune --blueprint my.pipeline --format json
+```
+
+`--blueprint` scopes to one discovered store (default: every store under
+`--store-dir`/the configured routing root). `--vacuum` is the *only* way to
+trigger `VACUUM` — a plain `report-prune` never does.
 
 ### Blob externalisation (1.1.2+)
 
@@ -555,18 +593,17 @@ populated `ModuleResult.exception` for that module type.
 ### Heal-loop forensics
 
 **When** you want to see what each LLM turn produced (1.1.0+).
-**What you learn** Per-attempt signature, token spend, latency, which gate
-rejected the attempt, and whether escalation kicked in.
-**What to do next** Repeated `signature_hash` rows mean the model is stuck;
-a row with `gate_that_rejected='apply'` means the patch parsed but failed
-guardrails: fix the guardrail policy or add prompt context.
+**What you learn** Per-attempt error signature (`error_class`/`where_field`),
+token spend, latency, and which gate rejected the attempt.
+**What to do next** Repeated identical `(error_class, where_field)` rows mean
+the model is stuck; a row with `gate_that_rejected='apply'` means the patch
+parsed but failed guardrails: fix the guardrail policy or add prompt context.
 
 ```sql
 SELECT attempt_num,
        gate_that_rejected,
-       escalated,
        error_class,
-       substr(signature_hash, 1, 8) AS sig,
+       where_field,
        tokens_in + tokens_out AS tokens,
        latency_ms,
        stop_reason
@@ -574,6 +611,12 @@ FROM heal_attempts
 WHERE run_id = '<run_id>'
 ORDER BY attempt_num;
 ```
+
+> `signature_hash`/`escalated` are no longer populated (2.85+, C1 — both
+> were write-only, never read by any query); the columns still exist in the
+> DDL but every write leaves them NULL/FALSE. Group by
+> `(error_class, where_field, normalized_message)` directly instead of a
+> precomputed hash.
 
 **When** a multi-patch heal (auto + `max_patches > 1`) ran multiple iterations and you want the full
 picture from the outer (user-visible) `run_id` (1.1.0+).
@@ -608,9 +651,12 @@ fired by inspecting `gate_that_rejected`.
 
 **When** a heal ran in agentic mode (`agent.mode: agentic`) and you want to
 see which diagnostic tools the model actually consulted before answering.
-**What you learn** Which tools were called, in what order, how long each
-took, and a truncated (already-redacted) preview of what came back, the
-same detail the `-v` transcript renders live, persisted for post-hoc review.
+**What you learn** Which tools were called, in what order, and how long each
+took — the same detail the `-v` transcript renders live, persisted for
+post-hoc review. (2.85+, C1: only `{name, duration_ms}` is stored — the
+argument/result string previews the live `-v` transcript shows are never
+persisted, so this recipe answers "what did it call" and "how long", not
+"what did it see".)
 **What to do next** If the model kept calling the same tool without ever
 converging on a patch, tighten `agent.max_tool_calls` or add the missing
 context directly to `agent.prompt_context` instead of relying on the tool.
@@ -758,15 +804,32 @@ LIMIT 10;
 
 ### Most common failure signatures
 
+`signature_hash` is no longer populated (2.85+, C1 — write-only, never
+read); group by the fields it used to hash instead:
+
 ```sql
-SELECT substr(signature_hash, 1, 8) AS sig,
-       error_class,
+SELECT error_class,
+       where_field,
        COUNT(*) AS times_hit
 FROM heal_attempts
-WHERE signature_hash IS NOT NULL
-GROUP BY signature_hash, error_class
+GROUP BY error_class, where_field
 ORDER BY times_hit DESC
 LIMIT 10;
+```
+
+### LLM token cost per blueprint per month
+
+`aqueduct report-costs` (2.85+, D7) aggregates `heal_attempts.tokens_in`/
+`tokens_out` — previously stored but unqueryable except as a flat, un-grouped
+100-row detail list (`heal_attempt_details()`):
+
+```console
+$ aqueduct report-costs --store-dir .aqueduct
+  blueprint      month    tokens_in  tokens_out  tokens_total  attempts
+  -------------  -------  ---------  ----------  ------------  --------
+  my.pipeline    2026-08       4200        1850          6050        18
+
+$ aqueduct report-costs --blueprint my.pipeline --format json
 ```
 
 ### Blueprint remediation timeline
@@ -853,6 +916,10 @@ read‑only connection on Postgres.
 | Override a Probe signal    | `aqueduct signal <signal_id> --value false` |
 | Heal a failed run          | `aqueduct heal <run_id>`                  |
 | Remediation timeline for a blueprint | `aqueduct blueprint history <blueprint.yml>` |
+| Cascade tier vs outcome    | `aqueduct runs --cascade`                 |
+| LLM cost per blueprint per month | `aqueduct report-costs`             |
+| Deep-clean old rows        | `aqueduct report-prune`                   |
+| Deep-clean + reclaim disk space | `aqueduct report-prune --vacuum`     |
 
 **Tip:** DuckDB files are stable; point any DuckDB client at them for
 custom dashboards. The `_resolve_obs_db()` helper inside the CLI walks the

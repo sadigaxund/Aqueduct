@@ -834,6 +834,15 @@ def _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt) -> None:
     help="Summarize healing_outcomes by resolution (llm / cached / "
     "replayed) and report zero-token heal coverage instead of listing runs.",
 )
+@click.option(
+    "--cascade",
+    is_flag=True,
+    default=False,
+    help="Model-cascade-tier vs outcome — which cascade tier "
+    "(healing_outcomes.model_cascade_position; 0 = first model tried, "
+    "1+ = escalation tiers) produced which resolution/success, instead "
+    "of listing runs.",
+)
 @_env_options
 def runs(
     blueprint: str | None,
@@ -843,6 +852,7 @@ def runs(
     config_path: str | None,
     out_format: str,
     heal_coverage: bool,
+    cascade: bool,
     env_file: str | None,
     cli_env: tuple[str, ...],
 ) -> None:
@@ -852,6 +862,39 @@ def runs(
     _resolve_and_load_env(env_file, Path(config_path) if config_path else None, cli_env=cli_env)
     cfg = load_config(Path(config_path) if config_path else None)
     _apply_warnings_from_cfg(cfg)
+
+    if cascade:
+        # Phase 85 C1 — healing_outcomes.model_cascade_position was written
+        # in several places but never selected anywhere; this is the report
+        # surface for it.
+        from aqueduct.cli.render.funnel import echo as _funnel_echo
+        from aqueduct.stores.queries import cascade_position_outcomes as _cascade_rows
+
+        rows = _cascade_rows(cfg, store_dir=store_dir)
+        if out_format.lower() == "json":
+            emit(rows, fmt="json")
+        elif not rows:
+            _funnel_echo("No model_cascade_position data recorded yet.", err=False)
+        else:
+            table_rows = [
+                [
+                    str(r["model_cascade_position"]),
+                    r["run_success_after_patch"],
+                    str(r["count"]),
+                    r["resolution"] or "",
+                ]
+                for r in rows
+            ]
+            render_table(
+                [
+                    Column("tier", align="right"),
+                    Column("outcome"),
+                    Column("count", align="right"),
+                    Column("resolution", flex=True),
+                ],
+                table_rows,
+            )
+        return
 
     blueprint_id: str | None = None
     if blueprint:
@@ -1027,6 +1070,219 @@ def runs(
             Column("status"),
             Column("started"),
             Column("failed_module", flex=True),
+        ],
+        table_rows,
+    )
+
+
+# ── aqueduct report-prune ──────────────────────────────────────────────────────
+
+
+@cli.command("report-prune")
+@click.option(
+    "--blueprint",
+    "blueprint_arg",
+    default=None,
+    metavar="PATH_OR_ID",
+    help="Restrict pruning to one blueprint's observability store "
+    "(default: every store discovered under --store-dir).",
+)
+@click.option(
+    "--store-dir",
+    default=None,
+    help="Store directory (default: aqueduct.yml or .aqueduct)",
+)
+@click.option(
+    "--config",
+    "config_path",
+    default=None,
+    help="Path to aqueduct.yml",
+)
+@click.option(
+    "--vacuum",
+    is_flag=True,
+    default=False,
+    help="After pruning, reclaim the freed disk space (DuckDB VACUUM; a "
+    "no-op on Postgres, whose autovacuum already handles this). Deep-clean "
+    "only — NEVER run automatically; this flag is the only way to trigger it.",
+)
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["table", "json"]),
+    default="table",
+    show_default=True,
+    help="Output format. `json` for machine-readable consumption.",
+)
+@_env_options
+def report_prune(
+    blueprint_arg: str | None,
+    store_dir: str | None,
+    config_path: str | None,
+    vacuum: bool,
+    fmt: str,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
+) -> None:
+    """Delete observability rows older than their configured retention window.
+
+    Applies ``observability.retention:`` (``aqueduct.yml``) to every
+    governed table (``run_records``, ``failure_contexts``,
+    ``healing_outcomes``, ``heal_attempts``, ``patch_simulation``,
+    ``column_lineage``, ``probe_signals``) in every discovered store, or
+    just one with ``--blueprint``. This is the on-demand deep-clean
+    counterpart to the throttled auto-prune already wired into every
+    ``aqueduct run`` (at most once/day per store) — safe to run any time.
+
+    ``--vacuum`` is a SEPARATE, explicit step: pruning alone only deletes
+    rows, it never reclaims DuckDB disk space on its own. Pass ``--vacuum``
+    to also reclaim it after the delete.
+    """
+    from aqueduct.config import ConfigError, load_config
+    from aqueduct.stores.queries import discover_stores
+    from aqueduct.surveyor.retention import prune_store, vacuum_store
+
+    try:
+        _resolve_and_load_env(env_file, Path(config_path) if config_path else None, cli_env=cli_env)
+        cfg = load_config(Path(config_path) if config_path else None)
+        _apply_warnings_from_cfg(cfg)
+    except ConfigError as exc:
+        _error(f"config error: {exc}")
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    blueprint_id = _resolve_blueprint_id(blueprint_arg)
+    handles = discover_stores(cfg, store_dir=store_dir)
+    if blueprint_id:
+        handles = [h for h in handles if h.label == blueprint_id]
+    if not handles:
+        _store_not_found(cfg, blueprint_id=blueprint_id, store_dir=store_dir)
+
+    retention = cfg.observability.retention
+    per_store: dict[str, dict[str, int]] = {}
+    totals: dict[str, int] = {}
+    for h in handles:
+        deleted = prune_store(h.store, retention)
+        per_store[h.label] = deleted
+        for table, n in deleted.items():
+            totals[table] = totals.get(table, 0) + n
+        if vacuum:
+            vacuum_store(h.store)
+
+    if fmt == "json":
+        emit({"vacuum": vacuum, "stores": per_store, "totals": totals}, fmt="json")
+        return
+
+    from aqueduct.cli.render.funnel import echo as _funnel_echo
+
+    _funnel_echo(
+        f"pruned {len(handles)} store(s)" + (" (+ vacuum)" if vacuum else "") + ":",
+        err=False,
+    )
+    table_rows = [[table, str(n)] for table, n in sorted(totals.items())]
+    if not table_rows:
+        _funnel_echo("  nothing to prune — no governed tables found.", err=False)
+        return
+    if not any(n for _, n in totals.items()):
+        _funnel_echo(
+            "  nothing to prune — every governed table is within its retention window.", err=False
+        )
+    render_table(
+        [Column("table", flex=True), Column("rows_deleted", align="right")],
+        table_rows,
+    )
+
+
+# ── aqueduct report-costs ──────────────────────────────────────────────────────
+
+
+@cli.command("report-costs")
+@click.option(
+    "--blueprint",
+    "blueprint_arg",
+    default=None,
+    metavar="PATH_OR_ID",
+    help="Restrict to one blueprint (default: every discovered store).",
+)
+@click.option(
+    "--store-dir",
+    default=None,
+    help="Store directory (default: aqueduct.yml or .aqueduct)",
+)
+@click.option(
+    "--config",
+    "config_path",
+    default=None,
+    help="Path to aqueduct.yml",
+)
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["table", "json"]),
+    default="table",
+    show_default=True,
+    help="Output format. `json` for machine-readable consumption.",
+)
+@_env_options
+def report_costs(
+    blueprint_arg: str | None,
+    store_dir: str | None,
+    config_path: str | None,
+    fmt: str,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
+) -> None:
+    """LLM token cost per blueprint per month, aggregated from heal_attempts.
+
+    ``heal_attempts.tokens_in``/``tokens_out`` fully capture per-attempt
+    token spend, but no aggregation query existed — this groups by
+    ``(blueprint_id, month)`` (month = the ``YYYY-MM`` prefix of
+    ``heal_attempts.recorded_at``) across every discovered store.
+    """
+    from aqueduct.config import ConfigError, load_config
+    from aqueduct.stores.queries import heal_costs
+
+    try:
+        _resolve_and_load_env(env_file, Path(config_path) if config_path else None, cli_env=cli_env)
+        cfg = load_config(Path(config_path) if config_path else None)
+        _apply_warnings_from_cfg(cfg)
+    except ConfigError as exc:
+        _error(f"config error: {exc}")
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    blueprint_id = _resolve_blueprint_id(blueprint_arg)
+    rows = heal_costs(cfg, store_dir=store_dir)
+    if blueprint_id:
+        rows = [r for r in rows if r["blueprint_id"] == blueprint_id]
+
+    if fmt == "json":
+        emit(rows, fmt="json")
+        return
+
+    from aqueduct.cli.render.funnel import echo as _funnel_echo
+
+    if not rows:
+        _funnel_echo("No heal_attempts token data recorded yet.", err=False)
+        return
+
+    table_rows = [
+        [
+            r["blueprint_id"],
+            r["month"],
+            str(r["tokens_in"]),
+            str(r["tokens_out"]),
+            str(r["tokens_total"]),
+            str(r["attempts"]),
+        ]
+        for r in rows
+    ]
+    render_table(
+        [
+            Column("blueprint", flex=True),
+            Column("month"),
+            Column("tokens_in", align="right"),
+            Column("tokens_out", align="right"),
+            Column("tokens_total", align="right"),
+            Column("attempts", align="right"),
         ],
         table_rows,
     )
