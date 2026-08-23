@@ -2819,48 +2819,31 @@ def run(
             _any_deep_loop = _deep_loop or any(bool(t.deep_loop) for t in (_cascade_tiers or []))
             _validate_cb = None
             if _any_deep_loop:
-                _bp_path_for_vc = Path(blueprint)
-                _vc_bundle = bundle
-                _vc_surveyor = surveyor
-                _vc_failed_module = failure_ctx.failed_module
-                _vc_rid = iteration_run_id
-                _vc_bid = manifest.blueprint_id
-                _vc_sandbox_mode = manifest.agent.sandbox_mode if manifest.agent else "sample"
+                # Phase 85 F-17 — was an inline closure capturing ~12 locals;
+                # extracted to aqueduct/agent/gate_validation.py (the agent
+                # boundary: this exists only to feed the deep-loop
+                # validate_callback protocol). The captured locals are now
+                # explicit `partial` keyword args instead of closure state.
+                from functools import partial
 
-                def _validate_cb(patch_spec: Any) -> tuple:
-                    try:
-                        _g2, _g3, _g4, _g3_passed = _aqcli._run_patch_gates_inline(
-                            patch=patch_spec,
-                            blueprint_path=_bp_path_for_vc,
-                            bundle=_vc_bundle,
-                            surveyor=_vc_surveyor,
-                            failed_module=_vc_failed_module,
-                            iteration_run_id=_vc_rid,
-                            blueprint_id=_vc_bid,
-                            engine=(failure_ctx.engine or engine),
-                            cfg=cfg,
-                            sandbox_mode=_vc_sandbox_mode,
-                            sandbox_master_url=resolved_sandbox_master_url,
-                            warnings_suppress=cfg.warnings.suppress,
-                            timezone=cfg.timezone,
-                        )
-                        _announce_polyglot_sandbox_unavailable(_g3)
-                        failures: list[str] = []
-                        if _g2 is not None and _g2.status == "fail":
-                            failures.append(
-                                f"Lineage gate: {_g2.detail or 'column impact detected'}"
-                            )
-                        if _g3 is not None and _g3.status == "fail":
-                            failures.append(f"Sandbox gate: {_g3.detail}")
-                        if _g4 is not None and _g4.status == "fail":
-                            failures.append(
-                                f"Explain gate: {_g4.detail or 'plan regression detected'}"
-                            )
-                        if failures:
-                            return False, " | ".join(failures)
-                        return True, ""
-                    except Exception as exc:
-                        return False, f"Validation error: {exc}"
+                from aqueduct.agent.gate_validation import validate_patch_via_gates
+
+                _validate_cb = partial(
+                    validate_patch_via_gates,
+                    blueprint_path=Path(blueprint),
+                    bundle=bundle,
+                    surveyor=surveyor,
+                    failed_module=failure_ctx.failed_module,
+                    iteration_run_id=iteration_run_id,
+                    blueprint_id=manifest.blueprint_id,
+                    engine=(failure_ctx.engine or engine),
+                    cfg=cfg,
+                    sandbox_mode=(manifest.agent.sandbox_mode if manifest.agent else "sample"),
+                    sandbox_master_url=resolved_sandbox_master_url,
+                    warnings_suppress=cfg.warnings.suppress,
+                    timezone=cfg.timezone,
+                    announce_unavailable=_announce_polyglot_sandbox_unavailable,
+                )
 
             # Phase 75 — agentic mode: build a per-heal ToolBox when this
             # blueprint (or the engine default) opted in. `session` is the
