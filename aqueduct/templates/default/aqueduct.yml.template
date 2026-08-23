@@ -264,9 +264,17 @@ stores:
 # later run of the same blueprint has succeeded. There is no time-based
 # expiry: retention is bounded by those actions, not by an age in days.
 #
+# Within a single polyglot run, a boundary's spill is also deleted EAGERLY —
+# the moment every island that reads it has finished successfully, rather
+# than waiting for the whole run to end — bounding peak spill storage on a
+# long chain. Set prune_eagerly to false to defer every deletion to the
+# run's own end instead (the end-of-run cleanup above still runs either way).
+#
 # handoff:
 #   root: ".aqueduct/handoff"    # default
 #   keep_on_failure: true        # default — the resume story
+#   prune_eagerly: true          # default — delete a boundary's spill as
+#                                 # soon as this run's own readers are done
 
 
 # ── Polyglot session keep-alive (Phase 89) ──────────────────────────────────

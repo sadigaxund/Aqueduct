@@ -154,12 +154,26 @@ def handoff() -> None:
     help="Output format. `text` (default) renders a table. `json` emits a "
     "machine-readable, ANSI-free document.",
 )
+@click.option(
+    "--older-than",
+    "older_than_raw",
+    default=None,
+    metavar="DURATION",
+    help="Additionally reclaim a kept-failure spill whose run FINISHED more "
+    "than this long ago, even though no later success has superseded it yet "
+    "(Phase 89 item 4 — the operator/watchdog reclaim the spec's gap "
+    "sentence names). Duration literal: an integer plus d/h/m, e.g. '7d', "
+    "'24h', '90m'. Omit to leave today's behaviour byte-identical — this "
+    "flag is additive, never automatic, and applies to both --dry-run and "
+    "--execute.",
+)
 @_env_options
 def handoff_sweep(
     config_path: str | None,
     store_dir: str | None,
     dry_run: bool,
     fmt: str,
+    older_than_raw: str | None,
     env_file: str | None,
     cli_env: tuple[str, ...],
 ) -> None:
@@ -184,15 +198,33 @@ def handoff_sweep(
     at the start of each polyglot run; this is the explicit, on-demand
     counterpart for a Blueprint that failed and was never rerun, or for
     routine disk hygiene between runs.
+
+    ``--older-than <duration>`` extends that on-demand counterpart further:
+    a kept-failure spill still protected by ``handoff.keep_on_failure``
+    (no later success has superseded it) is ALSO reclaimed once its run
+    finished longer ago than the given age — an explicit operator/watchdog
+    action for a Blueprint that failed and is never going to be rerun.
+    Automatic, config-driven time-based deletion is out of scope: this only
+    ever runs when an operator or an external monitoring tool passes the
+    flag.
     """
     from aqueduct.config import ConfigError, load_config
     from aqueduct.executor.spill import (
         dir_size_bytes,
         local_only_or_fsspec_available,
+        parse_duration,
         plan_orphan_sweep,
         sweep_orphan_spills,
     )
     from aqueduct.stores.queries import discover_stores
+
+    older_than = None
+    if older_than_raw is not None:
+        try:
+            older_than = parse_duration(older_than_raw)
+        except ValueError as exc:
+            click.echo(f"✗ {exc}", err=True)
+            sys.exit(exit_codes.CONFIG_ERROR)
 
     try:
         _resolve_and_load_env(env_file, Path(config_path) if config_path else None, cli_env=cli_env)
@@ -229,6 +261,7 @@ def handoff_sweep(
         current_run_id=None,  # no run is "in progress" for a standalone sweep
         keep_on_failure=cfg.handoff.keep_on_failure,
         obs_store=obs_store,
+        older_than=older_than,
     )
     # Measured BEFORE any deletion — `--execute` removes these paths below,
     # after which `dir_size_bytes` can only see "gone".
@@ -242,6 +275,7 @@ def handoff_sweep(
             keep_on_failure=cfg.handoff.keep_on_failure,
             obs_store=obs_store,
             dry_run=False,
+            older_than=older_than,
         )
     removed_set = set(removed)
 
@@ -257,6 +291,7 @@ def handoff_sweep(
                         "run_id": c.run_id,
                         "status": c.status,
                         "reason": c.reason,
+                        "reclaimed_by_age": c.reclaimed_by_age,
                         "bytes": sizes.get(c.path),
                         "removed": (not dry_run) and c.path in removed_set,
                     }

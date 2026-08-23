@@ -1545,6 +1545,25 @@ class HandoffConfig(BaseModel):
         ),
         json_schema_extra={"engine_scoped": False},
     )
+    prune_eagerly: bool = Field(
+        default=True,
+        description=(
+            "When true (the default), a polyglot run deletes a boundary's "
+            "spilled parquet as soon as EVERY island that reads it has "
+            "finished successfully IN THIS RUN, instead of waiting for the "
+            "whole run to end — bounds peak spill storage on a long "
+            "same-engine-to-same-engine chain (Phase 89 item 3). A spill "
+            "feeding an island that has not yet run, or that this run "
+            "resumed from a PRIOR run (`--resume <run_id>`), is never "
+            "touched by this: only this run's OWN already-consumed "
+            "boundaries are eligible. The end-of-run deletion described "
+            "above still runs either way — an eagerly pruned boundary is "
+            "simply already gone by then. Set to false to defer every "
+            "deletion to the run's own end, exactly as before this flag "
+            "existed."
+        ),
+        json_schema_extra={"engine_scoped": False},
+    )
 
 
 class ExecutionConfig(BaseModel):

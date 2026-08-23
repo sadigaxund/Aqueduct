@@ -222,6 +222,16 @@ class ExecutionResult:
     islands shared an engine. Not part of ``to_dict()`` — an in-process
     signal the CLI narrative (``aqueduct/cli/run.py``) reads at ``-v`` to
     print one quiet line per reuse, not a persisted field."""
+    pruned_spills: tuple[str, ...] = ()
+    """Set only by ``aqueduct.executor.orchestrator.run_polyglot()`` — one
+    Handoff-module (edge) id per boundary whose spill was deleted EAGERLY,
+    the moment its reader island finished successfully, rather than waiting
+    for the end-of-run cleanup (Phase 89 item 3, gated by
+    ``execution.prune_spills_eagerly``), in the order pruning happened.
+    Empty for a single-engine ``execute()`` call, for a polyglot run with no
+    handoff edges, and whenever ``prune_spills_eagerly`` is False. Not part
+    of ``to_dict()`` — an in-process signal the CLI narrative reads at
+    ``-vv`` to print one quiet line per prune, not a persisted field."""
 
     def to_dict(self) -> dict:
         return {

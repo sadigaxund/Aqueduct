@@ -763,6 +763,181 @@ def test_resume_skipped_island_builds_no_session(tmp_path, monkeypatch, failed_p
     assert calls["duckdb"] == ["build", "close"]
 
 
+# ── Same-run eager spill pruning (Phase 89 item 3) ────────────────────────────
+#
+# Reuses `test_engine_switch_closes_before_building_the_next`'s three-island
+# spark -> duckdb -> spark chain (two handoffs, h1: a->b, h2: b->c) — the
+# shape that actually exercises "eager" pruning: h1's only reader (island b)
+# finishes strictly BEFORE the run ends, so if pruning is truly eager (not
+# just end-of-run cleanup wearing a new name) h1's directory must be gone
+# even when the run goes on to fail at island c, at which point h2 (whose
+# reader, c, never succeeded) must still be on disk for `--resume`.
+
+
+def _spark_duckdb_spark_chain():
+    a = _m("a", "spark")
+    b = _m("b", "duckdb")
+    c = _m("c", "spark")
+    h1 = _handoff_module("h1", "a", "b", from_engine="spark", to_engine="duckdb")
+    h2 = _handoff_module("h2", "b", "c", from_engine="duckdb", to_engine="spark")
+    return _manifest(
+        [a, h1, b, h2, c],
+        [
+            Edge(from_id="a", to_id="h1"),
+            Edge(from_id="h1", to_id="b"),
+            Edge(from_id="b", to_id="h2"),
+            Edge(from_id="h2", to_id="c"),
+        ],
+        [
+            Island(engine="spark", module_ids=frozenset({"a"})),
+            Island(engine="duckdb", module_ids=frozenset({"b"})),
+            Island(engine="spark", module_ids=frozenset({"c"})),
+        ],
+    )
+
+
+def test_eager_prune_deletes_a_boundary_as_soon_as_its_reader_succeeds(tmp_path, monkeypatch):
+    """h1's only reader (island b) succeeds; island c then fails. h1 must
+    already be gone (pruned eagerly, well before the run itself ended) while
+    h2 — read by the island that just failed — is still on disk, because
+    `keep_on_failure` (default True) protects the whole run directory and
+    h2's reader never got the chance to consume it."""
+    from aqueduct.executor.models import ExecutionStatus
+    from aqueduct.executor.orchestrator import run_polyglot
+
+    manifest = _spark_duckdb_spark_chain()
+    root = tmp_path / "handoff"
+    calls = _install_counting_engine(monkeypatch, island_status={"c": ExecutionStatus.ERROR})
+
+    result = run_polyglot(manifest, run_id="r1", handoff_root=str(root))
+
+    assert result.status == ExecutionStatus.ERROR
+    assert result.pruned_spills == ("h1",)
+    assert calls  # sanity — the stub engine actually ran
+
+    from aqueduct.executor.models import manifest_hash as _mh
+
+    run_dir = root / _mh(manifest) / "r1"
+    assert not (run_dir / "h1").exists(), "h1 was pruned the moment island b succeeded"
+    assert (run_dir / "h2").exists(), "h2's reader (c) never succeeded — must not be pruned"
+
+
+def test_eager_prune_never_touches_a_pending_or_failed_readers_boundary(tmp_path, monkeypatch):
+    """Positive control isolating the negative half: when EVERY island
+    fails immediately (the very first one), no edge's reader has succeeded,
+    so nothing is ever eagerly pruned."""
+    from aqueduct.executor.models import ExecutionStatus
+    from aqueduct.executor.orchestrator import run_polyglot
+
+    manifest = _spark_duckdb_spark_chain()
+    root = tmp_path / "handoff"
+    _install_counting_engine(monkeypatch, island_status={"a": ExecutionStatus.ERROR})
+
+    result = run_polyglot(manifest, run_id="r1", handoff_root=str(root))
+
+    assert result.status == ExecutionStatus.ERROR
+    assert result.pruned_spills == ()
+
+
+def test_eager_prune_fires_for_every_boundary_on_a_fully_successful_run(tmp_path, monkeypatch):
+    from aqueduct.executor.models import ExecutionStatus
+    from aqueduct.executor.orchestrator import run_polyglot
+
+    manifest = _spark_duckdb_spark_chain()
+    root = tmp_path / "handoff"
+    _install_counting_engine(monkeypatch)
+
+    result = run_polyglot(manifest, run_id="r1", handoff_root=str(root))
+
+    assert result.status == ExecutionStatus.SUCCESS
+    assert result.pruned_spills == ("h1", "h2")
+
+
+def test_prune_eagerly_false_keeps_todays_behavior(tmp_path, monkeypatch):
+    """`prune_eagerly=False` must defer every deletion to the run's own
+    end — h1 stays on disk even after its reader (b) has long since
+    succeeded, all the way up to the (still-failed) run's own cleanup
+    decision, exactly like before this feature existed."""
+    from aqueduct.executor.models import ExecutionStatus
+    from aqueduct.executor.orchestrator import run_polyglot
+
+    manifest = _spark_duckdb_spark_chain()
+    root = tmp_path / "handoff"
+    _install_counting_engine(monkeypatch, island_status={"c": ExecutionStatus.ERROR})
+
+    result = run_polyglot(manifest, run_id="r1", handoff_root=str(root), prune_eagerly=False)
+
+    assert result.status == ExecutionStatus.ERROR
+    assert result.pruned_spills == ()
+
+    from aqueduct.executor.models import manifest_hash as _mh
+
+    run_dir = root / _mh(manifest) / "r1"
+    assert (run_dir / "h1").exists(), "prune_eagerly=False must not delete anything early"
+    assert (run_dir / "h2").exists()
+
+
+def test_eager_prune_never_deletes_a_boundary_whose_write_side_was_resumed(
+    tmp_path, monkeypatch, failed_prior_run_store
+):
+    """An edge whose WRITE side was itself resumed from a PRIOR run must
+    never be eagerly pruned here — that spill's release is owned exclusively
+    by the resume-release logic (`resumed_from and ... resume_run_id`
+    branch), never by this same-run optimization, so the two mechanisms
+    never race on the same directory."""
+    from aqueduct.executor.models import ExecutionStatus
+    from aqueduct.executor.orchestrator import run_polyglot
+
+    manifest = _two_island_manifest()  # a(spark) --h--> b(duckdb)
+    root = tmp_path / "handoff"
+    prior = _seed_resume_spill(root, manifest, "prev_run")
+    _install_stub_engine(monkeypatch, island_status={})
+
+    result = run_polyglot(
+        manifest,
+        run_id="cur_run",
+        handoff_root=str(root),
+        resume_run_id="prev_run",
+        observability_store=failed_prior_run_store,
+    )
+
+    assert result.status == ExecutionStatus.SUCCESS
+    # "h" was never in `pruned_spills` — its release is the resume-release
+    # path's job, which already deletes the resumed-FROM directory below.
+    assert result.pruned_spills == ()
+    assert not prior.exists(), "still released — by the resume-release path, not eager pruning"
+
+
+def test_resume_after_mid_run_failure_still_finds_the_spills_it_needs(tmp_path, monkeypatch):
+    """Resume-safety trace for item 3: island b (duckdb) succeeds and
+    consumes h1, which eager pruning removes; island c (spark) then fails,
+    so h2 — b's own outgoing spill, read by c — is left on disk exactly as
+    it always was. A `--resume` of THIS failed run must find h2 (the only
+    thing it could possibly need — c is the one island left to (re)run) and
+    never needs h1 at all, since a(spark) and b(duckdb) already fully
+    succeeded and their result is exactly what h2 carries forward."""
+    from aqueduct.executor.models import ExecutionStatus
+    from aqueduct.executor.models import manifest_hash as _mh
+    from aqueduct.executor.orchestrator import run_polyglot
+
+    manifest = _spark_duckdb_spark_chain()
+    root = tmp_path / "handoff"
+    _install_counting_engine(monkeypatch, island_status={"c": ExecutionStatus.ERROR})
+
+    failed = run_polyglot(manifest, run_id="failed_run", handoff_root=str(root))
+    assert failed.status == ExecutionStatus.ERROR
+    assert failed.pruned_spills == ("h1",)
+
+    # What a `--resume failed_run` would actually look for: island b (the
+    # write side of h2, the one outstanding boundary) has a resume-URI.
+    handoffs = _handoff_edges(manifest)
+    resume_uris_for_b = _resume_spill_uris_for_island(
+        handoffs, island_idx=1, root=str(root), manifest_h=_mh(manifest), resume_run_id="failed_run"
+    )
+    assert resume_uris_for_b, "island b's outgoing (h2) resume URI must resolve"
+    assert _spill_exists(resume_uris_for_b["h2"]), "h2 is exactly what --resume needs — still there"
+
+
 # ── Engine-side cleanup hooks (Phase 89 item 1) ───────────────────────────────
 #
 # Exercises `ExecutorProtocol.cleanup_reused_session` for both shipped

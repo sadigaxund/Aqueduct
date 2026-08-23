@@ -17,6 +17,7 @@ from aqueduct.executor.spill import (
     ensure_parent_exists,
     is_remote_uri,
     local_only_or_fsspec_available,
+    parse_duration,
     plan_orphan_sweep,
     spill_dir_for,
     sweep_orphan_spills,
@@ -621,6 +622,99 @@ def test_sweep_keeps_a_kept_failure_when_the_later_success_never_FINISHED(tmp_pa
 
     assert (root / "hash1" / "run_failed").exists()
     assert deleted == []
+
+
+# ── parse_duration / --older-than reclaim (Phase 89 item 4) ─────────────────
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("7d", timedelta(days=7)),
+        ("24h", timedelta(hours=24)),
+        ("90m", timedelta(minutes=90)),
+        ("1d", timedelta(days=1)),
+    ],
+)
+def test_parse_duration_accepts_the_documented_shapes(text, expected):
+    assert parse_duration(text) == expected
+
+
+@pytest.mark.parametrize("junk", ["", "7", "d", "7 d", "7days", "-7d", "7.5d", "7dd", "seven days"])
+def test_parse_duration_rejects_junk(junk):
+    with pytest.raises(ValueError, match="invalid duration"):
+        parse_duration(junk)
+
+
+def test_sweep_older_than_reclaims_a_kept_failure_past_the_cutoff(tmp_path, obs_store):
+    root = tmp_path / "handoff"
+    _make_spill(root, "hash1", "run_old_failed")
+    _insert_run(obs_store, "run_old_failed", "error", finished=True, minutes_ago=60 * 24 * 30)
+
+    deleted = sweep_orphan_spills(
+        str(root),
+        current_run_id="run_current",
+        keep_on_failure=True,
+        obs_store=obs_store,
+        older_than=timedelta(days=7),
+    )
+
+    assert not (root / "hash1" / "run_old_failed").exists()
+    assert any("run_old_failed" in d for d in deleted)
+
+
+def test_sweep_older_than_spares_a_kept_failure_within_the_cutoff(tmp_path, obs_store):
+    root = tmp_path / "handoff"
+    _make_spill(root, "hash1", "run_young_failed")
+    _insert_run(obs_store, "run_young_failed", "error", finished=True, minutes_ago=5)
+
+    deleted = sweep_orphan_spills(
+        str(root),
+        current_run_id="run_current",
+        keep_on_failure=True,
+        obs_store=obs_store,
+        older_than=timedelta(days=7),
+    )
+
+    assert (root / "hash1" / "run_young_failed").exists()
+    assert deleted == []
+
+
+def test_sweep_without_older_than_is_byte_identical_to_before_the_flag_existed(tmp_path, obs_store):
+    """Positive control: the SAME old-failure fixture with `older_than=None`
+    (the default) must leave it exactly as untouched as the supersession
+    rule alone always left it — proving `older_than` is additive, never a
+    change to the default path."""
+    root = tmp_path / "handoff"
+    _make_spill(root, "hash1", "run_old_failed")
+    _insert_run(obs_store, "run_old_failed", "error", finished=True, minutes_ago=60 * 24 * 30)
+
+    deleted = sweep_orphan_spills(
+        str(root), current_run_id="run_current", keep_on_failure=True, obs_store=obs_store
+    )
+
+    assert (root / "hash1" / "run_old_failed").exists()
+    assert deleted == []
+
+
+def test_plan_orphan_sweep_older_than_marks_reclaimed_by_age(tmp_path, obs_store):
+    root = tmp_path / "handoff"
+    _make_spill(root, "hash1", "run_old_failed")
+    _insert_run(obs_store, "run_old_failed", "error", finished=True, minutes_ago=60 * 24 * 30)
+
+    candidates = plan_orphan_sweep(
+        str(root),
+        current_run_id="run_current",
+        keep_on_failure=True,
+        obs_store=obs_store,
+        older_than=timedelta(days=7),
+    )
+
+    by_run_id = {c.run_id: c for c in candidates}
+    assert by_run_id["run_old_failed"].reclaimed_by_age is True
+    # The now-empty hash dir is also reported, same as any other reclaim —
+    # it is not itself "reclaimed by age" (it carries no run_id/status).
+    assert by_run_id[None].reclaimed_by_age is False
 
 
 def test_sweep_keeps_a_kept_failure_when_the_store_cannot_be_queried(tmp_path):

@@ -1197,6 +1197,7 @@ def run(
                 record_result=False,
                 session_keep_alive=cfg.execution.session_keep_alive,
                 share_island_state=cfg.execution.share_island_state,
+                prune_eagerly=cfg.handoff.prune_eagerly,
             )
             # Phase 89 item 1 — one quiet `-v` narrative line per boundary
             # where a session was kept alive instead of rebuilt, same
@@ -1210,6 +1211,21 @@ def run(
                 for _reused_engine in polyglot_result.session_reused:
                     _funnel_info(
                         f"session kept alive · {_reused_engine}",
+                        gutter="  ",
+                        err=True,
+                    )
+            # Phase 89 item 3 — same, but for eager spill pruning, one quiet
+            # `-vv` narrative line per boundary whose spill was deleted the
+            # moment its reader island succeeded rather than at run end.
+            # Gated at -vv (not -v, unlike the reuse line above): a pruned
+            # edge is routine per-boundary housekeeping, one level quieter
+            # than "a session build was skipped" is.
+            if verbosity >= 2 and polyglot_result.pruned_spills:
+                from aqueduct.cli.render.funnel import info as _funnel_info
+
+                for _pruned_edge in polyglot_result.pruned_spills:
+                    _funnel_info(
+                        f"spill pruned · {_pruned_edge}",
                         gutter="  ",
                         err=True,
                     )

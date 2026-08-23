@@ -35,6 +35,30 @@ the moment that island finishes.
 A cross-ENGINE boundary is entirely unaffected by any of this — it stays
 storage-mediated (the handoff spill), never in-memory session state.
 
+**Same-run eager spill pruning (Phase 89 item 3).** Independently of
+session keep-alive, once an island finishes SUCCESSFULLY, every handoff
+edge it just READ (``h.to_island_idx == island_idx``) is provably done for
+the rest of THIS run — an edge has exactly one reader island (verified: a
+Handoff module's ``to_module`` resolves to one island, ``_handoff_edges``
+above), so nothing later in this run's execution order will ever touch
+that spill again. When ``handoff.prune_eagerly`` is true (the
+default), that edge's directory is deleted right there instead of waiting
+for the end-of-run ``delete_spill_tree(run_dir)``, bounding peak
+spill-storage for a long chain instead of holding every boundary's output
+until the whole run ends. This is deliberately narrower than the
+``keep_on_failure``/orphan-sweep/supersession machinery in
+``aqueduct.executor.spill``, which is entirely unmodified by this feature:
+an edge whose WRITE side was itself resumed from a PRIOR run
+(``resume_run_id``) is never eagerly pruned here — that spill's release is
+owned exclusively by the "successful resume releases what it consumed"
+logic further down this function, so the two mechanisms never race or
+double-decide the same directory. Failure semantics are unchanged: pruning
+only ever happens for an edge whose reader ALREADY succeeded, so a run that
+fails at island N still has every spill feeding island N (and everything
+after it) intact on disk for `--resume` — only spills belonging to islands
+that are already fully done, in a run that is itself still succeeding so
+far, are ever removed early.
+
 ``run_polyglot()`` is a strict superset of the single-engine case: a
 Manifest with exactly one island (including a single-engine Blueprint)
 runs correctly through this same code path (one island, no handoffs,
@@ -308,6 +332,7 @@ def run_polyglot(
     record_result: bool = True,
     session_keep_alive: bool = True,
     share_island_state: bool = False,
+    prune_eagerly: bool = True,
 ) -> ExecutionResult:
     """Execute a (possibly polyglot) compiled Manifest island by island.
 
@@ -385,6 +410,12 @@ def run_polyglot(
                          keep-alive" section.
         share_island_state: ``aqueduct.yml``'s ``execution.share_island_state``
                          (default False). See the module docstring.
+        prune_eagerly: ``aqueduct.yml``'s
+                         ``handoff.prune_eagerly`` (default True).
+                         See the module docstring's "Same-run eager spill
+                         pruning" section. When False, no spill is deleted
+                         until the run itself ends — the pre-Phase-89
+                         behavior exactly.
         record_result:   When True (the default — preserves this function's
                          existing standalone/tested contract), this call
                          records the run's outcome itself via
@@ -465,6 +496,14 @@ def run_polyglot(
     live_sub_manifest: Manifest | None = None  # island sub-Manifest that last ran on it
     session_reused: list[str] = []  # one engine name per reuse boundary, in order
 
+    # ── Eager spill pruning bookkeeping (Phase 89 item 3) ─────────────────
+    # An edge's module id lands here the moment its WRITE side is resumed
+    # from a PRIOR run (`resume_run_id`) — never eagerly pruned below, since
+    # that spill's release belongs exclusively to the resume-release logic
+    # at the end of this function, not to this same-run optimization.
+    resumed_edge_module_ids: set[str] = set()
+    pruned_spills: list[str] = []  # edge_ids pruned eagerly, in the order they were pruned
+
     try:
         for island_idx in order:
             island = manifest.islands[island_idx]
@@ -512,6 +551,10 @@ def run_polyglot(
                 # run's (which was never written).
                 for h in resumable_exits:
                     run_spill_uris[h.module.id] = resume_uris[h.module.id]
+                    # Owned by the resume-release logic at the end of this
+                    # function from here on — eager pruning below must never
+                    # touch it.
+                    resumed_edge_module_ids.add(h.module.id)
                 # No session was touched for a resume-skipped island — `live_*`
                 # (whatever it holds from an earlier island) is left exactly as
                 # is, still eligible for reuse by a LATER island on the same
@@ -670,6 +713,24 @@ def run_polyglot(
                 acc.status = ExecutionStatus.ERROR
                 acc.failed_engine = island.engine
                 break
+
+            # ── Eager spill pruning (Phase 89 item 3) — this island just
+            # succeeded, so every handoff edge it READ is provably done for
+            # the rest of this run (one edge has exactly one reader island).
+            # Skip an edge whose write side was resumed from a PRIOR run —
+            # that spill belongs to the resume-release logic below, not to
+            # this same-run optimization (see module docstring).
+            if prune_eagerly:
+                for h in handoffs:
+                    if h.to_island_idx != island_idx:
+                        continue
+                    if h.module.id in resumed_edge_module_ids:
+                        continue
+                    uri = run_spill_uris.get(h.module.id)
+                    if not uri:
+                        continue
+                    if delete_spill_tree(uri):
+                        pruned_spills.append(h.module.id)
     finally:
         # Whatever is still live when the loop exits — normally, via
         # `break` on failure, or because an exception propagated past the
@@ -687,6 +748,7 @@ def run_polyglot(
         trigger_agent=acc.trigger_agent,
         failed_engine=acc.failed_engine if acc.status != ExecutionStatus.SUCCESS else None,
         session_reused=tuple(session_reused),
+        pruned_spills=tuple(pruned_spills),
     )
 
     # ── Spill lifecycle: delete on success; keep on failure unless the
