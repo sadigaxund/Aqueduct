@@ -88,8 +88,29 @@ def test_duckdb_module_reads_via_duckdb_schema_reader_not_spark(duckdb_project, 
     def _boom(*a, **kw):
         raise AssertionError("drift must not read a duckdb module's schema via Spark")
 
-    monkeypatch.setattr("aqueduct.executor.spark.ingress.read_source_schema", _boom, raising=False)
-    monkeypatch.setattr("aqueduct.executor.spark.session.make_spark_session", _boom, raising=False)
+    # Only installable when pyspark is importable. `raising=False` does NOT
+    # help here: it suppresses AttributeError on a missing attribute, not the
+    # ImportError `monkeypatch.setattr` raises while importing the dotted
+    # target — and `aqueduct.executor.spark.session` imports pyspark at module
+    # level. The `drift-tests` CI lane installs no pyspark, so poisoning there
+    # would fail the test for the very reason it is asserting against.
+    #
+    # Skipping the poison without pyspark loses nothing: with pyspark absent,
+    # ANY attempt to route a duckdb module through Spark raises
+    # ModuleNotFoundError on its own, which is a strictly louder failure than
+    # the AssertionError above. The `spy.assert_called_once()` below is the
+    # positive half of the proof and runs in both environments.
+    try:
+        import pyspark  # noqa: F401
+    except ImportError:
+        pass
+    else:
+        monkeypatch.setattr(
+            "aqueduct.executor.spark.ingress.read_source_schema", _boom, raising=False
+        )
+        monkeypatch.setattr(
+            "aqueduct.executor.spark.session.make_spark_session", _boom, raising=False
+        )
 
     res = _invoke(tmp_path, store)
     assert res.exit_code == exit_codes.SUCCESS, res.output
