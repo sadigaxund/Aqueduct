@@ -464,3 +464,63 @@ def test_composed_duckdb_prompt_oom_rule_present_without_defer(tmp_path: Path):
     assert "Out of Memory" in prompt
     assert "memory_limit" in prompt
     assert "capacity limit of the machine, not a Blueprint defect" in prompt
+
+
+# ── Phase 88 — declare_dependency op guidance + defer_reason vocabulary ─────
+#
+# Both changes are true of every engine (a missing package and a defer bucket
+# are not Spark/DuckDB-flavored concepts), so they belong in the
+# engine-independent scaffold, not any engine's PromptRules pack. Proven here
+# against the "fake-engine" non-Spark protocol, same as the anti-bleed guard
+# above, so a regression that accidentally moved this text into an engine
+# pack (or dropped it) is caught regardless of which engine is composing.
+
+
+def test_composed_prompt_discloses_declare_dependency_never_installs_semantics(
+    tmp_path: Path, monkeypatch
+):
+    import aqueduct.executor.protocol as protocol
+
+    monkeypatch.setitem(protocol.PROTOCOL_REGISTRY, "fake-engine", _fake_engine_protocol())
+
+    prompt = _build_system_prompt(tmp_path, coaching=False, obs_store=None, engine="fake-engine")
+    assert (
+        "`declare_dependency` records a required package in the Blueprint's "
+        "`dependencies:` block — it DECLARES, it does not install. Aqueduct "
+        "never installs anything."
+    ) in prompt
+    assert "staged for a human to install it rather than auto-applied" in prompt
+    assert "the package or version does not exist at all, the patch is rejected" in prompt
+    assert "PEP 508" in prompt
+    assert "environment markers are not supported" in prompt
+
+
+def test_composed_prompt_discloses_defer_reason_bucket_vocabulary(tmp_path: Path, monkeypatch):
+    import aqueduct.executor.protocol as protocol
+
+    monkeypatch.setitem(protocol.PROTOCOL_REGISTRY, "fake-engine", _fake_engine_protocol())
+
+    prompt = _build_system_prompt(
+        tmp_path,
+        allow_defer=True,
+        coaching=False,
+        obs_store=None,
+        engine="fake-engine",
+    )
+    assert (
+        "- `defer_reason`: REQUIRED — the nearest bucket, one of `infrastructure` | "
+        "`upstream_schema_change` | `data_shape_change` | `insufficient_context` | `other`."
+    ) in prompt
+    assert "does NOT replace `diagnosis`, `suggestions`, or `confidence_reason`" in prompt
+    assert "`other` only as a last resort" in prompt
+
+    # allow_defer=False must hide this section entirely, same as the rest of
+    # the defer block (Phase 41 invariant: no easy way out on a normal heal).
+    prompt_no_defer = _build_system_prompt(
+        tmp_path,
+        allow_defer=False,
+        coaching=False,
+        obs_store=None,
+        engine="fake-engine",
+    )
+    assert "defer_reason" not in prompt_no_defer

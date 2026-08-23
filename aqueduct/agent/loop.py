@@ -108,7 +108,7 @@ logger = logging.getLogger(__name__)
 #        (each engine sees only its own allowlist); an engine that ships no
 #        allowlist is told the op is unavailable rather than shown an empty
 #        table. Changes the composed prompt for every engine.
-PROMPT_VERSION = "1.11"
+PROMPT_VERSION = "1.12"
 
 
 @dataclass

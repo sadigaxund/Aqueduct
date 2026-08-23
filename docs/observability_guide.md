@@ -207,10 +207,11 @@ budget axis tripped before a valid patch landed), the CLI synthesises one
 #### `patch_simulation`
 
 One row per gate the patch went through. `gate` vocabulary: `engine_config`,
-`lineage`, `sandbox`, `explain` (guardrail rejections — `forbidden_ops`,
-`allowed_paths`, the `set_engine_config` allowlist — are recorded in
-`heal_attempts`, not here). `status` is `pass` | `fail` | `warn` |
-`not_applicable` | `unavailable`.
+`lineage`, `sandbox`, `explain`, `resolvability` (Gate 5, 2.66 — one row per
+patch reporting the worst verdict across every `declare_dependency` op it
+carries; guardrail rejections — `forbidden_ops`, `allowed_paths`, the
+`set_engine_config` allowlist — are recorded in `heal_attempts`, not here).
+`status` is `pass` | `fail` | `warn` | `not_applicable` | `unavailable`.
 
 The three verdicts (`pass`, `warn`, `fail`) mean the gate ran. The other two
 mean it did not, and they are **opposite facts** — the question is whether a
@@ -256,6 +257,16 @@ effective before/after are identical: a clean apply that changes nothing an
 engine can see. That row is written for the record only — the refusal
 itself is enforced at apply time, so a `fail` here is always accompanied by
 a patch that never reached the Blueprint.
+
+The `resolvability` gate reports `not_applicable` for a patch carrying no
+`declare_dependency` op — most rows. `warn` means the declared requirement
+resolves on PyPI but is not installed in this environment: unlike every
+other gate's `warn`, this one is never advisory — it is a hard defer to a
+human (install it, then `aqueduct patch apply <id>`), and the patch is
+never auto-applied. `fail` means no such package (or no version satisfying
+the specifier) exists on PyPI at all. `unavailable` means the PyPI check
+itself could not run (network/timeout) — nothing about the requirement was
+verified, fail-closed like the `sandbox` gate's `unavailable`.
 
 For the SAME zero-module patches, the `sandbox` gate still runs and can
 still report `pass` on a clean replay, but its `detail` says so honestly
@@ -888,7 +899,7 @@ columns or aggregation tables:
 | `failure_categories` | `dict[str, int]` | Count of failures grouped by `error_class` |
 | `heal_coverage` | `dict[str, int]` | Heals resolved by the signature memory cache (`memory`) vs the LLM (`agent`), per blueprint |
 | `blueprint_history` | `list[BlueprintHistoryEvent]` | One blueprint's store-side remediation timeline (heal run starts, patch apply/reject, outcomes), `aqueduct blueprint history` merges this with `git_blueprint_commits` for the full picture |
-| `gate_rejection_rates` | `dict[str, int]` | Count of `patch_simulation` rows with `status = 'fail'`, per `gate` (`engine_config`/`lineage`/`sandbox`/`explain`). `warn`, `not_applicable` and `unavailable` are not rejections — see the function's docstring for why. Note `unavailable` is not a rejection but *is* blocking for the `sandbox` gate, so a rising `unavailable` count means heals are stalling for humans without any patch being judged wrong; count it separately rather than reading it as health. Falls back to `heal_attempts.gate_that_rejected` counts when `patch_simulation` is unavailable |
+| `gate_rejection_rates` | `dict[str, int]` | Count of `patch_simulation` rows with `status = 'fail'`, per `gate` (`engine_config`/`lineage`/`sandbox`/`explain`/`resolvability`). `warn`, `not_applicable` and `unavailable` are not rejections — see the function's docstring for why. Note `unavailable` is not a rejection but *is* blocking for the `sandbox` gate, so a rising `unavailable` count means heals are stalling for humans without any patch being judged wrong; count it separately rather than reading it as health. A rising `resolvability` `warn` count (not counted here — see above) similarly means heals are stalling on missing packages rather than bad patches. Falls back to `heal_attempts.gate_that_rejected` counts when `patch_simulation` is unavailable |
 
 DuckDB: the functions iterate discovered per‑pipeline files. Postgres: a single
 schema‑scoped query. Both backends return the same shape.
