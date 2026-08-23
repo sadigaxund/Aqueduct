@@ -371,7 +371,6 @@ Aqueduct is a transformation engine with a repair loop attached. It is not a sch
 - **[Production Guide](docs/production_guide.md)**: cluster deployment, security, Delta operations
 - **[Compatibility Matrix](docs/compatibility.md)**: supported Python × Spark versions, per-engine capability tables
 - **[Extending Aqueduct](docs/extending.md)**: how to add an execution engine (`ExecutorProtocol`, capability declarations, entry points)
-- **[Roadmap](docs/roadmap.md)**: deferred features and future plans
 - **[Gallery](gallery/)**: real working examples
 
 ## Contributing
