@@ -745,6 +745,9 @@ leaves:
     hint: "check_java()/check_spark(preflight=True) (aqueduct/doctor/__init__.py) build a real SparkSession with the project's engine.spark.conf and run spark.range(1).count(), verifying the session actually builds before a run starts."
     tests:
       - tests/test_cli/test_cli_doctor_new.py::test_preflight_spark_session_failure
+  tooling.sandbox_dry_run:
+    support: supported
+    hint: "aqueduct run --sandbox builds a Spark session through ExecutorProtocol.session_factory() and replays the compiled Manifest with every Egress skipped."
   observability.module_metrics.per_module:
     support: supported
     hint: "The Spark executor writes a module_metrics row (duration, row/byte counts) for every real module dispatch (_write_stage_metrics, spark/executor.py), not only Handoff."

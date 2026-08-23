@@ -808,9 +808,12 @@ Because that rebuild happens in place, on a mutable `_SessionHolder` (`run.py:60
   all read `_session_holder.session` for the same reason: whichever session is CURRENT at the
   moment they run, never the one that existed when they were defined.
 
-Do not confuse this with the unrelated `atexit.register(session.stop)` at `run.py:1526` — a
-short-lived sandbox dry-run session with no holder, built and torn down within one function
-with no rebuild path, where a bare local is correct.
+Do not confuse this with the unrelated `atexit.register(lambda: _protocol.session_closer()(session))`
+in the `--sandbox` short-circuit block (`run.py`, inside `if sandbox:`) — a short-lived sandbox
+dry-run session with no holder, built and torn down within one function with no rebuild path,
+where a bare local is correct. Engine-agnostic since Phase 89 (built via
+`get_protocol(engine).session_factory()`, not a hardcoded `make_spark_session()`), so the closer
+is resolved through `session_closer()` rather than assumed to be Spark's `session.stop`.
 
 ## Documentation style (user-set, binding)
 
