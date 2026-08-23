@@ -4,7 +4,7 @@ Aqueduct compiles a Blueprint into an engine-agnostic `Manifest`, then hands
 that Manifest to an execution engine. `spark` is the reference engine, and
 `duckdb` is the second engine, single-node and implementing a declared
 subset of the grammar. This guide is written from the experience of building
-`duckdb` through the real scaffold-and-fill workflow — it documents mechanics
+`duckdb` through the real scaffold-and-fill workflow. It documents mechanics
 that shipped, not a design proposal.
 
 For the reference-level contract (verdicts, leaf sets, the compile gate, the
@@ -12,11 +12,11 @@ version check), see `docs/specs.md` §10.9. For the published per-engine
 capability matrix, see `docs/compatibility.md`. This document is the
 how-to; those are the what-is.
 
-## Stability warning — read this first
+## Stability warning: read this first
 
 **`ExecutorProtocol` is not a stable public API.** It has survived exactly
 one second engine (DuckDB) and was reshaped more than once while that engine
-was being built — `engine_options` was added to `SessionSpec` mid-build,
+was being built: `engine_options` was added to `SessionSpec` mid-build,
 `DeferRules` was split out of `PromptRules` to stop one engine's advice
 leaking into another's, and the required/optional split on
 `ExecutorProtocol`'s fields was tuned against what DuckDB actually needed.
@@ -24,7 +24,7 @@ One data point is not enough to call a shape final.
 
 Aqueduct does not yet market "bring your own engine" as a supported feature,
 and this guide is not an invitation to build one for production against a
-frozen contract — there isn't one yet. If you build a third-party engine
+frozen contract: there isn't one yet. If you build a third-party engine
 today, expect the protocol to change under you between minor releases, and
 watch `CHANGELOG.md` for changes to `aqueduct/executor/protocol.py` and
 `aqueduct/executor/capabilities.py`. The mechanics below are honest about
@@ -32,7 +32,7 @@ what exists, not a promise about what will keep working.
 
 This is stated in code too: `ExecutorProtocol` carries a programmatically
 detectable marker, `ExecutorProtocol._aq_stability == "unstable"`, kept in
-sync with this section — so a reader who reaches for the source sees the same
+sync with this section, so a reader who reaches for the source sees the same
 warning without having to find this guide.
 
 ## What an engine is in Aqueduct
@@ -40,10 +40,10 @@ warning without having to find this guide.
 An engine is a Python module that, as an import side effect, registers two
 things into two registries:
 
-- an `EngineCapabilities` declaration (`aqueduct/executor/capabilities.py`) —
+- an `EngineCapabilities` declaration (`aqueduct/executor/capabilities.py`):
   a verdict for every leaf of the Blueprint grammar and every `aqueduct.yml`
   config key;
-- an `ExecutorProtocol` (`aqueduct/executor/protocol.py`) — the callables
+- an `ExecutorProtocol` (`aqueduct/executor/protocol.py`): the callables
   core uses to run a Manifest on the engine and to fold the engine into the
   healing loop.
 
@@ -54,7 +54,7 @@ name. `aqueduct/executor/capabilities.py::load_engines()` resolves and
 imports every entry point in that group exactly once per process; each
 engine module registers itself as an import side effect of being imported.
 This is why adding DuckDB required zero edits to the compiler, the config
-loader, or the CLI's engine dispatch — the seam already existed and DuckDB
+loader, or the CLI's engine dispatch: the seam already existed and DuckDB
 plugged into it.
 
 Two consequences follow directly from "registration is an import side
@@ -64,7 +64,7 @@ effect":
   actual runtime dependency to be installed. `execute`, `make_session`, and
   friends are thin wrappers that defer their real (`pyspark`- or
   `duckdb`-importing) implementation to call time. See
-  `aqueduct/executor/spark/engine.py`'s module docstring — module-level
+  `aqueduct/executor/spark/engine.py`'s module docstring: a module-level
   `import pyspark` there would break every install without the `spark`
   extra, including the DuckDB-only install path.
 - A broken or half-installed third-party engine surfaces as a clean,
@@ -82,42 +82,42 @@ aqueduct dev capabilities scaffold --engine <name>
 
 This writes a complete `capabilities.yml` under
 `aqueduct/executor/<name>/` with **every leaf on YOUR engine's own
-checklist** present and set to `undeclared` — currently 189
+checklist** present and set to `undeclared`, currently 189
 Blueprint-grammar leaves (module types, Channel ops, Egress write modes,
 Junction/Funnel fan modes, feature flags, hub type constructors) plus your
 engine's own engine-scoped `aqueduct.yml` config leaves (17 today, minus one
-per OTHER engine's `engine.<name>.*` block — 15 for a second engine given
+per OTHER engine's `engine.<name>.*` block (15 for a second engine given
 Spark already owns two). The leaf set is derived live from the grammar and
 config walkers (`capability_leaves.py`, `config_leaves.py`), so the scaffold
-cannot go stale the way a checked-in template would, and it cannot be gamed
-— there is no default-verdict sweep anywhere in the framework.
+cannot go stale the way a checked-in template would, and it cannot be gamed:
+there is no default-verdict sweep anywhere in the framework.
 
 **Your checklist is NOT the whole `config.*` surface.** Of `AqueductConfig`'s
-105 `config.*` leaves, ~88 are CORE — `webhooks.*`, `secrets.*`, `stores.*`,
-`lineage.*`, most of `agent.*`/`danger.*` — they run in core code paths with
+105 `config.*` leaves, ~88 are CORE (`webhooks.*`, `secrets.*`, `stores.*`,
+`lineage.*`, most of `agent.*`/`danger.*`). They run in core code paths with
 no per-engine implementation to diverge from, so no engine (yours included)
 is ever asked for a verdict on them; they simply never appear in your
 scaffold. (`lineage.*` is core because OpenLineage emission is built in
 `Surveyor.__init__` gated only on a configured URL, with no engine
-condition — a DuckDB run emits the same events a Spark run does.) The ones
+condition: a DuckDB run emits the same events a Spark run does.) The ones
 that DO appear are the ones that genuinely dispatch through an engine:
 `probes.*`, `metrics.use_observe`, `timezone`, `checkpoint_root`,
 `deployment.target`, `handoff.root`,
 `agent.sandbox_master_url`/`block_on_explain_regression`,
 `danger.allow_full_probe_actions`. A field under `engine.<name>.*`
 (`engine.spark.master_url`, `engine.duckdb.memory_limit`) is positionally
-yours alone — it never appears on another engine's checklist and no other
+yours alone: it never appears on another engine's checklist and no other
 engine's such leaves appear on yours.
 
 **Do not copy another engine's `capabilities.yml`.** Spark's table has 208
 rows, ~207 of them `supported`, because Spark actually implements that much.
 Cloning it onto a new engine is a silent claim that the new engine supports
-the entire grammar — precisely the blind spot this framework exists to
+the entire grammar, precisely the blind spot this framework exists to
 catch. Read Spark's table as a reference for what a verdict/`requires`/`hint`
 row looks like; never paste it wholesale. DuckDB's own table
 (`aqueduct/executor/duckdb_/capabilities.yml`) is a better model of an
 *honest* subset declaration: parquet/csv/json ingress, a handful of Channel
-ops, both Junction modes and both Funnel modes, parquet/csv egress —
+ops, both Junction modes and both Funnel modes, parquet/csv egress:
 everything else `unsupported`, with a `hint` on the rows that matter.
 
 ### 2. Work through every leaf
@@ -130,13 +130,13 @@ Every `undeclared` row must become one of:
 | `unsupported` | The engine cannot run this leaf. A Blueprint grammar leaf becomes a compile-time `CompileError`; a config leaf only ever warns. |
 | `ignored_with_warning` | The engine accepts the leaf but it has no effect. Suppressible warning (`engine_key_ignored`). |
 
-`undeclared` itself is **not a fourth verdict** — it is a sentinel meaning
+`undeclared` itself is **not a fourth verdict**: it is a sentinel meaning
 "nobody has decided yet," and it is deliberately distinct from
 `unsupported` ("we decided this engine cannot do it"). A row stuck on
 `undeclared` fails the build at engine registration
 (`CapabilityDeclarationError`) and fails
 `tests/test_capabilities/test_closure.py`. Earning `supported` means a real
-handler plus a test exercising it on that engine — not an assumption.
+handler plus a test exercising it on that engine, not an assumption.
 
 ### 3. `sync` and `check`
 
@@ -145,9 +145,9 @@ aqueduct dev capabilities check    # read-only, what CI runs
 aqueduct dev capabilities sync     # appends any newly-derived leaves as `undeclared`
 ```
 
-`sync` never invents a verdict — a human decides what a new leaf means for
+`sync` never invents a verdict: a human decides what a new leaf means for
 an existing engine, so a new leaf is always parked at `undeclared`. An
-orphaned row (one that no longer matches a real leaf on your checklist —
+orphaned row (one that no longer matches a real leaf on your checklist,
 after a rename, a reclassification to core, or because it is now
 positionally owned by a different engine) is DELETED by default: it already
 makes your table invalid, so `sync`'s job is to hand back a valid table, not
@@ -166,7 +166,7 @@ aqueduct dev capabilities docs
 Regenerates the engine matrix in `docs/compatibility.md` between its
 `<!-- ENGINE_MATRIX_START -->` / `<!-- ENGINE_MATRIX_END -->` markers,
 straight from the YAML declarations. The published matrix and the enforced
-one are the same data by construction — there is no separate hand-written
+one are the same data by construction: there is no separate hand-written
 compatibility table to keep in sync.
 
 ## Implement `ExecutorProtocol`
@@ -174,7 +174,7 @@ compatibility table to keep in sync.
 `aqueduct/executor/protocol.py` defines the contract. Every engine
 constructs exactly one `ExecutorProtocol` instance and calls
 `register_protocol()` on it, mirroring the capability registration pattern.
-`__post_init__` enforces the required members structurally — a malformed
+`__post_init__` enforces the required members structurally: a malformed
 engine cannot register, it raises `EnginePluginError` at construction time
 rather than degrading silently.
 
@@ -191,8 +191,8 @@ engine's `execute` with the same superset of run options
 `resume_run_id`, `from_module`, `to_module`, `block_full_actions`,
 `warnings_*`, plus Spark-only options like `parallel`, `use_observe`,
 `sampling`, `observability_store`, `explain_capture`). An engine with no
-equivalent for a Spark-only option drops it in its own protocol adapter —
-see `_DUCKDB_EXECUTE_KWARGS` in `aqueduct/executor/duckdb_/engine.py`, a
+equivalent for a Spark-only option drops it in its own protocol adapter.
+See `_DUCKDB_EXECUTE_KWARGS` in `aqueduct/executor/duckdb_/engine.py`, a
 frozenset the adapter filters kwargs against before calling the engine's
 real `execute()`, so that function's actual signature never has to accept
 an option it cannot honour.
@@ -204,12 +204,12 @@ structured fields (`error_class`, `root_exception`, `sql_state`,
 `suggested_columns`, `object_name`). This is required, not optional,
 because without it `FailureContext.error_class`/`root_exception` stay
 silently `None` for every failure on that engine, and the healing LLM loses
-the structured root-cause block it relies on for diagnosis — the exact
-"heal quality dies on a new engine's errors" failure mode this member
+the structured root-cause block it relies on for diagnosis. That is the
+exact "heal quality dies on a new engine's errors" failure mode this member
 exists to prevent. Spark's implementation
 (`aqueduct/executor/spark/engine.py::_extract_error`) is a straight
 delegation to the pre-existing
-`aqueduct.surveyor.error_extraction._extract_structured_error` — naming
+`aqueduct.surveyor.error_extraction._extract_structured_error`: it names
 existing behavior through the new seam, not new code. DuckDB's
 (`aqueduct/executor/duckdb_/error_extraction.py::extract_duckdb_error`) is
 written fresh against DuckDB's own exception types.
@@ -219,31 +219,31 @@ written fresh against DuckDB's own exception types.
 The engine's half of the composed healing system prompt. The healing
 prompt is **composed**, not monolithic: an engine-independent scaffold
 (PatchSpec schema, op-selection table, provenance rules, output contract,
-generic defer categories — `aqueduct/agent/prompts.py`) is combined at
+generic defer categories, `aqueduct/agent/prompts.py`) is combined at
 build time with the target engine's `PromptRules` pack, pulled through the
 registry. `PromptRules` has four fields:
 
-- `persona` — the prompt's opening line ("You are an expert `<engine>`
+- `persona`: the prompt's opening line ("You are an expert `<engine>`
   blueprint repair agent...").
-- `root_cause_note` — the prose description of what the engine's structured
+- `root_cause_note`: the prose description of what the engine's structured
   root-cause block contains; it is the human-readable counterpart of what
   `extract_error` actually returns, so the two need to stay honest about
   each other.
-- `rules` — the engine's own error idioms and advice (DuckDB's pack, for
+- `rules`: the engine's own error idioms and advice (DuckDB's pack, for
   example, warns the model that `repartition`/`coalesce`/`cache` have no
   DuckDB equivalent and are `unsupported`, and that a Binder Error naming a
   missing column is often a wrong Ingress `format` rather than a bad
   Channel query).
-- `defer` — a `DeferRules`, the engine's slice of the "when to defer to a
+- `defer`: a `DeferRules`, the engine's slice of the "when to defer to a
   human" section: `infra_examples` (the engine's actual infrastructure
-  failure modes — Spark names Hive metastore locks and cluster config;
-  DuckDB, single-process and embedded, names a concurrent writer holding
+  failure modes; Spark names Hive metastore locks and cluster config,
+  while DuckDB, single-process and embedded, names a concurrent writer holding
   the database file lock instead), `udf_languages` (the languages the
   engine's UDF registry accepts), and an optional `extra_bullets` for a
   whole defer category unique to the engine.
 
 **Why this cannot be generic strings.** A `DeferRules`/`PromptRules` field
-left blank does not fail closed — it falls back to reading like advice for
+left blank does not fail closed: it falls back to reading like advice for
 a different engine. A DuckDB heal told to defer over "Hive metastore locks"
 is actively wrong: DuckDB has no metastore. This is why `DeferRules` is a
 separate frozen dataclass with its own non-empty validation rather than a
@@ -251,7 +251,7 @@ free-text field on `PromptRules`, and why the guard test
 (`tests/test_agent/test_prompt_composition.py`) composes the full prompt
 for a synthetic non-Spark engine and asserts no Spark vocabulary
 (`Spark`, `pyspark`, `AnalysisException`, `Py4J`, `Hive`, `Scala`,
-`metastore`) survives anywhere in it — including in the parts of the prompt
+`metastore`) survives anywhere in it, including in the parts of the prompt
 assembled at *runtime* (the defer section only renders when `allow_defer`
 is on), not just the static template constant. When you write a new
 engine's `PromptRules`, write it fresh against that engine's real error
@@ -259,8 +259,8 @@ vocabulary; do not adapt another engine's copy.
 
 ### Session lifecycle: `make_session` / `close_session` / `SessionSpec`
 
-Optional at registration — a compile-only engine or a test double has no
-session to build — but required for `aqueduct run` to actually run on the
+Optional at registration (a compile-only engine or a test double has no
+session to build), but required for `aqueduct run` to actually run on the
 engine. `session_factory()`/`session_closer()` raise a clean
 `EnginePluginError` naming the engine (never `NotImplementedError`) if a
 runnable engine reaches the CLI without one.
@@ -277,14 +277,14 @@ engine_options: dict[str, Any] = {}
 ```
 
 The fields are the *union* of what registered engines need, not Spark's
-constructor signature verbatim — an engine reads the fields it understands
+constructor signature verbatim: an engine reads the fields it understands
 and ignores the rest. DuckDB's `make_session` (`_make_session` in
 `aqueduct/executor/duckdb_/engine.py`) ignores `master_url`/`quiet*`
 entirely and always opens a fresh `:memory:` connection; `engine_config`
 and `engine_options` are accepted for cross-engine parity but currently
 unused (there is no `duckdb_config` knob yet). `engine_options` exists
-specifically so a future engine's session needs — anything the four named
-fields don't cover — can be threaded through without a breaking change to
+specifically so a future engine's session needs, anything the four named
+fields don't cover, can be threaded through without a breaking change to
 this frozen dataclass; nothing in core populates it today.
 
 ### Optional diagnostic readers: `read_source_schema` / `sample_source_rows`
@@ -293,10 +293,10 @@ this frozen dataclass; nothing in core populates it today.
 `(module, session, n, base_dir) -> [{col: val}, ...]` back two of the
 healing agent's toolbox diagnostics (`get_source_schema` and `sample_rows`
 in `aqueduct/agent/toolbox.py`). Both must be metadata-only /
-bounded-by-a-pushed-down-LIMIT — never a full scan or a materializing read.
+bounded-by-a-pushed-down-LIMIT: never a full scan or a materializing read.
 
 If an engine registers without them (`None`, the default), the toolbox does
-not crash and does not fall back to another engine's reader — it degrades
+not crash and does not fall back to another engine's reader: it degrades
 to the same structured "unavailable" response it already returns when there
 is no live session. This closed a real coupling: before the protocol
 existed, the toolbox imported Spark's schema reader unconditionally, so a
@@ -308,10 +308,10 @@ broken one.
 
 ### Optional type mapping: `render_type`
 
-`(HubType | NativeType) -> str` — renders one parsed hub type
+`(HubType | NativeType) -> str` renders one parsed hub type
 (`aqueduct/typehub.py`) to this engine's own native type-system spelling.
-Backs Channel `op: cast`, Ingress `schema_hint`, and (Spark only, so far) UDF
-`return_type` — the three places a Blueprint type string reaches an engine at
+It backs Channel `op: cast`, Ingress `schema_hint`, and (Spark only, so far) UDF
+`return_type`, the three places a Blueprint type string reaches an engine at
 runtime.
 
 Optional at registration, the same class as `read_source_schema` /
@@ -321,12 +321,12 @@ new engine's first release. The degrade contract when it is missing
 (`render_type=None`, the default) is narrow and must stay honest rather than
 silent: your engine still runs a Blueprint that uses only ITS OWN
 native-namespace escape hatch (`"<your-engine>:<spelling>"`, unwrapped to
-`.spelling` verbatim — no mapping needed) and any spelling its own runtime
+`.spelling` verbatim, no mapping needed) and any spelling its own runtime
 parser accepts raw, but a hub spelling (`bigint`, `array<int>`, `decimal(10,2)`,
 …) used against your engine is refused with a clean `EnginePluginError`, not
 silently forwarded to a parser that was never going to understand it. That
 refusal is `aqueduct.executor.protocol.render_native_type(engine, spelling)`'s
-job — route your engine's cast/schema_hint/return_type consumption through
+job. Route your engine's cast/schema_hint/return_type consumption through
 it (or through your own `render_type` directly once you've written one)
 rather than reimplementing the parse-and-dispatch logic:
 
@@ -338,14 +338,14 @@ def normalize_type_spelling(spelling: str) -> str:
     try:
         return render_native_type("your-engine", spelling)
     except TypeSpellingError:
-        # Not a hub spelling at all — hand it to your own parser raw,
+        # Not a hub spelling at all: hand it to your own parser raw,
         # same fallback both shipped engines use for a spelling the hub
         # does not recognize (their own native DDL written directly).
         return spelling
 ```
 
 `render_native_type` also defensively rejects a `NativeType` naming a
-DIFFERENT engine (`"other-engine:<spelling>"` reaching your engine) — the
+DIFFERENT engine (`"other-engine:<spelling>"` reaching your engine). The
 compile-time `type.native.*` capability gate should already have refused
 that Blueprint for your engine, so this only fires on an ungated call path,
 and it must fail loudly rather than forward a foreign engine's native
@@ -353,12 +353,12 @@ spelling to your parser.
 
 Look at `aqueduct/executor/spark/type_render.py` and
 `aqueduct/executor/duckdb_/type_render.py` for two real, complete mappers.
-Both are pure string logic — no `pyspark`/`duckdb` import — which is the
+Both are pure string logic, with no `pyspark`/`duckdb` import, which is the
 preferred shape: `render_type` does not need the lazy-import discipline
 `execute` does, since it never has to touch the engine's actual runtime.
 When you do need composite-type spellings (`array<T>`, `map<K,V>`,
 `struct<name:type,...>`), verify them empirically against your engine's real
-parser rather than guessing from documentation — DuckDB's mapper was written
+parser rather than guessing from documentation. DuckDB's mapper was written
 this way (`CAST(x AS INTEGER[])`, `CAST(x AS MAP(VARCHAR, INTEGER))`,
 `CAST(x AS STRUCT(a INTEGER))`, including nested combinations, all checked
 against a real `duckdb.connect()` before being declared `supported`).
@@ -377,46 +377,46 @@ The key is the engine name (matches `deployment.engine` in `aqueduct.yml`
 and the `engine` field on `ExecutorProtocol`/`EngineCapabilities`); the
 value is the dotted path to the module whose import registers both. A
 third-party engine ships this same table in its own package's
-`pyproject.toml` — `aqueduct` never needs to know about it in advance;
+`pyproject.toml`. `aqueduct` never needs to know about it in advance;
 `load_engines()` discovers it via `importlib.metadata.entry_points()` at
 process start.
 
-## The three failure modes — never conflate them
+## The three failure modes: never conflate them
 
 Three error types cover three genuinely different situations on this seam,
 and callers distinguish them by exception **type**, never by matching
-message text. All three are direct `AqueductError` subclasses — none is a
-subclass of another — so a handler written for one cannot accidentally
+message text. All three are direct `AqueductError` subclasses; none is a
+subclass of another, so a handler written for one cannot accidentally
 swallow another and re-conflate two states that need different fixes:
 
-- **`EnginePluginError`** — the `aqueduct.engines` entry point failed to
+- **`EnginePluginError`**: the `aqueduct.engines` entry point failed to
   **import**. The plugin is broken or half-installed (a syntax error, a
   missing transitive dependency, a stale wheel). The fix is reinstall.
   This is also what `ExecutorProtocol.__post_init__`/`PromptRules`/
-  `DeferRules` raise for a structurally incomplete registration attempt —
+  `DeferRules` raise for a structurally incomplete registration attempt,
   the same error type, because a plugin author hitting one of those guards
   is, from the framework's point of view, shipping a broken plugin.
-- **`CapabilityDeclarationError`** — the `capabilities.yml` declaration is
+- **`CapabilityDeclarationError`**: the `capabilities.yml` declaration is
   **incomplete or invalid**: a leaf with no row, a row still on
   `undeclared`, a row naming a leaf that no longer exists, an illegal
   verdict string, a malformed `requires` specifier. This is a dev-time
   build failure. The fix is `aqueduct dev capabilities sync` followed by a
-  real verdict — reinstalling fixes nothing, because the package installed
+  real verdict. Reinstalling fixes nothing, because the package installed
   fine; the *data it ships* is the problem.
-- **`CapabilityScopeError`** — a `config.*` field's engine-scoping is
+- **`CapabilityScopeError`**: a `config.*` field's engine-scoping is
   **undecided or contradictory**: EVERY `config.*` field in
   `aqueduct/config.py` must carry an explicit
   `Field(..., json_schema_extra={"engine_scoped": True})` or `{"...": False}`
-  tag — there is no "untagged means core" fallback anywhere, precisely so a
+  tag: there is no "untagged means core" fallback anywhere, precisely so a
   brand-new field can never fall silently into either bucket with nobody
   deciding. A field with neither key raises, naming the field and both legal
   resolutions (tag it `True` if it dispatches through an engine, `False` if
   it is core-only). A field living under an `engine.<name>.*` block is
-  additionally restricted to `True` — tagging it `False` (or leaving it
+  additionally restricted to `True`: tagging it `False` (or leaving it
   untagged) is a contradiction and also raises, since there is no coherent
   "core" reading for something namespaced to one engine. Raised the moment
   the walker runs (every engine's `capabilities.py` walks it at import, i.e.
-  at registration time — never CI-only). This one is a first-party
+  at registration time, never CI-only). This one is a first-party
   `aqueduct/config.py` bug, not something a third-party engine plugin can
   trigger by shipping bad data. See `docs/specs.md` §10.9 "Config-leaf
   scoping".
@@ -433,7 +433,7 @@ this seam, branch on `isinstance(exc, EnginePluginError)` /
 
 - **Engine runtime deps stay inside the engine's own subpackage.**
   `pyspark` is imported nowhere outside `aqueduct/executor/spark/`; `duckdb`
-  is a base dependency (the observability/depot stores already need it —
+  is a base dependency (the observability/depot stores already need it;
   see `aqueduct/stores/duckdb_.py`) but the engine's own code still lives
   entirely under `aqueduct/executor/duckdb_/`. A third-party engine's own
   heavy dependency (a database driver, a distributed-compute client)
@@ -442,7 +442,7 @@ this seam, branch on `isinstance(exc, EnginePluginError)` /
   stay importable without that dependency (constructing the
   `ExecutorProtocol`/`EngineCapabilities` objects must never require it).
 - **Prompt-pack purity.** An engine's `PromptRules` pack names no other
-  engine, ever — see the anti-bleed discussion above. This is enforced by a
+  engine, ever. See the anti-bleed discussion above. This is enforced by a
   test, not just a convention (`tests/test_agent/test_prompt_composition.py`).
 - **Core never imports an engine by name.** Not the compiler, not
   `aqueduct/config.py`, not the CLI. Everything reaches an engine through
@@ -450,26 +450,26 @@ this seam, branch on `isinstance(exc, EnginePluginError)` /
   `load_engines()`. If you find yourself writing
   `from aqueduct.executor.duckdb_ import ...` anywhere outside
   `aqueduct/executor/duckdb_/` itself or its own tests, that is very likely
-  a layering violation — the one documented exception in the whole codebase
+  a layering violation. The one documented exception in the whole codebase
   for a similar cross-layer reach is `aqueduct/parser/parser.py` importing
   the engine-agnostic `path_keys.py` registry, which is deliberately not
   engine-specific code.
 - **The agent layer imports no engine specifics.** Spark's `engine.py`
   module docstring states this explicitly: "this module imports NOTHING
   from `aqueduct/agent/`... Core never imports a `spark.*` module by name."
-  The dependency only ever flows one way — an engine's module imports from
+  The dependency only ever flows one way: an engine's module imports from
   `aqueduct.executor.protocol`, never the reverse.
 
 ## Testing expectations
 
 The capability declaration is the single source of truth for what an
-engine is *allowed* to be tested doing — there is no separate,
+engine is *allowed* to be tested doing. There is no separate,
 hand-maintained per-engine skip list anywhere in the test suite. Two
 mechanisms keep this honest:
 
 - `tests/test_capabilities/test_closure.py` is the anti-drift proof: it
   reads every registered engine's `capabilities.yml` straight off disk
-  (not through the loaded registry — the two must stay independent sources
+  (not through the loaded registry: the two must stay independent sources
   that *can* disagree, or the test cannot fail) and compares it against the
   live-derived leaf set. A leaf with no row, a row still `undeclared`, or a
   row naming a leaf that no longer exists fails the build. This is what
@@ -477,7 +477,7 @@ mechanisms keep this honest:
   single functional test against it.
 - The compile-time gate (`aqueduct/compiler/capability_check.py`) means an
   `unsupported` leaf simply cannot appear in a Manifest compiled for that
-  engine — a test blueprint using an op DuckDB does not support fails to
+  engine. A test blueprint using an op DuckDB does not support fails to
   *compile* for `duckdb`, loudly, rather than needing a runtime skip
   decorator to route around it.
 
@@ -486,26 +486,26 @@ own test directory (`tests/test_executor_duckdb/`, marked
 `pytest.mark.duckdb`) exercises DuckDB-specific behavior (`COPY TO`,
 `sqlglot` transpilation, DuckDB's mutable-catalog relation lifecycle) that
 has no Spark analog and does not belong in a shared parametrized suite.
-Behavior that is genuinely engine-invariant (hook firing, retry policy —
+Behavior that is genuinely engine-invariant (hook firing, retry policy;
 see `tests/test_cli/test_cli_duckdb_engine_invariant.py`) gets its own
 proof, run concretely against DuckDB, rather than an assumption that
 "engine-agnostic orchestration" needs no engine-specific verification at
 all. When you add a new engine: write its own marked test directory for its
 own mechanics, run `aqueduct dev capabilities check` before you claim a
 leaf `supported`, and let the closure test and the compile gate do the
-work of keeping the declaration and the grammar from drifting apart — do
+work of keeping the declaration and the grammar from drifting apart. Do
 not hand-write a skip list that duplicates what the capability table
 already says.
 
-**A `supported` EXECUTION verdict is not just a claim — it is a claim with a
+**A `supported` EXECUTION verdict is not just a claim: it is a claim with a
 test id attached.** `capability_leaves.py::execution_leaves()` is the
 in-scope subset (`module.type.*`, `channel.op.*`, `ingress.format.*`,
 `egress.format.*`/`.mode.*`/`.on_new_columns.*`, `junction.mode.*`,
-`funnel.mode.*`, `feature.*` — never `config.*`, never `module.field.*` or a
+`funnel.mode.*`, `feature.*`; never `config.*`, never `module.field.*` or a
 `<block>.field.*` leaf, which are warn-only or engine-invariant with nothing
 per-engine to exercise). For every leaf in that set your engine declares
 `supported`, add a `tests:` key naming the pytest id(s) (or a bare file path
-for a whole-file link) that actually run the handler on your engine — a
+for a whole-file link) that actually run the handler on your engine. A
 compile-only or mocked test is a weak link, not a real one; prefer a test
 that drives the module/op end to end. `tests/test_capabilities/
 test_verdict_test_links.py` is the build-breaking gate: it fails, naming the
@@ -514,7 +514,7 @@ declared id does not resolve against the real test tree (missing file,
 or a `::name` node id pytest would never collect). `aqueduct dev
 capabilities check` reports the same gaps without failing its own exit
 code, so you can see them before wiring CI. Never invent an id to make the
-gate go green, and never downgrade a verdict just to dodge it — an honestly
+gate go green, and never downgrade a verdict just to dodge it: an honestly
 unbacked `supported` leaf should fail this test until you either write the
 missing test or admit the leaf is not really proven yet.
 
@@ -525,7 +525,7 @@ and knowing which is which matters more than it sounds: some are open and
 documented, some are deliberately closed forever, and some are closed only
 because nobody has needed them open yet.
 
-### Bring your own code — five seams, one loader
+### Bring your own code: five seams, one loader
 
 Five places accept user-authored Python from a Blueprint or config reference:
 
@@ -542,17 +542,17 @@ All five resolve through **`aqueduct/infra/module_loading.py`** against
 chokepoint on purpose: a bare import only searches `sys.path`, and the
 `aqueduct` console script never has your Blueprint's directory on it, so a
 sibling `.py` next to the Blueprint is invisible. That exact bug shipped five
-times independently — once per seam — before being fixed once at the root.
+times independently, once per seam, before being fixed once at the root.
 
 `aqueduct dev scaffold <kind> --name <name>` generates a working stub for any of
 them (`probe`, `assert`, `udf`, `datasource`, `secrets`). The stubs are rendered
 from the live contracts rather than from template strings, and each one is
-acceptance-tested by loading it through the real seam — so a scaffold that stops
+acceptance-tested by loading it through the real seam, so a scaffold that stops
 matching its seam fails the build.
 
 ### Entry-point groups
 
-Four exist; only one is live. **Being named is not being loaded** — check before
+Four exist; only one is live. **Being named is not being loaded**: check before
 assuming a group works.
 
 | Group | State |
@@ -560,10 +560,10 @@ assuming a group works.
 | `aqueduct.engines` | **Live.** Declared in `pyproject.toml`, resolved by `executor/capabilities.py::load_engines`. This guide is about writing one. |
 | `aqueduct.probe_signals` | **Resolved but unused.** `executor/probe_plugins.py` reads it; no package declares it. The `module:`/`entry:` pointer path carries the real load today. |
 | `aqueduct.tools` | **Reserved, not resolved.** The constant exists (`tools/registry.py`) and nothing reads it. Deliberate: a tool is code running on the driver, so custom-tool loading needs config allowlisting first. Do not implement loading without that gate. |
-| `aqueduct.actuators` | **Planned, not in code.** Phase 82 domains 3/5. |
+| `aqueduct.actuators` | **Reserved, not in code.** No loader exists and none is currently planned. |
 
 Anywhere plugin code executes on the driver, discovery alone is never
-authorization — an allowlist gates it.
+authorization: an allowlist gates it.
 
 ### Closed sets, and what extending one actually costs
 
@@ -582,7 +582,7 @@ one needs a capability verdict per engine:
 
 The realistic cost of one new member: the enum or frozenset value, an
 implementation in **every** registered engine, and one capability-table row with
-a verdict per engine. The build breaks until every engine has declared one —
+a verdict per engine. The build breaks until every engine has declared one:
 that is the framework working, not an obstacle. Run `aqueduct dev capabilities
 sync` and it will tell you exactly what is missing.
 
@@ -600,7 +600,7 @@ Two sets are **closed by decision, not by accident**:
 This is not a parity claim between engines. DuckDB is single-node,
 implements a declared subset of the grammar, and some capabilities the two
 engines do share still behave differently in ways a verdict cannot express
-— see `docs/specs.md` §10.9's "Engine notes" for the current list (DuckDB's
+. See `docs/specs.md` §10.9's "Engine notes" for the current list (DuckDB's
 `append` write is not atomic; several Channel ops materialize eagerly
 rather than staying lazy). Read the matrix in `docs/compatibility.md`
 before assuming a Blueprint that runs on one engine runs unchanged on

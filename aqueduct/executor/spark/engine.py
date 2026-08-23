@@ -28,6 +28,7 @@ by pulling it through ``ExecutorProtocol.prompt_rules``.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 # Side effect: registers "spark" into aqueduct.executor.capabilities.CAPABILITY_REGISTRY.
@@ -39,6 +40,9 @@ from aqueduct.executor.spark.type_render import render_spark_type
 
 if TYPE_CHECKING:
     from aqueduct.executor.models import ExecutionResult
+    from aqueduct.models import Manifest
+
+logger = logging.getLogger(__name__)
 
 
 def _execute(*args: Any, **kwargs: Any) -> ExecutionResult:
@@ -145,6 +149,46 @@ def _sample_source_rows(
     return [row.asDict(recursive=True) for row in rows]
 
 
+def _cleanup_reused_session(session: Any, manifest: Manifest) -> None:
+    """``ExecutorProtocol.cleanup_reused_session`` for Spark (Phase 89
+    item 1 — polyglot session keep-alive).
+
+    Drops the catalog tables *manifest* (the island sub-Manifest that just
+    finished on *session*) registered via an Egress module's
+    ``register_as_table`` (``aqueduct.executor.spark.egress
+    ._register_external_table``) — the one piece of session-scoped state a
+    Spark island leaves behind that isn't already self-cleaning. Channel
+    SQL temp views need no equivalent handling: ``spark/channel.py``'s
+    ``_run_sql`` already drops every temp view it registers in a ``finally``
+    block on every call, so nothing from a Channel module survives past its
+    own execution regardless of how long the session lives afterward. Same
+    for `mode: merge` Egress's ``_aq_merge_src`` view.
+
+    Best-effort: a failure here only means the reused session might still
+    carry a stale table registration (the same non-fatal posture
+    ``_register_external_table`` itself uses) — it must never abort the
+    keep-alive reuse.
+    """
+    from aqueduct.models import ModuleType
+
+    for m in manifest.modules:
+        if m.type != ModuleType.Egress:
+            continue
+        table_name = m.config.get("register_as_table")
+        if not table_name or m.config.get("table"):
+            continue  # `table:` already ignores register_as_table at write time
+        try:
+            session.sql(f"DROP TABLE IF EXISTS {table_name}")
+        except Exception as exc:
+            logger.warning(
+                "[runtime_session_reuse_cleanup_failed] [%s] failed to drop "
+                "reused-session table %r registered via register_as_table: %s",
+                m.id,
+                table_name,
+                exc,
+            )
+
+
 SPARK = ExecutorProtocol(
     engine="spark",
     execute=_execute,
@@ -152,6 +196,7 @@ SPARK = ExecutorProtocol(
     prompt_rules=SPARK_PROMPT_RULES,
     make_session=_make_session,
     close_session=_close_session,
+    cleanup_reused_session=_cleanup_reused_session,
     read_source_schema=_read_source_schema,
     sample_source_rows=_sample_source_rows,
     render_type=render_spark_type,

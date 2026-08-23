@@ -293,6 +293,7 @@ TOOLING_FLAGS: frozenset[str] = frozenset(
         "doctor.table_exists",  # doctor's table-existence check
         "doctor.cloud_preflight",  # doctor's `--preflight` cloud-URI check
         "doctor.session_preflight",  # doctor-time "will a session build" check
+        "sandbox_dry_run",  # `aqueduct run --sandbox` — the CLI --sandbox dry-run path
     }
 )
 

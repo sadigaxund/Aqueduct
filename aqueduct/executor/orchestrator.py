@@ -8,14 +8,56 @@ island (lazily, in island-topological order — an island's upstream
 boundary(ies) must finish before it starts), execute that island's modules
 through its OWN engine on an island-scoped sub-Manifest, perform each
 boundary's synthetic Handoff module's write (upstream island) / read
-(downstream island) half, and close each island's session IMMEDIATELY
-after that island finishes.
+(downstream island) half, and tear down sessions according to
+``execution.session_keep_alive``.
 
-**Deliberate v1 choice, not yet optimized:** an engine's session closes
-after its island even if that SAME engine recurs later in the run (e.g.
-spark -> duckdb -> spark). Keeping a live session across a re-occurrence is
-a recorded, statically-decidable optimization for a later step, not this
-one — every island gets its own fresh session, always.
+**Session keep-alive (Phase 89 item 1).** When ``session_keep_alive`` is
+true (the default), a session is closed only when the run moves to an
+island on a DIFFERENT engine (or when the run ends) — an island that shares
+its engine with the PREVIOUS island in execution order (any same-engine
+adjacency, not only a provably-sequential dependency) is instead handed
+that still-live session directly, skipping a fresh session build entirely.
+Because a reused session is not observationally fresh, session-scoped state
+the finishing island's modules created (Spark/DuckDB catalog objects
+registered via ``register_as_table``) is dropped at the boundary — through
+each engine's own ``ExecutorProtocol.cleanup_reused_session`` hook, never a
+hardcoded per-engine call here — UNLESS ``execution.share_island_state`` is
+also true, which deliberately skips that cleanup so the next same-engine
+island sees the previous one's registered tables (e.g. to avoid reloading
+state when a run returns to an engine it already visited). Regardless of
+either flag, EVERY session this function ever built or reused is closed by
+the time it returns — success, failure, or a raised exception — so a
+single-engine same-island decision never leaks a live session past this
+call. Setting ``session_keep_alive`` to false restores the original v1
+behavior exactly: every island gets its own fresh session, always, closed
+the moment that island finishes.
+
+A cross-ENGINE boundary is entirely unaffected by any of this — it stays
+storage-mediated (the handoff spill), never in-memory session state.
+
+**Same-run eager spill pruning (Phase 89 item 3).** Independently of
+session keep-alive, once an island finishes SUCCESSFULLY, every handoff
+edge it just READ (``h.to_island_idx == island_idx``) is provably done for
+the rest of THIS run — an edge has exactly one reader island (verified: a
+Handoff module's ``to_module`` resolves to one island, ``_handoff_edges``
+above), so nothing later in this run's execution order will ever touch
+that spill again. When ``handoff.prune_eagerly`` is true (the
+default), that edge's directory is deleted right there instead of waiting
+for the end-of-run ``delete_spill_tree(run_dir)``, bounding peak
+spill-storage for a long chain instead of holding every boundary's output
+until the whole run ends. This is deliberately narrower than the
+``keep_on_failure``/orphan-sweep/supersession machinery in
+``aqueduct.executor.spill``, which is entirely unmodified by this feature:
+an edge whose WRITE side was itself resumed from a PRIOR run
+(``resume_run_id``) is never eagerly pruned here — that spill's release is
+owned exclusively by the "successful resume releases what it consumed"
+logic further down this function, so the two mechanisms never race or
+double-decide the same directory. Failure semantics are unchanged: pruning
+only ever happens for an edge whose reader ALREADY succeeded, so a run that
+fails at island N still has every spill feeding island N (and everything
+after it) intact on disk for `--resume` — only spills belonging to islands
+that are already fully done, in a run that is itself still succeeding so
+far, are ever removed early.
 
 ``run_polyglot()`` is a strict superset of the single-engine case: a
 Manifest with exactly one island (including a single-engine Blueprint)
@@ -56,8 +98,10 @@ from aqueduct.executor.models import (
     ExecutionResult,
     ExecutionStatus,
     ModuleResult,
-    manifest_hash as _manifest_hash,
     resolve_observability_store,
+)
+from aqueduct.executor.models import (
+    manifest_hash as _manifest_hash,
 )
 from aqueduct.executor.protocol import SessionSpec, get_protocol
 from aqueduct.executor.spill import (
@@ -286,6 +330,9 @@ def run_polyglot(
     sampling: Any = None,
     explain_capture: dict[str, dict] | None = None,
     record_result: bool = True,
+    session_keep_alive: bool = True,
+    share_island_state: bool = False,
+    prune_eagerly: bool = True,
 ) -> ExecutionResult:
     """Execute a (possibly polyglot) compiled Manifest island by island.
 
@@ -358,6 +405,17 @@ def run_polyglot(
                          precisely the shape that makes cross-engine
                          timezone divergence visible instead of silent —
                          the whole reason this key exists.
+        session_keep_alive: ``aqueduct.yml``'s ``execution.session_keep_alive``
+                         (default True). See the module docstring's "Session
+                         keep-alive" section.
+        share_island_state: ``aqueduct.yml``'s ``execution.share_island_state``
+                         (default False). See the module docstring.
+        prune_eagerly: ``aqueduct.yml``'s
+                         ``handoff.prune_eagerly`` (default True).
+                         See the module docstring's "Same-run eager spill
+                         pruning" section. When False, no spill is deleted
+                         until the run itself ends — the pre-Phase-89
+                         behavior exactly.
         record_result:   When True (the default — preserves this function's
                          existing standalone/tested contract), this call
                          records the run's outcome itself via
@@ -422,80 +480,154 @@ def run_polyglot(
     # the release below can't delete a directory this run did not use.
     resumed_from = False
 
-    for island_idx in order:
-        island = manifest.islands[island_idx]
-        sub_manifest = _sub_manifest(manifest, island, handoffs, island_idx)
+    # ── Session keep-alive bookkeeping (Phase 89 item 1) ─────────────────
+    # `live_*` tracks the session (if any) that is CURRENTLY open and not
+    # yet closed — whether this run just built it or is reusing it from a
+    # previous island. Wrapping the whole loop in this function-level
+    # try/finally is what guarantees a run never leaks a live session past
+    # `run_polyglot()`'s return, on success, failure, OR a raised exception
+    # (e.g. an engine bug that isn't `ExecuteError`) — the invariant the v1
+    # code got for free by closing every island's session in its own
+    # per-island `finally` immediately below `call_execute()`. Keeping it at
+    # the FUNCTION level instead is what lets a session survive past one
+    # island's own `try` block into the next iteration.
+    live_session: Any = None
+    live_protocol: Any = None  # the ExecutorProtocol `live_session` belongs to
+    live_sub_manifest: Manifest | None = None  # island sub-Manifest that last ran on it
+    session_reused: list[str] = []  # one engine name per reuse boundary, in order
 
-        this_run_uris = _spill_uris_for_island(
-            handoffs, island_idx, handoff_root, manifest_h, run_id
-        )
-        # `setdefault`, not `update`: a handoff's WRITE-side island always
-        # precedes its READ-side island in `order` (see
-        # `_island_execution_order`), so by the time a downstream island's
-        # turn comes around, `run_spill_uris` may ALREADY hold that handoff's
-        # authoritative URI — either this run's own (the common case) or a
-        # RESUMED run's (set in the `can_resume` branch below, on an earlier
-        # iteration). Blindly overwriting it here with this island's own
-        # freshly-computed (this-run) guess would silently point a resumed
-        # read at a spill directory that was never written this run.
-        for _hid, _uri in this_run_uris.items():
-            run_spill_uris.setdefault(_hid, _uri)
+    # ── Eager spill pruning bookkeeping (Phase 89 item 3) ─────────────────
+    # An edge's module id lands here the moment its WRITE side is resumed
+    # from a PRIOR run (`resume_run_id`) — never eagerly pruned below, since
+    # that spill's release belongs exclusively to the resume-release logic
+    # at the end of this function, not to this same-run optimization.
+    resumed_edge_module_ids: set[str] = set()
+    pruned_spills: list[str] = []  # edge_ids pruned eagerly, in the order they were pruned
 
-        resume_uris = _resume_spill_uris_for_island(
-            handoffs,
-            island_idx,
-            handoff_root,
-            manifest_h,
-            resume_run_id,
-        )
-        resumable_exits = [h for h in handoffs if h.from_island_idx == island_idx]
-        can_resume = bool(resumable_exits) and all(
-            _spill_exists(resume_uris.get(h.module.id, "")) for h in resumable_exits
-        )
+    try:
+        for island_idx in order:
+            island = manifest.islands[island_idx]
+            sub_manifest = _sub_manifest(manifest, island, handoffs, island_idx)
 
-        if can_resume:
-            logger.info(
-                "Island (engine=%s) skipped — resuming from run %r's existing "
-                "handoff spill for %s",
-                island.engine,
+            this_run_uris = _spill_uris_for_island(
+                handoffs, island_idx, handoff_root, manifest_h, run_id
+            )
+            # `setdefault`, not `update`: a handoff's WRITE-side island always
+            # precedes its READ-side island in `order` (see
+            # `_island_execution_order`), so by the time a downstream island's
+            # turn comes around, `run_spill_uris` may ALREADY hold that handoff's
+            # authoritative URI — either this run's own (the common case) or a
+            # RESUMED run's (set in the `can_resume` branch below, on an earlier
+            # iteration). Blindly overwriting it here with this island's own
+            # freshly-computed (this-run) guess would silently point a resumed
+            # read at a spill directory that was never written this run.
+            for _hid, _uri in this_run_uris.items():
+                run_spill_uris.setdefault(_hid, _uri)
+
+            resume_uris = _resume_spill_uris_for_island(
+                handoffs,
+                island_idx,
+                handoff_root,
+                manifest_h,
                 resume_run_id,
-                [h.module.id for h in resumable_exits],
             )
-            resumed_from = True
-            for m in sub_manifest.modules:
-                acc.module_results.append(_skipped_result(m.id))
-            # Downstream islands must read the RESUME run's spill, not this
-            # run's (which was never written).
-            for h in resumable_exits:
-                run_spill_uris[h.module.id] = resume_uris[h.module.id]
-            continue
-
-        # The URIs actually handed to `execute()` come from the authoritative
-        # `run_spill_uris` accumulator (not the freshly-computed
-        # `this_run_uris`), so a READ-side handoff whose WRITE side was
-        # resumed from a prior run gets that prior run's directory, never
-        # this run's un-populated one.
-        exec_uris = {
-            h.module.id: run_spill_uris[h.module.id]
-            for h in handoffs
-            if h.from_island_idx == island_idx or h.to_island_idx == island_idx
-        }
-
-        for uri in exec_uris.values():
-            ensure_parent_exists(uri)
-
-        protocol = get_protocol(island.engine)
-        session = protocol.session_factory()(
-            SessionSpec(
-                blueprint_id=manifest.blueprint_id,
-                engine_config=(engine_configs or {}).get(island.engine, {}),
-                master_url=master_url,
-                quiet_startup=quiet_startup,
-                timezone=timezone,
-                engine_options={"secrets": secrets_config} if secrets_config else {},
+            resumable_exits = [h for h in handoffs if h.from_island_idx == island_idx]
+            can_resume = bool(resumable_exits) and all(
+                _spill_exists(resume_uris.get(h.module.id, "")) for h in resumable_exits
             )
-        )
-        try:
+
+            if can_resume:
+                logger.info(
+                    "Island (engine=%s) skipped — resuming from run %r's existing "
+                    "handoff spill for %s",
+                    island.engine,
+                    resume_run_id,
+                    [h.module.id for h in resumable_exits],
+                )
+                resumed_from = True
+                for m in sub_manifest.modules:
+                    acc.module_results.append(_skipped_result(m.id))
+                # Downstream islands must read the RESUME run's spill, not this
+                # run's (which was never written).
+                for h in resumable_exits:
+                    run_spill_uris[h.module.id] = resume_uris[h.module.id]
+                    # Owned by the resume-release logic at the end of this
+                    # function from here on — eager pruning below must never
+                    # touch it.
+                    resumed_edge_module_ids.add(h.module.id)
+                # No session was touched for a resume-skipped island — `live_*`
+                # (whatever it holds from an earlier island) is left exactly as
+                # is, still eligible for reuse by a LATER island on the same
+                # engine. A skipped island must never force a pointless build.
+                continue
+
+            # The URIs actually handed to `execute()` come from the authoritative
+            # `run_spill_uris` accumulator (not the freshly-computed
+            # `this_run_uris`), so a READ-side handoff whose WRITE side was
+            # resumed from a prior run gets that prior run's directory, never
+            # this run's un-populated one.
+            exec_uris = {
+                h.module.id: run_spill_uris[h.module.id]
+                for h in handoffs
+                if h.from_island_idx == island_idx or h.to_island_idx == island_idx
+            }
+
+            for uri in exec_uris.values():
+                ensure_parent_exists(uri)
+
+            protocol = get_protocol(island.engine)
+
+            # ── Resolve this island's session: reuse the live one when it's
+            # the SAME engine as whatever is still open, otherwise close
+            # that one (order matters — close THEN build, never a bare
+            # `getOrCreate()` reuse, same invariant the single-engine
+            # heal-retry funnel enforces) and build fresh. ────────────────
+            reused = (
+                session_keep_alive
+                and live_session is not None
+                and live_protocol is not None
+                and live_protocol.engine == island.engine
+            )
+            if reused:
+                session = live_session
+                if not share_island_state:
+                    try:
+                        live_protocol.session_cleanup()(session, live_sub_manifest)
+                    except Exception as exc:  # noqa: BLE001 — cleanup must never abort the reuse
+                        logger.warning(
+                            "session-reuse cleanup failed for engine %r before "
+                            "island %d (%s) — continuing with the reused session "
+                            "as-is",
+                            island.engine,
+                            island_idx,
+                            exc,
+                        )
+                session_reused.append(island.engine)
+            else:
+                if live_session is not None:
+                    live_protocol.session_closer()(live_session)
+                    live_session = None
+                    live_protocol = None
+                    live_sub_manifest = None
+                session = protocol.session_factory()(
+                    SessionSpec(
+                        blueprint_id=manifest.blueprint_id,
+                        engine_config=(engine_configs or {}).get(island.engine, {}),
+                        master_url=master_url,
+                        quiet_startup=quiet_startup,
+                        timezone=timezone,
+                        engine_options={"secrets": secrets_config} if secrets_config else {},
+                    )
+                )
+
+            # From this point `session` is live and MUST be reachable through
+            # `live_*` before anything that could raise runs — the function-
+            # level `finally` below is what closes it if `call_execute` (or
+            # anything else) raises something other than `ExecuteError`.
+            live_session = session
+            live_protocol = protocol
+            live_sub_manifest = sub_manifest
+
             try:
                 # `call_execute()` (not `protocol.execute()` directly) so the
                 # OPTIONAL capability kwargs (parallel/use_observe/sampling/
@@ -566,17 +698,47 @@ def run_polyglot(
                         ),
                     ),
                 )
-        finally:
-            # Deliberate v1 choice: close THIS island's session now, even if
-            # `island.engine` recurs later in `order` — see module docstring.
-            protocol.session_closer()(session)
 
-        acc.module_results.extend(result.module_results)
-        acc.trigger_agent = acc.trigger_agent or result.trigger_agent
-        if result.status != ExecutionStatus.SUCCESS:
-            acc.status = ExecutionStatus.ERROR
-            acc.failed_engine = island.engine
-            break
+            if not session_keep_alive:
+                # Restores the original v1 behavior exactly: every island's
+                # session closes the moment that island finishes.
+                protocol.session_closer()(session)
+                live_session = None
+                live_protocol = None
+                live_sub_manifest = None
+
+            acc.module_results.extend(result.module_results)
+            acc.trigger_agent = acc.trigger_agent or result.trigger_agent
+            if result.status != ExecutionStatus.SUCCESS:
+                acc.status = ExecutionStatus.ERROR
+                acc.failed_engine = island.engine
+                break
+
+            # ── Eager spill pruning (Phase 89 item 3) — this island just
+            # succeeded, so every handoff edge it READ is provably done for
+            # the rest of this run (one edge has exactly one reader island).
+            # Skip an edge whose write side was resumed from a PRIOR run —
+            # that spill belongs to the resume-release logic below, not to
+            # this same-run optimization (see module docstring).
+            if prune_eagerly:
+                for h in handoffs:
+                    if h.to_island_idx != island_idx:
+                        continue
+                    if h.module.id in resumed_edge_module_ids:
+                        continue
+                    uri = run_spill_uris.get(h.module.id)
+                    if not uri:
+                        continue
+                    if delete_spill_tree(uri):
+                        pruned_spills.append(h.module.id)
+    finally:
+        # Whatever is still live when the loop exits — normally, via
+        # `break` on failure, or because an exception propagated past the
+        # `except ExecuteError` above — is closed exactly once here. This is
+        # the guarantee that makes keep-alive safe: a run must never leak a
+        # live session past `run_polyglot()`'s return.
+        if live_session is not None:
+            live_protocol.session_closer()(live_session)
 
     merged = ExecutionResult(
         blueprint_id=manifest.blueprint_id,
@@ -585,6 +747,8 @@ def run_polyglot(
         module_results=tuple(acc.module_results),
         trigger_agent=acc.trigger_agent,
         failed_engine=acc.failed_engine if acc.status != ExecutionStatus.SUCCESS else None,
+        session_reused=tuple(session_reused),
+        pruned_spills=tuple(pruned_spills),
     )
 
     # ── Spill lifecycle: delete on success; keep on failure unless the

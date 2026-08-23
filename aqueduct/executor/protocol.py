@@ -82,6 +82,7 @@ from aqueduct.errors import EnginePluginError, UnknownEngineError
 
 if TYPE_CHECKING:
     from aqueduct.executor.models import ExecutionResult
+    from aqueduct.models import Manifest
     from aqueduct.typehub import HubType, NativeType
 
 # engine exception (or None) -> FailureContext field dict (or None).
@@ -177,6 +178,15 @@ class SessionSpec:
 SessionFactory = Callable[["SessionSpec"], Any]
 # (engine session handle) -> None. Tears down what SessionFactory built.
 SessionCloser = Callable[[Any], None]
+# (engine session handle, the ISLAND sub-Manifest that just finished on this
+# session) -> None. Drops session-scoped state that island's modules created
+# (e.g. Spark/DuckDB `register_as_table` catalog objects) so a session handed
+# to the NEXT same-engine island (Phase 89 item 1 — polyglot session
+# keep-alive, ``aqueduct.executor.orchestrator.run_polyglot``) stays
+# observationally identical to a fresh one. Never called for a session about
+# to be closed (nothing to protect) or when the operator opted into
+# ``execution.share_island_state``.
+SessionCleaner = Callable[[Any, "Manifest"], None]
 
 
 @dataclass(frozen=True)
@@ -339,6 +349,18 @@ class ExecutorProtocol:
         close_session: ``(session) -> None`` — tears down what ``make_session``
             built. OPTIONAL (default ``None`` = no teardown needed); resolved
             through ``session_closer()``.
+        cleanup_reused_session: ``(session, island_sub_manifest) -> None`` —
+            drops session-scoped state ``island_sub_manifest``'s modules
+            created on ``session`` (Spark/DuckDB ``register_as_table``
+            catalog objects — see each engine's ``egress.py``). OPTIONAL
+            (default ``None`` = no-op, resolved through ``session_cleanup()``
+            below): an engine with no such state to clean, or one that never
+            participates in a keep-alive reuse, needs no implementation.
+            Called ONLY by ``aqueduct.executor.orchestrator.run_polyglot``
+            when ``execution.session_keep_alive`` hands a live session to the
+            next same-engine island AND ``execution.share_island_state`` is
+            false — never on a session about to be closed, and never for a
+            fresh session an island just built.
         render_type: ``(HubType | NativeType) -> str`` — renders one parsed
             hub type (see ``aqueduct/typehub.py``) to this engine's own
             native type-system spelling (Spark DDL, DuckDB SQL type, ...).
@@ -410,6 +432,9 @@ class ExecutorProtocol:
     # are not enforced in __post_init__ the way execute/extract_error are.
     make_session: SessionFactory | None = None
     close_session: SessionCloser | None = None
+    # Session-reuse cleanup hook — optional, see the attribute doc above and
+    # ``session_cleanup()`` below (Phase 89 item 1).
+    cleanup_reused_session: SessionCleaner | None = None
     # Healing-agent diagnostic readers — optional at registration, same
     # rationale as make_session/close_session: a compile-only engine or one
     # without a live-read story still registers. See attribute docs above.
@@ -443,6 +468,11 @@ class ExecutorProtocol:
     def session_closer(self) -> SessionCloser:
         """Return ``close_session`` or a no-op if the engine declared none."""
         return self.close_session or (lambda _session: None)
+
+    def session_cleanup(self) -> SessionCleaner:
+        """Return ``cleanup_reused_session`` or a no-op if the engine declared
+        none (Phase 89 item 1 — see the attribute doc above)."""
+        return self.cleanup_reused_session or (lambda _session, _manifest: None)
 
     def __post_init__(self) -> None:
         if not self.engine:
@@ -686,7 +716,7 @@ def call_execute(
     *args: Any,
     suppress: Iterable[str] | None = None,
     **kwargs: Any,
-) -> "ExecutionResult":
+) -> ExecutionResult:
     """Call ``get_protocol(engine).execute`` filtering optional capability kwargs.
 
     Every positional arg (the compiled ``Manifest``, the engine session

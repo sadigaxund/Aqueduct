@@ -18,9 +18,9 @@ What Aqueduct supports in production, and what it does not.
 **Out of scope:**
 
 - **Databricks remote-submit deployment.** Removed from this release; Databricks is no longer a supported `deployment.target`.
-- **Spark Connect** (`spark.remote(...)`). Several call sites depend on classic-session internals (`SparkContext`, `_jdf`) and degrade gracefully rather than working under a Connect session. Revisit if Connect becomes the default batch path; see the roadmap.
+- **Spark Connect** (`spark.remote(...)`). Several call sites depend on classic-session internals (`SparkContext`, `_jdf`) and degrade gracefully rather than working under a Connect session.
 - **MotherDuck.** No support, and no code trace, for MotherDuck-hosted DuckDB.
-- **Delta write on DuckDB.** DuckDB has no Delta writer; every Delta write leaf is `unsupported` on that engine. Implementable via `delta-rs`; see the roadmap for the deferred design.
+- **Delta write on DuckDB.** DuckDB has no Delta writer; every Delta write leaf is `unsupported` on that engine. Implementable via `delta-rs` if demand appears.
 
 ---
 
@@ -54,7 +54,7 @@ Aqueduct has no built-in scheduler. `aqueduct run` is a one-shot CLI command des
 
 ## Spark cluster configuration
 
-Aqueduct creates a `SparkSession` on the driver. Cluster connection is controlled via the `deployment:` and `engine.spark:` blocks in `aqueduct.yml` (2.0 — `master_url` and Spark session config live under `engine.spark:`, namespaced by engine name so a second engine's own settings have somewhere to live; see [specs.md §10.1](specs.md)).
+Aqueduct creates a `SparkSession` on the driver. Cluster connection is controlled via the `deployment:` and `engine.spark:` blocks in `aqueduct.yml` (2.0: `master_url` and Spark session config live under `engine.spark:`, namespaced by engine name so a second engine's own settings have somewhere to live; see [specs.md §10.1](specs.md)).
 
 The `target` field is validated against `engine.spark.master_url` at config-load. A
 mismatch raises a `ConfigError` naming both values and the expected shape.
@@ -204,27 +204,27 @@ the blueprint's `engine.spark.conf`.
 
 ## DuckDB engine configuration
 
-`engine.duckdb:` (`aqueduct.yml`) configures the DuckDB engine's session — see
+`engine.duckdb:` (`aqueduct.yml`) configures the DuckDB engine's session; see
 `docs/specs.md` §10.9 for the full field reference. Production-relevant points:
 
 - **`database_path`** replaces the default `:memory:` connection with a
-  persistent local file — raises a receiving cross-engine handoff island's
+  persistent local file. This raises a receiving cross-engine handoff island's
   RAM ceiling and lets large intermediates spill to disk. LOCAL PATHS ONLY;
   point it at fast local disk, not a network mount shared with other
   processes (DuckDB's own file locking assumes single-writer).
-- **`memory_limit`/`threads`** bound the connection's resource usage — set
+- **`memory_limit`/`threads`** bound the connection's resource usage. Set
   these in a shared/multi-tenant environment the same way you would tune
   `engine.spark.conf` for a Spark executor.
 - **S3/GCS credentials** (`s3_key_id_secret`/`s3_secret_access_key_secret`/
-  `s3_region`) are secret KEY NAMES resolved through the `secrets:` block —
-  never put a literal credential in `aqueduct.yml`. Same rule as every other
+  `s3_region`) are secret KEY NAMES resolved through the `secrets:` block.
+  Never put a literal credential in `aqueduct.yml`. Same rule as every other
   credential in this table.
 - **Airgapped / hermetic-CI clusters**: DuckDB's `httpfs` extension
   autoinstalls over the network the first time a Blueprint touches a remote
   (`s3://`, `gs://`, ...) path. A cluster with no route to DuckDB's public
   extension repository needs one of two escapes BEFORE the first such run:
   pre-populate `~/.duckdb/extensions` with `httpfs` (fetched once on a
-  machine with network access, shipped alongside the deployment image — no
+  machine with network access, shipped alongside the deployment image, no
   config needed), or set `engine.duckdb.extension_repository` to an internal
   mirror. Without one of these, the first remote read/write raises
   `DuckDBExtensionError` naming the cause.
@@ -238,11 +238,11 @@ Spark Ingress/Egress, and a cross-engine `handoff.root` spilling to and
 reading back from MinIO in both directions (Spark island → DuckDB island
 and the reverse). AWS's default virtual-hosted addressing
 (`bucket.s3.amazonaws.com`) and TLS-everywhere assumption don't hold for
-MinIO or any other S3-compatible store — both engines need an explicit
+MinIO or any other S3-compatible store: both engines need an explicit
 non-AWS override, or they resolve the bucket against AWS's real S3
 regardless of which credentials are configured.
 
-**DuckDB** — `engine.duckdb.s3_endpoint`/`s3_url_style`/`s3_use_ssl` (added
+**DuckDB**: `engine.duckdb.s3_endpoint`/`s3_url_style`/`s3_use_ssl` (added
 alongside this verification; NOT secrets, literal values are fine here),
 on top of the existing `s3_key_id_secret`/`s3_secret_access_key_secret`
 (secret KEY NAMES, resolved through `secrets:`):
@@ -257,9 +257,9 @@ engine:
     s3_use_ssl: false               # local/dev MinIO typically serves plain HTTP
 ```
 
-**Spark** — the S3A Hadoop FS driver, via `engine.spark.conf` (needs the
-`hadoop-aws` jar; `spark.jars.packages` resolves it — and its transitive AWS
-SDK dependency — via Ivy on first use, so the FIRST run on a fresh machine
+**Spark**: the S3A Hadoop FS driver, via `engine.spark.conf` (needs the
+`hadoop-aws` jar; `spark.jars.packages` resolves it, and its transitive AWS
+SDK dependency, via Ivy on first use, so the FIRST run on a fresh machine
 downloads it):
 
 ```yaml
@@ -279,17 +279,17 @@ engine:
 jar, not just its major version.** Measured: PySpark 4.1.1 ships
 `hadoop-client-api`/`hadoop-client-runtime` 3.4.2; resolving `hadoop-aws`
 3.4.0 against that classpath raises `NoSuchMethodError` on READ (not on
-write — a write-only smoke test will not catch this). Check
+write, so a write-only smoke test will not catch this). Check
 `pyspark/jars/hadoop-client-api-*.jar` in your PySpark install and pin
 `hadoop-aws` to the identical version.
 
 **Bucket URI scheme.** Use `s3a://` (not `s3://`) for any path Spark
-touches — Spark's bundled Hadoop FS registers `s3a://` via `hadoop-aws`,
+touches. Spark's bundled Hadoop FS registers `s3a://` via `hadoop-aws`,
 not the legacy `s3://` scheme, and raises
 `UnsupportedFileSystemException: No FileSystem for scheme "s3"` otherwise.
 DuckDB's httpfs accepts both `s3a://` and `s3://` identically, so `s3a://`
-is the one scheme that works for a path either engine — or a cross-engine
-`handoff.root` — might touch:
+is the one scheme that works for a path either engine, or a cross-engine
+`handoff.root`, might touch:
 
 ```yaml
 handoff:
@@ -297,13 +297,13 @@ handoff:
 ```
 
 **Cleanup needs `fsspec`.** The ENGINES write/read a handoff spill natively
-(no `fsspec` involved) — the round trip above works with no object-store
+(no `fsspec` involved), so the round trip above works with no object-store
 extra installed. Aqueduct's OWN bookkeeping (deleting a successful run's
 spill, the orphan sweep) uses `fsspec` for a remote root, because unlike an
 engine's own writer it has no native way to list/delete an arbitrary URI
 scheme. Without the `[object-store]` extra, spill accumulates under
-`handoff.root` behind a suppressible `handoff_cleanup_unavailable` warning
-— install `aqueduct-core[object-store]` to enable cleanup on a remote root.
+`handoff.root` behind a suppressible `handoff_cleanup_unavailable` warning;
+install `aqueduct-core[object-store]` to enable cleanup on a remote root.
 
 ---
 
@@ -345,9 +345,9 @@ agent:
 
 In `cluster` or `cloud` mode, `aqueduct doctor` warns when a Blueprint contains paths without a URI scheme.
 
-**Checkpoints require a driver+worker-visible filesystem.** `checkpoint: true` writes module checkpoints under the local observability store directory (`.aqueduct/observability/<blueprint_id>/checkpoints/<run_id>/`) by default. When Spark workers run in containers or on remote hosts that don't share the driver's filesystem (Docker-based Standalone, k8s), the checkpoint write fails per-module and degrades to a `runtime_checkpoint_write_failed` warning, the run still succeeds, but the recompute-avoidance benefit (and `--resume` for that module) is lost. Either mount the project directory into the worker containers so the path resolves on both sides, or drop `checkpoint: true` and accept the recompute (for small data the cost is negligible). A remote checkpoint root (`s3a://`) is a roadmap item (see `roadmap.md`).
+**Checkpoints require a driver+worker-visible filesystem.** `checkpoint: true` writes module checkpoints under the local observability store directory (`.aqueduct/observability/<blueprint_id>/checkpoints/<run_id>/`) by default. When Spark workers run in containers or on remote hosts that don't share the driver's filesystem (Docker-based Standalone, k8s), the checkpoint write fails per-module and degrades to a `runtime_checkpoint_write_failed` warning, the run still succeeds, but the recompute-avoidance benefit (and `--resume` for that module) is lost. Either mount the project directory into the worker containers so the path resolves on both sides, or drop `checkpoint: true` and accept the recompute (for small data the cost is negligible). A remote checkpoint root (`s3a://`) is not yet supported.
 
-**`checkpoint_root` override (2.8).** Set the top-level `checkpoint_root` key in `aqueduct.yml` to point checkpoints at a directory other than the derived `<store_dir>/checkpoints/`, e.g. a volume explicitly mounted into every worker container, or faster local disk on a single-node deployment. Local filesystem paths only; a `s3://`/`s3a://`/`gs://`/`hdfs://`/`abfss://` value is rejected at config-load (see the roadmap item above). Example:
+**`checkpoint_root` override (2.8).** Set the top-level `checkpoint_root` key in `aqueduct.yml` to point checkpoints at a directory other than the derived `<store_dir>/checkpoints/`, e.g. a volume explicitly mounted into every worker container, or faster local disk on a single-node deployment. Local filesystem paths only; a `s3://`/`s3a://`/`gs://`/`hdfs://`/`abfss://` value is rejected at config-load (see the note above). Example:
 
 ```yaml
 checkpoint_root: "/mnt/shared/aqueduct-checkpoints"
@@ -438,13 +438,13 @@ Run the new-backend pipeline once first so the target tables exist, and mind sch
 
 In production, LLM inference runs as a remote HTTP service. CONNECTION settings
 (`provider`, `base_url`, `model`, `api_key`, `timeout`, `cascade`) are configured
-in `aqueduct.yml` **only** — a Blueprint's `agent:` block cannot set or override
+in `aqueduct.yml` **only**; a Blueprint's `agent:` block cannot set or override
 any of them (2.59: this is a deliberate security boundary, not a missing
-feature — see `docs/specs.md` §8.1). A Blueprint's own `agent:` block sets
+feature; see `docs/specs.md` §8.1). A Blueprint's own `agent:` block sets
 POLICY only, e.g. `approval: human`, in a separate `agent:` block in the
 Blueprint YAML file.
 
-**`aqueduct.yml` — OpenAI-compatible endpoint (vLLM, Azure OpenAI, together.ai, etc.):**
+**`aqueduct.yml`: OpenAI-compatible endpoint (vLLM, Azure OpenAI, together.ai, etc.):**
 
 ```yaml
 agent:
@@ -454,7 +454,7 @@ agent:
   timeout: 60
 ```
 
-**`aqueduct.yml` — Anthropic API:**
+**`aqueduct.yml`: Anthropic API:**
 
 ```yaml
 agent:
@@ -462,14 +462,14 @@ agent:
   model: claude-opus-4-7-20251001
 ```
 
-**Blueprint YAML — policy for this pipeline:**
+**Blueprint YAML: policy for this pipeline:**
 
 ```yaml
 agent:
   approval: human
 ```
 
-Inject API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) via Kubernetes Secrets or your secrets manager. Never commit keys to `aqueduct.yml`. `agent.api_key` (`aqueduct.yml`, or per cascade tier) always uses `@aq.secret('KEY')` or `${ENV_VAR}`, never a plaintext literal (which triggers an `insecure_api_key` warning and is redacted from logs/LLM payloads). A multi-model cascade lives in `aqueduct.yml` under `agent.cascade` — engine-level only; a Blueprint cannot declare or override a cascade.
+Inject API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) via Kubernetes Secrets or your secrets manager. Never commit keys to `aqueduct.yml`. `agent.api_key` (`aqueduct.yml`, or per cascade tier) always uses `@aq.secret('KEY')` or `${ENV_VAR}`, never a plaintext literal (which triggers an `insecure_api_key` warning and is redacted from logs/LLM payloads). A multi-model cascade lives in `aqueduct.yml` under `agent.cascade`, engine-level only; a Blueprint cannot declare or override a cascade.
 
 ---
 
@@ -637,7 +637,7 @@ Deferred. These targets raise `NotImplementedError` at runtime. They will reuse 
 ### Databricks
 
 Databricks is not a built-in deployment target. Run Aqueduct on Databricks by
-wrapping `aqueduct run` in a Databricks Workflows `spark_python_task` — the
+wrapping `aqueduct run` in a Databricks Workflows `spark_python_task`: the
 task calls `aqueduct run blueprint.yml` like any other environment, and
 Databricks owns scheduling, retries, and cluster lifecycle.
 

@@ -202,10 +202,10 @@ class TestCheckpointRoot:
         with pytest.raises(ValidationError, match="checkpoint_root"):
             AqueductConfig(checkpoint_root=uri)
 
-    def test_remote_uri_error_points_at_roadmap(self):
+    def test_remote_uri_error_names_local_fallback(self):
         from pydantic import ValidationError
 
-        with pytest.raises(ValidationError, match="roadmap"):
+        with pytest.raises(ValidationError, match="local path"):
             AqueductConfig(checkpoint_root="s3a://bucket/checkpoints")
 
     def test_load_config_yaml_key(self, tmp_path):

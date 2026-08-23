@@ -16,6 +16,7 @@ matter to the sweep — nothing here needs a real run.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 
 import duckdb
 import pytest
@@ -181,3 +182,94 @@ handoff:
     result = _invoke(runner, config, store_dir, "--execute")
     assert result.exit_code == exit_codes.SUCCESS, result.output
     assert (root / "HASH1" / "run-kept-fail").exists()
+
+
+# ── --older-than (Phase 89 item 4) ────────────────────────────────────────
+
+
+def _older_than_project(tmp_path, *, old_minutes_ago, young_minutes_ago):
+    config = tmp_path / "aqueduct.yml"
+    config.write_text(
+        """
+aqueduct_config: "1.0"
+deployment:
+  engine: duckdb
+  target: local
+handoff:
+  root: handoff_spill
+  keep_on_failure: true
+""",
+        encoding="utf-8",
+    )
+    store_dir = tmp_path / "store"
+    conn = _conn(store_dir)
+    now = datetime.now(tz=UTC)
+    old_finished = (now - timedelta(minutes=old_minutes_ago)).isoformat()
+    young_finished = (now - timedelta(minutes=young_minutes_ago)).isoformat()
+    _run_record(conn, "run-old-kept-fail", "bp1", "error", old_finished)
+    _run_record(conn, "run-young-kept-fail", "bp2", "error", young_finished)
+    conn.close()
+
+    root = tmp_path / "handoff_spill"
+    _spill(root, "HASH1", "run-old-kept-fail")
+    _spill(root, "HASH2", "run-young-kept-fail")
+    return config, store_dir, root
+
+
+def test_older_than_reclaims_a_kept_failure_older_than_the_given_age(tmp_path):
+    """Neither run is superseded by a later success — without --older-than,
+    both stay (see the positive control below). A kept failure that
+    finished long before the cutoff is reclaimed once --older-than names an
+    age it exceeds."""
+    config, store_dir, root = _older_than_project(
+        tmp_path, old_minutes_ago=60 * 24 * 30, young_minutes_ago=5
+    )
+    runner = CliRunner()
+    result = _invoke(runner, config, store_dir, "--execute", "--older-than", "7d")
+    assert result.exit_code == exit_codes.SUCCESS, result.output
+    assert not (root / "HASH1" / "run-old-kept-fail").exists()
+
+
+def test_older_than_spares_a_kept_failure_younger_than_the_given_age(tmp_path):
+    config, store_dir, root = _older_than_project(
+        tmp_path, old_minutes_ago=60 * 24 * 30, young_minutes_ago=5
+    )
+    runner = CliRunner()
+    result = _invoke(runner, config, store_dir, "--execute", "--older-than", "7d")
+    assert result.exit_code == exit_codes.SUCCESS, result.output
+    assert (root / "HASH2" / "run-young-kept-fail").exists()
+
+
+def test_without_older_than_both_kept_failures_survive(tmp_path):
+    """Positive control: identical fixture, no --older-than at all — sweep
+    behavior must be byte-identical to before this flag existed, i.e.
+    neither kept failure (not superseded, no age rule engaged) is touched."""
+    config, store_dir, root = _older_than_project(
+        tmp_path, old_minutes_ago=60 * 24 * 30, young_minutes_ago=5
+    )
+    runner = CliRunner()
+    result = _invoke(runner, config, store_dir, "--execute")
+    assert result.exit_code == exit_codes.SUCCESS, result.output
+    assert (root / "HASH1" / "run-old-kept-fail").exists()
+    assert (root / "HASH2" / "run-young-kept-fail").exists()
+
+
+def test_older_than_reclaimed_entries_are_labeled_distinctly_in_json(tmp_path):
+    config, store_dir, root = _older_than_project(
+        tmp_path, old_minutes_ago=60 * 24 * 30, young_minutes_ago=5
+    )
+    runner = CliRunner()
+    result = _invoke(runner, config, store_dir, "--format", "json", "--older-than", "7d")
+    assert result.exit_code == exit_codes.SUCCESS, result.output
+    payload = json.loads(result.output)
+    by_run = {c["run_id"]: c for c in payload["candidates"]}
+    assert by_run["run-old-kept-fail"]["reclaimed_by_age"] is True
+    assert "run-young-kept-fail" not in by_run
+
+
+def test_older_than_rejects_a_junk_duration(project):
+    tmp_path, config, store_dir, root = project
+    runner = CliRunner()
+    result = _invoke(runner, config, store_dir, "--older-than", "not-a-duration")
+    assert result.exit_code == exit_codes.CONFIG_ERROR, result.output
+    assert "invalid duration" in result.output

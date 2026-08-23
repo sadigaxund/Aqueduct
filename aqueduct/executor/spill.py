@@ -63,8 +63,10 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -74,6 +76,30 @@ from aqueduct.executor.path_keys import CLOUD_SCHEMES
 logger = logging.getLogger(__name__)
 
 RULE_ID_HANDOFF_CLEANUP_UNAVAILABLE = "handoff_cleanup_unavailable"
+
+_DURATION_RE = re.compile(r"^(\d+)([dhm])$")
+_DURATION_UNITS: dict[str, str] = {"d": "days", "h": "hours", "m": "minutes"}
+
+
+def parse_duration(text: str) -> timedelta:
+    """Parse a small duration literal — ``7d``, ``24h``, ``90m`` — into a
+    ``timedelta``. Exactly one integer and one unit letter (``d``/``h``/
+    ``m``), no combinations, no fractional values, no whitespace. This backs
+    ``aqueduct handoff sweep --older-than`` (Phase 89 item 4) only; nothing
+    elsewhere in the spill lifecycle reads a duration or an age — see
+    ``_superseded_by_later_success``'s docstring for why the RELEASE rule
+    itself stays action-based, not time-based. Raises ``ValueError`` with a
+    message naming the accepted shapes on anything else.
+    """
+    m = _DURATION_RE.match(text.strip())
+    if not m:
+        raise ValueError(
+            f"invalid duration {text!r} — expected an integer followed by "
+            "d/h/m, e.g. '7d', '24h', '90m'"
+        )
+    amount, unit = m.groups()
+    return timedelta(**{_DURATION_UNITS[unit]: int(amount)})
+
 
 # Same remote-scheme vocabulary the rest of the codebase already uses
 # (`aqueduct.executor.path_keys.CLOUD_SCHEMES`) plus the generic RFC3986
@@ -369,6 +395,35 @@ def _superseded_by_later_success(obs_store: Any, run_id: str) -> bool:
     return row is not None
 
 
+def _older_than_cutoff_exceeded(obs_store: Any, run_id: str, cutoff_iso: str) -> bool:
+    """True when *run_id*'s ``finished_at`` is strictly older than
+    *cutoff_iso* — the ``--older-than`` operator-invoked reclaim (Phase 89
+    item 4), additive to (never a replacement for) the ACTION-based
+    ``_superseded_by_later_success`` release above. This is the one place a
+    wall clock enters the spill lifecycle, and it only fires when an
+    operator explicitly passes ``--older-than`` to ``aqueduct handoff
+    sweep`` — the automatic per-run sweep and the config-driven
+    ``keep_on_failure``/supersession rules never see it.
+
+    Best effort — a store that cannot be queried returns False, i.e. keep
+    the spill, same fail-safe direction as ``_superseded_by_later_success``.
+    """
+    if obs_store is None:
+        return False
+    try:
+        with obs_store.connect() as cur:
+            cur.execute(
+                "SELECT 1 FROM run_records WHERE run_id = ? AND finished_at IS NOT NULL "
+                "AND finished_at < ?",
+                [run_id, cutoff_iso],
+            )
+            row = cur.fetchone()
+    except Exception as exc:
+        logger.debug("_older_than_cutoff_exceeded: query failed for %r: %s", run_id, exc)
+        return False
+    return row is not None
+
+
 @dataclass(frozen=True)
 class SweepCandidate:
     """One handoff spill directory ``aqueduct handoff sweep`` would remove
@@ -378,6 +433,12 @@ class SweepCandidate:
     ``run_id`` is ``None`` only for a ``manifest_hash`` directory itself,
     reclaimed once every run underneath it has been swept — the same
     "hash directory left empty" reclaim the real sweep performs.
+
+    ``reclaimed_by_age`` is True only for a kept failure reclaimed via
+    ``--older-than`` (Phase 89 item 4) rather than the ordinary orphan/
+    supersession rules — a distinct machine-readable marker so a caller
+    (e.g. ``aqueduct handoff sweep --format json``) can tell the two apart
+    without parsing ``reason`` text.
     """
 
     path: str
@@ -385,6 +446,7 @@ class SweepCandidate:
     run_id: str | None
     status: str | None
     reason: str
+    reclaimed_by_age: bool = False
 
 
 def plan_orphan_sweep(
@@ -393,6 +455,7 @@ def plan_orphan_sweep(
     current_run_id: str | None,
     keep_on_failure: bool,
     obs_store: Any = None,
+    older_than: timedelta | None = None,
 ) -> list[SweepCandidate]:
     """Decide which handoff spill directories under *root* are orphaned,
     without deleting anything.
@@ -414,9 +477,18 @@ def plan_orphan_sweep(
     ``run_records`` knows about) also lives under the hash directory — a
     case the real sweep still handles correctly by refusing to delete a
     non-empty directory.
+
+    ``older_than`` (``aqueduct handoff sweep --older-than``, Phase 89 item
+    4) is additive, operator-invoked ONLY: when set, a kept failure that the
+    supersession rule would otherwise still protect is ALSO reclaimed once
+    its run finished longer ago than ``older_than``. ``None`` (the default —
+    every existing caller) reproduces today's decision exactly, byte for
+    byte; this is the one place a wall clock enters the spill lifecycle, and
+    it never runs unless an operator explicitly asks for it.
     """
     if not local_only_or_fsspec_available(root):
         return []
+    cutoff_iso = (datetime.now(tz=UTC) - older_than).isoformat() if older_than is not None else ""
     candidates: list[SweepCandidate] = []
     for manifest_hash in _list_hash_dirs(root):
         hash_dir = f"{root.rstrip('/')}/{manifest_hash}"
@@ -430,11 +502,18 @@ def plan_orphan_sweep(
             if status is not None and not is_terminal:
                 reclaimed_all = False
                 continue  # still running — never touch
+            reclaimed_by_age = False
             if status == "error" and keep_on_failure:
-                if not _superseded_by_later_success(obs_store, run_id):
+                if _superseded_by_later_success(obs_store, run_id):
+                    reason = "terminal failure, superseded by a later successful run"
+                elif older_than is not None and _older_than_cutoff_exceeded(
+                    obs_store, run_id, cutoff_iso
+                ):
+                    reason = f"terminal failure older than --older-than {older_than} — reclaimed"
+                    reclaimed_by_age = True
+                else:
                     reclaimed_all = False
-                    continue  # kept failure, not yet superseded
-                reason = "terminal failure, superseded by a later successful run"
+                    continue  # kept failure, not yet superseded or aged out
             elif status == "error":
                 reason = "terminal failure (handoff.keep_on_failure is false)"
             elif status is None:
@@ -448,6 +527,7 @@ def plan_orphan_sweep(
                     run_id=run_id,
                     status=status,
                     reason=reason,
+                    reclaimed_by_age=reclaimed_by_age,
                 )
             )
         if run_ids and reclaimed_all:
@@ -480,6 +560,7 @@ def sweep_orphan_spills(
     keep_on_failure: bool,
     obs_store: Any = None,
     dry_run: bool = False,
+    older_than: timedelta | None = None,
 ) -> list[str]:
     """Delete spill directories of runs that are neither live nor
     kept-failures. Run at the START of a new run, before that run's own
@@ -549,6 +630,11 @@ def sweep_orphan_spills(
       plain release-on-success, and that is the answer, not a placeholder
       for one.
 
+    ``older_than`` (Phase 89 item 4, ``aqueduct handoff sweep --older-than``)
+    is additive, operator-invoked ONLY — see ``plan_orphan_sweep``'s
+    docstring. ``None`` (every caller before this parameter existed)
+    reproduces today's decision exactly.
+
     Returns the list of deleted directory paths (best-effort; a remote root
     with no fsspec returns ``[]`` and the caller is expected to have already
     surfaced ``local_only_or_fsspec_available``'s warning).
@@ -564,9 +650,11 @@ def sweep_orphan_spills(
                 current_run_id=current_run_id,
                 keep_on_failure=keep_on_failure,
                 obs_store=obs_store,
+                older_than=older_than,
             )
         ]
 
+    cutoff_iso = (datetime.now(tz=UTC) - older_than).isoformat() if older_than is not None else ""
     deleted: list[str] = []
     for manifest_hash in _list_hash_dirs(root):
         hash_dir = f"{root.rstrip('/')}/{manifest_hash}"
@@ -591,8 +679,16 @@ def sweep_orphan_spills(
                 # spill's whole documented purpose has expired. Without
                 # this release the `keep_on_failure` exemption is
                 # permanent and disk grows without bound.
-                if not _superseded_by_later_success(obs_store, run_id):
-                    continue  # kept failure, not yet superseded — the resume story
+                #
+                # `older_than` is a SEPARATE, operator-invoked reclaim: a
+                # kept failure the supersession rule still protects is also
+                # reclaimed once its run finished longer ago than the given
+                # age. Only reached when `--older-than` was actually passed.
+                if not _superseded_by_later_success(obs_store, run_id) and not (
+                    older_than is not None
+                    and _older_than_cutoff_exceeded(obs_store, run_id, cutoff_iso)
+                ):
+                    continue  # kept failure, not yet superseded or aged out — the resume story
             path = f"{hash_dir}/{run_id}"
             if delete_spill_tree(path):
                 deleted.append(path)
@@ -615,6 +711,7 @@ __all__ = [
     "ensure_parent_exists",
     "is_remote_uri",
     "local_only_or_fsspec_available",
+    "parse_duration",
     "plan_orphan_sweep",
     "spill_dir_for",
     "sweep_orphan_spills",

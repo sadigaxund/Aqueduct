@@ -998,13 +998,6 @@ _SPARK_IMPORT_ALLOWLIST: dict[str, str] = {
         "has no test runner at all, so there is no protocol seam to route "
         "through yet; the import only happens on the engine=='spark' path."
     ),
-    "aqueduct/cli/run.py": (
-        "the --sandbox dry-run path's make_spark_session import is preceded "
-        "by an explicit `if engine != 'spark': ... sys.exit(...)` guard (see "
-        "the --sandbox refusal) — never reached for a non-Spark-resolved "
-        "run. Owned by a concurrent Phase 85 worker; not touched by this "
-        "file."
-    ),
     "aqueduct/cli/run_setup.py": (
         "Phase 85 Wave 5 split — `_load_engine_config`'s ProbeSampling "
         "import/construction and its `_LoadConfigResult.probe_sampling: "

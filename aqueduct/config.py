@@ -1545,6 +1545,78 @@ class HandoffConfig(BaseModel):
         ),
         json_schema_extra={"engine_scoped": False},
     )
+    prune_eagerly: bool = Field(
+        default=True,
+        description=(
+            "When true (the default), a polyglot run deletes a boundary's "
+            "spilled parquet as soon as EVERY island that reads it has "
+            "finished successfully IN THIS RUN, instead of waiting for the "
+            "whole run to end — bounds peak spill storage on a long "
+            "same-engine-to-same-engine chain (Phase 89 item 3). A spill "
+            "feeding an island that has not yet run, or that this run "
+            "resumed from a PRIOR run (`--resume <run_id>`), is never "
+            "touched by this: only this run's OWN already-consumed "
+            "boundaries are eligible. The end-of-run deletion described "
+            "above still runs either way — an eagerly pruned boundary is "
+            "simply already gone by then. Set to false to defer every "
+            "deletion to the run's own end, exactly as before this flag "
+            "existed."
+        ),
+        json_schema_extra={"engine_scoped": False},
+    )
+
+
+class ExecutionConfig(BaseModel):
+    """Top-level ``execution:`` block (Phase 89 item 1) — polyglot session
+    keep-alive across same-engine islands.
+
+    A polyglot run (``manifest.islands`` has more than one entry) executes
+    each island against its own engine session
+    (``aqueduct.executor.orchestrator.run_polyglot``). Before this block
+    existed, every island's session was closed the moment that island
+    finished, even when the SAME engine recurred later in the run (e.g.
+    spark -> duckdb -> spark) — see ``orchestrator.py``'s module docstring
+    for the history. These two flags govern that behavior; neither has any
+    effect on a single-engine run (``aqueduct/cli/run.py``'s single-engine
+    ``_execute_target`` fingerprint funnel, and the heal-retry rebuild it
+    guards, are untouched by this block).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    session_keep_alive: bool = Field(
+        default=True,
+        description=(
+            "When true (the default), a polyglot run hands a LIVE session "
+            "to the next island in execution order when that island uses "
+            "the SAME engine, instead of closing it and building a fresh "
+            "one — skipping the cost of a session rebuild (most significant "
+            "for Spark, whose session build re-runs SparkContext "
+            "initialization). Session-scoped state the finishing island "
+            "created — catalog tables/views registered via "
+            "`register_as_table` — is dropped at the boundary unless "
+            "`share_island_state` is also true, so a reused session stays "
+            "observationally identical to a fresh one. Every session is "
+            "still closed by the time the run returns, on success, "
+            "failure, or exception. Set to false to restore the original "
+            "close-every-island behavior exactly."
+        ),
+        json_schema_extra={"engine_scoped": False},
+    )
+    share_island_state: bool = Field(
+        default=False,
+        description=(
+            "When true, SKIP the inter-island cleanup that normally runs "
+            "when `session_keep_alive` reuses a session across a boundary "
+            "— the next same-engine island sees whatever catalog "
+            "tables/views the previous one registered via "
+            "`register_as_table`, e.g. to avoid reloading state when a run "
+            "returns to an engine it already visited. Sharing is opt-in: "
+            "only meaningful when `session_keep_alive` is true, and a "
+            "no-op otherwise."
+        ),
+        json_schema_extra={"engine_scoped": False},
+    )
 
 
 def _freeze_for_hash(value: Any) -> Any:
@@ -1596,14 +1668,15 @@ class AqueductConfig(BaseModel):
     agent: AgentConnectionConfig = Field(default_factory=AgentConnectionConfig)
     warnings: WarningsConfig = Field(default_factory=lambda: WarningsConfig())
     handoff: HandoffConfig = Field(default_factory=HandoffConfig)
+    execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     checkpoint_root: str | None = Field(
         default=None,
         description=(
             "Local filesystem path overriding the derived "
             "<store_dir>/checkpoints/ location for module checkpoint/resume "
             "state. LOCAL PATHS ONLY — remote URI schemes (s3://, s3a://, "
-            "gs://, hdfs://, abfss://, ...) are rejected at config-load; see "
-            "docs/roadmap.md 'Remote-Filesystem Checkpoint Root'."
+            "gs://, hdfs://, abfss://, ...) are rejected at config-load; "
+            "remote checkpoint roots are not supported."
         ),
         json_schema_extra={"engine_scoped": True},
     )
@@ -1710,11 +1783,10 @@ class AqueductConfig(BaseModel):
             scheme = v.split("://", 1)[0]
             raise ValueError(
                 f"checkpoint_root={v!r} uses a remote URI scheme ({scheme!r}://) "
-                "— checkpoint_root only supports local filesystem paths today. "
-                "Remote checkpoint roots (S3/GCS/HDFS/ABFSS) are tracked as a "
-                "roadmap item ('Remote-Filesystem Checkpoint Root' in "
-                "docs/roadmap.md). Use a local path, or omit checkpoint_root "
-                "to fall back to the derived <store_dir>/checkpoints/ default."
+                "— checkpoint_root only supports local filesystem paths today; "
+                "remote checkpoint roots (S3/GCS/HDFS/ABFSS) are not supported. "
+                "Use a local path, or omit checkpoint_root to fall back to the "
+                "derived <store_dir>/checkpoints/ default."
             )
         return v
 

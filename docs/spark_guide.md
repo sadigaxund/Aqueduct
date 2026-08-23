@@ -8,19 +8,19 @@ specifically. Aqueduct supports multiple executor engines; see
 and how they differ.
 
 **Contents:**
-[Compiler Warnings](#compiler-warnings) ·
-[Probe Signal Cost Model](#probe-signal-cost-model) ·
-[Read/Write Mode Defaults](#read-and-write-mode-defaults) ·
-[Table Addressing](#catalog-wiring) ·
+[Compiler warnings](#compiler-warnings) ·
+[Probe signal cost model](#probe-signal-cost-model) ·
+[Read/write mode defaults](#read-and-write-mode-defaults) ·
+[Table addressing](#catalog-wiring) ·
 [Iceberg & Hudi](#iceberg-hudi) ·
 [Custom Python DataSources](#format-custom) ·
-[JDBC Ingress Parallelism](#jdbc-ingress-parallelism) ·
-[Core Spark Principles](#core-spark-principles) ·
-[Implementation Rules](#implementation-rules-do-not-violate) ·
-[Common Pitfalls](#common-pitfalls) ·
-[Transformation Reference](#transformation-reference) ·
-[Resource Tuning](#resource-tuning-for-production) ·
-[Caching Strategy](#caching-strategy)
+[JDBC ingress parallelism](#jdbc-ingress-parallelism) ·
+[Core Spark principles](#core-spark-principles) ·
+[Implementation rules](#implementation-rules-do-not-violate) ·
+[Common pitfalls](#common-pitfalls) ·
+[Transformation reference](#transformation-reference) ·
+[Resource tuning](#resource-tuning-for-production) ·
+[Caching strategy](#caching-strategy)
 
 ---
 
@@ -51,7 +51,7 @@ warnings are **not suppressible**.
 
 | Rule id | Flags | Detail |
 |---|---|---|
-| ~~`ambiguous_type_spelling`~~ | Escalated to a **compile error** (bare `timestamp` in a `schema_hint`/`cast`/`return_type` type string means a different value per engine — instant vs. naive); no deprecation window, no longer suppressible — engine-agnostic, not Spark-specific | [ambiguous-type-spelling](#ambiguous-type-spelling) |
+| ~~`ambiguous_type_spelling`~~ | Escalated to a **compile error** (bare `timestamp` in a `schema_hint`/`cast`/`return_type` type string means a different value per engine, instant vs. naive); no deprecation window, no longer suppressible (engine-agnostic, not Spark-specific) | [ambiguous-type-spelling](#ambiguous-type-spelling) |
 | `delivery_append_retry_dupes` | `mode: append` with `max_attempts > 1`: retries may produce duplicate rows | [delivery-append-retry-dupes](#delivery-append-retry-dupes) |
 | ~~`maintenance_optimize_non_delta`~~ | Escalated to a **compile error** (deterministic runtime failure, OPTIMIZE is Delta-only); no longer suppressible | [maintenance-optimize-non-delta](#maintenance-optimize-non-delta) |
 | `perf_delta_append_no_partition` | `mode: append` without `partition_by`/repartition accumulates small files | [append-no-partition](#append-no-partition) |
@@ -150,7 +150,7 @@ the Python interpreter:
 
 - Each row crosses the JVM↔Python serialization boundary
 - No Arrow batch transfer, no SIMD/columnar processing
-- For billions of rows: **10–100× slower** than a native Spark SQL expression
+- For billions of rows: **10-100× slower** than a native Spark SQL expression
 
 Since Spark 3.5, `spark.sql.execution.pythonUDF.arrow.enabled: true` (or
 `useArrow=True` per UDF) switches plain Python UDFs to Arrow-batched execution,
@@ -187,7 +187,7 @@ metadata overhead, Hive metastore thrash).
 1. `partition_by: [high_cardinality_col, ...]`: organises files into a directory tree;
    each partition gets its own subdirectory so per-partition file counts stay bounded.
 2. `repartition: N` or `coalesce: N`: reduces output file count at the cost of a shuffle
-   (`repartition`) or potential skew (`coalesce`). Target 128–512 MB per file.
+   (`repartition`) or potential skew (`coalesce`). Target 128-512 MB per file.
 3. External `OPTIMIZE` job (Delta): runs periodically to compact small files outside
    the pipeline. See the [post-write maintenance](#iceberg-hudi) table.
 
@@ -202,15 +202,15 @@ vs. a one-time small-file problem).
 
 **Now a compile ERROR** (was warning `ambiguous_type_spelling`, no deprecation
 window): a type string (Ingress `schema_hint`, Channel `op: cast` columns, UDF
-`return_type`) spells a column type as bare `timestamp` — engine-agnostic, fires
+`return_type`) spells a column type as bare `timestamp`. This is engine-agnostic and fires
 at compile time regardless of `deployment.engine`.
 
 `timestamp` means an INSTANT on Spark (normalized against the session time zone) and
-a NAIVE wall-clock value with no zone on DuckDB — the same Blueprint, unmodified,
+a NAIVE wall-clock value with no zone on DuckDB: the same Blueprint, unmodified,
 would resolve to a different value on each engine. Aqueduct's internal type
 vocabulary (`aqueduct/typehub.py`) spells the two meanings out explicitly:
 `timestamp_tz` for an instant, `timestamp_ntz` for a naive value. There is no safe
-default to silently fall back on, so this raises unconditionally — it cannot be
+default to silently fall back on, so this raises unconditionally: it cannot be
 suppressed via `warnings.suppress` or `--suppress-warning`.
 
 **Fix:** Write `timestamp_tz` or `timestamp_ntz` explicitly, or, if the Blueprint
@@ -364,7 +364,7 @@ when you want a sampled population alarm that does not pay the cost of a full sc
 
 ---
 
-### SparkListener Row Estimates: Stage Fusion Caveat
+### SparkListener row estimates: stage fusion caveat
 
 The `row_count_estimate` signal with `method: spark_listener` queries `module_metrics`
 in `observability.db` using the module's ID as the lookup key. This works correctly when each
@@ -439,7 +439,7 @@ When writing Parquet, JSON, CSV, or ORC, Spark writes **one file per partition**
 - Too many partitions = too many small files = slow downstream reads (S3 list overhead, Parquet metadata overhead)
 - Default shuffle partitions (`spark.sql.shuffle.partitions: 200`) after a wide transform often produces 200 tiny files
 
-**Rule of thumb:** target 128–512 MB per output file. Use `coalesce` (no shuffle) when reducing from many balanced partitions; use `repartition` when redistribution is needed.
+**Rule of thumb:** target 128-512 MB per output file. Use `coalesce` (no shuffle) when reducing from many balanced partitions; use `repartition` when redistribution is needed.
 
 **Parquet version incompatibility:** Parquet files written by older Spark versions (< 2.x) may be unreadable by newer Spark or vice versa. If reading files written by an older cluster, set `spark.sql.parquet.enableVectorizedReader: "false"` as a fallback.
 
@@ -449,7 +449,7 @@ When writing Parquet, JSON, CSV, or ORC, Spark writes **one file per partition**
 
 When a Blueprint uses `table:` (instead of `path:`) on an Ingress or Egress,
 Spark resolves `catalog.schema.table` through whichever catalog the session is
-configured to talk to. Aqueduct defines nothing about the table's internals ---
+configured to talk to. Aqueduct defines nothing about the table's internals:
 the catalog (Unity Catalog, AWS Glue, Hive metastore, Iceberg REST, Polaris)
 owns the location, schema, format, and permissions.
 
@@ -485,14 +485,14 @@ engine:
       spark.sql.catalog.polaris.rest-catalog.uri: "https://polaris.example.com/api/catalog"
 ```
 
-Once configured, use `table: catalog.db.table` in your Blueprint modules --- the
+Once configured, use `table: catalog.db.table` in your Blueprint modules: the
 identifier is resolved through the active catalog.
 
 **Limitations.** `time_travel` (version/timestamp pin) is not supported on
 `table:`-addressed Ingress reads (the `spark.read.table()` API does not accept
 DataFrameReader options). Use a Channel with `TIMESTAMP AS OF` / `VERSION AS OF`
 SQL syntax instead. `register_as_table` is meaningless when `table:` is set on
-an Egress --- the catalog table is already the direct write target.
+an Egress: the catalog table is already the direct write target.
 
 ---
 
@@ -889,7 +889,7 @@ engine:
 This repartitions the target DataFrame by the merge key before writing, distributing the output
 evenly. Adds one shuffle but eliminates small-file skew in the target table.
 
-### `DataFrame.observe()` and Whole-Stage Codegen
+### `DataFrame.observe()` and whole-stage codegen
 
 Aqueduct uses `DataFrame.observe()` to collect per-stage metrics (row counts, byte sizes).
 This is generally safe, but `observe()` inserts a metric-collection node into the physical plan
@@ -902,7 +902,7 @@ An observer node forces a stage boundary, potentially:
 - Adding serialization/deserialization overhead at the boundary
 
 For most workloads this overhead is negligible. For high-throughput pipelines (billions of rows,
-tight latency requirements), it can be a 5–15% throughput regression.
+tight latency requirements), it can be a 5-15% throughput regression.
 
 **Mitigation:** Disable `observe()`-based metrics and rely solely on SparkListener:
 
@@ -930,7 +930,7 @@ aqueduct test
 Or set `spark_master: local[*]` in a separate `aqueduct.test.yml` and pass it with `--config`.
 The `AQ_SPARK_MASTER` env var overrides `aqueduct.yml` without modifying the file.
 
-### Caching Strategy: Multi-Consumer Channels {#caching-strategy}
+### Caching strategy: multi-consumer channels {#caching-strategy}
 
 When a Channel has two or more downstream consumers (edges leaving it), Spark re-evaluates its full DAG independently for each consumer branch. Adding `checkpoint: true` on the Channel materialises the DataFrame once and serves all consumers from disk.
 
@@ -965,7 +965,7 @@ These are different mechanisms: do not confuse them:
 **K8s note:** If `checkpoint_dir` points to a path inside the driver pod (e.g. `/tmp/aq_checkpoints`),
 checkpoints are lost when the pod restarts. Use a PersistentVolume or an S3/GCS path for durable resume.
 
-### SparkListener Queue Overhead
+### SparkListener queue overhead
 
 Aqueduct's SparkListener collects stage metrics (recordsWritten, shuffleBytes,
 duration) after each stage completes. In normal workloads this overhead is negligible.

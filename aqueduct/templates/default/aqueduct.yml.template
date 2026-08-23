@@ -242,7 +242,7 @@ stores:
 #
 # LOCAL FILESYSTEM PATHS ONLY — remote URI schemes (s3://, s3a://, gs://,
 # hdfs://, abfss://, ...) are rejected at config-load. Remote checkpoint
-# roots are a roadmap item (see docs/roadmap.md).
+# roots are not supported.
 #
 # checkpoint_root: "/mnt/fast-local/aqueduct-checkpoints"
 
@@ -264,9 +264,36 @@ stores:
 # later run of the same blueprint has succeeded. There is no time-based
 # expiry: retention is bounded by those actions, not by an age in days.
 #
+# Within a single polyglot run, a boundary's spill is also deleted EAGERLY —
+# the moment every island that reads it has finished successfully, rather
+# than waiting for the whole run to end — bounding peak spill storage on a
+# long chain. Set prune_eagerly to false to defer every deletion to the
+# run's own end instead (the end-of-run cleanup above still runs either way).
+#
 # handoff:
 #   root: ".aqueduct/handoff"    # default
 #   keep_on_failure: true        # default — the resume story
+#   prune_eagerly: true          # default — delete a boundary's spill as
+#                                 # soon as this run's own readers are done
+
+
+# ── Polyglot session keep-alive (Phase 89) ──────────────────────────────────
+#
+# A polyglot Blueprint executes each island against its own engine session.
+# By default the SAME engine recurring later in the run (e.g. spark ->
+# duckdb -> spark) reuses the still-live session from its earlier island
+# instead of closing and rebuilding one — skipping the rebuild cost (most
+# significant for Spark). Session-scoped state the finishing island created
+# (register_as_table catalog objects) is dropped at the boundary so the
+# reused session stays observationally identical to a fresh one; every
+# session is still closed by the time the run returns regardless of outcome.
+#
+# execution:
+#   session_keep_alive: true    # default — false restores per-island close-every-time
+#   share_island_state: false   # default — true skips the boundary cleanup,
+#                                # deliberately sharing catalog state between
+#                                # same-engine islands (only matters when
+#                                # session_keep_alive is true)
 
 
 # ── Universal session timezone (2.38) ───────────────────────────────────────

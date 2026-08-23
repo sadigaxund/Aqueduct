@@ -1,13 +1,13 @@
 # Compatibility Matrix
 
-The combinations below are what Aqueduct is tested against in CI. Anything outside this range is **not** supported, it may work, but will not get bug fixes, and version pin errors at install time are intentional.
+The combinations below are what Aqueduct is tested against in CI. Anything outside this range is **not** supported. It may work, but it will not get bug fixes, and version pin errors at install time are intentional.
 
 ## Promised vs canary lanes
 
 `.github/workflows/version-matrix.yml` runs two kinds of lane, with different failure contracts:
 
-- **Promised lanes** (the `compat` job's 3 pinned combos below: LTS, Latest, Legacy, plus `snippets-lts`) are CI-enforced. A failure on any of these fails the workflow, this is the range the "Latest run" table reports.
-- **Canary lane** (the `snippets` job) installs unpinned, latest dependency versions on every push to `main`. It exists to surface a breaking upstream release (a new pandas/numpy/pyspark point release) before it becomes a promised-lane failure. It runs with `continue-on-error: true`, a canary failure is a red job annotation, not a workflow failure, and does not change the support matrix below.
+- **Promised lanes** (the `compat` job's 3 pinned combos below: LTS, Latest, Legacy, plus `snippets-lts`) are CI-enforced. A failure on any of these fails the workflow; this is the range the "Latest run" table reports.
+- **Canary lane** (the `snippets` job) installs unpinned, latest dependency versions on every push to `main`. It exists to surface a breaking upstream release (a new pandas/numpy/pyspark point release) before it becomes a promised-lane failure. It runs with `continue-on-error: true`: a canary failure is a red job annotation, not a workflow failure, and does not change the support matrix below.
 
 If the canary lane is red, treat it as an early warning: the failure is not yet in the promised range and does not block a release by itself, but it is worth triaging before the next pinned-version bump would inherit it.
 
@@ -15,15 +15,15 @@ The reproducible lanes install under a lock; the canary does not. Every job in `
 
 ### Gallery snippets: canary vs blocking, and the engine matrix
 
-`snippets` and `snippets-lts` both run every shipped `gallery/snippets/**` example end-to-end (`bash scripts/run_snippets.sh`), against a real local Spark or DuckDB session — `gallery-tests` in `test-suite.yml` is the fast parse/compile-only guard for branch pushes; these two are the full-run compat checks. `snippets` is the unpinned canary described above; `snippets-lts` is its blocking, pinned counterpart (same LTS combo as the `compat` job's `LTS` row: python 3.11 / pyspark 4.1.2 / delta 4.1.0), same reasoning as `compat`'s promised lanes vs its own unpinned twin.
+`snippets` and `snippets-lts` both run every shipped `gallery/snippets/**` example end-to-end (`bash scripts/run_snippets.sh`), against a real local Spark or DuckDB session. `gallery-tests` in `test-suite.yml` is the fast parse/compile-only guard for branch pushes; these two are the full-run compat checks. `snippets` is the unpinned canary described above; `snippets-lts` is its blocking, pinned counterpart (same LTS combo as the `compat` job's `LTS` row: python 3.11 / pyspark 4.1.2 / delta 4.1.0), same reasoning as `compat`'s promised lanes vs its own unpinned twin.
 
-Both jobs carry `strategy.matrix.engine: [spark, duckdb]` — one task per engine registered through the `aqueduct.engines` entry-point group, run via `run_snippets.sh -e ${{ matrix.engine }}` (forwarded to `--set deployment.engine=<engine>`). A snippet whose blueprint uses a capability leaf the target engine declares `unsupported` is not a failure: the harness detects the compiler's capability-gate `CompileError` and reports `UNSUPPORTED` (naming the leaf), which is informational on both lanes — only a genuine `FAIL` blocks `snippets-lts`. `tests/test_meta_ci.py::test_snippets_lanes_cover_every_registered_engine` fails the build if either job's matrix is missing a registered engine.
+Both jobs carry `strategy.matrix.engine: [spark, duckdb]`, one task per engine registered through the `aqueduct.engines` entry-point group, run via `run_snippets.sh -e ${{ matrix.engine }}` (forwarded to `--set deployment.engine=<engine>`). A snippet whose blueprint uses a capability leaf the target engine declares `unsupported` is not a failure: the harness detects the compiler's capability-gate `CompileError` and reports `UNSUPPORTED` (naming the leaf), which is informational on both lanes. Only a genuine `FAIL` blocks `snippets-lts`. `tests/test_meta_ci.py::test_snippets_lanes_cover_every_registered_engine` fails the build if either job's matrix is missing a registered engine.
 
 ## Engine capability framework (2.16)
 
-Not every module-config key / Channel op / write mode a Blueprint can express is guaranteed to run on every version of a dependency. `aqueduct doctor` (`aqueduct/doctor/checks_io.py::check_capabilities`) walks a compiled blueprint's used capabilities and checks each one's declared version requirement (e.g. `format: custom` needs `pyspark>=4.0`) against what's actually installed, reporting `fail`/`skip`/`ok` per capability. This is a runtime check, distinct from the compile-time capability gate (`aqueduct/compiler/capability_check.py`) that blocks a capability the engine does not support at all, see `docs/specs.md` §10.9 for the full contract.
+Not every module-config key / Channel op / write mode a Blueprint can express is guaranteed to run on every version of a dependency. `aqueduct doctor` (`aqueduct/doctor/checks_io.py::check_capabilities`) walks a compiled blueprint's used capabilities and checks each one's declared version requirement (e.g. `format: custom` needs `pyspark>=4.0`) against what's actually installed, reporting `fail`/`skip`/`ok` per capability. This is a runtime check, distinct from the compile-time capability gate (`aqueduct/compiler/capability_check.py`) that blocks a capability the engine does not support at all. See `docs/specs.md` §10.9 for the full contract.
 
-The matrix below also carries one `type.<constructor>` row per hub type constructor and one `type.native.<engine>` row per registered engine's native-namespace escape hatch — see `docs/specs.md` §9 for the type vocabulary itself and §10.9 for how it is gated.
+The matrix below also carries one `type.<constructor>` row per hub type constructor and one `type.native.<engine>` row per registered engine's native-namespace escape hatch. See `docs/specs.md` §9 for the type vocabulary itself and §10.9 for how it is gated.
 
 Each engine declares a verdict for every capability leaf in a YAML data file shipped with it (`aqueduct/executor/spark/capabilities.yml`). That file is the source of truth, so the matrix below is generated from it with `aqueduct dev capabilities docs` rather than hand-maintained.
 
@@ -135,9 +135,9 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 
 ## Notes
 
-- **`pyspark>=4.0,<5.0`** is hard-pinned in `pyproject.toml`. The Legacy CI combo installs PySpark 3.5.8 explicitly by bypassing the pin, this is safe for testing but not recommended for production, where the pin is intentional. Widening the range would require runtime version gates throughout the executor, deliberately out of scope.
-- **Custom Python DataSource (`format: custom`) needs Spark 4.0+**, it uses the `spark.dataSource` registry introduced in Spark 4.0. Since the supported floor is already 4.0+ this affects no supported install; on the unsupported Legacy 3.5 lane the engine raises a clear `RuntimeError` (a per-feature capability gate, not a hard requirement bump). All other features run across the full supported matrix.
-- **Python 3.13 + PySpark 4.0** needs a system-installed `cloudpickle>=3.0`; the bundled cloudpickle 2.x in current PySpark recurses or segfaults during UDF serialization. Aqueduct monkeypatches at startup when both conditions hold. See `aqueduct/executor/spark/udf.py::_patch_pyspark_cloudpickle`, the patch self-deprecates once upstream PySpark ships cloudpickle ≥ 3.
+- **`pyspark>=4.0,<5.0`** is hard-pinned in `pyproject.toml`. The Legacy CI combo installs PySpark 3.5.8 explicitly by bypassing the pin. This is safe for testing but not recommended for production, where the pin is intentional. Widening the range would require runtime version gates throughout the executor, deliberately out of scope.
+- **Custom Python DataSource (`format: custom`) needs Spark 4.0+.** It uses the `spark.dataSource` registry introduced in Spark 4.0. Since the supported floor is already 4.0+, this affects no supported install; on the unsupported Legacy 3.5 lane the engine raises a clear `RuntimeError` (a per-feature capability gate, not a hard requirement bump). All other features run across the full supported matrix.
+- **Python 3.13 + PySpark 4.0** needs a system-installed `cloudpickle>=3.0`; the bundled cloudpickle 2.x in current PySpark recurses or segfaults during UDF serialization. Aqueduct monkeypatches at startup when both conditions hold. See `aqueduct/executor/spark/udf.py::_patch_pyspark_cloudpickle`; the patch self-deprecates once upstream PySpark ships cloudpickle ≥ 3.
 - **LLM providers**: Anthropic (default) and any OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, NVIDIA NIM, together.ai, Groq). Per-provider quirks documented in `gallery/aqscenarios/README.md`.
 - **Stores**: DuckDB embedded (default), Postgres (`aqueduct-core[postgres]`), Redis (`aqueduct-core[redis]`). All tested against the matrix above.
 - **Remote-submit targets**: none built in. EMR / Dataproc deferred. To run on Databricks, wrap `aqueduct run` in a Databricks Workflows `spark_python_task`. See the [Production Guide](production_guide.md) for per-target setup.
@@ -150,10 +150,9 @@ Aqueduct is **not tested or supported against `spark.remote(...)` (Spark
 Connect) sessions.** The engine assumes a classic driver-embedded
 `SparkSession` with a local JVM gateway (py4j). The table below documents
 today's *actual* behavior if a Connect session were substituted, produced by
-running `skills/aqskill-audit-connect.md`'s detection commands against the
-tree and tracing each hit's exception path. This is a snapshot of current
-incompatibilities, not a roadmap; no Connect support is scheduled (see
-`docs/roadmap.md` if that changes).
+running Connect-specific detection commands against the tree and tracing each
+hit's exception path. This is a snapshot of current incompatibilities, not a
+roadmap; no Connect support is scheduled.
 
 | Call site | Feature it powers | Behavior under Connect | Fallback / current mitigation |
 |---|---|---|---|
@@ -166,7 +165,7 @@ incompatibilities, not a roadmap; no Connect support is scheduled (see
 
 **Works today, verified not a false positive:**
 
-- `DataFrame.observe()` / `pyspark.sql.Observation` (`aqueduct/executor/spark/metrics.py::observe_df`, used for `records_written` row counts), this is the Connect-native Observation API, not `SparkListener`. Comments elsewhere in the codebase describing "SparkListener stage metrics" refer to the mechanism this API replaced for zero-cost row counting, not to a live listener registration, there is no `addSparkListener` call anywhere in the tree (verified by grep).
+- `DataFrame.observe()` / `pyspark.sql.Observation` (`aqueduct/executor/spark/metrics.py::observe_df`, used for `records_written` row counts) is the Connect-native Observation API, not `SparkListener`. Comments elsewhere in the codebase describing "SparkListener stage metrics" refer to the mechanism this API replaced for zero-cost row counting, not to a live listener registration; there is no `addSparkListener` call anywhere in the tree (verified by grep).
 - `aqueduct/surveyor/error_extraction.py`'s lazy `py4j.protocol.Py4JJavaError` import: the import succeeds under Connect (py4j still ships with pyspark) but the `isinstance` check simply never matches a `SparkConnectGrpcException`; already falls through to the generic error path by design.
 
 **Summary:** 6 verified call sites reach into JVM/py4j-only internals; all 6 now degrade gracefully (clean skip, `None`/`warn`/`skip` result, or an honest "could not verify" note), none crash and none produce a misleading all-clear or a false regression. This is a hardening of failure-mode *honesty*, not Spark Connect support: Connect sessions remain untested/unsupported (see intro above); the guards only ensure that when one is substituted anyway, the engine degrades legibly instead of aborting a module or reporting a spurious signal.
@@ -184,7 +183,7 @@ Python ecosystem doesn't lock by default: that's a `pip` reality, not an Aqueduc
 
 ### The `duckdb` extra pulls numpy
 
-`aqueduct-core[duckdb]` (`pyproject.toml`) declares `numpy` alongside its `duckdb`/`sqlglot` pins. DuckDB's own `conn.create_function()` — how `aqueduct/executor/duckdb_/udf.py` registers a Python UDF — requires numpy internally, unconditionally, regardless of the UDF's declared `return_type` or execution mode; there is no type mapping that avoids it. `duckdb` and `sqlglot` are already base dependencies (the observability/depot/benchmark stores need `duckdb` regardless of execution engine), so numpy is the first dependency the `[duckdb]` extra actually adds rather than just documents. `pyspark` does not reliably pull numpy in either — it sits behind pyspark's own `ml`/`mllib`/`sql` extras, not a base dependency — so a plain `aqueduct-core[spark]` install cannot be relied on to supply it.
+`aqueduct-core[duckdb]` (`pyproject.toml`) declares `numpy` alongside its `duckdb`/`sqlglot` pins. DuckDB's own `conn.create_function()`, how `aqueduct/executor/duckdb_/udf.py` registers a Python UDF, requires numpy internally, unconditionally, regardless of the UDF's declared `return_type` or execution mode. There is no type mapping that avoids it. `duckdb` and `sqlglot` are already base dependencies (the observability/depot/benchmark stores need `duckdb` regardless of execution engine), so numpy is the first dependency the `[duckdb]` extra actually adds rather than just documents. `pyspark` does not reliably pull numpy in either: it sits behind pyspark's own `ml`/`mllib`/`sql` extras, not a base dependency. A plain `aqueduct-core[spark]` install cannot be relied on to supply it.
 
 ## Out of scope
 

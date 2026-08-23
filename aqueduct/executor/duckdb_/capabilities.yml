@@ -80,9 +80,8 @@
 #   applicable to DuckDB at all.
 #   Delta / JDBC / Depot ingress+egress, egress.mode.overwrite_partitions,
 #   feature.{delta_write,delta_time_travel,parallel_mode}: DEFERRED, not
-#   architecturally blocked. See docs/roadmap.md "DuckDB: Delta, JDBC,
-#   Depot ingress/egress and related features" for the implementation path
-#   per leaf (delta-rs / postgres scanner / httpfs / per-thread cursor).
+#   architecturally blocked. Implementation path per leaf if ever picked
+#   up: delta-rs / postgres scanner / httpfs / per-thread cursor.
 #   Grouped in their own comment blocks below so the verdict flip is a
 #   one-line edit per leaf once a later stage picks one up.
 
@@ -989,6 +988,9 @@ leaves:
   tooling.doctor.session_preflight:
     support: unsupported
     hint: "There is no check_duckdb()/session-preflight analog to check_java()+check_spark(preflight=True) — DuckDB session/extension/S3-secret verification only happens incidentally inside _probe_duckdb_handoff, gated on handoff.root being remote with credentials configured. A blueprint whose DuckDB Ingress/Egress modules read/write s3:// while handoff.root stays local gets zero doctor-time verification that httpfs can install/load; that failure only surfaces mid-run. Not built yet."
+  tooling.sandbox_dry_run:
+    support: supported
+    hint: "aqueduct run --sandbox builds a DuckDB session through ExecutorProtocol.session_factory() and replays the compiled Manifest with every Egress skipped."
   observability.module_metrics.per_module:
     support: supported
     hint: "The DuckDB executor writes a module_metrics row (duration_ms + row/byte counts where cheaply derivable) for every real module type (Ingress, Channel, Junction, Funnel, Egress), not only the synthetic Handoff module, via the same generic write_module_metrics used by Handoff. records_read is left NULL for every type (DuckDB relations re-execute per consumer, so counting would be a genuine extra source scan); records_written/bytes_written are left NULL for mode=append onto an existing path and for depot/table targets with no filesystem path — a number core cannot derive honestly is left NULL, never guessed."

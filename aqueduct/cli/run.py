@@ -447,14 +447,21 @@ def run(
         # Egress skipped — no writes, no Surveyor, no self-healing, no
         # observability persistence. Reuses the patch-validation sandbox
         # transform so behaviour matches Gate 3.
+        #
+        # Engine-agnostic (Phase 89 add-on): built THROUGH THE PROTOCOL
+        # REGISTRY — `get_protocol(engine).session_factory()` +
+        # `resolve_session_engine_config` — the same seam
+        # `aqueduct.patch.preview.run_sandbox_gate` (Gate 3's own sandbox
+        # replay) and the main run path's `_execute_target` already use,
+        # rather than a hardcoded `make_spark_session()` that made
+        # `--sandbox` reachable only for `engine=spark` regardless of which
+        # engines were actually registered.
         if sandbox:
             import atexit
 
+            from aqueduct.executor.capabilities import Support, get_capabilities
             from aqueduct.patch.preview import build_sandbox_manifest
 
-            if engine != "spark":
-                click.echo(f"✗ --sandbox requires engine=spark (got {engine!r})", err=True)
-                sys.exit(exit_codes.CONFIG_ERROR)
             if len(manifest.islands) > 1:
                 _island_engines = ", ".join(sorted({isl.engine for isl in manifest.islands}))
                 click.echo(
@@ -465,10 +472,26 @@ def run(
                 )
                 sys.exit(exit_codes.CONFIG_ERROR)
 
-            from aqueduct.executor.session_config import resolve_session_engine_config
+            _sandbox_leaf = get_capabilities(engine).verdict("tooling.sandbox_dry_run")
+            if _sandbox_leaf.support != Support.SUPPORTED:
+                click.echo(
+                    f"✗ --sandbox does not support engine {engine!r}: "
+                    f"{_sandbox_leaf.hint or 'tooling.sandbox_dry_run is unsupported for this engine'}",
+                    err=True,
+                )
+                sys.exit(exit_codes.CONFIG_ERROR)
+
+            from aqueduct.executor.protocol import (
+                SessionSpec,
+                filter_execute_kwargs,
+                get_protocol,
+            )
+            from aqueduct.executor.session_config import (
+                resolve_session_engine_config,
+                session_secrets_options,
+            )
 
             sandboxed_manifest, egress_targets = build_sandbox_manifest(manifest, sample)
-            merged_spark_config = resolve_session_engine_config(cfg, "spark", manifest)
             sandbox_run_id = (
                 f"sandbox-{run_id or uuid.uuid4().hex}"  # full uuid — queryable, no collisions
             )
@@ -480,30 +503,36 @@ def run(
                 err=True,
             )
 
-            from aqueduct.executor.spark.session import make_spark_session
-
-            session = make_spark_session(
-                manifest.blueprint_id,
-                merged_spark_config,
-                master_url=master_url,
-                quiet_startup=(verbosity < 2),
+            _protocol = get_protocol(engine)
+            session = _protocol.session_factory()(
+                SessionSpec(
+                    blueprint_id=manifest.blueprint_id,
+                    engine_config=resolve_session_engine_config(cfg, engine, manifest),
+                    master_url=master_url,
+                    quiet_startup=(verbosity < 2),
+                    timezone=cfg.timezone,
+                    engine_options=session_secrets_options(cfg, manifest),
+                )
             )
-            atexit.register(session.stop)
+            atexit.register(lambda: _protocol.session_closer()(session))
 
             try:
-                result = execute(
-                    sandboxed_manifest,
-                    session,
-                    run_id=sandbox_run_id,
-                    store_dir=None,
-                    surveyor=None,
-                    depot=depot,
-                    from_module=from_module,
-                    to_module=to_module,
-                    block_full_actions=not cfg.danger.allow_full_probe_actions,
-                    parallel=parallel,
-                    sampling=probe_sampling,
+                _sandbox_kwargs = filter_execute_kwargs(
+                    engine,
+                    dict(
+                        run_id=sandbox_run_id,
+                        store_dir=None,
+                        surveyor=None,
+                        depot=depot,
+                        from_module=from_module,
+                        to_module=to_module,
+                        block_full_actions=not cfg.danger.allow_full_probe_actions,
+                        parallel=parallel,
+                        sampling=probe_sampling,
+                    ),
+                    suppress=cfg.warnings.suppress,
                 )
+                result = execute(sandboxed_manifest, session, **_sandbox_kwargs)
             except ExecuteError as exc:
                 click.echo(f"✗ sandbox run failed: {exc}", err=True)
                 sys.exit(exit_codes.DATA_OR_RUNTIME)
@@ -1195,7 +1224,40 @@ def run(
                 use_observe=kw.get("use_observe", False),
                 sampling=kw.get("sampling"),
                 record_result=False,
+                session_keep_alive=cfg.execution.session_keep_alive,
+                share_island_state=cfg.execution.share_island_state,
+                prune_eagerly=cfg.handoff.prune_eagerly,
             )
+            # Phase 89 item 1 — one quiet `-v` narrative line per boundary
+            # where a session was kept alive instead of rebuilt, same
+            # funnel/style convention as the `⇄ handoff` boundary rendering
+            # above. `session_reused` is empty whenever keep-alive found no
+            # same-engine adjacency (or `execution.session_keep_alive` is
+            # off), so this is silent in the common case.
+            if verbosity >= 1 and polyglot_result.session_reused:
+                from aqueduct.cli.render.funnel import info as _funnel_info
+
+                for _reused_engine in polyglot_result.session_reused:
+                    _funnel_info(
+                        f"session kept alive · {_reused_engine}",
+                        gutter="  ",
+                        err=True,
+                    )
+            # Phase 89 item 3 — same, but for eager spill pruning, one quiet
+            # `-vv` narrative line per boundary whose spill was deleted the
+            # moment its reader island succeeded rather than at run end.
+            # Gated at -vv (not -v, unlike the reuse line above): a pruned
+            # edge is routine per-boundary housekeeping, one level quieter
+            # than "a session build was skipped" is.
+            if verbosity >= 2 and polyglot_result.pruned_spills:
+                from aqueduct.cli.render.funnel import info as _funnel_info
+
+                for _pruned_edge in polyglot_result.pruned_spills:
+                    _funnel_info(
+                        f"spill pruned · {_pruned_edge}",
+                        gutter="  ",
+                        err=True,
+                    )
             return polyglot_result, None
 
         while True:
