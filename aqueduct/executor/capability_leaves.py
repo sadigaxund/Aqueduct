@@ -81,6 +81,26 @@ same as compiler warning ``rule_id``s):
                                            escape hatch, one leaf per
                                            REGISTERED engine (governed, not
                                            exempt — see below).
+  tooling.<name>                        — Phase 85 Wave 4 — hand-curated
+                                           TOOLING/HOST capability flags: CLI
+                                           surfaces and doctor-time checks
+                                           that no Blueprint field ever
+                                           references (``aqueduct test``'s
+                                           test runner, ``aqueduct drift``'s
+                                           schema reader, doctor's table-
+                                           existence / cloud-preflight /
+                                           session-preflight checks). See the
+                                           "Tooling/host leaves" note below
+                                           for why these are curated rather
+                                           than derived, and why they are
+                                           NOT part of ``execution_leaves()``.
+  observability.<name>                  — Phase 85 Wave 4 — same curation
+                                           shape as ``tooling.*``, for
+                                           observability-surface capabilities
+                                           (today: per-module ``module_metrics``
+                                           writing) that likewise have no
+                                           Blueprint-grammar field to derive
+                                           from.
 
 Derivation sources, by leaf category:
   - module.type.*, module.field.*, <type_lower>.field.*, and every
@@ -139,6 +159,37 @@ Derivation sources, by leaf category:
     leaf (and every OTHER engine's declaration must now say whether it
     accepts that engine's native escape hatch, keeping the native namespace
     GOVERNED rather than a silent hole).
+  - tooling.* / observability.* are hand-curated (documented in
+    TOOLING_FLAGS / OBSERVABILITY_FLAGS below), same shape as ``feature.*``
+    — these describe TOOLING/HOST capabilities (CLI test-running, doctor
+    checks, metrics-writing), not Blueprint grammar, so there is no
+    pydantic model or dispatch constant to walk.
+
+Tooling/host leaves (``tooling.*`` / ``observability.*``) — why they differ
+from every other category above, and how that difference is handled:
+
+  Every other leaf category answers "does engine X support Blueprint
+  grammar Y" — derived from something a compiled Manifest actually contains
+  (a module type, a config field, an op name, a UDF language, a cast
+  spelling) and checked at compile time by
+  ``aqueduct/compiler/capability_check.py`` against the specific module/
+  manifest that uses it. ``tooling.*``/``observability.*`` leaves instead
+  describe a capability of the ENGINE ITSELF, exercised by a CLI command or
+  doctor check (``aqueduct test``, ``aqueduct drift``, ``aqueduct doctor
+  --preflight``, per-module ``module_metrics`` writing) — no Blueprint field
+  ever spells one of these leaf ids, so ``leaves_for_module()`` /
+  ``feature_leaves_for_manifest()`` / ``type_leaves_for_manifest()``
+  (``compiler/capability_check.py``) never emit one, and
+  ``check_capabilities()`` never looks one up. A ``tooling.*``/
+  ``observability.*`` leaf therefore CANNOT make a Blueprint fail to
+  compile, by construction — it is included in ``all_leaves()`` (so every
+  engine must still declare an explicit verdict, keeping the "no gap lands
+  silently" guarantee) but deliberately EXCLUDED from ``execution_leaves()``
+  (which feeds the verdict-test-link requirement for leaves with an actual
+  Blueprint-triggered runtime dispatch path — see that function's own
+  docstring). The CLI/doctor call sites that will actually branch on these
+  verdicts are a separate work package; this module only defines and
+  governs the leaf vocabulary.
 
 This module must stay importable without ``pyspark`` — it is read by the
 compile-time capability gate (``aqueduct/compiler/capability_check.py``,
@@ -224,6 +275,34 @@ FEATURE_FLAGS: frozenset[str] = frozenset(
         "checkpoint",
         "parallel_mode",
         "table_addressing",
+    }
+)
+
+# ── Curated: tooling/host capability flags (Phase 85 Wave 4) ───────────────
+# Same shape as FEATURE_FLAGS — hand-maintained, not schema-derivable — but a
+# DIFFERENT kind of capability: these describe the ENGINE ITSELF (a CLI
+# command, a doctor check, an observability writer), not Blueprint grammar.
+# See the "Tooling/host leaves" note in the module docstring for why they are
+# curated here yet excluded from ``execution_leaves()``. Bare names — the
+# leaf id is minted with the ``tooling.`` prefix by ``_tooling_leaves()``
+# below.
+TOOLING_FLAGS: frozenset[str] = frozenset(
+    {
+        "test_runner",  # `aqueduct test` — running module unit tests
+        "drift_schema_read",  # `aqueduct drift` — reading a source schema
+        "doctor.table_exists",  # doctor's table-existence check
+        "doctor.cloud_preflight",  # doctor's `--preflight` cloud-URI check
+        "doctor.session_preflight",  # doctor-time "will a session build" check
+    }
+)
+
+# Same curation shape as TOOLING_FLAGS, prefixed ``observability.`` instead —
+# kept as a separate constant/prefix because these describe an
+# OBSERVABILITY-surface capability (what gets recorded), not a CLI/doctor
+# tooling surface (what gets checked/run). Bare names, same as TOOLING_FLAGS.
+OBSERVABILITY_FLAGS: frozenset[str] = frozenset(
+    {
+        "module_metrics.per_module",  # per-module (not just Handoff) metrics rows
     }
 )
 
@@ -336,6 +415,17 @@ def _feature_leaves() -> set[str]:
     return {f"feature.{name}" for name in FEATURE_FLAGS}
 
 
+def _tooling_leaves() -> set[str]:
+    """``tooling.*`` and ``observability.*`` leaves — see the "Tooling/host
+    leaves" note in the module docstring. Included in ``all_leaves()`` (every
+    engine must declare a verdict) but NOT in ``execution_leaves()`` (no
+    Blueprint-triggered runtime dispatch path — see that function's
+    docstring)."""
+    leaves = {f"tooling.{name}" for name in TOOLING_FLAGS}
+    leaves |= {f"observability.{name}" for name in OBSERVABILITY_FLAGS}
+    return leaves
+
+
 def _type_leaves() -> set[str]:
     from aqueduct.typehub import constructor_names
 
@@ -384,6 +474,7 @@ def all_leaves() -> frozenset[str]:
     leaves |= _funnel_leaves()
     leaves |= _feature_leaves()
     leaves |= type_leaves()
+    leaves |= _tooling_leaves()
     return frozenset(leaves)
 
 
@@ -407,7 +498,11 @@ def execution_leaves() -> frozenset[str]:
     leaves" note in each engine's ``capabilities.yml`` header, which already
     draws this exact line). Also excludes ``config.*`` (a wholly separate
     leaf category from ``config_leaves.py``, warn-only governance, never
-    execution).
+    execution). Also excludes ``tooling.*`` / ``observability.*`` (Phase 85
+    Wave 4) — those describe engine/tooling capabilities with no
+    Blueprint-triggered dispatch path at all (no module ever emits one via
+    ``leaves_for_module()``), so there is nothing for a compiled Blueprint to
+    "exercise"; see the "Tooling/host leaves" note in the module docstring.
 
     Composed from the SAME per-category walker functions ``all_leaves()``
     unions — not a hand-listed set of leaf-id strings — so this stays in
@@ -433,6 +528,8 @@ __all__ = [
     "EGRESS_FORMATS",
     "FEATURE_FLAGS",
     "INGRESS_FORMATS",
+    "OBSERVABILITY_FLAGS",
+    "TOOLING_FLAGS",
     "all_leaves",
     "execution_leaves",
     "type_leaves",
