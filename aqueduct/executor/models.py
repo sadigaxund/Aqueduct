@@ -40,6 +40,13 @@ CREATE TABLE IF NOT EXISTS module_metrics (
 );
 CREATE INDEX IF NOT EXISTS idx_module_metrics_module
     ON module_metrics (module_id);
+-- Phase 85 E2 — the actual read pattern (`report --profile`,
+-- aqueduct/stores/queries.py:270,280) filters by run_id, not module_id;
+-- module_id-only left every profile lookup doing a full table scan. Both
+-- indexes stay — module_id still serves the cross-run per-module trend
+-- query (`report --profile --blueprint <id> --last N`).
+CREATE INDEX IF NOT EXISTS idx_module_metrics_run
+    ON module_metrics (run_id);
 """
 
 

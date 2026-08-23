@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.64: Reference Document**
+**Version 2.65: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -106,7 +106,7 @@ Aqueduct has four processing layers and three persistent stores. Each layer has 
 
 | Store | Description |
 | :- | :- |
-| **Observability Store** | Append-only log of all runtime signals: Probe readings, stage metrics, errors. Per-pipeline routing (1.1.0+): `.aqueduct/observability/<blueprint_id>/observability.db`. |
+| **Observability Store** | Append-only log of all runtime signals: Probe readings, stage metrics, errors. Per-pipeline routing (1.1.0+): `.aqueduct/observability/<blueprint_id>/observability.db`. Pruned automatically, throttled to once/day/store, per the `observability.retention:` windows (2.65, §10.1) — `VACUUM`/disk reclaim stays manual (`aqueduct report prune --vacuum`). |
 | **Column Lineage** | Column lineage graphs and Flow Reports live in the `column_lineage` table **inside the observability store** (no separate store). The former `stores.lineage` config option has been **removed**; a legacy block in `aqueduct.yml` raises a `ConfigError` (2.0). |
 | **Depot (KV Store)** | Persistent key-value store for pipeline state across runs: watermarks, last-run metadata. Configured under `stores.depots` (a name-keyed map of mounts; a `default` mount always exists). Keys are **per-blueprint isolated** by default, transparently prefixed with `blueprint_id`, so blueprints don't collide on a shared depot; opt a mount into cross-blueprint sharing with `shared: true` (read via `@aq.depot.<name>.get`). Incremental Channels persist their watermark to the Depot (if configured); without a Depot the watermark is lost between runs and every run re-scans all source data. The compiler emits `perf_incremental_watermark_scan` when an incremental Channel has no upstream cache/checkpoint, because computing `MAX(watermark_column)` on the output requires a second full scan. |
 | **Object Store** (1.3+) | Transport for driver-side **blobs** and the **patch lifecycle**, configured under `stores.blob`. A single backend (`local` default, or `s3` / `gcs` / `adls` via one `fsspec` handle, the `object-store` extra, folded into `[stores]`) serves two semantic stores: a **BlobStore** (zstd-externalised `manifest_json` / `stack_trace` / `provenance_json`) and a **PatchStore** (the `pending` / `applied` / `rejected` patch directories). The `local` backend is byte-identical to the historical on-disk layout, so the git-diff review workflow is unchanged; the cloud backends let a run on an ephemeral pod leave no local-FS artefacts under its cwd. |
@@ -1736,6 +1736,7 @@ The canonical field reference with descriptions and defaults lives in the `aqued
 | `engine` | Per-engine settings, namespaced by engine name (2.0 — see below): `engine.spark.master_url`, `engine.spark.conf`, `engine.duckdb` |
 | `stores` | Backend selection for observability, depot, blob, and benchmark (DuckDB / Postgres / Redis / local / s3 / gcs / adls) |
 | `probes` | Default probe signal limits |
+| `observability` | Observability-store retention/pruning windows (`observability.retention:`, 2.65) — see below |
 | `danger` | Safety-gate overrides |
 | `secrets` | Secrets provider (env / aws / gcp / azure / custom) |
 | `webhooks` | Outbound webhook endpoints for run lifecycle events |
@@ -1798,6 +1799,30 @@ spark_config:                      engine:
 **This merge is engine-generic, not a Spark special case (2.53), and has THREE layers (2.64).** `aqueduct.executor.session_config.resolve_session_engine_config` layers a Blueprint's `engine.<name>:` block over that engine's `aqueduct.yml`-level `engine.<name>:` config, and this invocation's `-s/--set` overrides over both — lowest to highest: `aqueduct.yml` < Blueprint < `--set`. That holds for EVERY registered engine — the same rule Spark has always documented above, implemented once and shared. Through 2.52 the internal Manifest carrier for this was still named `spark_config` and read only on Spark's session-build path, so a Blueprint-level `engine.duckdb:` override had nowhere to go: DuckDB always got its `aqueduct.yml` config only, with no way for a Blueprint to override it. The internal carrier (never a YAML-facing name — this Blueprint/Manifest field is plumbing, not part of the grammar documented here) is now `engine_config: dict[str, dict]`, keyed by engine name, populated for every engine named in the `engine:` block, empty for one with nothing set. DuckDB's Blueprint-level block (2.54) carries `memory_limit`/`threads`; a future field added there participates in the same Blueprint-wins merge automatically.
 
 **Why `--set` is the top layer (2.64).** `-s/--set` is documented as the highest-precedence source (`--set > blueprint > aqueduct.yml > defaults`, see the CLI reference), but engine config is not resolved by that plain overlay: it has its own merge, and `--set` used to be applied only to the `aqueduct.yml` layer of it. A value a self-heal had written into the Blueprint's `engine.<name>:` block therefore beat the flag a user typed at the prompt, inverting "explicit beats default" for the one source that is the most explicit statement a user can make about a run. `--set` is now a genuine third layer above the Blueprint rather than a mutation of the layer beneath it, stated once in `resolve_session_engine_config` and never re-implemented per call site. It is safe for a CLI flag to outrank a heal precisely because it is per-invocation and never written back to any file: it overrides a healed value for one run, it cannot undo one. Two visible consequences. First, `session_config_fingerprint` separates a session built with `--set` from one built without it, for free — the flag is inside the function whose output the fingerprint hashes, so nothing had to be added there; within a run, a heal writing a Blueprint value the flag shadows produces the SAME fingerprint and correctly triggers no session rebuild. Second, Gate 1's inert-write refusal (§8) becomes reachable from a source the Blueprint cannot outrank: a `set_engine_config` patch writing a key the invocation pins is refused with a message naming the exact `--set` path and its pinned value, rather than the ordinary "write a different value" advice, which would be false there.
+
+### The `observability.retention:` block (2.65)
+
+Core config (never engine-scoped — pruning is store-level housekeeping,
+identical regardless of which engine produced the rows, same reasoning
+`webhooks`/`secrets`/`stores` already use). Configures per-table age windows
+for the automatic, throttled (once/day/store) prune that runs at the end of
+every `aqueduct run`, plus a count-based cap for the Probe `sample_rows`
+signal type. See `docs/observability_guide.md`'s "Retention & pruning"
+section for the full table-by-table defaults and the separate, never-automatic
+`aqueduct report prune --vacuum` deep-clean verb.
+
+```yaml
+observability:
+  retention:
+    run_records_days: 90
+    failure_contexts_days: 90
+    healing_outcomes_days: 180
+    heal_attempts_days: 180
+    patch_simulation_days: 90
+    column_lineage_days: 90
+    probe_signals_days: 90
+    sample_rows_keep_last_n: 20
+```
 
 ### The `engine.duckdb:` block — session config + remote storage (2.41, Blueprint-level fields 2.54)
 

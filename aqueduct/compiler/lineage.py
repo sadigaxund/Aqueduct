@@ -145,7 +145,7 @@ def _functions_from_parsed_stmt(stmt: Any) -> set[str]:
         # `Func` subclasses too (they share its dispatch machinery), but
         # they are not `name(args)` call syntax and can never be a UDF
         # reference — exclude them so "AND"/"OR" don't pollute the name set.
-        if isinstance(fn, (exp.Binary, exp.Unary)):
+        if isinstance(fn, exp.Binary | exp.Unary):
             continue
         name = fn.name if isinstance(fn, exp.Anonymous) else fn.sql_name()
         if name and name != "ANONYMOUS":
@@ -253,6 +253,47 @@ def compute_lineage_rows(
     return all_rows
 
 
+def _unchanged_channel_ids(
+    blueprint_id: str,
+    modules: tuple[Any, ...],
+    observability_store: Any,
+) -> set[str]:
+    """Channel ids whose current SQL fingerprint is already recorded in
+    ``channel_fingerprints`` — i.e. the SQL has NOT changed since the last
+    run that wrote lineage for it.
+
+    Phase 85 B2 — reuses the exact fingerprint `channel_fingerprints`
+    already tracks (`aqueduct.compiler.fingerprint.compute_channel_
+    fingerprints`), rather than adding a second, parallel change-detection
+    mechanism. Must run BEFORE `write_fingerprints()` upserts THIS run's
+    fingerprint (the executor calls `write_lineage` first — see
+    `executor/spark/executor.py`), so a composite-PK lookup here reflects
+    state as of the END of the previous run, not this one. Fails OPEN (an
+    empty "unchanged" set, i.e. write everything) on any DB error — losing
+    lineage silently is worse than writing a redundant row.
+    """
+    from aqueduct.compiler.fingerprint import compute_channel_fingerprints
+
+    current = {r["channel_id"]: r["fingerprint"] for r in compute_channel_fingerprints(modules)}
+    if not current or observability_store is None:
+        return set()
+    unchanged: set[str] = set()
+    try:
+        with observability_store.connect() as cur:
+            for channel_id, fingerprint in current.items():
+                row = cur.execute(
+                    "SELECT 1 FROM channel_fingerprints "
+                    "WHERE blueprint_id = ? AND channel_id = ? AND fingerprint = ?",
+                    [blueprint_id, channel_id, fingerprint],
+                ).fetchone()
+                if row is not None:
+                    unchanged.add(channel_id)
+    except Exception as exc:
+        logger.debug("Fingerprint dedup check failed (writing all lineage rows): %s", exc)
+        return set()
+    return unchanged
+
+
 def write_lineage(
     blueprint_id: str,
     run_id: str,
@@ -265,6 +306,14 @@ def write_lineage(
     Writes to the observability store's ``column_lineage`` table (merged from
     the former ``lineage.db`` in Phase 38).  No exception propagates — lineage
     failure must never block compilation or execution.
+
+    Phase 85 B2 — a Channel's lineage rows are written only when its SQL
+    fingerprint actually changed since the last recorded run (see
+    ``_unchanged_channel_ids`` above); a repeat run of unchanged SQL writes
+    nothing for that Channel, mirroring ``channel_fingerprints``'s own
+    changelog model instead of duplicating every row on every compile.
+    Handoff passthrough rows (no SQL, not fingerprint-tracked) are always
+    written — one row per Handoff module, not a per-run duplication risk.
 
     Args:
         blueprint_id:        Blueprint ID (from Manifest).
@@ -283,6 +332,12 @@ def write_lineage(
 
         if observability_store is None:
             return  # no store backend configured, skip lineage
+
+        unchanged = _unchanged_channel_ids(blueprint_id, modules, observability_store)
+        if unchanged:
+            all_rows = [r for r in all_rows if r["channel_id"] not in unchanged]
+        if not all_rows:
+            return
 
         now = datetime.now(tz=UTC).isoformat()
 

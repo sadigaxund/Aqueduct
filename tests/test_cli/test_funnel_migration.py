@@ -138,7 +138,7 @@ def _seed_history_store(store_dir):
     conn.execute(PATCH_INDEX_DDL)
     conn.execute(
         "INSERT INTO run_records VALUES "
-        "('run1','bp1','error','2026-01-01T00:00:00','2026-01-01T00:01:00', '[]', NULL)"
+        "('run1','bp1','error','2026-01-01T00:00:00','2026-01-01T00:01:00', '[]', NULL, NULL)"
     )
     conn.execute(
         "INSERT INTO heal_attempts (id, run_id, attempt_num, recorded_at) "

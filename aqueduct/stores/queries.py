@@ -420,8 +420,17 @@ def failure_context(store: Any, run_id: str) -> FailureContext | None:
 def lineage(
     store: Any, blueprint_id: str | None = None, run_id: str | None = None, limit: int = 500
 ) -> list[LineageRow]:
-    """Column-level lineage rows (empty if the table is absent)."""
-    q = "SELECT channel_id, output_column, source_table, source_column FROM column_lineage"
+    """Column-level lineage rows (empty if the table is absent).
+
+    Phase 85 B2 — when ``run_id`` is not given, the read is scoped to the
+    LATEST run in scope (optionally within ``blueprint_id``) instead of an
+    unscoped ``LIMIT 500`` across every historical run: `column_lineage` has
+    no `DISTINCT`/`ORDER BY`/latest-run filter by construction (append-only,
+    one row per `(channel, output_column)` per compile), so an unscoped read
+    used to mix stale and current lineage up to an arbitrary cap. ``DISTINCT``
+    also guards against any accidental duplicate row at the same
+    ``captured_at``.
+    """
     params: list[Any] = []
     clauses: list[str] = []
     if blueprint_id:
@@ -430,12 +439,29 @@ def lineage(
     if run_id:
         clauses.append("run_id = ?")
         params.append(run_id)
-    if clauses:
-        q += " WHERE " + " AND ".join(clauses)
-    q += " LIMIT ?"
-    params.append(limit)
+
     try:
         with store.connect() as cur:
+            if not run_id:
+                sub_where = " WHERE blueprint_id = ?" if blueprint_id else ""
+                sub_params = [blueprint_id] if blueprint_id else []
+                cur.execute(
+                    f"SELECT run_id FROM column_lineage{sub_where} "
+                    "ORDER BY captured_at DESC LIMIT 1",
+                    sub_params,
+                )
+                latest = cur.fetchone()
+                if not latest or not latest[0]:
+                    return []
+                clauses.append("run_id = ?")
+                params.append(latest[0])
+
+            where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+            q = (
+                "SELECT DISTINCT channel_id, output_column, source_table, source_column "
+                f"FROM column_lineage{where} ORDER BY channel_id, output_column LIMIT ?"
+            )
+            params.append(limit)
             cur.execute(q, params)
             rows = cur.fetchall()
     except Exception:
@@ -726,12 +752,26 @@ def runs_over_time(cfg: Any, store_dir: str | None = None, days: int = 30) -> li
 
 
 def failure_categories(cfg: Any, store_dir: str | None = None) -> dict[str, int]:
-    """Failure-category distribution across the fleet (best-effort)."""
+    """Failure-category distribution across the fleet (best-effort).
+
+    Phase 85 E1 — the second fallback query used to select a `category`
+    column from `failure_contexts` that has never existed in the DDL
+    (`aqueduct/surveyor/ddl.py`; the real column is `error_class`). It was
+    silently dead: wrapped in `except Exception: continue`, and unreachable
+    in practice besides — `healing_outcomes` is created by the SAME `_DDL`
+    string as `failure_contexts` (both `CREATE TABLE IF NOT EXISTS` in one
+    execute()), so the first query in this loop always succeeds (even
+    against an empty table) and `break`s before the second ever runs. The
+    fallback's real purpose is a genuinely pre-`healing_outcomes` legacy
+    store (one created before that table existed) — fixed to use the real
+    column name so that legacy-store case actually works instead of always
+    silently no-op'ing via the except clause.
+    """
     dist: dict[str, int] = {}
     for h in discover_stores(cfg, store_dir=store_dir):
         for sql in (
             "SELECT failure_category, COUNT(*) FROM healing_outcomes GROUP BY failure_category",
-            "SELECT category, COUNT(*) FROM failure_contexts GROUP BY category",
+            "SELECT error_class, COUNT(*) FROM failure_contexts GROUP BY error_class",
         ):
             try:
                 with h.store.connect() as cur:

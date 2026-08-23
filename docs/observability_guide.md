@@ -88,8 +88,9 @@ before the migration have `NULL` in those columns.
 | `status`         | VARCHAR NOT NULL    | `running`, `success`, `error`, `patched`. (`skipped` exists only as a per-module status inside `module_results`, never at run level.) |
 | `started_at`     | TIMESTAMPTZ NOT NULL | Iteration start |
 | `finished_at`    | TIMESTAMPTZ          | NULL while running |
-| `module_results` | JSON                | Per-module status/error blobs. Since 2.37 each entry also carries `engine` — the module's fully-resolved execution engine (`Manifest.modules[i].engine`), populated for every run, single-engine or polyglot alike (a single-engine run's every module simply names the same one engine). `aqueduct report --format json` surfaces this per module plus a run-level `engines` list (the distinct set actually present). |
+| `module_results` | JSON                | Per-module status/error blobs. Since 2.37 each entry also carries `engine` — the module's fully-resolved execution engine (`Manifest.modules[i].engine`), populated for every run, single-engine or polyglot alike (a single-engine run's every module simply names the same one engine). `aqueduct report --format json` surfaces this per module plus a run-level `engines` list (the distinct set actually present). Since 2.65 each entry also carries `warnings` (list of `[rule_id, message]` pairs) and `notes` (list of strings) — `ModuleResult.warnings`/`.notes` were previously computed and displayed but never persisted. |
 | `parent_run_id`  | VARCHAR             | User-visible outer `run_id` for multi-patch iterations. NULL on iteration 0 and on single-patch runs. Join all iterations of one heal call with `WHERE COALESCE(parent_run_id, run_id) = '<outer>'`. |
+| `engine`         | VARCHAR             | Since 2.65 — the run's execution engine (`spark` \| `duckdb`), stamped from `Surveyor`'s own `engine` constructor arg (or `record(engine=...)`'s override for a polyglot run's failing island). Previously engine was only available per-module inside the `module_results` JSON blob; a **successful** run's engine comparison required parsing that blob row-by-row. This column makes `WHERE engine = ?` work directly, indexed via `idx_run_records_engine`. Migrated in place on existing stores (`_RUN_RECORDS_MIGRATIONS` in `aqueduct/surveyor/ddl.py`, mirroring the Phase-84 `benchmark_results` migration pattern) — NULL on rows written before the upgrade. |
 
 `Surveyor.record()` writes via `INSERT … ON CONFLICT DO UPDATE`, so each
 multi-patch iteration owns its own row (the pre-1.1.0 code issued a
@@ -145,7 +146,7 @@ One row per LLM turn inside the unified reprompt loop, finer-grained than
 | `chain_link`        | INTEGER             | Progressive healing only (`agent.progressive: true`): 1-based link index within the chain this attempt belongs to; NULL for a normal (non-progressive) heal attempt. Orthogonal to `attempt_num`, which still counts reprompts *within* one link |
 | `engine`            | VARCHAR             | Execution engine this attempt targeted (`spark` \| `duckdb`) |
 
-Columns added to `heal_attempts` after a release are migrated in place: Surveyor init runs idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements (see `_HEAL_ATTEMPTS_MIGRATIONS` in `aqueduct/surveyor/ddl.py`, which also carries `tool_calls_json`, `chain_link`, and `engine`) right after the `CREATE TABLE IF NOT EXISTS`, so a pre-upgrade observability database gains new columns on the next run, no manual migration needed. `failure_contexts` and `healing_outcomes` gained `engine` the same way, via `_FAILURE_CONTEXTS_MIGRATIONS` and `_HEALING_OUTCOMES_MIGRATIONS` in the same file; `patch_index` gained it via `PATCH_INDEX_MIGRATIONS` in `aqueduct/patch/index.py`.
+Columns added to `heal_attempts` after a release are migrated in place: Surveyor init runs idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements (see `_HEAL_ATTEMPTS_MIGRATIONS` in `aqueduct/surveyor/ddl.py`, which also carries `tool_calls_json`, `chain_link`, and `engine`) right after the `CREATE TABLE IF NOT EXISTS`, so a pre-upgrade observability database gains new columns on the next run, no manual migration needed. `failure_contexts` and `healing_outcomes` gained `engine` the same way, via `_FAILURE_CONTEXTS_MIGRATIONS` and `_HEALING_OUTCOMES_MIGRATIONS` in the same file; `patch_index` gained it via `PATCH_INDEX_MIGRATIONS` in `aqueduct/patch/index.py`; `run_records` gained `engine` (+ its index) the same way via `_RUN_RECORDS_MIGRATIONS` (2.65).
 
 `stop_reason` vocabulary: `solved`, `exhausted_attempts`,
 `budget_seconds_exceeded`, `budget_tokens_exceeded`, `stuck_signature`,
@@ -269,6 +270,11 @@ auditability, not for lookup filtering.
 
 User overrides for Probe signals via `aqueduct signal <signal_id> --value`.
 
+#### `store_maintenance` (2.65)
+
+One row (`key='global'`) tracking `last_pruned_at` — the throttle marker for
+the automatic daily prune sweep. See "Retention & pruning" below.
+
 #### `explain_snapshot`
 
 Rolling per-module Spark physical-plan summary (`Exchange` / Python UDF /
@@ -281,6 +287,12 @@ Per-module I/O metrics (`records_read`, `bytes_read`, `records_written`,
 `NULL` means "not collected", never "zero records".
 
 **Cross-engine handoff (2.36).** A synthetic Handoff module (`aqueduct.compiler.handoff`, §10.9) gets a row here like any other module: `bytes_written`/`duration_ms` on the upstream (write) side, `bytes_read`/`duration_ms` on the downstream (read) side, measured from the spill directory's on-disk size. This is DuckDB's first `module_metrics` write — the DDL and writer (`MODULE_METRICS_DDL`/`write_module_metrics`, `aqueduct/executor/models.py`) are engine-agnostic and shared, but DuckDB's own executor otherwise still writes no per-module metrics outside the Handoff case (see that engine's own docstring). `records_read`/`records_written` stay NULL for a Handoff row — the transport is a byte-level parquet copy, not a row-counted operation.
+
+**Indexes (2.65).** `idx_module_metrics_module (module_id)` serves the
+cross-run per-module trend query (`report --profile --blueprint <id> --last
+N`); `idx_module_metrics_run (run_id)` serves the actual per-run profile
+lookup (`report <run_id> --profile`, `queries.py:270,280`) — previously
+unindexed, a full table scan on every profile call as the table grew.
 
 **Resource profiling.** `aqueduct report <run_id> --profile` ranks a run's
 modules by duration (heaviest first) with each module's share of total time and
@@ -306,6 +318,52 @@ or Hudi `run_compaction`/`run_clean`, depending on the Egress `format`.
 | `payload`     | JSON | Signal-type-specific data |
 | `captured_at` | TIMESTAMPTZ | |
 
+**`sample_rows` redaction + retention cap (2.65).** `sample_rows` is the only
+built-in signal type that persists real sampled **data row content**
+(`df.limit(n).collect()`) — every other signal here is aggregate/statistical
+(counts, rates, min/max/percentiles) and carries no comparable sensitivity or
+size risk. Its `payload` is routed through the same `redact()`
+(`aqueduct/redaction.py`) the `failure_contexts` failure path already uses,
+so a registered `@aq.secret()` value inside a sampled row is scrubbed to
+`[REDACTED]` before the INSERT, not stored raw. It also gets a dedicated,
+count-based retention cap on top of the age-based `probe_signals_days`
+window below: only the most recent `observability.retention.
+sample_rows_keep_last_n` (default 20) rows are kept **per `probe_id`**,
+enforced at write time (mirrors `explain_snapshot`'s rolling-window prune).
+
+### Retention & pruning (2.65)
+
+Every table but `explain_snapshot` (rolling `keep_last_n=5`) and
+`signal_overrides` (manual `DELETE` only) grew append-only forever before
+2.65. `aqueduct.yml`'s `observability.retention:` block configures per-table
+age windows (defaults below); `aqueduct.surveyor.retention.prune_store()`
+applies them with one `DELETE ... WHERE <timestamp column> < ?` per table:
+
+| Table | Timestamp column | Default window |
+|---|---|---|
+| `run_records` | `started_at` | 90 days |
+| `failure_contexts` | `started_at` | 90 days |
+| `healing_outcomes` | `applied_at` | 180 days |
+| `heal_attempts` | `recorded_at` | 180 days |
+| `patch_simulation` | `recorded_at` | 90 days |
+| `column_lineage` | `captured_at` | 90 days |
+| `probe_signals` | `captured_at` | 90 days (all signal types; `sample_rows` also gets its own count-based cap — see above) |
+
+**Automatic, throttled, age-based only.** `maybe_prune_store()` runs at the
+end of every `Surveyor.record()` call (success or failure), but only
+actually sweeps once per calendar day per store — the throttle check is a
+single indexed `SELECT last_pruned_at FROM store_maintenance WHERE
+key='global'` (PK lookup), so the overwhelming majority of runs pay for one
+cheap read and nothing else. `prune_store()` never calls `VACUUM`/reclaims
+disk space — it only deletes rows.
+
+**`VACUUM` is never automatic.** Reclaiming the disk space `prune_store()`'s
+deletes free up is a deliberately separate, deliberately manual step:
+`aqueduct.surveyor.retention.vacuum_store(store)` issues DuckDB's `VACUUM`
+(a no-op on Postgres, whose autovacuum already reclaims space), wired only to
+the explicit `aqueduct report prune --vacuum` CLI verb — never triggered by
+`aqueduct run`.
+
 ### Blob externalisation (1.1.2+)
 
 Large payloads (`manifest_json`, `provenance_json`, `stack_trace`) are stored as
@@ -325,6 +383,18 @@ resolves blob paths to content on read.
 | `source_table`  | VARCHAR | |
 | `source_column` | VARCHAR | |
 | `captured_at`   | TIMESTAMPTZ | |
+
+**Dedup against `channel_fingerprints` (2.65).** A Channel's lineage rows are
+written only when its `channel_fingerprints` SQL fingerprint actually
+*changed* since the last recorded run — a repeat run of unchanged SQL writes
+nothing for that Channel (`aqueduct.compiler.lineage._unchanged_channel_ids`),
+mirroring `channel_fingerprints`'s own changelog model instead of duplicating
+every row on every compile. Handoff passthrough rows (no SQL, not
+fingerprint-tracked) are always written. `lineage()` (`stores/queries.py`)
+also changed: with no explicit `run_id`, the read now scopes to the **latest**
+run in scope (optionally within `blueprint_id`) with `DISTINCT`/`ORDER BY`,
+instead of an unscoped `LIMIT 500` that could mix rows from many historical
+runs.
 
 **Per-hop transform trace, not just the stored graph.** `aqueduct lineage <blueprint.yml> --chain <column> --types` gives a *deeper* view than a `column_lineage` query, a vertical, per-hop trace showing the sqlglot-inferred SQL type at every Channel the column passes through, with a `⚠ type change` marker on any hop where the inferred type shifts. It is computed on demand from the compiled manifest (no store read, no Spark action) rather than read from this table, so it works even before a run has ever persisted a `column_lineage` row. See [CLI Reference](cli_reference.md) for a worked example.
 

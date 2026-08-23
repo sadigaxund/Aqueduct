@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
-import yaml
-from pathlib import Path
-
 import pytest
+import yaml
 
 pytestmark = pytest.mark.unit
 
-from aqueduct.config import AqueductConfig, AgentConnectionConfig, load_config
+# Imports deliberately follow the `pytestmark` assignment above so the marker is
+# established before the module under test is imported.
+from aqueduct.config import (  # noqa: E402
+    AgentConnectionConfig,
+    AqueductConfig,
+    ObservabilityConfig,
+    ObservabilityRetentionConfig,
+    load_config,
+)
 
 
 class TestAgentConnectionConfig:
@@ -58,6 +64,7 @@ class TestAgentMemoryConfig:
 
     def test_extra_forbid_raises(self):
         from pydantic import ValidationError
+
         from aqueduct.config import AgentMemoryConfig
 
         with pytest.raises(ValidationError):
@@ -65,6 +72,7 @@ class TestAgentMemoryConfig:
 
     def test_replay_false_round_trips(self, tmp_path):
         import yaml
+
         from aqueduct.config import AgentMemoryConfig
 
         data = yaml.safe_load("memory:\n  replay: false\n  coaching: true\n")
@@ -85,8 +93,9 @@ class TestBlobLeakGuardrail:
 
     def _warns(self, stores_dict):
         import warnings
-        from aqueduct.config import StoresConfig
+
         from aqueduct import AqueductWarning
+        from aqueduct.config import StoresConfig
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
@@ -411,3 +420,56 @@ class TestAqueductConfigEqHash:
         overridden = cfg.with_cli_engine_overrides({"spark": {"k": "v"}})
         seen = {cfg, overridden}
         assert len(seen) == 1  # equal + same hash → collapse to one entry
+
+
+class TestObservabilityRetentionConfig:
+    """Phase 85 B1 — observability.retention: config block."""
+
+    def test_defaults_match_documented_windows(self):
+        cfg = ObservabilityRetentionConfig()
+        assert cfg.run_records_days == 90
+        assert cfg.failure_contexts_days == 90
+        assert cfg.healing_outcomes_days == 180
+        assert cfg.heal_attempts_days == 180
+        assert cfg.patch_simulation_days == 90
+        assert cfg.column_lineage_days == 90
+        assert cfg.probe_signals_days == 90
+        assert cfg.sample_rows_keep_last_n == 20
+
+    def test_aqueduct_config_wires_observability_block_with_defaults(self):
+        cfg = AqueductConfig()
+        assert isinstance(cfg.observability, ObservabilityConfig)
+        assert cfg.observability.retention == ObservabilityRetentionConfig()
+
+    def test_load_config_respects_custom_retention_values(self, tmp_path):
+        cfg_path = tmp_path / "aqueduct.yml"
+        cfg_data = {
+            "observability": {
+                "retention": {
+                    "run_records_days": 30,
+                    "sample_rows_keep_last_n": 5,
+                }
+            }
+        }
+        cfg_path.write_text(yaml.dump(cfg_data))
+
+        config = load_config(cfg_path)
+        assert config.observability.retention.run_records_days == 30
+        assert config.observability.retention.sample_rows_keep_last_n == 5
+        # untouched fields keep their defaults
+        assert config.observability.retention.heal_attempts_days == 180
+
+    def test_rejects_zero_or_negative_days(self):
+        with pytest.raises(Exception):
+            ObservabilityRetentionConfig(run_records_days=0)
+        with pytest.raises(Exception):
+            ObservabilityRetentionConfig(sample_rows_keep_last_n=-1)
+
+    def test_rejects_unknown_key(self):
+        with pytest.raises(Exception):
+            ObservabilityRetentionConfig(not_a_real_field=1)
+
+    def test_frozen(self):
+        cfg = ObservabilityRetentionConfig()
+        with pytest.raises(Exception):
+            cfg.run_records_days = 5  # type: ignore[misc]

@@ -96,6 +96,26 @@ def test_failure_categories(tmp_path, monkeypatch):
     assert dist.get("SchemaError") == 1
 
 
+def test_failure_categories_legacy_fallback_uses_real_column(tmp_path, monkeypatch):
+    """Phase 85 E1 — the fallback query used to select a nonexistent
+    `failure_contexts.category` column (silently dead, caught by
+    `except Exception`). It's now `error_class`, the real DDL column, so a
+    genuinely pre-`healing_outcomes` legacy store (no healing_outcomes table
+    at all) still produces a category distribution via the fallback."""
+    monkeypatch.chdir(tmp_path)
+    root = tmp_path / ".aqueduct" / "observability" / "legacy"
+    root.mkdir(parents=True)
+    con = duckdb.connect(str(root / "observability.db"))
+    con.execute(
+        "CREATE TABLE failure_contexts (run_id VARCHAR, blueprint_id VARCHAR, error_class VARCHAR)"
+    )
+    con.execute("INSERT INTO failure_contexts VALUES ('r1', 'legacy', 'UNRESOLVED_COLUMN')")
+    con.close()
+
+    dist = q.failure_categories(_cfg())
+    assert dist.get("UNRESOLVED_COLUMN") == 1
+
+
 def test_fleet_summary_empty_when_no_stores(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert q.fleet_summary(_cfg()) == []

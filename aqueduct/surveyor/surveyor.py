@@ -35,6 +35,7 @@ from aqueduct.surveyor.ddl import (
     _HEAL_ATTEMPTS_DDL,
     _HEAL_ATTEMPTS_MIGRATIONS,
     _HEALING_OUTCOMES_MIGRATIONS,
+    _RUN_RECORDS_MIGRATIONS,
     _SIGNAL_OVERRIDES_DDL,
 )
 from aqueduct.surveyor.error_extraction import (  # noqa: F401  (re-exported for callers/tests)
@@ -47,6 +48,7 @@ from aqueduct.surveyor.models import FailureContext
 from aqueduct.surveyor.webhook import fire_webhook
 
 if TYPE_CHECKING:
+    from aqueduct.config import ObservabilityRetentionConfig
     from aqueduct.stores import ObservabilityStore, StoreBundle
     from aqueduct.stores.object_store import BlobStore, PatchStore
 
@@ -113,6 +115,7 @@ class Surveyor:
         stores: StoreBundle | None = None,
         blob_config: tuple[str, str] | None = None,
         lineage_config: tuple[str, str] | None = None,
+        retention: ObservabilityRetentionConfig | None = None,
     ) -> None:
         """Initialise the Surveyor.
 
@@ -129,8 +132,14 @@ class Surveyor:
                 a default DuckDB layout under `store_dir`. The `stores=`
                 parameter exists for the Phase 28 case where the CLI hands
                 in a Postgres-backed bundle.
+            retention: Phase 85 B1 — resolved `ObservabilityRetentionConfig`
+                (from `aqueduct.yml`'s `observability.retention:` block).
+                `None` (the default) falls back to
+                `ObservabilityRetentionConfig()`'s own defaults — pruning
+                works out of the box even for a caller that doesn't thread
+                config through yet.
         """
-        from aqueduct.config import WebhookEndpointConfig
+        from aqueduct.config import ObservabilityRetentionConfig, WebhookEndpointConfig
 
         self._manifest = manifest
         self._store_dir = store_dir
@@ -169,6 +178,7 @@ class Surveyor:
         )
         self._started: bool = False  # DDL/migrations applied once per Surveyor.start()
         self._iteration_parents: dict[str, str] = {}  # run_id → parent_run_id (multi-patch)
+        self._retention: ObservabilityRetentionConfig = retention or ObservabilityRetentionConfig()
 
     def _blob_store(self) -> BlobStore | None:
         """Lazily build the Phase 53 BlobStore. None when no ``store_dir`` is
@@ -234,6 +244,8 @@ class Surveyor:
                 cur.execute(_migration)
             for _migration in _HEALING_OUTCOMES_MIGRATIONS:
                 cur.execute(_migration)
+            for _migration in _RUN_RECORDS_MIGRATIONS:
+                cur.execute(_migration)
             # Phase 53 — patch index (relational truth for the object-store patch
             # lifecycle). Created here so the heal cache can query it instead of
             # scanning the patches/ directory.
@@ -244,16 +256,17 @@ class Surveyor:
             cur.execute(
                 """
                 INSERT INTO run_records
-                    (run_id, blueprint_id, status, started_at, finished_at, module_results, parent_run_id)
-                VALUES (?, ?, 'running', ?, NULL, '[]', NULL)
+                    (run_id, blueprint_id, status, started_at, finished_at, module_results, parent_run_id, engine)
+                VALUES (?, ?, 'running', ?, NULL, '[]', NULL, ?)
                 ON CONFLICT (run_id) DO UPDATE SET
                     blueprint_id   = EXCLUDED.blueprint_id,
                     status         = EXCLUDED.status,
                     started_at     = EXCLUDED.started_at,
                     finished_at    = EXCLUDED.finished_at,
-                    module_results = EXCLUDED.module_results
+                    module_results = EXCLUDED.module_results,
+                    engine         = EXCLUDED.engine
                 """,
-                [run_id, self._manifest.blueprint_id, _iso(self._started_at)],
+                [run_id, self._manifest.blueprint_id, _iso(self._started_at), self._engine],
             )
 
         self._started = True
@@ -332,6 +345,14 @@ class Surveyor:
                         "status": r.status,
                         "error": r.error,
                         "engine": _module_engine.get(r.module_id),
+                        # Phase 85 D2 — ModuleResult.warnings/.notes were
+                        # computed and displayed but never persisted (see
+                        # ExecutionResult.to_dict() in executor/models.py,
+                        # which already serialises them for in-process use).
+                        # Same shape here: warnings is a list of
+                        # [rule_id, message] pairs, notes a list of strings.
+                        "warnings": [list(w) for w in r.warnings],
+                        "notes": list(r.notes),
                     }
                     for r in result.module_results
                 ]
@@ -354,13 +375,14 @@ class Surveyor:
                 """
                 INSERT INTO run_records
                     (run_id, blueprint_id, status, started_at, finished_at,
-                     module_results, parent_run_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                     module_results, parent_run_id, engine)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (run_id) DO UPDATE SET
                     status         = EXCLUDED.status,
                     finished_at    = EXCLUDED.finished_at,
                     module_results = EXCLUDED.module_results,
-                    parent_run_id  = COALESCE(run_records.parent_run_id, EXCLUDED.parent_run_id)
+                    parent_run_id  = COALESCE(run_records.parent_run_id, EXCLUDED.parent_run_id),
+                    engine         = EXCLUDED.engine
                 """,
                 [
                     result.run_id,
@@ -370,8 +392,20 @@ class Surveyor:
                     _iso(finished_at),
                     module_results_json,
                     parent_for_iter,
+                    _engine,
                 ],
             )
+
+        # Phase 85 B1 — throttled auto-prune (at most once per day per
+        # store). Best-effort: a pruning failure must never fail a run.
+        # Runs regardless of success/failure status — "run end" means every
+        # `record()` call, not just the failure path.
+        try:
+            from aqueduct.surveyor.retention import maybe_prune_store
+
+            maybe_prune_store(self._observability, self._retention)
+        except Exception:
+            logger.debug("maybe_prune_store failed", exc_info=True)
 
         if result.status == ExecutionStatus.SUCCESS:
             # Phase 55 — terminal OpenLineage COMPLETE (daemon thread, best-effort).

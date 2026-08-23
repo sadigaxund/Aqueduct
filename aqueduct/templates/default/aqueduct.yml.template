@@ -339,6 +339,36 @@ probes:
   # data_freshness is also suppressed unless allow_sample: true is set per-signal.
 
 
+# ── Observability retention ──────────────────────────────────────────────────
+#
+# Housekeeping for the observability store (run_records, failure_contexts,
+# healing_outcomes, heal_attempts, patch_simulation, column_lineage,
+# probe_signals). Every table here grows append-only forever without this —
+# pruning runs automatically at the end of every `aqueduct run`, throttled to
+# once per day per store (a `store_maintenance` marker row makes the skip
+# check a single indexed SELECT, so it's cheap on the runs that no-op).
+# Pruning only DELETEs rows past their window; it never reclaims disk space
+# (VACUUM) — that is a separate, NEVER-automatic step via the explicit
+# `aqueduct report prune --vacuum` command.
+
+observability:
+  retention:
+    run_records_days: 90
+    failure_contexts_days: 90
+    healing_outcomes_days: 180
+    heal_attempts_days: 180
+    patch_simulation_days: 90
+    column_lineage_days: 90
+    probe_signals_days: 90
+
+    # sample_rows is the one Probe signal type that persists real sampled
+    # DATA ROWS (redacted for registered secrets, but still row content) —
+    # it gets a tighter, count-based cap on top of probe_signals_days above,
+    # enforced at write time: only the most recent N sample_rows rows are
+    # kept per probe_id, regardless of age.
+    sample_rows_keep_last_n: 20
+
+
 # ── Metrics ───────────────────────────────────────────────────────────────────
 #
 # Per-module observability tuning. Aqueduct uses Spark `DataFrame.observe()` to

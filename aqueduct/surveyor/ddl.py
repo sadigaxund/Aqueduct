@@ -17,7 +17,17 @@ CREATE TABLE IF NOT EXISTS run_records (
     started_at     TIMESTAMPTZ NOT NULL,
     finished_at    TIMESTAMPTZ,
     module_results JSON,
-    parent_run_id  VARCHAR
+    parent_run_id  VARCHAR,
+    -- Phase 85 D8 — top-level execution engine ("spark", "duckdb", ...) for
+    -- this run. Every OTHER table that carries `engine` (failure_contexts,
+    -- healing_outcomes, heal_attempts, patch_index) stamps it as a plain
+    -- column; run_records previously only had it buried inside the
+    -- unindexed `module_results` JSON blob (one entry per module), which
+    -- made "WHERE engine = ?" for a SUCCESSFUL run impossible without
+    -- JSON-parsing every row. Populated by Surveyor.start()/.record() from
+    -- the Surveyor's own required `engine` constructor arg — same source
+    -- module_results' per-module `engine` field already uses.
+    engine         VARCHAR
 );
 
 CREATE TABLE IF NOT EXISTS failure_contexts (
@@ -199,3 +209,29 @@ _FAILURE_CONTEXTS_MIGRATIONS: tuple[str, ...] = (
 _HEALING_OUTCOMES_MIGRATIONS: tuple[str, ...] = (
     "ALTER TABLE healing_outcomes ADD COLUMN IF NOT EXISTS engine VARCHAR",
 )
+
+# Phase 85 D8 — `run_records.engine`, mirroring the Phase-84 `benchmark_results`
+# migration pattern (`aqueduct/surveyor/benchmark_store.py`'s
+# `_BENCHMARK_RESULTS_MIGRATIONS`): idempotent `ADD COLUMN IF NOT EXISTS`,
+# supported identically by DuckDB and Postgres, run right after the CREATE on
+# every Surveyor init so a pre-2.2 store gains the column in place instead of
+# being orphaned. The index MUST run after the ADD COLUMN, not inside `_DDL`
+# above — `CREATE INDEX IF NOT EXISTS run_records(engine)` against a
+# pre-existing table that does not have the column YET (before this
+# migration runs) raises a BinderException, since `CREATE TABLE IF NOT
+# EXISTS` is a no-op there. Order in this tuple matters.
+_RUN_RECORDS_MIGRATIONS: tuple[str, ...] = (
+    "ALTER TABLE run_records ADD COLUMN IF NOT EXISTS engine VARCHAR",
+    "CREATE INDEX IF NOT EXISTS idx_run_records_engine ON run_records (engine)",
+)
+
+# Phase 85 B1 — throttled auto-prune marker. One row per store (`key='global'`),
+# `last_pruned_at` checked with a single PK-indexed SELECT so the "did we
+# already prune today" check stays cheap on the runs that no-op (see
+# `aqueduct.surveyor.retention.maybe_prune_store`).
+_STORE_MAINTENANCE_DDL = """
+CREATE TABLE IF NOT EXISTS store_maintenance (
+    key            VARCHAR PRIMARY KEY,
+    last_pruned_at TIMESTAMPTZ
+);
+"""

@@ -81,18 +81,23 @@ from aqueduct.errors import ConfigError
 from aqueduct.executor.duckdb_.egress import _escape
 from aqueduct.executor.models import _add_module_warning
 from aqueduct.models import Module, ModuleType
+from aqueduct.redaction import redact as _redact
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class ProbeSampling:
-    """Duplicated from ``executor/spark/probe.py`` — same two fields, same
-    defaults, same ``aqueduct.yml`` `probes:` block behind it. See this
-    module's docstring for why this is a deliberate copy, not an import."""
+    """Duplicated from ``executor/spark/probe.py`` — same fields, same
+    defaults, same ``aqueduct.yml`` `probes:`/`observability.retention:`
+    blocks behind it. See this module's docstring for why this is a
+    deliberate copy, not an import."""
 
     max_sample_rows: int = 100
     default_sample_fraction: float = 0.1
+    # Phase 85 A1 — per-probe retention cap for the sample_rows signal type.
+    # From `aqueduct.yml`'s `observability.retention.sample_rows_keep_last_n`.
+    sample_rows_keep_last_n: int = 20
 
 
 # ── DuckDB DDL — byte-identical to spark/probe.py's, same observability
@@ -137,7 +142,7 @@ def _json_dumps(obj: Any) -> str:
     """json.dumps that coerces DuckDB-native types (datetime, Decimal, bytes)."""
 
     def _default(o: Any) -> Any:
-        if isinstance(o, (datetime, date)):
+        if isinstance(o, datetime | date):
             return o.isoformat()
         if isinstance(o, Decimal):
             return float(o)
@@ -551,8 +556,8 @@ def _stdout_report_lines(sig_type: str, payload: Any) -> list[str]:
     kept identical so the CLI renders the same shape on either engine."""
     if not isinstance(payload, dict):
         return [f"{sig_type}: {payload}"]
-    scalars = {k: v for k, v in payload.items() if not isinstance(v, (dict, list))}
-    nested = {k: v for k, v in payload.items() if isinstance(v, (dict, list))}
+    scalars = {k: v for k, v in payload.items() if not isinstance(v, dict | list)}
+    nested = {k: v for k, v in payload.items() if isinstance(v, dict | list)}
     head = "  ·  ".join(f"{k}={v}" for k, v in scalars.items())
     lines = [f"{sig_type}: {head}" if head else f"{sig_type}:"]
     for k, v in nested.items():
@@ -717,6 +722,14 @@ def execute_probe(
                         )
                         continue
 
+                    if sig_type == "sample_rows":
+                        # Phase 85 A1 — the ONLY signal type that persists
+                        # real sampled data ROW content; every other signal
+                        # here is aggregate/statistical. Route it through
+                        # the same `_redact()` the failure path
+                        # (surveyor.py) already uses.
+                        payload = _redact(payload)
+
                     cur.execute(
                         """
                         INSERT INTO probe_signals
@@ -725,6 +738,34 @@ def execute_probe(
                         """,
                         [run_id, module.id, sig_type, _json_dumps(payload), _utcnow_iso()],
                     )
+
+                    if sig_type == "sample_rows":
+                        # Phase 85 A1 — retention cap: keep only the most
+                        # recent `sample_rows_keep_last_n` rows per probe_id
+                        # for this signal type. Mirrors the Spark twin and
+                        # `record_explain_snapshot`'s rolling-window prune.
+                        try:
+                            _stale = cur.execute(
+                                """
+                                SELECT run_id, captured_at FROM probe_signals
+                                WHERE probe_id = ? AND signal_type = 'sample_rows'
+                                ORDER BY captured_at DESC
+                                """,
+                                [module.id],
+                            ).fetchall()
+                            if len(_stale) > sampling.sample_rows_keep_last_n:
+                                for _rid, _ in _stale[sampling.sample_rows_keep_last_n :]:
+                                    cur.execute(
+                                        """
+                                        DELETE FROM probe_signals
+                                        WHERE probe_id = ? AND signal_type = 'sample_rows'
+                                          AND run_id = ?
+                                        """,
+                                        [module.id, _rid],
+                                    )
+                        except Exception:
+                            pass  # sample_rows rotation is best-effort housekeeping
+
                     if _report_stdout:
                         try:
                             _notes.extend(_stdout_report_lines(sig_type, payload))
