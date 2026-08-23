@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -18,6 +17,7 @@ from aqueduct.agent import (
     generate_agent_patch,
     resolve_budget,
 )
+from aqueduct.agent.budget import BudgetConfig, StopReason
 from aqueduct.agent.parse import (
     _detect_structural_error,
     _format_reprompt_error,
@@ -25,10 +25,7 @@ from aqueduct.agent.parse import (
 )
 from aqueduct.agent.prompts import (
     _PATCH_SKELETON,
-    _REPROMPT_TEMPLATE,
-    _REPROMPT_TEMPLATE_ESCALATED,
 )
-from aqueduct.agent.budget import BudgetConfig, StopReason
 from aqueduct.config import AgentBudgetConfig, AgentConnectionConfig
 
 # ── _detect_structural_error ──────────────────────────────────────────────────
@@ -1099,7 +1096,8 @@ class TestDeferToHuman:
     _DEFER_PATCH_JSON = (
         '{"patch_id": "d1", "rationale": "cannot fix", '
         '"operations": [{"op": "defer_to_human", '
-        '"diagnosis": "UDF logic is out of scope"}]}'
+        '"diagnosis": "UDF logic is out of scope", '
+        '"defer_reason": "insufficient_context"}]}'
     )
 
     def test_allow_defer_true_returns_deferred(self, fctx, tmp_path):
@@ -1148,7 +1146,11 @@ class TestDeferMixedOps:
                 rationale="mixed",
                 operations=[
                     {"op": "set_module_config_key", "module_id": "m1", "key": "k", "value": "v"},
-                    {"op": "defer_to_human", "diagnosis": "cannot fix"},
+                    {
+                        "op": "defer_to_human",
+                        "diagnosis": "cannot fix",
+                        "defer_reason": "other",
+                    },
                 ],
             )
 
@@ -1169,8 +1171,9 @@ class TestPhase40BudgetEnforcement:
             mock_call.return_value = (_VALID_PATCH_JSON, 10, 20)
 
             budget = BudgetConfig(max_seconds=5, max_reprompts=5)
-            from aqueduct.agent.budget import time as btime
             import time as real_time
+
+            from aqueduct.agent.budget import time as btime
 
             original_monotonic = btime.monotonic
             start = real_time.monotonic()
@@ -1208,7 +1211,6 @@ class TestPhase40BudgetEnforcement:
 
 class TestAgentPatchResultBackwardCompat:
     def test_agent_patch_result_positional_kwargs_backward_compat(self):
-        from aqueduct.agent import AgentPatchResult
         from aqueduct.patch.grammar import PatchSpec
 
         p = PatchSpec(

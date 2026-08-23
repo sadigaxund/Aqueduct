@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import pytest
 
 pytestmark = pytest.mark.unit
 from pydantic import ValidationError
-from aqueduct.patch.grammar import PatchSpec, RetiredPatchOpError, SetEngineConfigOp
+
+from aqueduct.patch.grammar import DeferToHumanOp, PatchSpec, RetiredPatchOpError, SetEngineConfigOp
 
 
 def test_valid_patch_spec_parsing():
@@ -255,6 +255,54 @@ def test_set_spark_config_is_retired():
                 {"op": "set_spark_config", "key": "spark.sql.shuffle.partitions", "value": 200},
             ],
         )
+
+
+def test_defer_to_human_requires_defer_reason():
+    """`defer_reason` (Phase 88 Domain 6) is REQUIRED — an absent value is a
+    pydantic ValidationError, which feeds the normal reprompt loop rather
+    than hard-failing the heal (see aqueduct/agent/loop.py:751-752)."""
+    with pytest.raises(ValidationError, match="defer_reason"):
+        PatchSpec(
+            patch_id="p",
+            rationale="r",
+            operations=[
+                {
+                    "op": "defer_to_human",
+                    "diagnosis": "infra is down",
+                    "suggestions": ["restart infra"],
+                }
+            ],
+        )
+
+
+def test_defer_to_human_rejects_invalid_defer_reason():
+    """An out-of-enum value is a validation failure, not a silent coercion."""
+    with pytest.raises(ValidationError):
+        PatchSpec(
+            patch_id="p",
+            rationale="r",
+            operations=[
+                {
+                    "op": "defer_to_human",
+                    "diagnosis": "infra is down",
+                    "defer_reason": "not_a_real_bucket",
+                }
+            ],
+        )
+
+
+def test_defer_to_human_accepts_valid_defer_reason():
+    op = DeferToHumanOp(
+        op="defer_to_human",
+        diagnosis="upstream renamed a column",
+        suggestions=["contact upstream team"],
+        confidence_reason="high confidence — error is a clean schema mismatch",
+        defer_reason="upstream_schema_change",
+    )
+    assert op.defer_reason == "upstream_schema_change"
+    # Free-prose fields stay untouched by the new enum.
+    assert op.diagnosis == "upstream renamed a column"
+    assert op.confidence_reason.startswith("high confidence")
 
 
 def test_macro_alias_normalised():

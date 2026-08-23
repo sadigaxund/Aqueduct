@@ -294,6 +294,7 @@ def stage_patch_for_human(
     webhook_event: str = "on_patch_pending",
     patch_store: PatchStore | None = None,
     obs_store: ObservabilityStore | None = None,
+    on_defer_webhook: WebhookEndpointConfig | None = None,
 ) -> None:
     """Write a patch body to ``patches/pending/`` and index it for review.
 
@@ -309,6 +310,14 @@ def stage_patch_for_human(
             *patches_dir* (historical on-disk layout).
         obs_store: Observability store for the ``patch_index`` upsert. None skips
             indexing (the heal cache then can't reuse this pending patch).
+        on_defer_webhook: Endpoint for a DEFER-carrying patch (``cfg.webhooks
+            .on_defer``, Domain 6). When ``patch_spec`` contains a
+            ``defer_to_human`` op AND this is set, it FIRES INSTEAD OF
+            ``on_patch_pending_webhook`` with event ``"on_defer"`` — a
+            dedicated channel so defers stop overloading on_patch_pending.
+            When unset (the default), a defer patch falls back to the
+            existing ``on_patch_pending_webhook``/``webhook_event`` behavior
+            unchanged, so nobody loses notifications on upgrade.
     """
     ps = _patch_store_for(patches_dir, patch_store)
     filename = _patch_filename(patch_spec)
@@ -349,7 +358,19 @@ def stage_patch_for_human(
         out_path,
     )
 
-    if on_patch_pending_webhook is not None:
+    # A DEFER-carrying patch routes to the dedicated on_defer endpoint when
+    # configured, so defers stop overloading on_patch_pending; unset falls
+    # back to the existing on_patch_pending behavior unchanged (upgrade-safe).
+    _first_op = patch_spec.operations[0] if patch_spec.operations else None
+    _is_defer = _first_op is not None and getattr(_first_op, "op", "") == "defer_to_human"
+    if _is_defer and on_defer_webhook is not None:
+        _webhook = on_defer_webhook
+        _event = "on_defer"
+    else:
+        _webhook = on_patch_pending_webhook
+        _event = webhook_event
+
+    if _webhook is not None:
         try:
             from aqueduct.surveyor.webhook import fire_webhook
 
@@ -363,12 +384,15 @@ def stage_patch_for_human(
                 "confidence": patch_spec.confidence,
                 "category": patch_spec.category or "",
             }
-            _first_op = patch_spec.operations[0] if patch_spec.operations else None
-            if _first_op is not None and getattr(_first_op, "op", "") == "defer_to_human":
+            if _is_defer:
                 _diagnosis["diagnosis"] = getattr(_first_op, "diagnosis", "")
                 _diagnosis["suggestions"] = list(getattr(_first_op, "suggestions", ()) or ())
+                # Domain 6 — confidence_reason was collected on DeferToHumanOp
+                # but previously dropped on the floor here; forward it.
+                _diagnosis["confidence_reason"] = getattr(_first_op, "confidence_reason", "")
+                _diagnosis["defer_reason"] = getattr(_first_op, "defer_reason", "")
             fire_webhook(
-                on_patch_pending_webhook,
+                _webhook,
                 full_payload={
                     "patch_id": patch_spec.patch_id,
                     "run_id": failure_ctx.run_id,
@@ -392,7 +416,7 @@ def stage_patch_for_human(
                     ),
                     "category": str(_diagnosis["category"]),
                 },
-                event=webhook_event,
+                event=_event,
             )
         except Exception:
             logger.debug("Webhook fire failed", exc_info=True)

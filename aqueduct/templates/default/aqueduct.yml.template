@@ -478,13 +478,17 @@ secrets:
 # one automatic retry on 429/5xx or network error); failures are logged and
 # do not affect run outcome.
 #
-# Four hooks:
+# Five hooks:
 #   on_failure       — fires when a run ends with status="error"
 #   on_success       — fires when a run ends with status="success"
 #   on_patch_pending — fires when a patch is staged to patches/pending/
 #   on_ci_patch      — fires for approval: ci; receives the patch JSON
 #                      for external PR creation (full-config alternative to
 #                      agent.ci_webhook_url)
+#   on_defer         — fires when a patch defers to a human (defer_to_human
+#                      op) instead of proposing a fix. When unset, defers
+#                      fall back to firing on_patch_pending, so nobody loses
+#                      notifications on upgrade.
 #
 # Per-module webhook: set on_failure_webhook on any module in the Blueprint.
 #   Fires when that module's retry policy is exhausted, regardless of whether
@@ -516,7 +520,7 @@ secrets:
 #   ${blueprint_name}   Blueprint display name
 #   ${module_count}    Number of modules executed
 #
-# on_patch_pending / on_ci_patch template variables (the agent's
+# on_patch_pending / on_ci_patch / on_defer template variables (the agent's
 # structured diagnosis, no extra LLM calls):
 #   ${run_id} ${blueprint_id} ${failed_module}
 #   ${patch_id}        Staged patch identifier
@@ -524,6 +528,14 @@ secrets:
 #   ${rationale}       Why the proposed fix should work
 #   ${confidence}      Agent self-rated confidence (e.g. "0.85", "n/a")
 #   ${category}        Failure category label (schema_drift, bad_path, …)
+#
+# on_defer's full-payload (non-template) body additionally carries:
+#   defer_reason       Queryable bucket: infrastructure |
+#                       upstream_schema_change | data_shape_change |
+#                       insufficient_context | other
+#   diagnosis          Detailed explanation of why this can't be auto-patched
+#   suggestions        Actionable next steps for the human operator
+#   confidence_reason  Why the model is confident deferral is correct
 #
 # on_failure_webhook (per-module) template variables:
 #   ${run_id}          UUID of this blueprint run

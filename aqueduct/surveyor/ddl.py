@@ -184,7 +184,11 @@ CREATE TABLE IF NOT EXISTS heal_attempts (
     -- below for why a new column (not a repurposed one) is correct here.
     chain_link            INTEGER,
     -- Phase 78 — execution engine this attempt targeted ("spark", "duckdb", ...).
-    engine                VARCHAR
+    engine                VARCHAR,
+    -- Phase 88 Domain 6 — queryable bucket from the DeferToHumanOp's
+    -- `defer_reason` enum, when this attempt's patch deferred to a human.
+    -- NULL for every non-deferring attempt.
+    defer_reason          VARCHAR
 );
 """
 
@@ -198,6 +202,7 @@ _HEAL_ATTEMPTS_MIGRATIONS: tuple[str, ...] = (
     "ALTER TABLE heal_attempts ADD COLUMN IF NOT EXISTS tool_calls_json VARCHAR",
     "ALTER TABLE heal_attempts ADD COLUMN IF NOT EXISTS chain_link INTEGER",
     "ALTER TABLE heal_attempts ADD COLUMN IF NOT EXISTS engine VARCHAR",
+    "ALTER TABLE heal_attempts ADD COLUMN IF NOT EXISTS defer_reason VARCHAR",
 )
 
 # Phase 78 — `engine` column migrations for the two other pre-existing tables

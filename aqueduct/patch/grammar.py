@@ -239,6 +239,16 @@ class DeferToHumanOp(BaseModel, extra="forbid"):
         default="",
         description="Why the model is confident deferral is correct (vs uncertain)",
     )
+    defer_reason: Literal[
+        "infrastructure",
+        "upstream_schema_change",
+        "data_shape_change",
+        "insufficient_context",
+        "other",
+    ] = Field(
+        ...,
+        description="Queryable bucket for why this failure was deferred to a human",
+    )
 
 
 class ReplaceMacroOp(BaseModel, extra="forbid"):

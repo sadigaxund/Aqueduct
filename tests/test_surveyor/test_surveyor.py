@@ -435,6 +435,120 @@ class TestRecordHealAttempt:
         assert "customers_pii" not in row[0]
         assert "alice@example.com" not in row[0]
 
+    def test_record_heal_attempt_defer_reason_round_trips(self, tmp_path):
+        """Phase 88 Domain 6 — the keyword-only `defer_reason` param round-trips
+        through the INSERT into the new `heal_attempts.defer_reason` column."""
+        from aqueduct.agent.budget import AttemptRecord
+        from aqueduct.compiler.models import Manifest
+        from aqueduct.surveyor.surveyor import Surveyor
+
+        s = Surveyor(
+            Manifest(
+                blueprint_id="bp1", name="name", context={}, modules=(), edges=(), engine_config={}
+            ),
+            tmp_path,
+            engine="spark",
+        )
+        s.start("run1")
+
+        rec = AttemptRecord(attempt_num=1, signature=None)
+        s.record_heal_attempt(
+            run_id="run1", attempt_record=rec, defer_reason="upstream_schema_change"
+        )
+
+        with s._observability.connect() as cur:
+            row = cur.execute("SELECT defer_reason FROM heal_attempts").fetchone()
+
+        assert row[0] == "upstream_schema_change"
+
+    def test_record_heal_attempt_defer_reason_defaults_to_null(self, tmp_path):
+        """A non-deferring attempt (the overwhelming majority) leaves the new
+        column NULL — no behavior change for existing callers that don't
+        pass `defer_reason`."""
+        from aqueduct.agent.budget import AttemptRecord
+        from aqueduct.compiler.models import Manifest
+        from aqueduct.surveyor.surveyor import Surveyor
+
+        s = Surveyor(
+            Manifest(
+                blueprint_id="bp1", name="name", context={}, modules=(), edges=(), engine_config={}
+            ),
+            tmp_path,
+            engine="spark",
+        )
+        s.start("run1")
+
+        rec = AttemptRecord(attempt_num=1, signature=None)
+        s.record_heal_attempt(run_id="run1", attempt_record=rec)
+
+        with s._observability.connect() as cur:
+            row = cur.execute("SELECT defer_reason FROM heal_attempts").fetchone()
+
+        assert row[0] is None
+
+    def test_update_heal_attempt_stop_reason_also_sets_defer_reason(self, tmp_path):
+        """`update_heal_attempt_stop_reason(defer_reason=...)` — the terminal-row
+        UPDATE path used by cli/run.py once the loop returns the final
+        PatchSpec, since a defer's reason isn't known at per-turn INSERT time."""
+        from aqueduct.agent.budget import AttemptRecord, StopReason
+        from aqueduct.compiler.models import Manifest
+        from aqueduct.surveyor.surveyor import Surveyor
+
+        s = Surveyor(
+            Manifest(
+                blueprint_id="bp1", name="name", context={}, modules=(), edges=(), engine_config={}
+            ),
+            tmp_path,
+            engine="spark",
+        )
+        s.start("run1")
+
+        rec = AttemptRecord(attempt_num=1, signature=None)
+        s.record_heal_attempt(run_id="run1", attempt_record=rec)
+        s.update_heal_attempt_stop_reason(
+            run_id="run1",
+            attempt_num=1,
+            stop_reason=StopReason.DEFERRED,
+            defer_reason="data_shape_change",
+        )
+
+        with s._observability.connect() as cur:
+            row = cur.execute("SELECT stop_reason, defer_reason FROM heal_attempts").fetchone()
+
+        assert row[0] == StopReason.DEFERRED
+        assert row[1] == "data_shape_change"
+
+    def test_update_heal_attempt_stop_reason_without_defer_reason_leaves_column_untouched(
+        self, tmp_path
+    ):
+        """`defer_reason=None` (the default, and every non-deferred terminal
+        row) must not clobber an already-set value or write NULL over it —
+        the UPDATE only touches `stop_reason` in that branch."""
+        from aqueduct.agent.budget import AttemptRecord, StopReason
+        from aqueduct.compiler.models import Manifest
+        from aqueduct.surveyor.surveyor import Surveyor
+
+        s = Surveyor(
+            Manifest(
+                blueprint_id="bp1", name="name", context={}, modules=(), edges=(), engine_config={}
+            ),
+            tmp_path,
+            engine="spark",
+        )
+        s.start("run1")
+
+        rec = AttemptRecord(attempt_num=1, signature=None)
+        s.record_heal_attempt(run_id="run1", attempt_record=rec)
+        s.update_heal_attempt_stop_reason(
+            run_id="run1", attempt_num=1, stop_reason=StopReason.SOLVED
+        )
+
+        with s._observability.connect() as cur:
+            row = cur.execute("SELECT stop_reason, defer_reason FROM heal_attempts").fetchone()
+
+        assert row[0] == StopReason.SOLVED
+        assert row[1] is None
+
     def test_record_heal_attempt_prompt_version_default(self, tmp_path):
         from aqueduct.agent import PROMPT_VERSION
         from aqueduct.agent.budget import AttemptRecord

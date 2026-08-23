@@ -14,6 +14,8 @@ from aqueduct.config import (  # noqa: E402
     AqueductConfig,
     ObservabilityConfig,
     ObservabilityRetentionConfig,
+    WebhookEndpointConfig,
+    WebhooksConfig,
     load_config,
 )
 
@@ -473,3 +475,45 @@ class TestObservabilityRetentionConfig:
         cfg = ObservabilityRetentionConfig()
         with pytest.raises(Exception):
             cfg.run_records_days = 5  # type: ignore[misc]
+
+
+class TestWebhooksOnDefer:
+    """Phase 88 Domain 6 — dedicated on_defer webhook event."""
+
+    def test_on_defer_defaults_to_none(self):
+        cfg = WebhooksConfig()
+        assert cfg.on_defer is None
+
+    def test_on_defer_accepts_string_url_shorthand(self):
+        # Same coerce_string_url validator as on_failure/on_success/etc.
+        cfg = WebhooksConfig(on_defer="https://hooks.example.com/defer")
+        assert isinstance(cfg.on_defer, WebhookEndpointConfig)
+        assert cfg.on_defer.url == "https://hooks.example.com/defer"
+
+    def test_on_defer_accepts_full_config(self):
+        cfg = WebhooksConfig(on_defer={"url": "https://hooks.example.com/defer", "max_retries": 3})
+        assert cfg.on_defer.url == "https://hooks.example.com/defer"
+        assert cfg.on_defer.max_retries == 3
+
+    def test_load_config_respects_on_defer(self, tmp_path):
+        cfg_path = tmp_path / "aqueduct.yml"
+        cfg_data = {"webhooks": {"on_defer": "https://hooks.example.com/defer"}}
+        cfg_path.write_text(yaml.dump(cfg_data))
+
+        config = load_config(cfg_path)
+        assert config.webhooks.on_defer.url == "https://hooks.example.com/defer"
+
+    def test_config_leaves_walker_accepts_on_defer_without_capability_scope_error(self):
+        """`on_defer: WebhookEndpointConfig | None` is a nested-BaseModel field
+        — the walker recurses INTO `WebhookEndpointConfig`'s own tagged
+        fields rather than requiring a tag on `on_defer` itself (same as its
+        four siblings on_failure/on_success/on_patch_pending/on_ci_patch).
+        This must not raise CapabilityScopeError."""
+        from aqueduct.executor.config_leaves import all_config_leaves
+
+        leaves = all_config_leaves()
+        # WebhookEndpointConfig's own leaves (e.g. url/timeout) appear once,
+        # not once per parent field — proving on_defer recursed cleanly
+        # rather than becoming its own untagged leaf.
+        assert "config.webhooks.on_defer" not in leaves
+        assert "config.webhooks.on_defer.url" not in leaves

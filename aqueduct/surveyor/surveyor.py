@@ -703,6 +703,7 @@ class Surveyor:
         attempt_record: Any,  # agent.budget.AttemptRecord
         stop_reason: str | None = None,
         prompt_version: str | None = None,
+        defer_reason: str | None = None,
     ) -> None:
         """Persist one row to ``heal_attempts`` (Task 88).
 
@@ -721,6 +722,10 @@ class Surveyor:
         the terminal row's stop_reason is attached afterwards via
         ``update_heal_attempt_stop_reason`` (a second
         ``record_heal_attempt`` call would write a duplicate row).
+
+        ``defer_reason``: Phase 88 Domain 6 — the queryable bucket from a
+        ``DeferToHumanOp.defer_reason``, when this attempt's patch deferred
+        to a human. ``None`` for every non-deferring attempt.
         """
         if self._observability is None:
             return
@@ -766,8 +771,9 @@ class Surveyor:
                     (id, run_id, attempt_num, error_class, where_field,
                      normalized_message, tokens_in, tokens_out,
                      latency_ms, gate_that_rejected, stop_reason,
-                     prompt_version, recorded_at, tool_calls_json, chain_link, engine)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     prompt_version, recorded_at, tool_calls_json, chain_link, engine,
+                     defer_reason)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         str(_uuid.uuid4()),
@@ -795,6 +801,7 @@ class Surveyor:
                         # hashed with one), falling back to this Surveyor's
                         # engine for signature-less rows (e.g. a clean apply).
                         (sig.engine if sig else None) or self._engine,
+                        defer_reason,
                     ],
                 )
         except Exception:
@@ -806,6 +813,7 @@ class Surveyor:
         run_id: str,
         attempt_num: int,
         stop_reason: str,
+        defer_reason: str | None = None,
     ) -> None:
         """Update the terminal `heal_attempts` row's ``stop_reason`` in place.
 
@@ -821,6 +829,14 @@ class Surveyor:
         heal actually fixed the pipeline — to answer that, join against
         ``healing_outcomes.run_success_after_patch``.
 
+        ``defer_reason``: Phase 88 Domain 6 — the terminal patch's
+        ``DeferToHumanOp.defer_reason``, when the loop stopped on a defer.
+        Only known once the loop returns the final PatchSpec (unlike
+        ``stop_reason``'s other values, a defer's reason isn't available at
+        ``record_heal_attempt``'s per-turn INSERT time), so it is attached
+        here alongside ``stop_reason`` rather than threaded through the
+        ``on_attempt`` hook. ``None`` leaves the column untouched.
+
         Best-effort: swallows DB errors at DEBUG, never blocks the caller.
         """
         if self._observability is None:
@@ -829,19 +845,34 @@ class Surveyor:
             with self._observability.connect() as cur:
                 # DuckDB lacks correlated UPDATE-with-LIMIT; constrain by the
                 # most-recent recorded_at to pick the terminal row only.
-                cur.execute(
-                    """
-                    UPDATE heal_attempts
-                       SET stop_reason = ?
-                     WHERE id = (
-                         SELECT id FROM heal_attempts
-                          WHERE run_id = ? AND attempt_num = ?
-                          ORDER BY recorded_at DESC
-                          LIMIT 1
-                     )
-                    """,
-                    [stop_reason, run_id, int(attempt_num)],
-                )
+                if defer_reason is not None:
+                    cur.execute(
+                        """
+                        UPDATE heal_attempts
+                           SET stop_reason = ?, defer_reason = ?
+                         WHERE id = (
+                             SELECT id FROM heal_attempts
+                              WHERE run_id = ? AND attempt_num = ?
+                              ORDER BY recorded_at DESC
+                              LIMIT 1
+                         )
+                        """,
+                        [stop_reason, defer_reason, run_id, int(attempt_num)],
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE heal_attempts
+                           SET stop_reason = ?
+                         WHERE id = (
+                             SELECT id FROM heal_attempts
+                              WHERE run_id = ? AND attempt_num = ?
+                              ORDER BY recorded_at DESC
+                              LIMIT 1
+                         )
+                        """,
+                        [stop_reason, run_id, int(attempt_num)],
+                    )
         except Exception:
             logger.debug("update_heal_attempt_stop_reason failed", exc_info=True)
 

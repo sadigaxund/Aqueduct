@@ -1488,10 +1488,23 @@ def run(
                                 err=True,
                             )
                             try:
+                                _replay_defer_op = next(
+                                    (
+                                        op
+                                        for op in _replay_patch.operations
+                                        if op.op == "defer_to_human"
+                                    ),
+                                    None,
+                                )
                                 surveyor.record_heal_attempt(
                                     run_id=run_id,
                                     attempt_record=_zero_token_attempt(_sig_exact),
                                     stop_reason="replayed",
+                                    defer_reason=(
+                                        getattr(_replay_defer_op, "defer_reason", None)
+                                        if _replay_defer_op is not None
+                                        else None
+                                    ),
                                 )
                             except Exception:
                                 pass  # recording the zero-token replay is best-effort; never block for audit logging
@@ -2144,10 +2157,26 @@ def run(
             # joins can answer "which axis terminated this heal".
             if agent_result.attempt_records and agent_result.stop_reason:
                 try:
+                    # Domain 6 — thread the terminal patch's defer_reason (if
+                    # any) alongside stop_reason. Only known now, once the
+                    # loop has returned the final PatchSpec.
+                    _defer_op = next(
+                        (
+                            op
+                            for op in (patch.operations if patch is not None else [])
+                            if op.op == "defer_to_human"
+                        ),
+                        None,
+                    )
                     surveyor.update_heal_attempt_stop_reason(
                         run_id=_heal_run_id,
                         attempt_num=agent_result.attempt_records[-1].attempt_num,
                         stop_reason=agent_result.stop_reason,
+                        defer_reason=(
+                            getattr(_defer_op, "defer_reason", None)
+                            if _defer_op is not None
+                            else None
+                        ),
                     )
                 except Exception:
                     pass  # updating stop_reason is best-effort; never let persistence block the loop
@@ -2303,6 +2332,7 @@ def run(
                     source=_patch_source,
                     patch_store=_patch_store,
                     obs_store=_obs_store,
+                    on_defer_webhook=cfg.webhooks.on_defer,
                 )
                 _fire_heal_hook(
                     "on_patch_pending",
@@ -2344,6 +2374,7 @@ def run(
                     source=_patch_source,
                     patch_store=_patch_store,
                     obs_store=_obs_store,
+                    on_defer_webhook=cfg.webhooks.on_defer,
                 )
                 _fire_heal_hook(
                     "on_patch_pending",
@@ -2420,6 +2451,7 @@ def run(
                     webhook_event="on_ci_patch",
                     patch_store=_patch_store,
                     obs_store=_obs_store,
+                    on_defer_webhook=cfg.webhooks.on_defer,
                 )
                 _fire_heal_hook(
                     "on_patch_pending",
@@ -2452,6 +2484,81 @@ def run(
                 break
 
             elif effective_mode == "auto":
+                # A4 — a defer-only patch makes zero Blueprint changes (Domain
+                # 6): running the sandbox/gate/apply pyramid on it is an
+                # expensive no-op. `has_defer` mirrors
+                # `aqueduct/agent/loop.py:820`'s own predicate exactly.
+                # "defer-only" (the ratified wording) means EVERY op is
+                # defer_to_human, not just any — a MIXED patch (a real op
+                # alongside a defer) still runs the full gate ladder below.
+                # In practice `has_defer` and `_defer_only` can never diverge
+                # for a validated PatchSpec — `grammar.py`'s
+                # `_reject_mixed_defer_ops` already refuses to construct a
+                # patch mixing `defer_to_human` with any other op, so a
+                # "mixed" patch can never reach this branch. The separate
+                # `all(...)` check is kept anyway as the defensive, provably-
+                # correct statement of intent (never trust a duck-typed
+                # `patch.operations` two layers removed from validation), not
+                # because it currently changes behavior.
+                # A defer-only patch instead routes straight to the same
+                # pending/defer staging path the "ci"/"human" branches use:
+                # NO sandbox, NO gate run, NO apply.
+                has_defer = any(op.op == "defer_to_human" for op in patch.operations)
+                _defer_only = has_defer and all(
+                    op.op == "defer_to_human" for op in patch.operations
+                )
+                if _defer_only:
+                    click.echo(
+                        "  ▸ defer-only patch — skipping sandbox/gate/apply, "
+                        "staging for human review",
+                        err=True,
+                    )
+                    stage_patch_for_human(
+                        patch,
+                        patches_dir,
+                        failure_ctx,
+                        on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
+                        source=_patch_source,
+                        patch_store=_patch_store,
+                        obs_store=_obs_store,
+                        on_defer_webhook=cfg.webhooks.on_defer,
+                    )
+                    _fire_heal_hook(
+                        "on_patch_pending",
+                        iter_run_id=iteration_run_id,
+                        hook_status="pending",
+                        ctx=failure_ctx,
+                    )
+                    patch_staged_for_review = True
+                    _rel_bp_defer = (
+                        Path(blueprint).relative_to(_project_root)
+                        if Path(blueprint).is_relative_to(_project_root)
+                        else Path(blueprint)
+                    )
+                    click.echo(
+                        f"  ▸ Agent patch staged → "
+                        f"{_patch_store.location_label if _patch_store is not None else patches_dir}/pending/  "
+                        f"(id={patch.patch_id})\n"
+                        f"    Review: aqueduct patch apply {patch.patch_id} --blueprint {_rel_bp_defer}",
+                        err=True,
+                    )
+                    surveyor.record_healing_outcome(
+                        run_id=iteration_run_id,
+                        failed_module=failure_ctx.failed_module,
+                        parent_run_id=run_id,
+                        failure_category=patch.category,
+                        model=_outcome_model,
+                        patch_id=patch.patch_id,
+                        confidence=patch.confidence,
+                        patch_applied=False,
+                        run_success_after_patch=False,
+                        failure_signature=_sig_exact.hash,
+                        failure_signature_coarse=_sig_coarse.hash,
+                        resolution=_resolution,
+                        model_cascade_position=_cascade_pos,
+                    )
+                    break
+
                 # Multi-patch gate validation: sandbox replay + explain gate check
                 # before writing to the blueprint.
                 # Phase 45: gates already ran on a replay candidate at the
