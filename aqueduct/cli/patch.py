@@ -277,8 +277,10 @@ def patch_preview(
 ) -> None:
     """Validation pyramid preview for a pending patch.
 
-    Always runs the guardrails gate (schema + post-apply Parser re-check)
-    and the lineage gate (live lineage impact). With `--sandbox`, also
+    Always runs the guardrails gate (schema + post-apply Parser re-check),
+    the lineage gate (live lineage impact), and the resolvability gate
+    (Gate 5, Phase 88 — PyPI check for every `declare_dependency` op;
+    `not_applicable` for a patch that declares none). With `--sandbox`, also
     runs the sandbox gate (replay the patched Blueprint on a per-Ingress
     LIMIT N, Egress modules skipped and listed in the report) and the
     explain gate (post-patch `explain()` regression
@@ -302,6 +304,7 @@ def patch_preview(
         run_lineage_gate,
         run_sandbox_gate,
     )
+    from aqueduct.patch.resolvability_gate import run_resolvability_gate
 
     bp_raw = _yaml_load(_Path(blueprint_path))
     try:
@@ -357,6 +360,11 @@ def patch_preview(
 
     diff = render_unified_diff(bp_raw, bp_after)
     lineage_res = run_lineage_gate(bp_raw, bp_after, spec)
+    # Resolvability gate (Gate 5, Phase 88) — unconditional, like the
+    # lineage gate: cheap and network-free unless the patch actually
+    # declares a dependency (a declare_dependency-free patch short-circuits
+    # to `not_applicable` before any PyPI call is made).
+    resolvability_res = run_resolvability_gate(spec)
 
     # No `--sandbox` means the gate was never asked to run — a caller-level
     # fact, not a verdict, and (unlike the old bare `None`) it now reports
@@ -437,6 +445,12 @@ def patch_preview(
                 # not exist in this version".
                 "cli_pinned": {k: list(v) for k, v in config_delta_res.cli_pinned.items()},
             },
+            "resolvability": {
+                "status": resolvability_res.status,
+                "detail": resolvability_res.detail or None,
+                "requirements": resolvability_res.requirements,
+                "duration_ms": resolvability_res.duration_ms,
+            },
         }
         if sandbox_res is not None:
             report["sandbox"] = {
@@ -464,7 +478,9 @@ def patch_preview(
         # invocation) has objected to nothing and must not fail the command.
         sys.exit(
             exit_codes.SUCCESS
-            if lineage_res.status != "fail" and not sandbox_gate_blocks_preview(sandbox_res)
+            if lineage_res.status != "fail"
+            and resolvability_res.status != GateStatus.FAIL
+            and not sandbox_gate_blocks_preview(sandbox_res)
             else exit_codes.DATA_OR_RUNTIME
         )
 
@@ -537,6 +553,21 @@ def patch_preview(
         for _key in _pinned:
             click.echo(f"    {_eng}.{_key}: pinned by --set — this patch cannot move it")
 
+    click.echo()
+    click.echo(_dim("── Resolvability gate (declared dependencies) ─────────────────"))
+    _gate_status_line(resolvability_res.status)
+    click.echo(f"  requirements: {', '.join(resolvability_res.requirements) or '(none)'}")
+    if resolvability_res.status == GateStatus.NOT_APPLICABLE:
+        click.echo(f"  · {resolvability_res.detail}")
+    elif resolvability_res.detail:
+        click.echo(f"  detail: {resolvability_res.detail}")
+    if resolvability_res.status in (GateStatus.WARN, GateStatus.UNAVAILABLE):
+        click.echo(
+            "  effect:      this patch is NOT eligible for automatic "
+            "application — a human must decide"
+        )
+    click.echo(f"  duration:    {resolvability_res.duration_ms} ms")
+
     if sandbox_res is not None:
         click.echo()
         click.echo(_dim("── Sandbox gate (replay) ─────────────────────────────────────"))
@@ -575,6 +606,10 @@ def patch_preview(
 
     exit_code = exit_codes.SUCCESS
     if lineage_res.status == GateStatus.FAIL:
+        exit_code = exit_codes.DATA_OR_RUNTIME
+    # WARN is a defer, not a rejection — it must NOT make preview exit
+    # non-zero, only FAIL does (mirrors the lineage gate's line above).
+    if resolvability_res.status == GateStatus.FAIL:
         exit_code = exit_codes.DATA_OR_RUNTIME
     # The same predicate as the `--format json` branch above, so text and
     # json modes cannot disagree about whether this patch is reviewable as

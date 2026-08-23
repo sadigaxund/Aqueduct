@@ -7,7 +7,13 @@ import pytest
 pytestmark = pytest.mark.unit
 from pydantic import ValidationError
 
-from aqueduct.patch.grammar import DeferToHumanOp, PatchSpec, RetiredPatchOpError, SetEngineConfigOp
+from aqueduct.patch.grammar import (
+    DeclareDependencyOp,
+    DeferToHumanOp,
+    PatchSpec,
+    RetiredPatchOpError,
+    SetEngineConfigOp,
+)
 
 
 def test_valid_patch_spec_parsing():
@@ -317,3 +323,60 @@ def test_macro_alias_normalised():
         ],
     )
     assert all(op.op == "replace_macro" for op in spec.operations)
+
+
+# ── Phase 88: declare_dependency ────────────────────────────────────────────
+
+
+def test_declare_dependency_schema_round_trip():
+    op = DeclareDependencyOp(op="declare_dependency", requirement="holidays>=0.40")
+    spec = PatchSpec(
+        patch_id="p",
+        rationale="need holidays package",
+        operations=[op.model_dump()],
+    )
+    assert spec.operations[0].op == "declare_dependency"
+    assert spec.operations[0].requirement == "holidays>=0.40"
+    # Round-trips through JSON too.
+    spec2 = PatchSpec.model_validate_json(spec.model_dump_json())
+    assert spec2.operations[0].requirement == "holidays>=0.40"
+
+
+@pytest.mark.parametrize("alias", ["add_dependency", "require_package", "declare_dependencies"])
+def test_declare_dependency_alias_normalized(alias):
+    spec = PatchSpec(
+        patch_id="p",
+        rationale="r",
+        operations=[{"op": alias, "requirement": "holidays>=0.40"}],
+    )
+    assert spec.operations[0].op == "declare_dependency"
+
+
+def test_declare_dependency_malformed_requirement_rejected():
+    with pytest.raises(ValidationError):
+        DeclareDependencyOp(op="declare_dependency", requirement="not a valid req!!")
+
+
+def test_declare_dependency_environment_marker_rejected():
+    with pytest.raises(ValidationError):
+        DeclareDependencyOp(
+            op="declare_dependency",
+            requirement='holidays>=0.40; python_version < "3.12"',
+        )
+
+
+def test_declare_dependency_no_rationale_field():
+    # The op class does NOT carry a per-op rationale field — PatchSpec.rationale
+    # already covers the why for the whole patch (extra="forbid" enforces this).
+    with pytest.raises(ValidationError):
+        DeclareDependencyOp(
+            op="declare_dependency",
+            requirement="holidays>=0.40",
+            rationale="needs holiday calendar",
+        )
+
+
+def test_declare_dependency_present_in_json_schema():
+    schema = PatchSpec.model_json_schema()
+    schema_text = str(schema)
+    assert "declare_dependency" in schema_text

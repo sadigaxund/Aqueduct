@@ -244,7 +244,7 @@ def test_run_auto_mode_patch_succeeds_exits_0(mock_gen, mock_get_exec, mock_surv
     runner = CliRunner()
     with (
         patch("aqueduct.cli._agent_usable", return_value=True),
-        patch("aqueduct.cli._run_patch_gates_inline", return_value=(None, None, None, True)),
+        patch("aqueduct.cli._run_patch_gates_inline", return_value=(None, None, None, None, True)),
         patch("aqueduct.cli._apply_patch_in_memory", return_value=MagicMock()),
     ):
         result = runner.invoke(cli, ["run", str(bp), "--config", str(cfg)])
@@ -294,7 +294,7 @@ def test_run_auto_mode_gate_rejected_exits_4(mock_gen, mock_get_exec, mock_surve
         patch("aqueduct.cli._agent_usable", return_value=True),
         patch(
             "aqueduct.cli._run_patch_gates_inline",
-            return_value=(None, gate_fail, None, False),
+            return_value=(None, gate_fail, None, None, False),
         ),
     ):
         result = runner.invoke(cli, ["run", str(bp), "--config", str(cfg)])

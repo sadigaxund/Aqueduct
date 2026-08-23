@@ -35,6 +35,7 @@ from aqueduct.parser.schema import EngineBlockSchema
 from aqueduct.patch.grammar import (
     AddArcadeRefOp,
     AddProbeOp,
+    DeclareDependencyOp,
     DeferToHumanOp,
     InsertModuleOp,
     RemoveModuleOp,
@@ -446,6 +447,33 @@ def apply_replace_macro(bp: dict, op: ReplaceMacroOp) -> dict:
     return bp
 
 
+def apply_declare_dependency(bp: dict, op: DeclareDependencyOp) -> dict:
+    """Append a PEP 508-lite requirement to the Blueprint's ``dependencies:``
+    list (Phase 88).
+
+    Writes ONLY to ``bp["dependencies"]`` — the patch-target invariant
+    documented on ``DeclareDependencyOp``. Never touches ``requirements.txt``,
+    ``pyproject.toml``, the environment, or shells out to ``pip``.
+
+    Creates the ``dependencies:`` key if absent. Dedups: skips the append if
+    an identical requirement string is already present (exact string match —
+    ``"holidays>=0.40"`` and ``"holidays >=0.40"`` are treated as distinct
+    entries; normalizing whitespace/case here would silently diverge from
+    what the LLM actually wrote). Ordering is APPEND-STABLE: new entries are
+    always appended at the end, never sorted — pinned by test so the choice
+    stays deliberate rather than accidental.
+    """
+    deps = bp.setdefault("dependencies", [])
+    if not isinstance(deps, list):
+        raise PatchOperationError(
+            f"declare_dependency: Blueprint's 'dependencies' key is not a list "
+            f"(got {type(deps).__name__})"
+        )
+    if op.requirement not in deps:
+        deps.append(_DQ(op.requirement))
+    return bp
+
+
 # ── Dispatch table ────────────────────────────────────────────────────────────
 
 _DISPATCH = {
@@ -463,6 +491,7 @@ _DISPATCH = {
     "defer_to_human": apply_defer_to_human,
     "set_engine_config": apply_set_engine_config,
     "replace_macro": apply_replace_macro,
+    "declare_dependency": apply_declare_dependency,
 }
 
 

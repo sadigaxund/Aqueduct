@@ -103,19 +103,25 @@ def _gate_icon(status: str | None) -> tuple[str, str]:
     return "⚠", "yellow"  # unknown status — never silently vanish
 
 
-def _print_gate_ladder(g2, g3, g4, *, verbosity: int, gate1_ok: bool = True) -> None:
-    """Print gate 1-4 outcomes for one candidate patch as they complete.
+def _print_gate_ladder(g2, g3, g4, g5, *, verbosity: int, gate1_ok: bool = True) -> None:
+    """Print gate 1-5 outcomes for one candidate patch as they complete.
 
-    ``g2``/``g3``/``g4`` are ``lineage_res``/``sandbox_res``/``explain_res``
-    from ``_run_patch_gates_inline`` (``None`` when that gate did not run —
-    e.g. a heal-cache replay that skipped straight to sandbox). Gate 1
-    (policy/guardrails) already ran in-loop via ``_check_guardrails`` before
-    a candidate ever reaches here, so ``gate1_ok`` is a plain bool, not a
-    ``GateStatus``. Default: one compact line, collapsing to "gates 1-4
-    passed" when nothing failed or warned. ``-v``: one line per gate.
+    ``g2``/``g3``/``g4``/``g5`` are ``lineage_res``/``sandbox_res``/
+    ``explain_res``/``resolvability_res`` from ``_run_patch_gates_inline``
+    (``None`` when that gate did not run — e.g. a heal-cache replay that
+    skipped straight to sandbox). Gate 1 (policy/guardrails) already ran
+    in-loop via ``_check_guardrails`` before a candidate ever reaches here,
+    so ``gate1_ok`` is a plain bool, not a ``GateStatus``. Default: one
+    compact line, collapsing to "gates 1-5 passed" when nothing failed or
+    warned. ``-v``: one line per gate.
     """
     entries = [(1, "policy", "pass" if gate1_ok else "fail", None)]
-    for num, name, res in ((2, "lineage", g2), (3, "sandbox", g3), (4, "explain", g4)):
+    for num, name, res in (
+        (2, "lineage", g2),
+        (3, "sandbox", g3),
+        (4, "explain", g4),
+        (5, "resolvability", g5),
+    ):
         if res is None:
             continue
         entries.append((num, name, res.status, getattr(res, "detail", None)))
@@ -1437,7 +1443,7 @@ def run(
                         if effective_mode == "auto":
                             # Run the gate pyramid on the candidate NOW so a stale
                             # patch costs one sandbox pass, not a production write.
-                            _rg2, _rg3, _rg4, _rg3_passed = _aqcli._run_patch_gates_inline(
+                            _rg2, _rg3, _rg4, _rg5, _rg3_passed = _aqcli._run_patch_gates_inline(
                                 patch=_replay_patch,
                                 blueprint_path=Path(blueprint),
                                 bundle=bundle,
@@ -1461,10 +1467,20 @@ def run(
                             )
                             _announce_polyglot_sandbox_unavailable(_rg3)
                             if _rg3 is not None and not _rg3_passed:
+                                from aqueduct.patch.gate_status import (
+                                    resolvability_gate_permits_auto_apply as _rg_permits,
+                                )
+
                                 _replay_ok = False
+                                _rg_fail_gate, _rg_fail_res = (
+                                    ("resolvability", _rg5)
+                                    if not _rg_permits(_rg5)
+                                    else ("sandbox", _rg3)
+                                )
                                 click.echo(
                                     f"  ⚠ heal cache: replay candidate {_candidate.patch_id} failed "
-                                    f"sandbox replay ({_rg3.detail}) — falling through to Agent",
+                                    f"{_rg_fail_gate} gate ({_rg_fail_res.detail}) — falling "
+                                    f"through to Agent",
                                     err=True,
                                 )
                             else:
@@ -1472,7 +1488,7 @@ def run(
                                 # Same plan-regression warning the LLM path gets,
                                 # so a replayed patch's regression isn't silent.
                                 _emit_explain_regressions(_rg4)
-                                _print_gate_ladder(_rg2, _rg3, _rg4, verbosity=verbosity)
+                                _print_gate_ladder(_rg2, _rg3, _rg4, _rg5, verbosity=verbosity)
                         if _replay_ok:
                             from aqueduct.agent import AgentPatchResult as _AgentPatchResult
 
@@ -2565,9 +2581,9 @@ def run(
                 # heal-cache check — skip the redundant rerun.
                 if _replay_gates_done:
                     _g3_passed = True
-                    _g2, _g3, _g4 = None, None, None
+                    _g2, _g3, _g4, _g5 = None, None, None, None
                 else:
-                    _g2, _g3, _g4, _g3_passed = _aqcli._run_patch_gates_inline(
+                    _g2, _g3, _g4, _g5, _g3_passed = _aqcli._run_patch_gates_inline(
                         patch=patch,
                         blueprint_path=Path(blueprint),
                         bundle=bundle,
@@ -2585,7 +2601,7 @@ def run(
                     _announce_polyglot_sandbox_unavailable(_g3)
                     # F-16 — print the gate ladder as it completes (SCREEN 3/7),
                     # instead of staying silent when everything passes.
-                    _print_gate_ladder(_g2, _g3, _g4, verbosity=verbosity)
+                    _print_gate_ladder(_g2, _g3, _g4, _g5, verbosity=verbosity)
                 _block_on_g4 = (
                     manifest.agent.block_on_explain_regression
                     if manifest.agent.block_on_explain_regression is not None

@@ -48,9 +48,11 @@ from typing import Any
 
 __all__ = [
     "AUTO_APPLY_PERMITTING_SANDBOX_STATUSES",
+    "AUTO_APPLY_PERMITTING_RESOLVABILITY_STATUSES",
     "GATE_STATUSES",
     "PREVIEW_NON_BLOCKING_SANDBOX_STATUSES",
     "GateStatus",
+    "resolvability_gate_permits_auto_apply",
     "sandbox_gate_blocks_preview",
     "sandbox_gate_permits_auto_apply",
 ]
@@ -181,3 +183,39 @@ def sandbox_gate_blocks_preview(sandbox_result: Any) -> bool:
     if sandbox_result is None:
         return True
     return getattr(sandbox_result, "status", None) not in PREVIEW_NON_BLOCKING_SANDBOX_STATUSES
+
+
+#: Gate 5 (resolvability — ``aqueduct/patch/resolvability_gate.py``) statuses
+#: under which a patch may be applied with no human in the loop. Same
+#: closed-set-of-permitting-values shape as Gate 3's set above, for the same
+#: reason (AGENTS.md "classify by what you EXCLUDE"): a status added later
+#: falls into "a human decides".
+AUTO_APPLY_PERMITTING_RESOLVABILITY_STATUSES: frozenset[str] = frozenset(
+    {GateStatus.PASS, GateStatus.NOT_APPLICABLE}
+)
+
+
+def resolvability_gate_permits_auto_apply(resolvability_result: Any) -> bool:
+    """Return whether Gate 5's result permits applying without a human.
+
+    Mirrors ``sandbox_gate_permits_auto_apply`` exactly, including its
+    fail-CLOSED ``None`` handling: a caller that forgot to run the gate, or
+    passed ``None`` by accident, must not silently auto-apply a patch whose
+    declared dependencies were never checked against PyPI. A caller that
+    legitimately owes no check must say so explicitly with a result object
+    carrying ``status=GateStatus.NOT_APPLICABLE`` (the patch declares no
+    ``declare_dependency`` op) — never ``None``.
+
+    ``WARN`` does NOT permit — a requirement that resolves on PyPI but is
+    not installed locally is a deliberate human-review defer (install it,
+    then re-run ``aqueduct patch apply``), not a blocking failure. ``FAIL``
+    and ``UNAVAILABLE`` do not permit either, for the same reasons as their
+    Gate 3 counterparts: a package/version that does not exist, or a check
+    that could not run at all, must not auto-apply.
+    """
+    if resolvability_result is None:
+        return False
+    return (
+        getattr(resolvability_result, "status", None)
+        in AUTO_APPLY_PERMITTING_RESOLVABILITY_STATUSES
+    )
