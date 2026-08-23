@@ -984,16 +984,22 @@ def test_spark_cleanup_reused_session_skips_table_write_egress():
     from aqueduct.executor.spark.engine import _cleanup_reused_session
 
     class _FakeSparkSession:
-        def sql(self, stmt):
-            raise AssertionError(f"must not be called: {stmt}")
+        def __init__(self):
+            self.sql_calls: list[str] = []
 
+        def sql(self, stmt):
+            self.sql_calls.append(stmt)
+
+    session = _FakeSparkSession()
     manifest = _manifest(
         [_egress_module("out", register_as_table="ignored", table="real_table")],
         [],
         [],
     )
 
-    _cleanup_reused_session(_FakeSparkSession(), manifest)  # no assertion raised = pass
+    _cleanup_reused_session(session, manifest)
+
+    assert session.sql_calls == []
 
 
 def test_spark_cleanup_reused_session_best_effort_on_failure():
