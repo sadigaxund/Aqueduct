@@ -601,14 +601,17 @@ class TestPhase35ExtractStructuredError:
 
         # Mock pyspark.errors.PySparkException
         import sys
-        from unittest.mock import MagicMock
+        from unittest.mock import MagicMock, patch
 
         mock_pyspark = MagicMock()
         mock_pyspark.errors.PySparkException = MockPySparkException
-        sys.modules["pyspark"] = mock_pyspark
-        sys.modules["pyspark.errors"] = mock_pyspark.errors
 
-        try:
+        # patch.dict restores the prior sys.modules entries (or removes ours
+        # if there were none) on exit, instead of unconditionally deleting
+        # the real pyspark/pyspark.errors modules other tests rely on.
+        with patch.dict(
+            sys.modules, {"pyspark": mock_pyspark, "pyspark.errors": mock_pyspark.errors}
+        ):
             exc = MockPySparkException()
             res = _extract_structured_error(exc)
             assert res is not None
@@ -616,9 +619,6 @@ class TestPhase35ExtractStructuredError:
             assert res["object_name"] == "event_ts"
             assert res["suggested_columns"] == ("event_id", "event_time")
             assert res["sql_state"] == "42703"
-        finally:
-            del sys.modules["pyspark"]
-            del sys.modules["pyspark.errors"]
 
     def test_falls_back_to_get_error_class(self):
         class MockPySparkException(Exception):
@@ -632,21 +632,18 @@ class TestPhase35ExtractStructuredError:
                 return "42000"
 
         import sys
-        from unittest.mock import MagicMock
+        from unittest.mock import MagicMock, patch
 
         mock_pyspark = MagicMock()
         mock_pyspark.errors.PySparkException = MockPySparkException
-        sys.modules["pyspark"] = mock_pyspark
-        sys.modules["pyspark.errors"] = mock_pyspark.errors
 
-        try:
+        with patch.dict(
+            sys.modules, {"pyspark": mock_pyspark, "pyspark.errors": mock_pyspark.errors}
+        ):
             exc = MockPySparkException()
             res = _extract_structured_error(exc)
             assert res is not None
             assert res["error_class"] == "UNRESOLVED_COLUMN"
-        finally:
-            del sys.modules["pyspark"]
-            del sys.modules["pyspark.errors"]
 
     def test_py4j_java_error_walks_cause_chain(self):
         class MockJavaCause:
@@ -676,14 +673,12 @@ class TestPhase35ExtractStructuredError:
                 self.java_exception = cause1
 
         import sys
-        from unittest.mock import MagicMock
+        from unittest.mock import MagicMock, patch
 
         mock_py4j = MagicMock()
         mock_py4j.protocol.Py4JJavaError = MockPy4JJavaError
-        sys.modules["py4j"] = mock_py4j
-        sys.modules["py4j.protocol"] = mock_py4j.protocol
 
-        try:
+        with patch.dict(sys.modules, {"py4j": mock_py4j, "py4j.protocol": mock_py4j.protocol}):
             exc = MockPy4JJavaError()
             res = _extract_structured_error(exc)
             assert res is not None
@@ -692,9 +687,6 @@ class TestPhase35ExtractStructuredError:
                 "type": "java.lang.NullPointerException",
                 "message": "NPE",
             }
-        finally:
-            del sys.modules["py4j"]
-            del sys.modules["py4j.protocol"]
 
     def test_py4j_terminates_self_reference(self):
         class MockJavaCause:
@@ -722,21 +714,16 @@ class TestPhase35ExtractStructuredError:
                 self.java_exception = root_cause
 
         import sys
-        from unittest.mock import MagicMock
+        from unittest.mock import MagicMock, patch
 
         mock_py4j = MagicMock()
         mock_py4j.protocol.Py4JJavaError = MockPy4JJavaError
-        sys.modules["py4j"] = mock_py4j
-        sys.modules["py4j.protocol"] = mock_py4j.protocol
 
-        try:
+        with patch.dict(sys.modules, {"py4j": mock_py4j, "py4j.protocol": mock_py4j.protocol}):
             exc = MockPy4JJavaError()
             res = _extract_structured_error(exc)
             assert res is not None
             assert res["error_class"] == "InfiniteLoopException"
-        finally:
-            del sys.modules["py4j"]
-            del sys.modules["py4j.protocol"]
 
     def test_python_only_path(self):
         try:
@@ -839,18 +826,16 @@ class TestPhase35ExtractStructuredErrorExtra:
 
         assert not hasattr(MockPySparkException, "getCondition")
         import sys
+        from unittest.mock import patch
 
         mock_pyspark = MagicMock()
         mock_pyspark.errors.PySparkException = MockPySparkException
-        sys.modules["pyspark"] = mock_pyspark
-        sys.modules["pyspark.errors"] = mock_pyspark.errors
-        try:
+        with patch.dict(
+            sys.modules, {"pyspark": mock_pyspark, "pyspark.errors": mock_pyspark.errors}
+        ):
             res = _extract_structured_error(MockPySparkException())
             assert res is not None
             assert res["error_class"] == "UNRESOLVED_COLUMN"
-        finally:
-            del sys.modules["pyspark"]
-            del sys.modules["pyspark.errors"]
 
     def test_python_cause_chain_walked(self):
         # An outer exception with a __cause__ root should yield the root
@@ -931,6 +916,7 @@ class TestPhase35SurveyorRecord:
         # Mock PySparkException carrying a condition; Surveyor.record() must
         # extract it and persist error_class to failure_contexts.
         import sys
+        from unittest.mock import patch
 
         class MockPySparkException(Exception):
             def getCondition(self):
@@ -944,9 +930,9 @@ class TestPhase35SurveyorRecord:
 
         mock_pyspark = MagicMock()
         mock_pyspark.errors.PySparkException = MockPySparkException
-        sys.modules["pyspark"] = mock_pyspark
-        sys.modules["pyspark.errors"] = mock_pyspark.errors
-        try:
+        with patch.dict(
+            sys.modules, {"pyspark": mock_pyspark, "pyspark.errors": mock_pyspark.errors}
+        ):
             s = _make_surveyor(tmp_path)
             s.start("run_pse")
             result = ExecutionResult(
@@ -964,9 +950,6 @@ class TestPhase35SurveyorRecord:
                 ).fetchone()
             assert row is not None
             assert row[0] == "UNRESOLVED_COLUMN.WITH_SUGGESTION"
-        finally:
-            del sys.modules["pyspark"]
-            del sys.modules["pyspark.errors"]
 
     def test_record_with_plain_runtime_error_leaves_new_columns_null(self, tmp_path):
         # A plain RuntimeError populates root_exception/error_class via the
@@ -999,6 +982,7 @@ class TestPhase35SurveyorRecord:
         # run_id must overwrite via ON CONFLICT DO UPDATE — the row returned
         # by SELECT now carries the new error_class.
         import sys
+        from unittest.mock import patch
 
         class A_Exc(Exception):
             def getCondition(self):
@@ -1018,9 +1002,9 @@ class TestPhase35SurveyorRecord:
         # Patch PySparkException to A_Exc first.
         mock_pyspark = MagicMock()
         mock_pyspark.errors.PySparkException = A_Exc
-        sys.modules["pyspark"] = mock_pyspark
-        sys.modules["pyspark.errors"] = mock_pyspark.errors
-        try:
+        with patch.dict(
+            sys.modules, {"pyspark": mock_pyspark, "pyspark.errors": mock_pyspark.errors}
+        ):
             s = _make_surveyor(tmp_path)
             s.start(run_id)
             result = ExecutionResult(
@@ -1043,6 +1027,3 @@ class TestPhase35SurveyorRecord:
                 ).fetchone()
             assert row is not None
             assert row[0] == "B"
-        finally:
-            del sys.modules["pyspark"]
-            del sys.modules["pyspark.errors"]
