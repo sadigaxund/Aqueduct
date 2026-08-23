@@ -14,7 +14,7 @@ versioning follows [SemVer](https://semver.org/). The stability contract
 applies from v1.0.0 — during alpha/RC, breaking changes may land in any
 release and are marked **BREAKING**.
 
-## [Unreleased]
+## [2.1.2] — 2026-08-23
 
 Phase 88 — the domains workstream: dependency healing (Domain 3) and the
 typed defer slice (Domain 6).
