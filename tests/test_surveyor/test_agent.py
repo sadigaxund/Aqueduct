@@ -496,7 +496,9 @@ class TestStageForHuman:
             mock_fw.assert_not_called()
 
 
-class TestArchivePatch:
+class TestArchivePatchDefaultPatchId:
+    """archive_patch behavior when the spec uses the default patch_id ('test-fix')."""
+
     def test_creates_applied_file(self, tmp_path):
         patches_dir = tmp_path / "patches"
         spec = _patch_spec()
