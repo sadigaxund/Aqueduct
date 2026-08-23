@@ -1195,7 +1195,24 @@ def run(
                 use_observe=kw.get("use_observe", False),
                 sampling=kw.get("sampling"),
                 record_result=False,
+                session_keep_alive=cfg.execution.session_keep_alive,
+                share_island_state=cfg.execution.share_island_state,
             )
+            # Phase 89 item 1 — one quiet `-v` narrative line per boundary
+            # where a session was kept alive instead of rebuilt, same
+            # funnel/style convention as the `⇄ handoff` boundary rendering
+            # above. `session_reused` is empty whenever keep-alive found no
+            # same-engine adjacency (or `execution.session_keep_alive` is
+            # off), so this is silent in the common case.
+            if verbosity >= 1 and polyglot_result.session_reused:
+                from aqueduct.cli.render.funnel import info as _funnel_info
+
+                for _reused_engine in polyglot_result.session_reused:
+                    _funnel_info(
+                        f"session kept alive · {_reused_engine}",
+                        gutter="  ",
+                        err=True,
+                    )
             return polyglot_result, None
 
         while True:

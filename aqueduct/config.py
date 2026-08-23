@@ -1547,6 +1547,59 @@ class HandoffConfig(BaseModel):
     )
 
 
+class ExecutionConfig(BaseModel):
+    """Top-level ``execution:`` block (Phase 89 item 1) — polyglot session
+    keep-alive across same-engine islands.
+
+    A polyglot run (``manifest.islands`` has more than one entry) executes
+    each island against its own engine session
+    (``aqueduct.executor.orchestrator.run_polyglot``). Before this block
+    existed, every island's session was closed the moment that island
+    finished, even when the SAME engine recurred later in the run (e.g.
+    spark -> duckdb -> spark) — see ``orchestrator.py``'s module docstring
+    for the history. These two flags govern that behavior; neither has any
+    effect on a single-engine run (``aqueduct/cli/run.py``'s single-engine
+    ``_execute_target`` fingerprint funnel, and the heal-retry rebuild it
+    guards, are untouched by this block).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    session_keep_alive: bool = Field(
+        default=True,
+        description=(
+            "When true (the default), a polyglot run hands a LIVE session "
+            "to the next island in execution order when that island uses "
+            "the SAME engine, instead of closing it and building a fresh "
+            "one — skipping the cost of a session rebuild (most significant "
+            "for Spark, whose session build re-runs SparkContext "
+            "initialization). Session-scoped state the finishing island "
+            "created — catalog tables/views registered via "
+            "`register_as_table` — is dropped at the boundary unless "
+            "`share_island_state` is also true, so a reused session stays "
+            "observationally identical to a fresh one. Every session is "
+            "still closed by the time the run returns, on success, "
+            "failure, or exception. Set to false to restore the original "
+            "close-every-island behavior exactly."
+        ),
+        json_schema_extra={"engine_scoped": False},
+    )
+    share_island_state: bool = Field(
+        default=False,
+        description=(
+            "When true, SKIP the inter-island cleanup that normally runs "
+            "when `session_keep_alive` reuses a session across a boundary "
+            "— the next same-engine island sees whatever catalog "
+            "tables/views the previous one registered via "
+            "`register_as_table`, e.g. to avoid reloading state when a run "
+            "returns to an engine it already visited. Sharing is opt-in: "
+            "only meaningful when `session_keep_alive` is true, and a "
+            "no-op otherwise."
+        ),
+        json_schema_extra={"engine_scoped": False},
+    )
+
+
 def _freeze_for_hash(value: Any) -> Any:
     """Recursively turn *value* into something hashable, for
     ``AqueductConfig.__hash__`` — several nested config models carry plain
@@ -1596,6 +1649,7 @@ class AqueductConfig(BaseModel):
     agent: AgentConnectionConfig = Field(default_factory=AgentConnectionConfig)
     warnings: WarningsConfig = Field(default_factory=lambda: WarningsConfig())
     handoff: HandoffConfig = Field(default_factory=HandoffConfig)
+    execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     checkpoint_root: str | None = Field(
         default=None,
         description=(

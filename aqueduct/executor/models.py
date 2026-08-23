@@ -213,6 +213,15 @@ class ExecutionResult:
     construction-time engine", which is exactly today's single-engine
     behavior. Not part of ``to_dict()`` — this is an in-process routing
     signal for the CLI healing loop, not a persisted/serialized field."""
+    session_reused: tuple[str, ...] = ()
+    """Set only by ``aqueduct.executor.orchestrator.run_polyglot()`` — one
+    engine name per boundary where ``execution.session_keep_alive`` handed a
+    live session to the NEXT island instead of closing and rebuilding one
+    (Phase 89 item 1), in execution order. Empty for a single-engine
+    ``execute()`` call, and for a polyglot run where no two consecutive
+    islands shared an engine. Not part of ``to_dict()`` — an in-process
+    signal the CLI narrative (``aqueduct/cli/run.py``) reads at ``-v`` to
+    print one quiet line per reuse, not a persisted field."""
 
     def to_dict(self) -> dict:
         return {

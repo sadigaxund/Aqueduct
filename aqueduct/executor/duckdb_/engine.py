@@ -20,6 +20,7 @@ module makes the seam easier to read.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 # Side effect: registers "duckdb" into aqueduct.executor.capabilities.CAPABILITY_REGISTRY.
@@ -30,6 +31,9 @@ from aqueduct.executor.protocol import ExecutorProtocol, SessionSpec, register_p
 
 if TYPE_CHECKING:
     from aqueduct.executor.models import ExecutionResult
+    from aqueduct.models import Manifest
+
+logger = logging.getLogger(__name__)
 
 # Execution kwargs the DuckDB engine's `execute()` genuinely accepts. The
 # shared run path (`aqueduct/cli/run.py`) calls through
@@ -222,6 +226,47 @@ def _sample_source_rows(
     return sample_source_rows(module, session, n=n, base_dir=base_dir)
 
 
+def _cleanup_reused_session(session: Any, manifest: Manifest) -> None:
+    """``ExecutorProtocol.cleanup_reused_session`` for DuckDB (Phase 89
+    item 1 — polyglot session keep-alive).
+
+    Drops the catalog views *manifest* (the island sub-Manifest that just
+    finished on *session*) registered via an Egress module's
+    ``register_as_table`` (``aqueduct.executor.duckdb_.egress
+    ._register_as_table`` — ``CREATE OR REPLACE VIEW``). Per-module upstream
+    relations Channel/Funnel register onto the connection
+    (``con.register(upstream_id, rel)``) need no equivalent handling here —
+    module ids are globally unique across the WHOLE Manifest (not just this
+    island), so a name collision across islands can't happen; those
+    registrations are deliberately left for the life of the connection
+    already (see ``duckdb_/channel.py``'s ``_run_sql`` docstring), which is
+    now simply a longer life when a session is kept alive.
+
+    Best-effort: a failure here only means the reused session might still
+    carry a stale view registration (the same non-fatal posture
+    ``_register_as_table`` itself uses) — it must never abort the keep-alive
+    reuse.
+    """
+    from aqueduct.models import ModuleType
+
+    for m in manifest.modules:
+        if m.type != ModuleType.Egress:
+            continue
+        table_name = m.config.get("register_as_table")
+        if not table_name or m.config.get("table"):
+            continue  # `table:` already ignores register_as_table at write time
+        try:
+            session.execute(f"DROP VIEW IF EXISTS {table_name}")
+        except Exception as exc:
+            logger.warning(
+                "[runtime_session_reuse_cleanup_failed] [%s] failed to drop "
+                "reused-session view %r registered via register_as_table: %s",
+                m.id,
+                table_name,
+                exc,
+            )
+
+
 DUCKDB = ExecutorProtocol(
     engine="duckdb",
     execute=_execute,
@@ -229,6 +274,7 @@ DUCKDB = ExecutorProtocol(
     prompt_rules=DUCKDB_PROMPT_RULES,
     make_session=_make_session,
     close_session=_close_session,
+    cleanup_reused_session=_cleanup_reused_session,
     read_source_schema=_read_source_schema,
     sample_source_rows=_sample_source_rows,
     render_type=render_duckdb_type,
