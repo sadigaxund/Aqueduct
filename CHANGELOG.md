@@ -14,6 +14,15 @@ versioning follows [SemVer](https://semver.org/). The stability contract
 applies from v1.0.0 — during alpha/RC, breaking changes may land in any
 release and are marked **BREAKING**.
 
+## [Unreleased]
+
+Phase 88 — the domains workstream: dependency healing (Domain 3) and the
+typed defer slice (Domain 6).
+
+### Added
+
+- **A top-level `dependencies:` Blueprint block** — a flat list of PEP 508 requirement strings (`"holidays>=0.40"`), sibling of `udf_registry:`. Its entire runtime semantics are a **compile-time preflight**: every declared requirement is checked against the installed environment via `importlib.metadata`, and anything missing or version-conflicting raises the new typed `DependencyError` (a `CompileError` subclass) naming each failing requirement and the copy-pasteable `pip install` command — instead of the author meeting a bare `ImportError` halfway through a run. Satisfied requirements are silent. The block is **not** engine-scoped, carries no capability leaf (top-level Blueprint fields are outside the leaf walker's `_SCHEMA_BLOCKS`, exactly like `udf_registry`), and has no allowlist and no `aqueduct.yml` surface: **Aqueduct never installs anything**, so the installed environment is the only boundary there is. A malformed requirement string fails at PARSE time with the bad string named. `aqueduct/dependencies.py` hand-rolls the PEP 508-lite parser and reuses the existing PEP 440-lite comparator from `executor/capabilities.py` (`packaging` is not a declared dependency); a package installed at a version string that comparator cannot read passes rather than failing, because the preflight exists to catch definitely-unsatisfied requirements, never to reject an install it merely does not understand. (`aqueduct/dependencies.py`, `aqueduct/parser/schema.py`, `aqueduct/compiler/compiler.py`; tests: `tests/test_parser/test_dependencies.py`)
+
 ## [2.1.1] — 2026-08-23
 
 Phase 85 — the CLI workstream. A rendering foundation, then a narrative
