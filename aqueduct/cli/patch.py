@@ -251,6 +251,18 @@ def patch() -> None:
     show_default=True,
     help="Output format. `text` (default) renders diff + gate findings. `json` emits a machine-readable report.",
 )
+@click.option(
+    "-s",
+    "--set",
+    "set_items",
+    multiple=True,
+    metavar="PATH=VALUE",
+    help="Override an aqueduct.yml value for this preview only (repeatable, "
+    "in-memory, never persisted). Dotted path — e.g. "
+    "--set engine.spark.master_url=spark://h:7077. Same precedence as "
+    "`aqueduct run`'s --set: pins the effective session config the "
+    "engine-config gate and --sandbox replay measure against.",
+)
 @_env_options
 def patch_preview(
     patch_file: str,
@@ -259,6 +271,7 @@ def patch_preview(
     sample_rows: int,
     config_path: str | None,
     out_format: str,
+    set_items: tuple[str, ...],
     env_file: str | None,
     cli_env: tuple[str, ...],
 ) -> None:
@@ -314,6 +327,17 @@ def patch_preview(
     except ConfigError as exc:
         click.echo(f"✗ config error: {exc}", err=True)
         sys.exit(exit_codes.CONFIG_ERROR)
+
+    # ── -s/--set overrides (config-only; the patch itself is not re-routed) ────
+    if set_items:
+        from aqueduct.overrides import OverrideError, apply_to_model, route_overrides
+
+        try:
+            _cfg_set_nested, _ = route_overrides(set_items, allow_blueprint=False)
+            cfg = apply_to_model(cfg, _cfg_set_nested)
+        except OverrideError as exc:
+            click.echo(f"✗ {exc}", err=True)
+            sys.exit(exit_codes.CONFIG_ERROR)
 
     # Guardrails gate — deterministic. Identical enforcement used by
     # `patch apply`; surfaced here so reviewers see violations up front.
@@ -406,9 +430,9 @@ def patch_preview(
                 "detail": config_delta_res.detail,
                 "delta": config_delta_res.delta,
                 "write_targets": {k: list(v) for k, v in config_delta_res.write_targets.items()},
-                # Always present, normally `{}`. `patch preview` takes no
-                # `-s/--set`, so it measures with no CLI layer at all —
-                # emitting the key unconditionally is what lets a consumer
+                # Always present, normally `{}` — non-empty only when this
+                # invocation passed `-s/--set engine.<name>.<key>=...`.
+                # Emitting the key unconditionally is what lets a consumer
                 # tell "measured without pins" apart from "the field does
                 # not exist in this version".
                 "cli_pinned": {k: list(v) for k, v in config_delta_res.cli_pinned.items()},
@@ -684,11 +708,19 @@ def patch_policy(engine_name: str | None, out_format: str) -> None:
     style.info(POLICY_NARROWING_NOTE)
 
 
-def _patch_store_from(patches_root, config_path, env_file, cli_env):
+def _patch_store_from(patches_root, config_path, env_file, cli_env, set_items=()):
     """Build the configured PatchStore (local OR object backend), or None.
 
     Resolves aqueduct.yml (CWD walk-up / --config) + .env, so the body lifecycle
-    (apply/reject move) acts on the same store `patch list` shows."""
+    (apply/reject move) acts on the same store `patch list` shows.
+
+    *set_items* (``-s/--set``, config-only) overlays on top — e.g.
+    `--set stores.blob.backend=s3` — so a caller that resolved its engine
+    config under an override finds the SAME patch store. Never touches
+    anything but this internally-loaded ``cfg``; a caller with its own
+    ``cfg`` (e.g. `patch revert`'s prior-values equality check) is
+    unaffected by this pin.
+    """
     from pathlib import Path
 
     try:
@@ -700,6 +732,12 @@ def _patch_store_from(patches_root, config_path, env_file, cli_env):
             env_file=env_file,
             cli_env=cli_env or (),
         )
+        if set_items:
+            from aqueduct.overrides import apply_to_model as _apply_to_model
+            from aqueduct.overrides import route_overrides
+
+            _cfg_set_nested, _ = route_overrides(set_items, allow_blueprint=False)
+            cfg = _apply_to_model(cfg, _cfg_set_nested)
         return make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, Path(patches_root))
     except Exception:
         return None
@@ -874,7 +912,7 @@ def patch_apply(
 
 
 def _applied_patch_operations(
-    patches_root, config_path, env_file, cli_env, patch_id: str
+    patches_root, config_path, env_file, cli_env, patch_id: str, set_items=()
 ) -> list | None:
     """Operations of the APPLIED patch body carrying *patch_id*, or None.
 
@@ -882,10 +920,15 @@ def _applied_patch_operations(
     (``aqueduct/patch/revert.py::_require_config_only``); the ``healed_by``
     record alone cannot tell a config-only patch from a mixed one. None means
     "no such applied body", which the planner turns into its own refusal.
+
+    *set_items* is forwarded to ``_patch_store_from`` only (which patch
+    store to read the applied body from) — it never touches the caller's
+    own ``cfg``, so `patch revert`'s prior-values equality check stays
+    unpinned regardless of what this resolves.
     """
     from aqueduct.patch.revert import RevertError
 
-    ps = _patch_store_from(patches_root, config_path, env_file, cli_env)
+    ps = _patch_store_from(patches_root, config_path, env_file, cli_env, set_items=set_items)
     if ps is None:
         return None
     matches = [
@@ -937,6 +980,20 @@ def _applied_patch_operations(
     show_default=True,
     help="Output format. `text` (default) renders the restore list. `json` emits the plan.",
 )
+@click.option(
+    "-s",
+    "--set",
+    "set_items",
+    multiple=True,
+    metavar="PATH=VALUE",
+    help="Override an aqueduct.yml value for this invocation only (repeatable, "
+    "in-memory, never persisted) — e.g. --set stores.blob.backend=s3 to read "
+    "the applied patch body from a different patch store. Does NOT affect the "
+    "prior-values safety check: that check always compares against the "
+    "UNPINNED effective config, exactly as `aqueduct run` (no --set) would "
+    "resolve it, so a --set can never make a legitimate revert abort nor let "
+    "a genuinely diverged one falsely pass.",
+)
 @_env_options
 def patch_revert(
     patch_id: str,
@@ -945,6 +1002,7 @@ def patch_revert(
     config_path: str | None,
     dry_run: bool,
     out_format: str,
+    set_items: tuple[str, ...],
     env_file: str | None,
     cli_env: tuple[str, ...],
 ) -> None:
@@ -981,6 +1039,12 @@ def patch_revert(
             _Path(config_path) if config_path else blueprint_path,
             cli_env=cli_env,
         )
+        # `cfg` here is what feeds `plan_revert`'s prior-values equality
+        # check (`resolve_effective_engine_configs(cfg, ...)`), and MUST
+        # stay the UNPINNED resolution — see the `-s/--set` help text above
+        # and `aqueduct/patch/revert.py`'s module docstring. `--set` still
+        # reaches this command (via `_applied_patch_operations`'s patch-store
+        # resolution below), it just never touches this `cfg`.
         cfg = load_config(_Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
@@ -990,7 +1054,7 @@ def patch_revert(
     bp_raw = _yaml_load(blueprint_path)
     try:
         operations = _applied_patch_operations(
-            patches_root, config_path, env_file, cli_env, patch_id
+            patches_root, config_path, env_file, cli_env, patch_id, set_items=set_items
         )
         plan = plan_revert(cfg=cfg, blueprint=bp_raw, patch_id=patch_id, operations=operations)
     except RevertError as exc:

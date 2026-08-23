@@ -502,6 +502,19 @@ def schema(target: str, output: str) -> None:
     help="Output format. `json` emits a stable, versioned document of every "
     "check (implies --verbose: no rows are collapsed).",
 )
+@click.option(
+    "-s",
+    "--set",
+    "set_items",
+    multiple=True,
+    metavar="PATH=VALUE",
+    help="Override an aqueduct.yml value for this diagnostic run only "
+    "(repeatable, in-memory, never persisted) — e.g. "
+    "--set engine.spark.master_url=spark://h:7077, so connectivity checks "
+    "(Spark, handoff, secrets, ...) probe under the same resolved config a "
+    "`--set`-pinned `aqueduct run` would use. The healed-engine-config drift "
+    "check is exempt: it always compares against the UNPINNED resolution.",
+)
 @_env_options
 def doctor(
     target: str | None,
@@ -511,6 +524,7 @@ def doctor(
     aqscenario_path: str | None,
     verbose: int,
     fmt: str,
+    set_items: tuple[str, ...],
     env_file: str | None,
     cli_env: tuple[str, ...],
 ) -> None:
@@ -647,6 +661,7 @@ def doctor(
             blueprint_path=blueprint_path,
             aqtest_path=Path(aqtest_path) if aqtest_path else None,
             aqscenario_path=Path(aqscenario_path) if aqscenario_path else None,
+            set_items=set_items,
             preflight=preflight,
         )
 

@@ -64,6 +64,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -368,17 +369,131 @@ def _superseded_by_later_success(obs_store: Any, run_id: str) -> bool:
     return row is not None
 
 
+@dataclass(frozen=True)
+class SweepCandidate:
+    """One handoff spill directory ``aqueduct handoff sweep`` would remove
+    (or did remove) — the read-only counterpart of what
+    ``sweep_orphan_spills`` deletes.
+
+    ``run_id`` is ``None`` only for a ``manifest_hash`` directory itself,
+    reclaimed once every run underneath it has been swept — the same
+    "hash directory left empty" reclaim the real sweep performs.
+    """
+
+    path: str
+    manifest_hash: str
+    run_id: str | None
+    status: str | None
+    reason: str
+
+
+def plan_orphan_sweep(
+    root: str,
+    *,
+    current_run_id: str | None,
+    keep_on_failure: bool,
+    obs_store: Any = None,
+) -> list[SweepCandidate]:
+    """Decide which handoff spill directories under *root* are orphaned,
+    without deleting anything.
+
+    This is the single source of truth for "orphaned vs. live" —
+    ``sweep_orphan_spills(..., dry_run=True)`` returns exactly these paths,
+    and ``aqueduct handoff sweep`` (with or without ``--dry-run``) lists
+    exactly these rows before anything is removed. The real (non-dry-run)
+    sweep below applies the SAME per-run_id rule inline (never delegates to
+    this function for the delete path — see its own docstring for why).
+
+    A ``manifest_hash`` directory is reported as reclaimable when EVERY
+    ``run_id`` this function found underneath it is itself a candidate — a
+    LOGICAL emptiness check, since this function deletes nothing and cannot
+    ask the filesystem what remains. The real sweep still asks the
+    filesystem (``_dir_is_empty``) right before it deletes a hash
+    directory, which is the authoritative check; this one is a preview and
+    can only be optimistic when something ELSE (not a ``run_id`` directory
+    ``run_records`` knows about) also lives under the hash directory — a
+    case the real sweep still handles correctly by refusing to delete a
+    non-empty directory.
+    """
+    if not local_only_or_fsspec_available(root):
+        return []
+    candidates: list[SweepCandidate] = []
+    for manifest_hash in _list_hash_dirs(root):
+        hash_dir = f"{root.rstrip('/')}/{manifest_hash}"
+        run_ids = _list_run_dirs(root, manifest_hash)
+        reclaimed_all = True
+        for run_id in run_ids:
+            if run_id == current_run_id:
+                reclaimed_all = False
+                continue  # this run's own spill — never a candidate
+            status, is_terminal = _run_status(obs_store, run_id)
+            if status is not None and not is_terminal:
+                reclaimed_all = False
+                continue  # still running — never touch
+            if status == "error" and keep_on_failure:
+                if not _superseded_by_later_success(obs_store, run_id):
+                    reclaimed_all = False
+                    continue  # kept failure, not yet superseded
+                reason = "terminal failure, superseded by a later successful run"
+            elif status == "error":
+                reason = "terminal failure (handoff.keep_on_failure is false)"
+            elif status is None:
+                reason = "no run_records row for this run_id — unknown, reclaimed"
+            else:
+                reason = f"terminal run (status={status!r}) whose own cleanup never ran"
+            candidates.append(
+                SweepCandidate(
+                    path=f"{hash_dir}/{run_id}",
+                    manifest_hash=manifest_hash,
+                    run_id=run_id,
+                    status=status,
+                    reason=reason,
+                )
+            )
+        if run_ids and reclaimed_all:
+            candidates.append(
+                SweepCandidate(
+                    path=hash_dir,
+                    manifest_hash=manifest_hash,
+                    run_id=None,
+                    status=None,
+                    reason="every run under this manifest-hash directory was reclaimed",
+                )
+            )
+        elif not run_ids and _dir_is_empty(hash_dir):
+            candidates.append(
+                SweepCandidate(
+                    path=hash_dir,
+                    manifest_hash=manifest_hash,
+                    run_id=None,
+                    status=None,
+                    reason="empty manifest-hash directory",
+                )
+            )
+    return candidates
+
+
 def sweep_orphan_spills(
     root: str,
     *,
-    current_run_id: str,
+    current_run_id: str | None,
     keep_on_failure: bool,
     obs_store: Any = None,
+    dry_run: bool = False,
 ) -> list[str]:
     """Delete spill directories of runs that are neither live nor
     kept-failures. Run at the START of a new run, before that run's own
     spill exists on disk, so ``current_run_id`` never appears among the
     candidates (nothing to special-case).
+
+    ``dry_run=True`` (the ``aqueduct handoff sweep --dry-run`` path) deletes
+    nothing and returns exactly ``plan_orphan_sweep``'s candidate paths —
+    see that function for the one-place statement of the decision rule. The
+    real deletion path below is NOT rewritten in terms of
+    ``plan_orphan_sweep``: it deletes a hash directory only once
+    ``_dir_is_empty`` confirms the filesystem agrees after this call's own
+    deletions actually ran, which a dry preview computed with nothing
+    deleted cannot reproduce.
 
     Scans the ENTIRE ``root``, across every ``manifest_hash`` subdirectory,
     not just the hash the current run happens to compile to. A heal changes
@@ -410,10 +525,15 @@ def sweep_orphan_spills(
     Two consequences of the release rule, both stated rather than papered
     over. One is still open; the other is decided.
 
-    * STILL OPEN — a blueprint that fails and is never run again keeps its
-      spill forever. Nothing here can reclaim it, because nothing here ever
-      runs again for that blueprint. Closing that gap needs an explicit
-      operator-invoked command, not a clock.
+    * CLOSED (`aqueduct handoff sweep`) — a blueprint that fails and is
+      never run again used to keep its spill forever: nothing here reclaims
+      it, because nothing here ever runs again for that blueprint. The
+      `aqueduct handoff sweep` CLI verb (`aqueduct/cli/handoff.py`) is that
+      explicit operator-invoked command — it calls this same function
+      directly (`current_run_id=None`, which can never match a real
+      run_id, so every terminal run at `root` is eligible), still gated by
+      the same `run_records` liveness/keep_on_failure/supersession rules
+      above.
     * ACCEPTED — a failure being actively debugged loses its spill if an
       unrelated scheduled run of the same blueprint succeeds in the
       meantime. No protection is built: not a most-recent-failure
@@ -435,6 +555,17 @@ def sweep_orphan_spills(
     """
     if not local_only_or_fsspec_available(root):
         return []
+
+    if dry_run:
+        return [
+            c.path
+            for c in plan_orphan_sweep(
+                root,
+                current_run_id=current_run_id,
+                keep_on_failure=keep_on_failure,
+                obs_store=obs_store,
+            )
+        ]
 
     deleted: list[str] = []
     for manifest_hash in _list_hash_dirs(root):
@@ -478,11 +609,13 @@ def sweep_orphan_spills(
 
 __all__ = [
     "RULE_ID_HANDOFF_CLEANUP_UNAVAILABLE",
+    "SweepCandidate",
     "delete_spill_tree",
     "dir_size_bytes",
     "ensure_parent_exists",
     "is_remote_uri",
     "local_only_or_fsspec_available",
+    "plan_orphan_sweep",
     "spill_dir_for",
     "sweep_orphan_spills",
 ]

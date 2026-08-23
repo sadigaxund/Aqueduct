@@ -11,19 +11,19 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-pytestmark = pytest.mark.unit
-
 from aqueduct.executor.spill import (
-    RULE_ID_HANDOFF_CLEANUP_UNAVAILABLE,
     delete_spill_tree,
     dir_size_bytes,
     ensure_parent_exists,
     is_remote_uri,
     local_only_or_fsspec_available,
+    plan_orphan_sweep,
     spill_dir_for,
     sweep_orphan_spills,
 )
 from aqueduct.surveyor.ddl import _DDL
+
+pytestmark = pytest.mark.unit
 
 # ── is_remote_uri / local_only_or_fsspec_available ──────────────────────────
 
@@ -264,6 +264,64 @@ def test_sweep_never_touches_a_still_running_run(tmp_path, obs_store):
     assert deleted == []
 
 
+# ── plan_orphan_sweep / dry_run — the `aqueduct handoff sweep` preview path ────
+
+
+def test_dry_run_deletes_nothing_but_lists_the_same_candidates(tmp_path, obs_store):
+    root = tmp_path / "handoff"
+    _make_spill(root, "hash1", "run_success")
+    _insert_run(obs_store, "run_success", "success", finished=True)
+
+    previewed = sweep_orphan_spills(
+        str(root),
+        current_run_id="run_current",
+        keep_on_failure=True,
+        obs_store=obs_store,
+        dry_run=True,
+    )
+
+    assert (root / "hash1" / "run_success").exists()  # nothing deleted
+    assert (root / "hash1").exists()
+    assert previewed == plan_orphan_sweep_paths(root, obs_store)
+
+
+def plan_orphan_sweep_paths(root, obs_store):
+    return [
+        c.path
+        for c in plan_orphan_sweep(
+            str(root), current_run_id="run_current", keep_on_failure=True, obs_store=obs_store
+        )
+    ]
+
+
+def test_plan_orphan_sweep_never_touches_a_still_running_run(tmp_path, obs_store):
+    root = tmp_path / "handoff"
+    _make_spill(root, "hash1", "run_live")
+    _insert_run(obs_store, "run_live", "success", finished=False)
+
+    candidates = plan_orphan_sweep(
+        str(root), current_run_id="run_current", keep_on_failure=True, obs_store=obs_store
+    )
+    assert candidates == []
+
+
+def test_plan_orphan_sweep_reports_a_reclaimable_hash_dir_only_when_every_run_is_reclaimed(
+    tmp_path, obs_store
+):
+    root = tmp_path / "handoff"
+    _make_spill(root, "hash1", "run_reclaim")
+    _make_spill(root, "hash1", "run_live")
+    _insert_run(obs_store, "run_reclaim", "success", finished=True)
+    _insert_run(obs_store, "run_live", "success", finished=False)
+
+    candidates = plan_orphan_sweep(
+        str(root), current_run_id="run_current", keep_on_failure=True, obs_store=obs_store
+    )
+    run_ids = {c.run_id for c in candidates}
+    assert run_ids == {"run_reclaim"}  # run_live protects the hash dir from reclaim
+    assert not any(c.run_id is None for c in candidates)
+
+
 def test_sweep_deletes_a_run_with_no_run_records_row_at_all(tmp_path, obs_store):
     root = tmp_path / "handoff"
     _make_spill(root, "hash1", "run_unknown")
@@ -377,7 +435,7 @@ def test_sweep_scans_multiple_hash_directories_independently(tmp_path, obs_store
     _make_spill(root, "hashB", "run_b_failed")
     _insert_run(obs_store, "run_b_failed", "error", finished=True, blueprint_id="bp_b")
 
-    deleted = sweep_orphan_spills(
+    sweep_orphan_spills(
         str(root), current_run_id="run_c", keep_on_failure=True, obs_store=obs_store
     )
 

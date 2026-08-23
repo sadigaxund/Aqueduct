@@ -2067,8 +2067,20 @@ def run_doctor(
     aqtest_path: Path | None = None,
     aqscenario_path: Path | None = None,
     preflight: bool = False,
+    set_items: tuple[str, ...] = (),
 ) -> list[CheckResult]:
-    """Run all checks and return results in order."""
+    """Run all checks and return results in order.
+
+    *set_items* is ``-s/--set PATH=VALUE`` (config-only, same grammar as
+    `aqueduct run`) — applied to every check EXCEPT
+    ``check_healed_engine_config``, which always runs against the UNPINNED
+    resolution. That check reports when a `healed_by` record's recorded
+    prior value no longer matches what the effective session config
+    resolves to (the same equality `aqueduct patch revert` enforces as a
+    hard refusal) — pinning it under `--set` would make it warn about drift
+    that only the flag introduced, or silence real drift a `--set` happens
+    to mask for this one invocation.
+    """
     from aqueduct.config import ConfigError, load_config
 
     results: list[CheckResult] = []
@@ -2092,6 +2104,20 @@ def run_doctor(
         cfg = load_config(config_path)
     except ConfigError:
         return results  # already recorded above
+
+    # `cfg_unpinned` is what `check_healed_engine_config` gets — see the
+    # docstring above. `cfg` itself is pinned (when `--set` was passed) and
+    # used by every other check below, matching `aqueduct run`'s precedence.
+    cfg_unpinned = cfg
+    if set_items:
+        from aqueduct.overrides import OverrideError, apply_to_model, route_overrides
+
+        try:
+            _cfg_set_nested, _ = route_overrides(set_items, allow_blueprint=False)
+            cfg = apply_to_model(cfg, _cfg_set_nested)
+        except OverrideError as exc:
+            results.append(CheckResult("cli-set", "fail", f"--set: {exc}", group="config"))
+            return results
 
     # Cluster-mode store path validation.
     # Only the `duckdb` backend persists to the local FS — Phase 28 added
@@ -2252,7 +2278,7 @@ def run_doctor(
         # config resolution (no engine, no session), so it belongs on the
         # single unconditional blueprint branch rather than duplicated into
         # both arms of the skip_spark split below.
-        results.extend(check_healed_engine_config(blueprint_path, cfg))
+        results.extend(check_healed_engine_config(blueprint_path, cfg_unpinned))
 
     # Webhook (if configured)
     wh = cfg.webhooks.on_failure
