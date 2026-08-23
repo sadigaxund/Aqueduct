@@ -8,7 +8,7 @@ name: "Delta MERGE + Retry"
 engine:
   spark:
     conf:
-      spark.jars.packages: "io.delta:delta-spark_4.1_2.13:4.3.1"
+      spark.jars.packages: "io.delta:delta-spark_4.2_2.13:4.4.0"
       spark.sql.extensions: "io.delta.sql.DeltaSparkSessionExtension"
       spark.sql.catalog.spark_catalog: "org.apache.spark.sql.delta.catalog.DeltaCatalog"
 # Blueprint-level default — inherited by every module that doesn't set its

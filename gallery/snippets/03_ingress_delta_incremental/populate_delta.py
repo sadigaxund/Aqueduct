@@ -1,10 +1,9 @@
+import logging
 import os
 import shutil
-import logging
-from pyspark.sql import SparkSession
-import pandas as pd
 
 import pyspark
+from pyspark.sql import SparkSession
 
 # Suppress Spark's own verbose INFO logging
 logging.getLogger("py4j").setLevel(logging.WARN)
@@ -17,10 +16,12 @@ major = int(parts[0])
 minor = int(parts[1])
 
 if major >= 4:
-    if major == 4 and minor == 1:
-        DELTA_PACKAGE = f"io.delta:delta-spark_4.1_2.13:4.2.0"
+    if major == 4 and minor == 2:
+        DELTA_PACKAGE = "io.delta:delta-spark_4.2_2.13:4.4.0"
+    elif major == 4 and minor == 1:
+        DELTA_PACKAGE = "io.delta:delta-spark_4.1_2.13:4.2.0"
     elif major == 4 and minor == 0:
-        DELTA_PACKAGE = f"io.delta:delta-spark_4.0_2.13:4.2.0"
+        DELTA_PACKAGE = "io.delta:delta-spark_4.0_2.13:4.2.0"
     else:
         DELTA_PACKAGE = "io.delta:delta-spark_2.13:4.0.1"
 else:

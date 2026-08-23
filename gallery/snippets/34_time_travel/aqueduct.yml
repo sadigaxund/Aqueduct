@@ -18,7 +18,7 @@ engine:
       # other pyspark version (see populate_delta.py's own derivation). The
       # fallback below only fires if you run `aqueduct run` without ever having
       # run populate_delta.py in this directory.
-      spark.jars.packages: "${DELTA_PACKAGE:-io.delta:delta-spark_4.1_2.13:4.2.0}"
+      spark.jars.packages: "${DELTA_PACKAGE:-io.delta:delta-spark_4.2_2.13:4.4.0}"
       spark.sql.extensions: "io.delta.sql.DeltaSparkSessionExtension"
       spark.sql.catalog.spark_catalog: "org.apache.spark.sql.delta.catalog.DeltaCatalog"
 

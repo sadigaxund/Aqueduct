@@ -3,10 +3,12 @@
 Run this once before running the blueprint.
 """
 
-import logging, shutil
+import logging
+import shutil
+
+import pyspark
 from pyspark.sql import SparkSession
 from pyspark.sql.types import IntegerType, StringType, StructField, StructType
-import pyspark
 
 logging.getLogger("py4j").setLevel(logging.WARN)
 logging.getLogger("pyspark").setLevel(logging.WARN)
@@ -15,7 +17,9 @@ parts = pyspark.__version__.split(".")
 major, minor = int(parts[0]), int(parts[1])
 
 if major >= 4:
-    if major == 4 and minor == 1:
+    if major == 4 and minor == 2:
+        DELTA_PACKAGE = "io.delta:delta-spark_4.2_2.13:4.4.0"
+    elif major == 4 and minor == 1:
         DELTA_PACKAGE = "io.delta:delta-spark_4.1_2.13:4.2.0"
     elif major == 4 and minor == 0:
         DELTA_PACKAGE = "io.delta:delta-spark_4.0_2.13:4.2.0"

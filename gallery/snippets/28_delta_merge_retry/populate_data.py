@@ -1,4 +1,6 @@
-import csv, logging, shutil
+import csv
+import logging
+import shutil
 from pathlib import Path
 
 import pyspark
@@ -44,7 +46,9 @@ def create_delta_table():
     major, minor = int(parts[0]), int(parts[1])
 
     if major >= 4:
-        if major == 4 and minor == 1:
+        if major == 4 and minor == 2:
+            delta_pkg = "io.delta:delta-spark_4.2_2.13:4.4.0"
+        elif major == 4 and minor == 1:
             delta_pkg = "io.delta:delta-spark_4.1_2.13:4.3.1"
         elif major == 4 and minor == 0:
             delta_pkg = "io.delta:delta-spark_4.0_2.13:4.3.1"
