@@ -812,18 +812,62 @@ Do not confuse this with the unrelated `atexit.register(session.stop)` at `run.p
 short-lived sandbox dry-run session with no holder, built and torn down within one function
 with no rebuild path, where a bare local is correct.
 
-## Docs writing style (user-facing prose)
+## Documentation style (user-set, binding)
 
-Applies to README, CONTRIBUTING, and `docs/` prose (not SKILL.md — LLM-facing;
-not code blocks or literal CLI output examples). Keep the register plain, dry,
-technical:
+Two kinds of documents, two different jobs. These rules govern every edit to
+`README.md`, `gallery/README.md`, and `docs/` (not SKILL.md — LLM-facing; not
+code blocks or literal CLI output examples). Violating them is rework, not
+taste.
 
-- No em/en dashes in prose — use a colon, comma, period, or parentheses.
-- No negative-parallelism triads ("no X, no Y, no Z") — state it positively.
-- No "-ing" significance tack-ons ("...ensuring consistency"), no AI-vocabulary
-  filler (crucial, seamless, robust, leverage, delve, landscape, showcase).
-- Prefer "is/has" over "serves as / boasts / features".
-- Headings in sentence case; bold sparingly, never mechanically per-list-item.
+**README = the front door. It links, it does not explain.** Keep it well under
+150 lines, in exactly this shape:
+
+1. Tagline + hook: what this is and why it exists, with one tiny example —
+   enough to stop a reader from leaving.
+2. Getting started: install, try-it, and platform support shown as a showcase
+   table (available vs planned).
+3. Integrate & extend: a SHORT summary whose job is pointing into the `docs/`
+   pages — never the material itself.
+4. A compact footer: license, contributing.
+
+Anything that can be referenced from `docs/` must not be expanded in the
+README unless short, simple, and only for branding or noting the project's
+features. Overpacking the README is the failure mode to guard against.
+(Standing owner ruling: README reshaping to this template happens in Phase 90's
+truth-pass, owner-owned — do not edit READMEs before then; report divergences
+instead.)
+
+**`docs/` = documentation for humans who open it and read.** All heavy
+technical material lives here, and it must read as prose someone follows, not
+notes someone decodes:
+
+- Each page has one audience (blueprint author / operator / integrating
+  developer) and a coherent, logical flow; `docs/specs.md` stays the short
+  normative core, with rationale in the topic pages.
+- Plain language. No jargon-dense sentences; never cram several facts into one
+  sentence — split it.
+- No long code inline or inside a paragraph. Code sits in short display blocks;
+  if a sample grows, restructure the section instead.
+- Professional documentation tone throughout. First-person diary phrasing
+  ("What I did NOT test") never ships in docs/ — audit material is rewritten as
+  verification status, keeping the evidence and the honesty, losing the diary
+  voice.
+- No em/en dashes in authored pages: docs/, both READMEs, and demo/gallery
+  content. Rephrase with a colon, a comma, a parenthetical, or a new sentence.
+  The owner reads em dashes as generated-text slop; "house style" is not an
+  exemption (that rationalization was tried and rejected 2026-08-18).
+- Register stays plain, dry, technical: no negative-parallelism triads ("no X,
+  no Y, no Z" — state it positively), no "-ing" significance tack-ons
+  ("...ensuring consistency"), no AI-vocabulary filler (crucial, seamless,
+  robust, leverage, delve, landscape, showcase). Prefer "is/has" over "serves
+  as / boasts / features". Headings in sentence case; bold sparingly, never
+  mechanically per-list-item.
+- Final pass on every authored page: apply the humanizer rules
+  (https://raw.githubusercontent.com/blader/humanizer/refs/heads/main/SKILL.md)
+  — strip inflated claims, filler, forced parallelism, decorative bolding, and
+  chatbot artifacts. Reference it; do not inline it.
+- While re-authoring, collect gaps and misdesigns and REPORT them; never
+  silently change a design decision as part of a rewrite.
 
 ## Audit Guide
 

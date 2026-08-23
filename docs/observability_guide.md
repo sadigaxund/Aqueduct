@@ -88,9 +88,9 @@ before the migration have `NULL` in those columns.
 | `status`         | VARCHAR NOT NULL    | `running`, `success`, `error`, `patched`. (`skipped` exists only as a per-module status inside `module_results`, never at run level.) |
 | `started_at`     | TIMESTAMPTZ NOT NULL | Iteration start |
 | `finished_at`    | TIMESTAMPTZ          | NULL while running |
-| `module_results` | JSON                | Per-module status/error blobs. Since 2.37 each entry also carries `engine` — the module's fully-resolved execution engine (`Manifest.modules[i].engine`), populated for every run, single-engine or polyglot alike (a single-engine run's every module simply names the same one engine). `aqueduct report --format json` surfaces this per module plus a run-level `engines` list (the distinct set actually present). Since 2.65 each entry also carries `warnings` (list of `[rule_id, message]` pairs) and `notes` (list of strings) — `ModuleResult.warnings`/`.notes` were previously computed and displayed but never persisted. |
+| `module_results` | JSON                | Per-module status/error blobs. Since 2.37 each entry also carries `engine`: the module's fully-resolved execution engine (`Manifest.modules[i].engine`), populated for every run, single-engine or polyglot alike (a single-engine run's every module simply names the same one engine). `aqueduct report --format json` surfaces this per module plus a run-level `engines` list (the distinct set actually present). Since 2.65 each entry also carries `warnings` (list of `[rule_id, message]` pairs) and `notes` (list of strings); `ModuleResult.warnings`/`.notes` were previously computed and displayed but never persisted. |
 | `parent_run_id`  | VARCHAR             | User-visible outer `run_id` for multi-patch iterations. NULL on iteration 0 and on single-patch runs. Join all iterations of one heal call with `WHERE COALESCE(parent_run_id, run_id) = '<outer>'`. |
-| `engine`         | VARCHAR             | Since 2.65 — the run's execution engine (`spark` \| `duckdb`), stamped from `Surveyor`'s own `engine` constructor arg (or `record(engine=...)`'s override for a polyglot run's failing island). Previously engine was only available per-module inside the `module_results` JSON blob; a **successful** run's engine comparison required parsing that blob row-by-row. This column makes `WHERE engine = ?` work directly, indexed via `idx_run_records_engine`. Migrated in place on existing stores (`_RUN_RECORDS_MIGRATIONS` in `aqueduct/surveyor/ddl.py`, mirroring the Phase-84 `benchmark_results` migration pattern) — NULL on rows written before the upgrade. |
+| `engine`         | VARCHAR             | Since 2.65: the run's execution engine (`spark` \| `duckdb`), stamped from `Surveyor`'s own `engine` constructor arg (or `record(engine=...)`'s override for a polyglot run's failing island). Previously engine was only available per-module inside the `module_results` JSON blob; a **successful** run's engine comparison required parsing that blob row-by-row. This column makes `WHERE engine = ?` work directly, indexed via `idx_run_records_engine`. Migrated in place on existing stores (`_RUN_RECORDS_MIGRATIONS` in `aqueduct/surveyor/ddl.py`, mirroring the Phase-84 `benchmark_results` migration pattern); NULL on rows written before the upgrade. |
 
 `Surveyor.record()` writes via `INSERT … ON CONFLICT DO UPDATE`, so each
 multi-patch iteration owns its own row (the pre-1.1.0 code issued a
@@ -114,7 +114,7 @@ plain `UPDATE` and silently dropped iterations 1..N).
 | `sql_state`         | VARCHAR             | ANSI SQLSTATE from `PySparkException.getSqlState()` |
 | `suggested_columns` | JSON                | Parsed list of backtick-quoted suggestions from Spark's "Did you mean …?" segment |
 | `object_name`       | VARCHAR             | Offending column / table / object |
-| `engine`            | VARCHAR             | Execution engine the failure occurred on (`spark` \| `duckdb`). Stamped by `Surveyor.record()` from its required `engine` constructor arg by default; a polyglot run (§10.9's Handoff/islands) passes `Surveyor.record(result, engine=<failing island's engine>)` explicitly, so this column — and the `ExecutorProtocol.extract_error` used to populate the structured fields below it — reflects the island that actually failed, not the run's nominal `deployment.engine` default |
+| `engine`            | VARCHAR             | Execution engine the failure occurred on (`spark` \| `duckdb`). Stamped by `Surveyor.record()` from its required `engine` constructor arg by default; a polyglot run (§10.9's Handoff/islands) passes `Surveyor.record(result, engine=<failing island's engine>)` explicitly, so this column (and the `ExecutorProtocol.extract_error` used to populate the structured fields below it) reflects the island that actually failed, not the run's nominal `deployment.engine` default |
 
 The structured fields populate from `_extract_structured_error()`:
 best-effort, lazy-imported. When extraction returned None the row carries
@@ -132,22 +132,22 @@ One row per LLM turn inside the unified reprompt loop, finer-grained than
 | `attempt_num`       | INTEGER NOT NULL    | 1-based |
 | `error_class`       | VARCHAR             | Mirrors `failure_contexts.error_class` when available |
 | `where_field`       | VARCHAR             | Pydantic location string for validation errors |
-| `normalized_message`| VARCHAR             | Normalised error text — used to compute a signature at match time (`error_class`/`where`/`normalized_message` together identify a repeat failure); digits, quoted (`'…'`/`"…"`) values, backtick-quoted identifiers (`` `col` ``, Spark 4 `UNRESOLVED_COLUMN` style), and filesystem paths are collapsed to placeholders so failures differing only in specifics match identically |
-| `signature_hash`    | VARCHAR             | **No longer populated (2.85+, C1).** Column stays for schema compatibility (no migration) but every write leaves it NULL — it was found write-only in the Phase 85 observability audit (never selected by any reader; use `error_class`/`where_field`/`normalized_message` directly instead) |
+| `normalized_message`| VARCHAR             | Normalised error text: used to compute a signature at match time (`error_class`/`where`/`normalized_message` together identify a repeat failure); digits, quoted (`'…'`/`"…"`) values, backtick-quoted identifiers (`` `col` ``, Spark 4 `UNRESOLVED_COLUMN` style), and filesystem paths are collapsed to placeholders so failures differing only in specifics match identically |
+| `signature_hash`    | VARCHAR             | **No longer populated (2.85+, C1).** Column stays for schema compatibility (no migration) but every write leaves it NULL: it was found write-only in the Phase 85 observability audit (never selected by any reader; use `error_class`/`where_field`/`normalized_message` directly instead) |
 | `tokens_in`         | INTEGER NOT NULL    | Prompt tokens; 0 when provider does not report usage |
 | `tokens_out`        | INTEGER NOT NULL    | Completion tokens |
 | `latency_ms`        | INTEGER NOT NULL    | Per-attempt wall clock |
 | `gate_that_rejected`| VARCHAR             | `schema` \| `apply` \| `validate` (deep-loop gates) \| `provider` \| `budget` \| `defer_rejected` \| NULL on success |
-| `escalated`         | BOOLEAN NOT NULL DEFAULT FALSE | **No longer populated (2.85+, C1).** Column stays (defaults FALSE) but every write leaves it at the default — also found write-only, never selected by any reader |
+| `escalated`         | BOOLEAN NOT NULL DEFAULT FALSE | **No longer populated (2.85+, C1).** Column stays (defaults FALSE) but every write leaves it at the default; also found write-only, never selected by any reader |
 | `stop_reason`       | VARCHAR             | Filled only on the loop's terminal row (UPDATE post-loop); NULL on intermediate rows |
 | `prompt_version`    | VARCHAR             | `aqueduct.agent.PROMPT_VERSION` at attempt time |
 | `recorded_at`       | VARCHAR NOT NULL    | ISO-8601 |
-| `tool_calls_json`   | VARCHAR             | Agentic mode only (`agent.mode: agentic`): JSON array of `{name, duration_ms}` for every tool call made during this attempt; NULL/absent in oneshot mode. **Trimmed at write time since 2.85 (C1)** — the in-memory log also carries `args_summary`/`result_preview` string previews of real argument/result content (the observability audit's single largest per-row bloat/sensitivity risk); only the op name and duration reach the store |
+| `tool_calls_json`   | VARCHAR             | Agentic mode only (`agent.mode: agentic`): JSON array of `{name, duration_ms}` for every tool call made during this attempt; NULL/absent in oneshot mode. **Trimmed at write time since 2.85 (C1):** the in-memory log also carries `args_summary`/`result_preview` string previews of real argument/result content (the observability audit's single largest per-row bloat/sensitivity risk); only the op name and duration reach the store |
 | `chain_link`        | INTEGER             | Progressive healing only (`agent.progressive: true`): 1-based link index within the chain this attempt belongs to; NULL for a normal (non-progressive) heal attempt. Orthogonal to `attempt_num`, which still counts reprompts *within* one link |
 | `engine`            | VARCHAR             | Execution engine this attempt targeted (`spark` \| `duckdb`) |
-| `defer_reason`      | VARCHAR             | **(2.66+)** Queryable bucket from `DeferToHumanOp.defer_reason` (`infrastructure` \| `upstream_schema_change` \| `data_shape_change` \| `insufficient_context` \| `other`) when this attempt's patch deferred to a human; NULL for every non-deferring attempt. Filled on the loop's terminal row alongside `stop_reason` (via `update_heal_attempt_stop_reason`), same timing as `stop_reason` itself — the value isn't known at the per-turn `record_heal_attempt` INSERT |
+| `defer_reason`      | VARCHAR             | **(2.66+)** Queryable bucket from `DeferToHumanOp.defer_reason` (`infrastructure` \| `upstream_schema_change` \| `data_shape_change` \| `insufficient_context` \| `other`) when this attempt's patch deferred to a human; NULL for every non-deferring attempt. Filled on the loop's terminal row alongside `stop_reason` (via `update_heal_attempt_stop_reason`), same timing as `stop_reason` itself: the value isn't known at the per-turn `record_heal_attempt` INSERT |
 
-Columns added to `heal_attempts` after a release are migrated in place: Surveyor init runs idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements (see `_HEAL_ATTEMPTS_MIGRATIONS` in `aqueduct/surveyor/ddl.py`, which also carries `tool_calls_json`, `chain_link`, `engine`, and `defer_reason`) right after the `CREATE TABLE IF NOT EXISTS`, so a pre-upgrade observability database gains new columns on the next run, no manual migration needed. `failure_contexts` and `healing_outcomes` gained `engine` the same way, via `_FAILURE_CONTEXTS_MIGRATIONS` and `_HEALING_OUTCOMES_MIGRATIONS` in the same file; `patch_index` gained it via `PATCH_INDEX_MIGRATIONS` in `aqueduct/patch/index.py`; `run_records` gained `engine` (+ its index) the same way via `_RUN_RECORDS_MIGRATIONS` (2.65).
+Columns added to `heal_attempts` after a release are migrated in place. Surveyor init runs idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements (see `_HEAL_ATTEMPTS_MIGRATIONS` in `aqueduct/surveyor/ddl.py`, which also carries `tool_calls_json`, `chain_link`, `engine`, and `defer_reason`) right after the `CREATE TABLE IF NOT EXISTS`. A pre-upgrade observability database therefore gains new columns on the next run, with no manual migration needed. `failure_contexts` and `healing_outcomes` gained `engine` the same way, via `_FAILURE_CONTEXTS_MIGRATIONS` and `_HEALING_OUTCOMES_MIGRATIONS` in the same file. `patch_index` gained it via `PATCH_INDEX_MIGRATIONS` in `aqueduct/patch/index.py`; `run_records` gained `engine` (+ its index) the same way via `_RUN_RECORDS_MIGRATIONS` (2.65).
 
 `stop_reason` vocabulary: `solved`, `exhausted_attempts`,
 `budget_seconds_exceeded`, `budget_tokens_exceeded`, `stuck_signature`,
@@ -171,7 +171,7 @@ without calling the LLM at all.
 | `failure_category`        | VARCHAR | LLM-assigned: `schema_drift`, `bad_path`, `format_mismatch`, etc. |
 | `model`                   | VARCHAR | LLM model id |
 | `patch_id`                | VARCHAR | NULL when every attempt was rejected (synthesised row) |
-| `confidence`              | DOUBLE  | LLM self-rated 0.0–1.0 |
+| `confidence`              | DOUBLE  | LLM self-rated 0.0-1.0 |
 | `patch_applied`           | BOOLEAN | |
 | `run_success_after_patch` | BOOLEAN | The authoritative "did this heal actually work" flag |
 | `applied_at`              | VARCHAR | ISO-8601 |
@@ -185,7 +185,7 @@ without calling the LLM at all.
 Zero-token heal coverage: `aqueduct runs --heal-coverage` aggregates
 `resolution` counts across discovered observability DBs.
 
-Cascade-tier vs outcome: `aqueduct runs --cascade` (2.85+, C1) — before this,
+Cascade-tier vs outcome: `aqueduct runs --cascade` (2.85+, C1). Before this,
 `model_cascade_position` was written by every cascade step but never
 selected anywhere:
 
@@ -207,17 +207,17 @@ budget axis tripped before a valid patch landed), the CLI synthesises one
 #### `patch_simulation`
 
 One row per gate the patch went through. `gate` vocabulary: `engine_config`,
-`lineage`, `sandbox`, `explain`, `resolvability` (Gate 5, 2.66 — one row per
+`lineage`, `sandbox`, `explain`, `resolvability` (Gate 5, 2.66: one row per
 patch reporting the worst verdict across every `declare_dependency` op it
-carries; guardrail rejections — `forbidden_ops`, `allowed_paths`, the
-`set_engine_config` allowlist — are recorded in `heal_attempts`, not here).
+carries; guardrail rejections, meaning `forbidden_ops`, `allowed_paths`, and the
+`set_engine_config` allowlist, are recorded in `heal_attempts`, not here).
 `status` is `pass` | `fail` | `warn` | `not_applicable` | `unavailable`.
 
 The three verdicts (`pass`, `warn`, `fail`) mean the gate ran. The other two
-mean it did not, and they are **opposite facts** — the question is whether a
+mean it did not, and they are **opposite facts**: the question is whether a
 check was *owed*:
 
-- **`not_applicable`** — no check was owed. Either the patch has no surface
+- **`not_applicable`**: no check was owed. Either the patch has no surface
   this gate looks at (the `lineage` gate against a `set_engine_config` op,
   which carries no module reference for a column-impact diff; the
   `engine_config` gate against a pipeline-only patch), or the operator
@@ -225,7 +225,7 @@ check was *owed*:
   `danger.allow_skip_sandbox`). Informational, never blocking. Distinct from
   `pass`: `pass` means the gate looked and found nothing wrong,
   `not_applicable` means there was nothing to look at.
-- **`unavailable`** — a check *was* owed and the environment prevented it.
+- **`unavailable`**: a check *was* owed and the environment prevented it.
   The target engine's dependencies are not installed, its session would not
   start, the Blueprint is polyglot and the sandbox replays only one engine,
   or plan capture does not exist on this session. **Nothing about the patch
@@ -233,14 +233,14 @@ check was *owed*:
   requires a human; for `explain` (warn-only by design) it does not.
 
 `detail` carries the reason in both cases, e.g. "no module-lineage surface
-for this patch's ops", or "sandbox replay did not run — engine 'spark' would
+for this patch's ops", or "sandbox replay did not run: engine 'spark' would
 not start (…); this patch was NOT replayed".
 
 > **Changed in 2.1.0 (BREAKING).** The `sandbox` and `explain` gates
 > previously wrote `skip` for *both* of the above, so a patch that was never
 > verified was indistinguishable from one that needed no verification, and
 > auto-approval accepted both. `skip` is no longer written. Rows recorded
-> before the split keep the old value and are **not** migrated — a `skip` row
+> before the split keep the old value and are **not** migrated: a `skip` row
 > is genuinely ambiguous after the fact, and rewriting it would invent a
 > distinction the data never carried. Treat pre-2.1.0 `skip` rows as
 > "unknown which", and filter on `finished_at` if a query needs the new
@@ -251,21 +251,21 @@ The `engine_config` gate is the mirror image of that pair: it reports
 pipeline-only patch writes no engine config, so there is nothing for it to
 compare) and `pass` when the patch's write really does change the effective
 session config the target engine will run with (`aqueduct.yml`'s
-`engine.<name>` block merged under the Blueprint's own — see
+`engine.<name>` block merged under the Blueprint's own; see
 `docs/specs.md` §8.5). Its `fail` is a `set_engine_config` write whose
 effective before/after are identical: a clean apply that changes nothing an
-engine can see. That row is written for the record only — the refusal
+engine can see. That row is written for the record only: the refusal
 itself is enforced at apply time, so a `fail` here is always accompanied by
 a patch that never reached the Blueprint.
 
 The `resolvability` gate reports `not_applicable` for a patch carrying no
-`declare_dependency` op — most rows. `warn` means the declared requirement
+`declare_dependency` op (most rows). `warn` means the declared requirement
 resolves on PyPI but is not installed in this environment: unlike every
-other gate's `warn`, this one is never advisory — it is a hard defer to a
+other gate's `warn`, this one is never advisory. It is a hard defer to a
 human (install it, then `aqueduct patch apply <id>`), and the patch is
 never auto-applied. `fail` means no such package (or no version satisfying
 the specifier) exists on PyPI at all. `unavailable` means the PyPI check
-itself could not run (network/timeout) — nothing about the requirement was
+itself could not run (network/timeout): nothing about the requirement was
 verified, fail-closed like the `sandbox` gate's `unavailable`.
 
 For the SAME zero-module patches, the `sandbox` gate still runs and can
@@ -273,7 +273,7 @@ still report `pass` on a clean replay, but its `detail` says so honestly
 rather than reading as a validated fix: the session built and the sample
 replayed successfully under the patched engine config, but a small local
 sample cannot reproduce the cluster-scale resource failure (OOM, shuffle
-spill) the patch usually targets — only the full re-run proves efficacy.
+spill) the patch usually targets: only the full re-run proves efficacy.
 `status` is unaffected; only the wording changes.
 
 #### `patch_index` (1.2.x+)
@@ -297,7 +297,7 @@ User overrides for Probe signals via `aqueduct signal <signal_id> --value`.
 
 #### `store_maintenance` (2.65)
 
-One row (`key='global'`) tracking `last_pruned_at` — the throttle marker for
+One row (`key='global'`) tracking `last_pruned_at`: the throttle marker for
 the automatic daily prune sweep. See "Retention & pruning" below.
 
 #### `explain_snapshot`
@@ -311,12 +311,12 @@ Per-module I/O metrics (`records_read`, `bytes_read`, `records_written`,
 `bytes_written`, `duration_ms`) from SparkListener and `DataFrame.observe()`.
 `NULL` means "not collected", never "zero records".
 
-**Cross-engine handoff (2.36).** A synthetic Handoff module (`aqueduct.compiler.handoff`, §10.9) gets a row here like any other module: `bytes_written`/`duration_ms` on the upstream (write) side, `bytes_read`/`duration_ms` on the downstream (read) side, measured from the spill directory's on-disk size. This is DuckDB's first `module_metrics` write — the DDL and writer (`MODULE_METRICS_DDL`/`write_module_metrics`, `aqueduct/executor/models.py`) are engine-agnostic and shared, but DuckDB's own executor otherwise still writes no per-module metrics outside the Handoff case (see that engine's own docstring). `records_read`/`records_written` stay NULL for a Handoff row — the transport is a byte-level parquet copy, not a row-counted operation.
+**Cross-engine handoff (2.36).** A synthetic Handoff module (`aqueduct.compiler.handoff`, §10.9) gets a row here like any other module: `bytes_written`/`duration_ms` on the upstream (write) side, `bytes_read`/`duration_ms` on the downstream (read) side, measured from the spill directory's on-disk size. This is DuckDB's first `module_metrics` write: the DDL and writer (`MODULE_METRICS_DDL`/`write_module_metrics`, `aqueduct/executor/models.py`) are engine-agnostic and shared, but DuckDB's own executor otherwise still writes no per-module metrics outside the Handoff case (see that engine's own docstring). `records_read`/`records_written` stay NULL for a Handoff row: the transport is a byte-level parquet copy, not a row-counted operation.
 
 **Indexes (2.65).** `idx_module_metrics_module (module_id)` serves the
 cross-run per-module trend query (`report --profile --blueprint <id> --last
 N`); `idx_module_metrics_run (run_id)` serves the actual per-run profile
-lookup (`report <run_id> --profile`, `queries.py:270,280`) — previously
+lookup (`report <run_id> --profile`, `queries.py:270,280`), previously
 unindexed, a full table scan on every profile call as the table grew.
 
 **Resource profiling.** `aqueduct report <run_id> --profile` ranks a run's
@@ -345,7 +345,7 @@ or Hudi `run_compaction`/`run_clean`, depending on the Egress `format`.
 
 **`sample_rows` redaction + retention cap (2.65).** `sample_rows` is the only
 built-in signal type that persists real sampled **data row content**
-(`df.limit(n).collect()`) — every other signal here is aggregate/statistical
+(`df.limit(n).collect()`): every other signal here is aggregate/statistical
 (counts, rates, min/max/percentiles) and carries no comparable sensitivity or
 size risk. Its `payload` is routed through the same `redact()`
 (`aqueduct/redaction.py`) the `failure_contexts` failure path already uses,
@@ -372,25 +372,25 @@ applies them with one `DELETE ... WHERE <timestamp column> < ?` per table:
 | `heal_attempts` | `recorded_at` | 180 days |
 | `patch_simulation` | `recorded_at` | 90 days |
 | `column_lineage` | `captured_at` | 90 days |
-| `probe_signals` | `captured_at` | 90 days (all signal types; `sample_rows` also gets its own count-based cap — see above) |
+| `probe_signals` | `captured_at` | 90 days (all signal types; `sample_rows` also gets its own count-based cap, see above) |
 
 **Automatic, throttled, age-based only.** `maybe_prune_store()` runs at the
 end of every `Surveyor.record()` call (success or failure), but only
-actually sweeps once per calendar day per store — the throttle check is a
+actually sweeps once per calendar day per store: the throttle check is a
 single indexed `SELECT last_pruned_at FROM store_maintenance WHERE
 key='global'` (PK lookup), so the overwhelming majority of runs pay for one
 cheap read and nothing else. `prune_store()` never calls `VACUUM`/reclaims
-disk space — it only deletes rows.
+disk space; it only deletes rows.
 
 **`VACUUM` is never automatic.** Reclaiming the disk space `prune_store()`'s
 deletes free up is a deliberately separate, deliberately manual step:
 `aqueduct.surveyor.retention.vacuum_store(store)` issues DuckDB's `VACUUM`
 (a no-op on Postgres, whose autovacuum already reclaims space), wired only to
-the explicit `aqueduct report-prune --vacuum` CLI verb — never triggered by
+the explicit `aqueduct report-prune --vacuum` CLI verb, never triggered by
 `aqueduct run`.
 
-**On-demand deep clean: `aqueduct report-prune`.** The same age windows apply
-— `report-prune` just runs them now instead of waiting for the next throttled
+**On-demand deep clean: `aqueduct report-prune`.** The same age windows apply:
+`report-prune` just runs them now instead of waiting for the next throttled
 `aqueduct run`, and reports what it deleted:
 
 ```console
@@ -412,7 +412,7 @@ $ aqueduct report-prune --blueprint my.pipeline --format json
 
 `--blueprint` scopes to one discovered store (default: every store under
 `--store-dir`/the configured routing root). `--vacuum` is the *only* way to
-trigger `VACUUM` — a plain `report-prune` never does.
+trigger `VACUUM`: a plain `report-prune` never does.
 
 ### Blob externalisation (1.1.2+)
 
@@ -436,7 +436,7 @@ resolves blob paths to content on read.
 
 **Dedup against `channel_fingerprints` (2.65).** A Channel's lineage rows are
 written only when its `channel_fingerprints` SQL fingerprint actually
-*changed* since the last recorded run — a repeat run of unchanged SQL writes
+*changed* since the last recorded run: a repeat run of unchanged SQL writes
 nothing for that Channel (`aqueduct.compiler.lineage._unchanged_channel_ids`),
 mirroring `channel_fingerprints`'s own changelog model instead of duplicating
 every row on every compile. Handoff passthrough rows (no SQL, not
@@ -624,7 +624,7 @@ WHERE run_id = '<run_id>'
 ORDER BY attempt_num;
 ```
 
-> `signature_hash`/`escalated` are no longer populated (2.85+, C1 — both
+> `signature_hash`/`escalated` are no longer populated (2.85+, C1: both
 > were write-only, never read by any query); the columns still exist in the
 > DDL but every write leaves them NULL/FALSE. Group by
 > `(error_class, where_field, normalized_message)` directly instead of a
@@ -664,8 +664,8 @@ fired by inspecting `gate_that_rejected`.
 **When** a heal ran in agentic mode (`agent.mode: agentic`) and you want to
 see which diagnostic tools the model actually consulted before answering.
 **What you learn** Which tools were called, in what order, and how long each
-took — the same detail the `-v` transcript renders live, persisted for
-post-hoc review. (2.85+, C1: only `{name, duration_ms}` is stored — the
+took: the same detail the `-v` transcript renders live, persisted for
+post-hoc review. (2.85+, C1: only `{name, duration_ms}` is stored; the
 argument/result string previews the live `-v` transcript shows are never
 persisted, so this recipe answers "what did it call" and "how long", not
 "what did it see".)
@@ -816,7 +816,7 @@ LIMIT 10;
 
 ### Most common failure signatures
 
-`signature_hash` is no longer populated (2.85+, C1 — write-only, never
+`signature_hash` is no longer populated (2.85+, C1: write-only, never
 read); group by the fields it used to hash instead:
 
 ```sql
@@ -832,7 +832,7 @@ LIMIT 10;
 ### LLM token cost per blueprint per month
 
 `aqueduct report-costs` (2.85+, D7) aggregates `heal_attempts.tokens_in`/
-`tokens_out` — previously stored but unqueryable except as a flat, un-grouped
+`tokens_out`, previously stored but unqueryable except as a flat, un-grouped
 100-row detail list (`heal_attempt_details()`):
 
 ```console
@@ -899,7 +899,7 @@ columns or aggregation tables:
 | `failure_categories` | `dict[str, int]` | Count of failures grouped by `error_class` |
 | `heal_coverage` | `dict[str, int]` | Heals resolved by the signature memory cache (`memory`) vs the LLM (`agent`), per blueprint |
 | `blueprint_history` | `list[BlueprintHistoryEvent]` | One blueprint's store-side remediation timeline (heal run starts, patch apply/reject, outcomes), `aqueduct blueprint history` merges this with `git_blueprint_commits` for the full picture |
-| `gate_rejection_rates` | `dict[str, int]` | Count of `patch_simulation` rows with `status = 'fail'`, per `gate` (`engine_config`/`lineage`/`sandbox`/`explain`/`resolvability`). `warn`, `not_applicable` and `unavailable` are not rejections — see the function's docstring for why. Note `unavailable` is not a rejection but *is* blocking for the `sandbox` gate, so a rising `unavailable` count means heals are stalling for humans without any patch being judged wrong; count it separately rather than reading it as health. A rising `resolvability` `warn` count (not counted here — see above) similarly means heals are stalling on missing packages rather than bad patches. Falls back to `heal_attempts.gate_that_rejected` counts when `patch_simulation` is unavailable |
+| `gate_rejection_rates` | `dict[str, int]` | Count of `patch_simulation` rows with `status = 'fail'`, per `gate` (`engine_config`/`lineage`/`sandbox`/`explain`/`resolvability`). `warn`, `not_applicable` and `unavailable` are not rejections: see the function's docstring for why. Note `unavailable` is not a rejection but *is* blocking for the `sandbox` gate, so a rising `unavailable` count means heals are stalling for humans without any patch being judged wrong; count it separately rather than reading it as health. A rising `resolvability` `warn` count (not counted here, see above) similarly means heals are stalling on missing packages rather than bad patches. Falls back to `heal_attempts.gate_that_rejected` counts when `patch_simulation` is unavailable |
 
 DuckDB: the functions iterate discovered per‑pipeline files. Postgres: a single
 schema‑scoped query. Both backends return the same shape.
