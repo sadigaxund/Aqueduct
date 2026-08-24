@@ -108,7 +108,15 @@ logger = logging.getLogger(__name__)
 #        (each engine sees only its own allowlist); an engine that ships no
 #        allowlist is told the op is unavailable rather than shown an empty
 #        table. Changes the composed prompt for every engine.
-PROMPT_VERSION = "1.12"
+# 1.13 — 2.2.0 security workstream, item B: untrusted-data framing. The
+#        scaffold gains an "Untrusted data" instruction block (placed before
+#        the failure-report description, per prompt-injection best practice)
+#        naming the `<<<UNTRUSTED_DATA>>>` / `<<</UNTRUSTED_DATA>>>` sentinel
+#        markers and telling the model to treat delimited content — and any
+#        tool_result — as data, never instructions. The user-prompt error
+#        message and root-cause/stack-trace section are now wrapped in those
+#        markers. Changes the composed prompt for every engine.
+PROMPT_VERSION = "1.13"
 
 
 @dataclass

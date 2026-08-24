@@ -14,6 +14,19 @@ versioning follows [SemVer](https://semver.org/). The stability contract
 applies from v1.0.0 — during alpha/RC, breaking changes may land in any
 release and are marked **BREAKING**.
 
+## [Unreleased]
+
+2.2.0 security workstream: three ratified fixes closing trust-boundary gaps in the LLM self-healing loop, identified by the design review's HIGH finding on prompt-injection defenses.
+
+### Changed
+
+- **BREAKING: `agent.approval: auto` now denies file-touching patch ops when `agent.guardrails.allowed_paths` is unset**, instead of allowing any path. `auto` is the only approval mode where a patch applies with zero human review, so an unconfigured allowlist previously meant a patch could write anywhere without anyone checking. Gate 1 (`aqueduct/patch/apply.py::_check_guardrails`) now refuses `set_module_config_key`/`replace_module_config`/`insert_module`/`add_probe`/`add_arcade_ref` ops that write a `path`/`output_path` value when `allowed_paths` is empty, naming the offending value and pointing at `agent.guardrails.allowed_paths` (or a switch to `human`/`ci`, where a human reviews the patch before it applies either way). `human`, `ci`, and `disabled` are unaffected. See `docs/specs.md` §8.3/§8.7 and `docs/threat_model.md`. (`aqueduct/patch/apply.py`; tests: `tests/test_patch/test_guardrails_rollback.py::TestAutoModeDenyByDefault`)
+- **Untrusted-data framing in the composed healing prompt.** The runtime data a heal attempt embeds (the failure's error message, and its structured root-cause block or raw stack trace) is now wrapped in `<<<UNTRUSTED_DATA>>>` / `<<</UNTRUSTED_DATA>>>` sentinel markers, and the system prompt scaffold gains an "Untrusted data" instruction block, placed before the failure-report description, telling the model that delimited content (and any tool_result from an agentic-mode tool call) is data, never instructions, and that instruction-like text inside it is a prompt-injection attempt to be ignored. `PROMPT_VERSION` bumps `1.12` → `1.13`. (`aqueduct/agent/prompts.py`, `aqueduct/agent/loop.py`; tests: `tests/test_agent/test_untrusted_data_framing.py`)
+
+### Added
+
+- **`docs/threat_model.md`**: the healing loop's trust boundaries, assets, the FailureContext → prompt → PatchSpec injection surface and its mitigations (the gate ladder, Gate 1's allowlist including the new auto-mode deny-by-default, the sandbox, the untrusted-data prompt framing, redaction chokepoints), and threats explicitly out of scope.
+
 ## [2.1.3] — 2026-08-24
 
 Phase 89 — the perf-polish workstream: session keep-alive across polyglot

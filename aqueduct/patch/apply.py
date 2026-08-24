@@ -397,6 +397,20 @@ def _resolve_path_for_guardrail(value: Any, provenance_map: Any | None) -> str:
     return text
 
 
+#: Op names that can write a `path`/`output_path` value into a module config.
+#: Shared between the per-op dispatch below and the auto-mode deny-by-default
+#: check (item A) so both walk the same op-name set.
+_PATH_TOUCHING_OPS = frozenset(
+    {
+        "set_module_config_key",
+        "replace_module_config",
+        "insert_module",
+        "add_probe",
+        "add_arcade_ref",
+    }
+)
+
+
 def _check_path_against_allowlist(
     path_value: Any,
     allowed_paths: list[str],
@@ -404,10 +418,32 @@ def _check_path_against_allowlist(
     module_id: str,
     provenance_map: Any | None,
     key_hint: str = "path",
+    *,
+    deny_if_empty: bool = False,
 ) -> None:
-    """Raise PatchError if a resolved path doesn't match any allowed_paths pattern."""
+    """Raise PatchError if a resolved path doesn't match any allowed_paths pattern.
+
+    ``deny_if_empty`` (item A, 2.2.0): under ``agent.approval: auto`` — the
+    only mode where a patch applies with zero human review — an EMPTY
+    ``allowed_paths`` must refuse a file-touching op outright rather than
+    silently allow-all. ``human``/``ci`` keep the historical "empty means
+    unrestricted" behavior because a human reviews the patch anyway.
+    """
     resolved = _resolve_path_for_guardrail(path_value, provenance_map)
     if not resolved:
+        return
+    if not allowed_paths:
+        if deny_if_empty:
+            raise PatchError(
+                f"Path value {resolved!r} (key={key_hint!r}) in op {op_name!r} "
+                f"(module {module_id!r}) was refused: agent.guardrails.allowed_paths "
+                "is empty under agent.approval: auto. auto mode applies patches with "
+                "zero human review, so an unconfigured allowlist would let a "
+                "file-touching patch op write to any path. Configure "
+                "agent.guardrails.allowed_paths with an explicit fnmatch allowlist, "
+                "or switch agent.approval to human or ci so a human reviews the "
+                "patch before it applies."
+            )
         return
     if not any(fnmatch.fnmatch(resolved, pat) for pat in allowed_paths):
         raise PatchError(
@@ -454,15 +490,21 @@ def _check_config_dict_paths(
     op_name: str,
     module_id: str,
     provenance_map: Any | None,
+    *,
+    deny_if_empty: bool = False,
 ) -> None:
     """Check path/output_path keys inside a module config dict (full or
-    partial) against allowed_paths, then deny_patterns (in that order)."""
+    partial) against allowed_paths, then deny_patterns (in that order).
+
+    ``deny_if_empty``: see ``_check_path_against_allowlist`` (item A,
+    2.2.0) — auto-mode deny-by-default when ``allowed_paths`` is empty.
+    """
     if not isinstance(config, dict):
         return
     for key in ("path", "output_path"):
         if key in config:
             value = config[key]
-            if allowed_paths:
+            if allowed_paths or deny_if_empty:
                 _check_path_against_allowlist(
                     value,
                     allowed_paths,
@@ -470,6 +512,7 @@ def _check_config_dict_paths(
                     module_id,
                     provenance_map,
                     key_hint=key,
+                    deny_if_empty=deny_if_empty,
                 )
             if deny_patterns:
                 _check_path_against_denylist(
@@ -568,6 +611,13 @@ def _check_guardrails(
                        refused (`aqueduct/patch/config_delta.py`). A clean
                        apply that changes nothing is the silent no-op this
                        gate exists to make impossible.
+      - auto-mode deny-by-default (item A, 2.2.0): under
+                       `agent.approval: auto` — the only mode a patch applies
+                       with zero human review — an EMPTY `allowed_paths`
+                       refuses every file-touching op instead of allowing all
+                       paths. `human`/`ci` keep the historical
+                       empty-means-unrestricted behavior; a human reviews the
+                       patch before it applies in both.
 
     Arcade-expanded modules (id contains `__`) are skipped for path checks —
     those IDs do not exist in the Blueprint YAML and the apply step will raise
@@ -592,6 +642,14 @@ def _check_guardrails(
     allowed_paths: list[str] = guardrails.get("allowed_paths") or []
     deny_patterns: list[str] = guardrails.get("deny_patterns") or []
 
+    # Item A (2.2.0): auto is the only mode where a patch applies with zero
+    # human review, so it is the only mode where an empty allowlist must deny
+    # file-touching ops rather than allow all paths. `bp_raw`'s `agent.approval`
+    # is the raw YAML key (schema.py aliases it to `approval_mode`); default
+    # mirrors the schema's own default of "disabled" for an unset block.
+    approval_mode = (bp_raw.get("agent") or {}).get("approval") or "disabled"
+    auto_deny_empty = approval_mode == "auto" and not allowed_paths
+
     for op in patch_spec.operations:
         op_name = op.op
 
@@ -604,7 +662,9 @@ def _check_guardrails(
         if op_name == "set_engine_config":
             _check_engine_config_allowlist(op)
 
-        if not allowed_paths and not deny_patterns:
+        if not allowed_paths and not deny_patterns and not auto_deny_empty:
+            continue
+        if op_name not in _PATH_TOUCHING_OPS:
             continue
 
         # set_module_config_key — single dotted key inside an existing module config
@@ -615,7 +675,7 @@ def _check_guardrails(
             key = getattr(op, "key", None)
             if key in ("path", "output_path"):
                 value = getattr(op, "value", None)
-                if allowed_paths:
+                if allowed_paths or auto_deny_empty:
                     _check_path_against_allowlist(
                         value,
                         allowed_paths,
@@ -623,6 +683,7 @@ def _check_guardrails(
                         module_id,
                         provenance_map,
                         key_hint=str(key),
+                        deny_if_empty=auto_deny_empty,
                     )
                 if deny_patterns:
                     _check_path_against_denylist(
@@ -646,6 +707,7 @@ def _check_guardrails(
                 op_name,
                 module_id,
                 provenance_map,
+                deny_if_empty=auto_deny_empty,
             )
 
         # insert_module / add_probe / add_arcade_ref — new module definitions carry full config
@@ -662,6 +724,7 @@ def _check_guardrails(
                 op_name,
                 module_id,
                 provenance_map,
+                deny_if_empty=auto_deny_empty,
             )
 
     # ── Effective engine/session config delta ────────────────────────────────

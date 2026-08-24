@@ -577,10 +577,12 @@ No code change needed to add a rule. Edit the file, commit it, rules apply on ne
 
 ## Security considerations
 
+See [Threat Model](threat_model.md) for the healing loop's trust boundaries, the injection surface, and how each mitigation below is enforced in code.
+
 | Concern | Mitigation |
 |---|---|
 | API keys in Blueprint YAML | Never. Use `${ENV_VAR}` refs. Inject via K8s Secrets / Vault. |
-| LLM modifying paths beyond guardrails | Set `agent.guardrails.allowed_paths` to cloud URI patterns. |
+| LLM modifying paths beyond guardrails | Set `agent.guardrails.allowed_paths` to cloud URI patterns. Under `agent.approval: auto`, an unset `allowed_paths` now refuses file-touching patch ops outright (2.2.0) rather than allowing any path. |
 | `auto` mode with `max_patches > 1` in production | Requires `danger.allow_multi_patch: true`: do not set in prod config. |
 | `observability.db` exposure | Contains resolved config and error details. Restrict filesystem access. |
 | Patch tampering | Planned: patch signature verification for `auto` multi-patch mode. |

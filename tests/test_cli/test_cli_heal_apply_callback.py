@@ -98,6 +98,10 @@ agent:
   max_patches: 2
   guardrails:
     forbidden_ops: ["remove_module"]
+    # 2.2.0: under approval: auto, an empty allowed_paths now denies every
+    # file-touching op by default (item A, security workstream) — this test
+    # exercises a VALID path-writing patch, so it needs an explicit allowlist.
+    allowed_paths: ["*.csv"]
 modules:
   - id: m1
     type: Ingress
