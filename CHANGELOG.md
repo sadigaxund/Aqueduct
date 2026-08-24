@@ -14,9 +14,13 @@ versioning follows [SemVer](https://semver.org/). The stability contract
 applies from v1.0.0 — during alpha/RC, breaking changes may land in any
 release and are marked **BREAKING**.
 
-## [Unreleased]
+## [2.2.0] — 2026-08-24
 
-2.2.0 security workstream: three ratified fixes closing trust-boundary gaps in the LLM self-healing loop, identified by the design review's HIGH finding on prompt-injection defenses.
+The 2.2.0 milestone (Phases 87 + 90): heal-as-PR becomes a first-class,
+git-native flow; the trust boundary around the healing loop is closed
+(deny-by-default auto guardrails, untrusted-data prompt framing, a written
+threat model); and the project front door is rewritten to the AI-harness
+positioning with a truth-pass across README, gallery, and docs.
 
 ### Changed
 
