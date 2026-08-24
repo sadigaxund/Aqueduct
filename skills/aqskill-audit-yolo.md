@@ -237,8 +237,12 @@ Non-negotiables for a triage agent, each learned by having it go wrong:
 
 After fixes, update AGENTS.md prevention rules if a bug class recurs across units — the per-module layout makes cross-module repetition visible. Reports stay in `.dev/AUDITS/pending/` until triaged; move triaged ones to `.dev/AUDITS/triaged/`. The audit skill is the detection layer; AGENTS.md is the prevention layer.
 
-Two companion audits exist alongside the per-unit sweep and answer questions this decomposition
+Three companion audits exist alongside the per-unit sweep and answer questions this decomposition
 cannot: a **sync-surface audit** (every place two artifacts must agree, whether a guard enforces
-it, and whether they agree today) and an **extensibility inventory** (every closed set, its
-extension path, and the real cost to add one member). Both are derivation-first and read-only.
-They catch drift *between* units, where per-unit isolation is weakest.
+it, and whether they agree today), an **extensibility inventory** (every closed set, its
+extension path, and the real cost to add one member) — both derivation-first and read-only,
+catching drift *between* units where per-unit isolation is weakest — and
+**`aqskill-audit-design.md`**, which judges the system itself rather than defect instances
+(identity/scope creep, truth-separation violations, silent-data edges, perf claims vs code,
+feature economics). It is explicit-trigger only: expensive, judgment-based, and its findings
+are design decisions to reconsider, not triage fixes to apply.

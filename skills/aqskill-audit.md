@@ -33,6 +33,15 @@ Three hallucination MODES confirmed in the 2026-07-03 pending-audit verification
 | `aqskill-audit-style` | Over-broad except, string-in-context, Python 3.11, dispatch, constants | After touching error handling, text parsing, or dispatch logic |
 | `aqskill-audit-health` | General code health: secrets, stubs, debt markers, dead code, commented-out code, language-agnostic patterns | Any codebase change — runs first as a baseline |
 
+## Companion passes (outside the five-domain sweep, explicit trigger only)
+
+Three deeper passes share this skill's accuracy model but answer questions the
+domain sweep cannot, and are never part of the default run:
+
+- `aqskill-audit-yolo.md` — same domains, per-module decomposition (one agent per package/file) when cross-module passes drown in false positives.
+- `aqskill-audit-design.md` — architecture/design-lens judgment pass (adopter stance): identity/scope creep, truth-separation violations, silent-data edges, perf claims vs code, feature economics, governance tax, production gaps. Produces a design review report, not a fix list.
+- The sync-surface and extensibility inventories described at the end of `aqskill-audit-yolo.md` — drift *between* artifacts.
+
 ## Running the full audit
 
 1. **Load** `aqskill-audit-health` first — run the general health scan (secrets, stubs, debt markers, dead code). These apply to every codebase and establish a baseline.
