@@ -539,6 +539,8 @@ aqueduct patch import received-patch.json --blueprint pipeline.yml
 
 `patch import` is the **one CI command**: it is `patch apply` + `patch commit` in a single atomic step (use `--no-commit` to stage only). A copy-paste example workflow wiring `import` + `gh pr create` lives at [`docs/templates/ci-heal-workflow.yml`](templates/ci-heal-workflow.yml), a snippet you own, not a maintained Action.
 
+**`aqueduct patch pr` (2.2.0).** Instead of wiring the webhook and template workflow above, `aqueduct patch pr <patch_ref> --blueprint <bp>` does the same branch + apply + commit + push + `gh pr create` sequence in one command, run locally or from any CI runner with `gh` installed and authenticated. It works on any staged patch regardless of `approval` mode, so a `human`-mode reviewer can use it too, in place of a local `patch apply`. Configure `git:`/`pr:` in `aqueduct.yml` (base branch, title template, draft state, and an optional `git.expected_root` pin for a monorepo layout); `aqueduct doctor` checks `gh` presence and auth. See [CLI Reference](cli_reference.md#5-patch-management).
+
 **`on_patch_pending` webhook:** When a patch is staged (`approval: human`), Aqueduct fires `agent.webhooks.on_patch_pending` so teams receive a Slack/PagerDuty notification.
 
 **Webhook hardening.** All webhook deliveries run in a daemon thread (never block or fail a run), redact registered `@aq.secret()` values from the body (headers/URL are left intact, that is how you authenticate to the endpoint), and carry an `X-Aqueduct-Delivery: <uuid>` header for receiver-side dedup. Two opt-in fields on any endpoint:

@@ -1089,6 +1089,8 @@ aqueduct patch import received-patch.json --blueprint pipeline.yml
 
 `patch import` is `patch apply` + `patch commit` atomically (`--no-commit` stages only), writing a structured `---aqueduct---` commit trailer that `aqueduct patch log` / `rollback` read back. The webhook payload schema (envelope keys `patch_id` / `run_id` / `blueprint_id` / `failed_module` / `source` plus the body's `_aq_meta`) and a copy-paste example workflow wiring `import` + `gh pr create` are documented in the **[Production Guide](production_guide.md)**.
 
+**Heal-as-PR (2.2.0).** `aqueduct patch pr <patch_ref>` branches, applies, commits, pushes, and opens a PR in one command, mode-agnostic (works under `human` and `ci` alike), as an alternative to the manual webhook-plus-template flow above. See [CLI Reference](cli_reference.md#5-patch-management) and `docs/templates/ci-heal-workflow.yml`.
+
 ## **8.4 Sandbox modes**
 
 | Mode | Sample size | Egress writes | Danger gate |

@@ -19,7 +19,12 @@ pytestmark = pytest.mark.unit
 from aqueduct.cli import cli
 from aqueduct.patch.ci import (
     CI_WEBHOOK_REQUIRED_KEYS,
+    HEAL_BRANCH_PREFIX,
     build_commit_message,
+    heal_branch_name,
+    render_pr_body,
+    render_pr_title,
+    resolve_repo_root_conflict,
     validate_ci_payload,
 )
 
@@ -307,3 +312,94 @@ def test_patch_import_outside_git_repo_fails_before_mutating(tmp_path):
     assert result.exit_code != 0
     assert "not inside a git work tree" in result.output
     assert bp.read_text() == before  # Blueprint untouched
+
+
+# ── heal_branch_name (Phase 87) ──────────────────────────────────────────────
+
+
+def test_heal_branch_name_uses_the_owned_prefix():
+    assert heal_branch_name("00001_fix-path") == f"{HEAL_BRANCH_PREFIX}/00001_fix-path"
+
+
+def test_heal_branch_name_prefix_is_aqueduct_heal():
+    assert HEAL_BRANCH_PREFIX == "aqueduct/heal"
+
+
+# ── resolve_repo_root_conflict (Phase 87 — item 4 pre-flight guard) ─────────
+
+
+def test_repo_root_conflict_matching_roots_returns_none():
+    assert resolve_repo_root_conflict("/repo", "/repo", None) is None
+
+
+def test_repo_root_conflict_parent_git_mismatch_refuses():
+    """toplevel resolves ABOVE the project root (parent .git footgun)."""
+    msg = resolve_repo_root_conflict("/repo", "/repo/sub/project", None)
+    assert msg is not None
+    assert "/repo" in msg and "project" in msg
+    assert "git.expected_root" in msg
+
+
+def test_repo_root_conflict_child_git_mismatch_refuses():
+    """toplevel resolves to a stale child .git (not an ancestor-or-equal of
+    the project root)."""
+    msg = resolve_repo_root_conflict("/repo/project/vendored", "/repo/project", None)
+    assert msg is not None
+
+
+def test_repo_root_conflict_pin_satisfied_allows_monorepo():
+    """An explicit git.expected_root pin overrides the project-root default —
+    the ratified monorepo escape hatch."""
+    assert resolve_repo_root_conflict("/repo", "/repo/sub/project", "/repo") is None
+
+
+def test_repo_root_conflict_pin_mismatch_refuses_and_names_the_pin():
+    msg = resolve_repo_root_conflict("/repo", "/repo/sub/project", "/somewhere/else")
+    assert msg is not None
+    assert "git.expected_root" in msg
+    assert "/somewhere/else" in msg
+
+
+# ── render_pr_title / render_pr_body (Phase 87) ─────────────────────────────
+
+
+def test_render_pr_title_fills_all_tokens():
+    title = render_pr_title(
+        "heal {blueprint_id}/{module}: {patch_id}",
+        patch_id="p1",
+        blueprint_id="demo.pipeline",
+        module="load_orders",
+    )
+    assert title == "heal demo.pipeline/load_orders: p1"
+
+
+def test_render_pr_title_falls_back_to_unknown_module():
+    title = render_pr_title(
+        "{blueprint_id}/{module}/{patch_id}", patch_id="p1", blueprint_id="bp", module=None
+    )
+    assert "/unknown/" in title
+
+
+def test_render_pr_body_carries_rationale_root_cause_and_ops():
+    body = render_pr_body(
+        {
+            "patch_id": "p1",
+            "rationale": "widen amount to double",
+            "root_cause": "schema drift",
+            "confidence": 0.9,
+            "category": "schema_drift",
+            "operations": [{"op": "replace_module_config"}, {"op": "replace_module_config"}],
+        },
+        "fix(aqueduct/bp): widen amount to double",
+    )
+    assert "widen amount to double" in body
+    assert "schema drift" in body
+    assert "confidence=0.9" in body
+    assert "category=schema_drift" in body
+    assert "replace_module_config" in body
+    assert "fix(aqueduct/bp): widen amount to double" in body  # trailer embedded verbatim
+
+
+def test_render_pr_body_handles_missing_optional_fields():
+    body = render_pr_body({"patch_id": "p1", "operations": []}, "fix(aqueduct/bp): x")
+    assert "(no rationale)" in body

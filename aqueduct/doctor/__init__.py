@@ -68,6 +68,7 @@ __all__ = [
     "check_cloudpickle_compat",
     "check_handoff_engine_access",
     "check_handoff_free_space",
+    "check_gh_pr",
     "check_healed_engine_config",
     "check_java",
     "check_config",
@@ -353,6 +354,67 @@ def check_java() -> CheckResult:
         # strictly better than failing a health check over a cosmetic hint.
         pass
     return CheckResult("java", "ok", detail, _ms(t))
+
+
+def check_gh_pr() -> CheckResult:
+    """`gh` CLI presence + auth, the transport `aqueduct patch pr` shells to.
+
+    Soft/skippable: `gh` is only needed by `patch pr` (Phase 87), not by the
+    rest of the engine, so its absence is a `skip`, not a `warn`/`fail` —
+    mirrors `check_java`'s "never fatal" posture for an optional local tool.
+    Installed-but-unauthenticated is a `warn` (the operator can still fix it
+    with `gh auth login` before their first `patch pr`); installed and
+    authenticated is `ok`.
+    """
+    import shutil
+    import subprocess
+
+    t = time.monotonic()
+    exe = shutil.which("gh")
+    if not exe:
+        return CheckResult(
+            "gh",
+            "skip",
+            "gh CLI not found — only needed for `aqueduct patch pr`; "
+            "install from https://cli.github.com/ if you use that flow",
+            _ms(t),
+            group="network",
+        )
+    try:
+        version = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=10)
+    except Exception as exc:
+        return CheckResult(
+            "gh", "warn", f"could not run `{exe} --version`: {exc}", _ms(t), group="network"
+        )
+    if version.returncode != 0:
+        return CheckResult(
+            "gh",
+            "warn",
+            f"`gh --version` failed: {(version.stderr or '').strip()}",
+            _ms(t),
+            group="network",
+        )
+    version_line = (version.stdout or "").splitlines()[0] if version.stdout else "gh"
+    try:
+        auth = subprocess.run([exe, "auth", "status"], capture_output=True, text=True, timeout=10)
+    except Exception as exc:
+        return CheckResult(
+            "gh",
+            "warn",
+            f"{version_line} — could not run `gh auth status`: {exc}",
+            _ms(t),
+            group="network",
+        )
+    if auth.returncode != 0:
+        return CheckResult(
+            "gh",
+            "warn",
+            f"{version_line} — not authenticated (`gh auth status` failed); "
+            "run `gh auth login` before using `aqueduct patch pr`",
+            _ms(t),
+            group="network",
+        )
+    return CheckResult("gh", "ok", f"{version_line} — authenticated", _ms(t), group="network")
 
 
 # ── Cross-engine handoff access (Phase 81/82) ───────────────────────────────
@@ -1573,7 +1635,7 @@ def check_healed_engine_config(blueprint_path: Path, cfg: Any) -> list[CheckResu
                 )
             else:
                 facts.append(
-                    f"perf on {obs.get('engine')!r}: {obs.get('status')} " f"({obs.get('detail')})"
+                    f"perf on {obs.get('engine')!r}: {obs.get('status')} ({obs.get('detail')})"
                 )
 
         if superseded:
@@ -2036,8 +2098,7 @@ def check_cloudpickle_compat(master_url: str) -> CheckResult:
 
     if not driver_ok:
         detail_parts.append(
-            "DRIVER: cloudpickle<3.0 — Python UDFs will crash. "
-            "Fix: pip install 'cloudpickle>=3.0'"
+            "DRIVER: cloudpickle<3.0 — Python UDFs will crash. Fix: pip install 'cloudpickle>=3.0'"
         )
         return CheckResult("cloudpickle", "fail", "  ".join(detail_parts), _ms(t), group="spark")
 
@@ -2230,6 +2291,11 @@ def run_doctor(
 
     # Java runtime the JVM/Spark launches (pure detection — no Spark session)
     results.append(check_java())
+
+    # `gh` CLI presence + auth — the transport `aqueduct patch pr` shells to
+    # (Phase 87). Pure detection, cheap, never fatal — soft/skippable when the
+    # PR flow isn't used (see check_gh_pr's docstring).
+    results.append(check_gh_pr())
 
     # Per-store backend reachability — replaces the legacy observability.db/depot.db
     # file probes when a non-DuckDB backend is configured. For DuckDB

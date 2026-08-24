@@ -12,8 +12,10 @@ pytestmark = pytest.mark.unit
 from aqueduct.config import (  # noqa: E402
     AgentConnectionConfig,
     AqueductConfig,
+    GitConfig,
     ObservabilityConfig,
     ObservabilityRetentionConfig,
+    PrConfig,
     WebhookEndpointConfig,
     WebhooksConfig,
     load_config,
@@ -517,3 +519,60 @@ class TestWebhooksOnDefer:
         # rather than becoming its own untagged leaf.
         assert "config.webhooks.on_defer" not in leaves
         assert "config.webhooks.on_defer.url" not in leaves
+
+
+class TestGitAndPrConfig:
+    """Phase 87 — `git:`/`pr:` blocks backing `aqueduct patch pr`."""
+
+    def test_git_config_defaults(self):
+        cfg = GitConfig()
+        assert cfg.expected_root is None
+        assert cfg.remote == "origin"
+
+    def test_pr_config_defaults(self):
+        cfg = PrConfig()
+        assert cfg.base_branch == "main"
+        assert cfg.draft is False
+        assert "{patch_id}" in cfg.title_template
+        assert "{blueprint_id}" in cfg.title_template
+
+    def test_aqueduct_config_carries_git_and_pr_blocks(self):
+        cfg = AqueductConfig()
+        assert isinstance(cfg.git, GitConfig)
+        assert isinstance(cfg.pr, PrConfig)
+
+    def test_git_config_extra_forbid(self):
+        with pytest.raises(Exception):
+            GitConfig(nonexistent_field="x")
+
+    def test_pr_config_has_no_labels_or_reviewers_fields(self):
+        """Ratified 2026-08-24 design audit item 3: reviewer routing belongs
+        to CODEOWNERS/branch protection, never to a healed pipeline's own
+        config. A `labels`/`reviewers` field here would let a Blueprint (or
+        an upstream-data-steered heal) influence who reviews its own fix."""
+        assert "labels" not in PrConfig.model_fields
+        assert "reviewers" not in PrConfig.model_fields
+
+    def test_load_config_respects_git_and_pr_blocks(self, tmp_path):
+        cfg_path = tmp_path / "aqueduct.yml"
+        cfg_data = {
+            "git": {"expected_root": str(tmp_path), "remote": "upstream"},
+            "pr": {"base_branch": "develop", "draft": True, "title_template": "heal {patch_id}"},
+        }
+        cfg_path.write_text(yaml.dump(cfg_data))
+
+        config = load_config(cfg_path)
+        assert config.git.expected_root == str(tmp_path)
+        assert config.git.remote == "upstream"
+        assert config.pr.base_branch == "develop"
+        assert config.pr.draft is True
+        assert config.pr.title_template == "heal {patch_id}"
+
+    def test_config_leaves_walker_accepts_git_and_pr_blocks(self):
+        """Every field carries an explicit `engine_scoped` tag (connection-
+        level, not engine-scoped) — must not raise CapabilityScopeError."""
+        from aqueduct.executor.config_leaves import all_config_leaves
+
+        leaves = all_config_leaves()
+        assert "config.git.remote" not in leaves  # engine_scoped=False, excluded
+        assert "config.pr.base_branch" not in leaves

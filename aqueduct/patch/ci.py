@@ -15,6 +15,20 @@ from typing import Any
 
 from aqueduct.patch.grammar import PATCH_META_KEY
 
+# ── Heal-as-PR (Phase 87) ────────────────────────────────────────────────────
+#
+# Aqueduct-owned branch name convention for `aqueduct patch pr`. A constant,
+# not a config knob (ratified: no registry, no per-project pattern override) —
+# `docs/templates/ci-heal-workflow.yml` references it instead of hardcoding
+# its own copy.
+HEAL_BRANCH_PREFIX = "aqueduct/heal"
+
+
+def heal_branch_name(patch_id: str) -> str:
+    """Branch name `aqueduct patch pr` creates for *patch_id*."""
+    return f"{HEAL_BRANCH_PREFIX}/{patch_id}"
+
+
 # ── CI webhook payload schema ────────────────────────────────────────────────
 # Keys the ``on_patch_pending`` webhook always carries (approval_mode: ci). The
 # webhook also includes diagnostic extras (root_cause, rationale, category,
@@ -93,3 +107,104 @@ def build_commit_message(blueprint_id: str, patches: list[dict]) -> str:
         commit_msg += f"\n\n{combined_rationale}"
     commit_msg += f"\n\n{aqueduct_block}"
     return commit_msg
+
+
+# ── Repo-root guard (Phase 87) ───────────────────────────────────────────────
+
+
+def resolve_repo_root_conflict(
+    toplevel: str, project_root: str, expected_root: str | None
+) -> str | None:
+    """Pure comparison behind ``patch pr``'s pre-flight guard.
+
+    *toplevel* is ``git rev-parse --show-toplevel`` resolved from the SAME
+    cwd every git-writing command uses (the blueprint directory). *project_root*
+    is the ``aqueduct.yml`` directory. Returns a refusal message (naming both
+    paths and the config key) when they diverge, or ``None`` when the write is
+    safe.
+
+    Catches both footguns with one assertion (2026-08-24 design audit, item
+    4): a parent `.git` above the project root resolves *toplevel* ABOVE
+    *project_root* (mismatch); a stale child `.git` between the project root
+    and the blueprint directory resolves *toplevel* to that child (also a
+    mismatch, since it cannot be an ancestor-or-equal of *project_root*). A
+    `.git` strictly BELOW the blueprint directory is unreachable by upward
+    discovery and therefore never mis-targets a commit, so it is deliberately
+    not scanned for.
+
+    When ``expected_root`` (``git.expected_root``) is set, it — not
+    *project_root* — is the required value: an explicit operator pin for a
+    Blueprint that intentionally lives inside a larger repo.
+    """
+    from pathlib import Path
+
+    resolved_toplevel = Path(toplevel).resolve()
+    if expected_root is not None:
+        pin = Path(expected_root).resolve()
+        if resolved_toplevel != pin:
+            return (
+                f"git worktree root ({resolved_toplevel}) does not match the pinned "
+                f"git.expected_root ({pin}) in aqueduct.yml — refusing to write. "
+                "Fix git.expected_root if this is the wrong repo, or update it if "
+                "the repo moved."
+            )
+        return None
+    resolved_project_root = Path(project_root).resolve()
+    if resolved_toplevel != resolved_project_root:
+        return (
+            f"git worktree root ({resolved_toplevel}) does not match the project "
+            f"root ({resolved_project_root}, the aqueduct.yml directory) — refusing "
+            "to write, to avoid committing into an unexpected repository. If this "
+            "project intentionally lives inside a larger repo, pin "
+            f'git.expected_root: "{resolved_toplevel}" in aqueduct.yml.'
+        )
+    return None
+
+
+# ── PR title/body rendering (Phase 87) ───────────────────────────────────────
+#
+# Rendered PURELY from existing PatchSpec fields — no model-authored prose, no
+# new prompt section, no PROMPT_VERSION bump (2026-08-24 design audit, item
+# 5). The `---aqueduct---` trailer (build_commit_message above) is embedded
+# verbatim so the PR body and the eventual commit message carry the same
+# provenance.
+
+
+def render_pr_title(template: str, *, patch_id: str, blueprint_id: str, module: str | None) -> str:
+    """Render *template* (``pr.title_template``) against a patch's identity."""
+    return template.format(
+        patch_id=patch_id,
+        blueprint_id=blueprint_id,
+        module=module or "unknown",
+    )
+
+
+def render_pr_body(patch_body: dict, commit_message: str) -> str:
+    """Render the PR body from a single patch's body dict + its commit message.
+
+    Every line traces to a PatchSpec field or the machine-rendered
+    `---aqueduct---` trailer already produced by `build_commit_message` — no
+    field here is model-authored prose the agent did not already put in
+    `rationale`/`root_cause`.
+    """
+    pid = patch_body.get("patch_id") or "(unknown)"
+    rationale = patch_body.get("rationale") or "(no rationale)"
+    root_cause = patch_body.get("root_cause")
+    confidence = patch_body.get("confidence")
+    category = patch_body.get("category")
+    ops = [op.get("op", "?") for op in patch_body.get("operations", [])]
+
+    lines = [f"Aqueduct heal `{pid}`", "", rationale]
+    if root_cause:
+        lines += ["", f"**Root cause:** {root_cause}"]
+    details = []
+    if confidence is not None:
+        details.append(f"confidence={confidence}")
+    if category:
+        details.append(f"category={category}")
+    if details:
+        lines += ["", " · ".join(details)]
+    if ops:
+        lines += ["", f"**Operations:** {', '.join(dict.fromkeys(ops))}"]
+    lines += ["", "```", commit_message, "```"]
+    return "\n".join(lines)
