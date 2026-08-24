@@ -307,7 +307,7 @@ class TestDoctor:
         stdout = _normalize(res.stdout, tmp_root=_dest)
         lines = stdout.splitlines()
         assert lines[0] == "─" * 80
-        assert lines[1] == "▶ doctor  ·  blueprint.yml  ·  21 checks"
+        assert lines[1] == "▶ doctor  ·  blueprint.yml  ·  22 checks"
         assert lines[2] == "─" * 80
         assert stdout.rstrip().splitlines()[-2] == "─" * 80
         assert stdout.rstrip().splitlines()[-1] == "✓ all checks passed"
@@ -339,7 +339,7 @@ class TestDoctor:
         assert "remote-target" in stdout
         # Same header/footer shape as default.
         lines = stdout.splitlines()
-        assert lines[1] == "▶ doctor  ·  blueprint.yml  ·  21 checks"
+        assert lines[1] == "▶ doctor  ·  blueprint.yml  ·  22 checks"
         assert stdout.rstrip().splitlines()[-1] == "✓ all checks passed"
 
     def test_verbose_has_strictly_more_lines_than_default(self, _dest, monkeypatch) -> None:
