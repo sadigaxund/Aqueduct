@@ -1,13 +1,13 @@
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/ceb9dd65-5a20-4325-bdc6-2244417333ea" 
-       alt="Aqueduct Logo" 
+  <img src="https://github.com/user-attachments/assets/ceb9dd65-5a20-4325-bdc6-2244417333ea"
+       alt="Aqueduct Logo"
        width="280" />
 </p>
 
 <h1 align="center">Aqueduct</h1>
 
 <p align="center">
-  <strong>Self-healing data pipelines. Declarative. Observable. Autonomous.</strong>
+  <strong>The AI harness for data pipelines: the model proposes, the harness decides.</strong>
   <br/>
   <strong>One blueprint. Spark or DuckDB. Your data never leaves your servers.</strong>
 </p>
@@ -20,23 +20,20 @@
   <br/>
   <a href="https://github.com/sadigaxund/aqueduct/actions/workflows/test-suite.yml"><img src="https://img.shields.io/github/actions/workflow/status/sadigaxund/aqueduct/test-suite.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=tests" alt="Test Suite" /></a>
   <a href="https://github.com/sadigaxund/aqueduct/actions/workflows/version-matrix.yml"><img src="https://img.shields.io/github/actions/workflow/status/sadigaxund/aqueduct/version-matrix.yml?branch=main&style=flat-square&label=compatibility" alt="Compatibility Matrix" /></a>
-  <!-- TODO(maturity): set the real project status. Options: experimental · alpha · beta · stable -->
   <img src="https://img.shields.io/badge/status-beta-orange?style=flat-square" alt="Project status: beta" />
   <a href="https://github.com/sadigaxund/aqueduct/stargazers"><img src="https://img.shields.io/github/stars/sadigaxund/aqueduct?style=flat-square&logo=github&color=2563eb" alt="Stars" /></a>
 </p>
-
 
 ---
 
 ## Why Aqueduct
 
-A pipeline fails at 3 a.m. over a column rename upstream. Somebody gets paged. They scroll a four-kilobyte stack trace to find a one-line fix. Aqueduct turns that night into a Git-diffable patch, waiting for review in the morning.
+A pipeline fails at 3 a.m. over a column rename upstream. Somebody gets paged, scrolls a four-kilobyte stack trace, and hand-writes a one-line fix. Aqueduct turns that night into a pull request waiting for review in the morning.
 
-
-<img width="1280" height="720" alt="ezgif-3d9a30cf90eb278e" src="https://github.com/user-attachments/assets/92acb8fb-80ad-4cac-b5bd-e00a114d22cb" />
+<img width="1280" height="720" alt="A failed run producing a pending patch" src="https://github.com/user-attachments/assets/92acb8fb-80ad-4cac-b5bd-e00a114d22cb" />
 
 >
-> **Wake up to a pending patch instead of a wall of errors.**
+> **Wake up to a reviewable fix instead of a wall of errors.**
 >
 <br>
 
@@ -44,25 +41,49 @@ A pipeline fails at 3 a.m. over a column rename upstream. Somebody gets paged. T
 - **Self-healing rather than alerting.** On failure, an LLM agent diagnoses the root cause and emits a structured patch. The patch must clear guardrail, lineage, and sandbox gates before it touches your pipeline. The agent cannot generate code or touch a shell. A failure it has solved before heals from memory, with zero LLM tokens.
 - **Observable by construction.** Every run, heal attempt, and column-lineage edge lands in a queryable store. Nothing is added to the hot path to make that happen.
 - **Model-agnostic and local-first.** Anthropic natively, or any OpenAI-compatible endpoint: OpenRouter, DeepSeek, Groq, a local 7B on Ollama or LM Studio. Set `provider` and `base_url`, done. Point it at a model inside your perimeter and your data, schemas, and error traces never leave your servers. Multi-model cascades escalate to a bigger model only when the small one gets stuck.
-- **The harness owns correctness; the model only proposes.** The LLM does exactly one thing deterministic code cannot: turn an unstructured failure into a structured hypothesis. Everything after that is deterministic. A constrained patch grammar with 14 operations and no code generation. Validation gates. Budget caps. A signature cache. That division of labor is why a small local model holds up here when raw code-generating assistants don't.
+- **The harness owns correctness; the model only proposes.** The LLM does exactly one thing deterministic code cannot: turn an unstructured failure into a structured hypothesis. Everything after that is deterministic. A constrained patch grammar with 15 operations and no code generation. Validation gates. Budget caps. A signature cache. That division of labor is why a small local model holds up here when raw code-generating assistants don't.
 
+## From failure to pull request
 
----
+```console
+$ aqueduct run blueprints/orders.yml
+  ✗ orders.load  PATH_NOT_FOUND: data/in.csv
+  agent: root cause identified (confidence 0.92), patch staged
+  → patches/pending/orders-20260824T031412.json
+
+$ aqueduct patch pr orders-20260824T031412 --blueprint blueprints/orders.yml
+  ✓ gates passed  guardrails · compile · lineage · sandbox
+  ✓ PR opened  branch=aqueduct/heal/orders-20260824T031412
+  https://github.com/you/your-repo/pull/128
+```
+
+The patch is a Git-diffable JSON document, never code:
+
+```jsonc
+// patches/pending/orders-20260824T031412.json (abridged)
+{
+  "category": "config_error",
+  "root_cause": "Ingress 'load' reads data/in.csv, but the upstream job renamed it to data/input.csv.",
+  "confidence": 0.92,
+  "rationale": "PATH_NOT_FOUND on data/in.csv; a sibling data/input.csv exists with a matching schema, so the path is stale rather than the data missing.",
+  "operations": [
+    { "op": "set_module_config_key", "module_id": "load", "key": "path", "value": "data/input.csv" }
+  ]
+}
+```
+
+The trust boundaries behind all of this, and what each gate actually enforces, are written down in the [Threat Model](docs/threat_model.md).
 
 ## Table of contents
 
 - [Supported engines](#supported-engines)
-- [What you get](#what-you-get)
-- [Core concepts](#core-concepts)
 - [The healing flow](#the-healing-flow)
 - [Architecture](#architecture)
-- [Observability dashboard](#observability-dashboard)
+- [Core concepts](#core-concepts)
 - [Getting started](#getting-started)
-- [How it compares](#how-it-compares)
+- [What you get](#what-you-get)
 - [References](#references)
 - [Contributing](#contributing)
-
----
 
 ## Supported engines
 
@@ -116,59 +137,22 @@ modules:
     config: { op: sql, query: "SELECT region, sum(amount) FROM extract GROUP BY region" }
 ```
 
-The compiler partitions the DAG into engine islands and inserts a handoff at each boundary. The handoff materializes data as parquet at a configurable location, visible in observability like any other module, with bytes and duration recorded. Each handoff point is announced at compile time, because the extra I/O is a real cost you should see before the run. If an island fails, a rerun picks up the already-materialized upstream data instead of recomputing it. Two independent flows with different engines run side by side with no handoff at all.
-
-## What you get
-
-| Capability | What it does | Details |
-|---|---|---|
-| **Self-healing** | LLM diagnoses failures, emits gated, Git-diffable patches with human, CI, or auto approval | [Spec §8](docs/specs.md) |
-| **Heal memory** | Failure signatures cache validated fixes; repeat failures heal with zero LLM tokens | [Spec §8.2](docs/specs.md) |
-| **Engine capability gate** | Unsupported features fail at compile time with a named capability, never mid-run | [Compatibility Matrix](docs/compatibility.md) |
-| **Portable types** | One type vocabulary across engines; ambiguous spellings rejected at parse time | [Spec §9](docs/specs.md) |
-| **Heal provenance** | Blueprints record which engine healed them; cross-engine deploys warn at compile | [Spec §8.14](docs/specs.md) |
-| **Polyglot pipelines** | Per-module engine choice; automatic, observable handoff at engine boundaries | [Spec](docs/specs.md) |
-| **Observability store** | Runs, failures, heal attempts, metrics in queryable DuckDB/Postgres | [Observability Guide](docs/observability_guide.md) |
-| **Column lineage** | Compile-time, zero engine actions; powers the patch lineage gate | [Spec §7](docs/specs.md) |
-| **Data quality** | Inline `Assert` rules + Spillway quarantine: bad rows are routed to a typed error sink instead of being dropped | [Spec §4.4](docs/specs.md) |
-| **Module tests** | `aqueduct test` runs transforms against inline fixtures, with no I/O and no cluster | [CLI Reference](docs/cli_reference.md) |
-| **LLM benchmark** | `aqueduct benchmark` scores models against simulated failures so you can pick the cheapest model that heals your pipelines | [CLI Reference](docs/cli_reference.md) |
-| **Safety rails** | Guardrails, multi-axis budgets, hourly heal caps, sandbox replay before any live write | [Spec §8.3](docs/specs.md) |
-| **Observability dashboard** | `aqueduct dashboard`, a local read-only Streamlit viewer: fleet, runs, lineage, healing patches with before/after diff, performance, quality | [Observability Guide](docs/observability_guide.md) |
-
-## Core concepts
-
-| Concept       | Purpose                                       |
-|---------------|-----------------------------------------------|
-| **Blueprint** | Your pipeline definition                      |
-| **Ingress**   | Reads sources (CSV, Parquet, Delta, JDBC)     |
-| **Channel**   | Transformations (SQL or native ops)           |
-| **Egress**    | Writes sinks (overwrite, append, Delta merge) |
-| **Junction**  | Fan-out (conditional, broadcast, partition)   |
-| **Funnel**    | Fan-in (unions, coalesce, zip)                |
-| **Spillway**  | Routes bad rows to error sink                 |
-| **Probe**     | Non-blocking observability taps               |
-| **Regulator** | Gate driven by Probe signals (skip / abort / trigger agent) |
-| **Assert**    | Inline quality gates                          |
-| **Depot**     | Cross-run state & watermarks                  |
-| **Arcade**    | Reusable sub-pipelines                        |
-
-Full details in the [References](#references).
+The compiler partitions the DAG into engine islands and inserts a handoff at each boundary. The handoff materializes data as parquet at a configurable location, visible in observability like any other module, with bytes and duration recorded. Each handoff point is announced at compile time, because the extra I/O is a real cost you should see before the run. If an island fails, a rerun picks up the already-materialized upstream data instead of recomputing it.
 
 ## The healing flow
 
 When a pipeline fails, Aqueduct does not throw a stack trace at an LLM and hope. Healing is a staged, auditable pipeline. The model works inside a constrained grammar: it cannot write code, edit files, or run shell commands.
 
-A generated patch clears four gates and a compile-check before it ever touches the Blueprint. Gate 1 is guardrails: deterministic policy checks on paths, operations, and confidence. The compile-check follows immediately, and the patched Blueprint must still parse. Then Gate 2, lineage: does the patch break a downstream column consumer. Gate 3, sandbox: replay against representative data. Gate 4, plan regression. They run in that order and the first failure wins:
+A generated patch clears five gates plus a compile-check before it ever touches the Blueprint. Gate 1 is guardrails: deterministic policy checks on paths, operations, and confidence. The compile-check follows immediately, and the patched Blueprint must still parse. Then Gate 2, lineage: does the patch break a downstream column consumer. Gate 3, sandbox: replay against representative data. Gate 4, plan regression. Gate 5, resolvability: any dependency the patch declares must actually be installable. They run in that order and the first failure wins:
 
 ```
-✓ guardrails  →  ✓ compile-check  →  ✓ lineage  →  ✓ sandbox  →  ✓ plan-regression  →  patch applied
+✓ guardrails  →  ✓ compile-check  →  ✓ lineage  →  ✓ sandbox  →  ✓ plan-regression  →  ✓ resolvability  →  patch applied
 ```
 
-Every patch clears the pyramid before it touches the Blueprint. `aqueduct patch preview --sandbox` runs the same pyramid on demand, before you decide to apply.
+`aqueduct patch preview --sandbox` runs the same pyramid on demand, before you decide to apply.
 
 <kbd>
-  
+
 <img width="1362" height="1410" alt="Figure 1: The Healing Flow" src="https://github.com/user-attachments/assets/29bd3782-ec31-4666-9cb3-3ee8690b38b2" />
 
 </kbd>
@@ -180,44 +164,20 @@ Who applies a generated patch. Deterministic guardrails (allowed paths, forbidde
 | Mode | Who applies the patch | When the Blueprint changes | Use when |
 |---|---|---|---|
 | `disabled` | LLM never fires | Never | Healing is intentionally off. |
-| `human` | Engineer reviews and applies | Only after human accepts | Production. Default behind CI/CD. |
-| `ci` | External CI receives patch, opens a PR | Only after merge | Production with code review. |
-| `auto` | Aqueduct applies in-memory, re-validates, writes only if the re-run succeeds | Only on a successful re-run | Trusted environments: dev, scoped pipelines. |
+| `human` | Engineer reviews and applies (`patch apply`, or `patch pr` for review in a pull request) | Only after human accepts | Production. Default behind CI/CD. |
+| `ci` | External CI receives the patch and opens a PR; `aqueduct patch pr` does branch, push, and PR in one step | Only after merge | Production with code review. |
+| `auto` | Aqueduct applies in-memory, re-validates, writes only if the re-run succeeds | Only on a successful re-run | Trusted environments: dev, scoped pipelines. Requires an explicit `allowed_paths` allowlist; an unconfigured one refuses file-touching patches outright. |
 
 Low-confidence patches and any guardrail violation auto-escalate to human review.
-
-<details>
-<summary><strong>What a patch looks like</strong> (click to expand)</summary>
-
-Every patch is a `PatchSpec`, a structured, Git-diffable JSON document staged under `patches/pending/`. It contains declarative operations against the Blueprint, never code or shell commands:
-
-```jsonc
-// patches/pending/hello-pipeline-20260611T031412.json (abridged)
-{
-  "patch_id": "hello-pipeline-20260611T031412",
-  "run_id": "9f3c2e1a",
-  "category": "config_error",
-  "root_cause": "Ingress 'load' reads data/in.csv, but the upstream job renamed the file to data/input.csv.",
-  "confidence": 0.92,
-  "rationale": "PATH_NOT_FOUND on data/in.csv; a sibling data/input.csv exists with a matching schema, so the path is stale rather than the data missing.",
-  "operations": [
-    { "op": "set_module_config_key", "module_id": "load", "key": "path", "value": "data/input.csv" }
-  ]
-}
-```
-
-Review it, then `aqueduct patch apply`, or let `auto` mode validate and apply it for you.
-
-</details>
 
 ### Why it holds up
 
 - **Every change is visible.** A patch is a structured diff with a rationale and a confidence score. Low confidence escalates to a human.
 - **Live data stays safe.** The sandbox validates each patch against representative data before any live write.
 - **Loops are bounded.** A multi-axis budget caps wall-clock time, tokens, reprompts, and stuck-signature windows. A rolling rate limit caps heals per hour per blueprint.
+- **Injection is assumed, not ignored.** Error text and data samples reach the model framed as untrusted data, and everything the model produces must still clear the deterministic gates. The full analysis is in the [Threat Model](docs/threat_model.md).
 - **Decisions are auditable.** Every LLM turn is recorded with the gate that rejected it, a stable error signature, and the prompt version. One run id joins every iteration of a heal.
-- **Efficient.** Healing stops on the first successful patch. Structured error extraction replaces multi-kilobyte traces with a short root-cause block. Cheap lineage and sandbox checks reject bad patches in seconds, before any full-pipeline replay.
-- **Reach beyond the blueprint, with the same discipline.** Healing extends past pipeline definitions into engine and session config (allowlisted keys only) and dependency declarations, each behind its own gate. Config patches are validated against a per-engine allowlist and replayed in the sandbox. Dependency fixes are declared and validated, then delivered for redeploy rather than live-installed. Data mutation stays off by default: the agent never touches your data without an explicit opt-in and per-action human approval.
+- **Reach beyond the blueprint, with the same discipline.** Healing extends past pipeline definitions into engine and session config (allowlisted keys only) and dependency declarations, each behind its own gate. Data mutation stays off, period: the patch grammar contains no operation that can touch your data, and a test enforces that the grammar stays that way.
 
 For the stage-by-stage detail, see the [Blueprint & Engine Spec](docs/specs.md).
 
@@ -243,27 +203,25 @@ Inside the box, Aqueduct is a single CLI that runs on the driver, with no server
 - **Executor** runs the Manifest on the target engine. Engines register through an entry-point protocol; Spark code is isolated under `executor/spark/`, DuckDB under `executor/duckdb_/`. The core never imports an engine by name.
 - **Surveyor** records runs, failures, and lineage to pluggable stores and triggers the Agent on failure.
 
-## Observability dashboard
+## Core concepts
 
-`aqueduct dashboard` launches a local, read-only Streamlit viewer over the same observability store the engine writes to. It runs on demand, like the Spark UI. It is not a production server, and no pipeline requires it. One place for fleet health, per-run module metrics, column lineage, the self-heal patch stream with before/after diffs, performance trends, and data-quality signals across every blueprint. Backend-agnostic (DuckDB or Postgres). Every view re-reads with short-lived connections, so it can't block a running pipeline's writer.
+| Concept       | Purpose                                       |
+|---------------|-----------------------------------------------|
+| **Blueprint** | Your pipeline definition                      |
+| **Ingress**   | Reads sources (CSV, Parquet, Delta, JDBC)     |
+| **Channel**   | Transformations (SQL or native ops)           |
+| **Egress**    | Writes sinks (overwrite, append, Delta merge) |
+| **Junction**  | Fan-out (conditional, broadcast, partition)   |
+| **Funnel**    | Fan-in (unions, coalesce, zip)                |
+| **Spillway**  | Routes bad rows to error sink                 |
+| **Probe**     | Non-blocking observability taps               |
+| **Regulator** | Gate driven by Probe signals (skip / abort / trigger agent) |
+| **Assert**    | Inline quality gates                          |
+| **Depot**     | Cross-run state & watermarks                  |
+| **Arcade**    | Reusable sub-pipelines                        |
 
-```bash
-pip install "aqueduct-core[dashboard]"
-aqueduct dashboard            # opens http://localhost:8501
-```
+Full details in the [References](#references).
 
-<!--
-  TODO(gallery): drop screenshots at docs/media/dashboard/*.png, then DELETE the
-  "coming soon" <p> below and uncomment the table.
-  Use static PNGs, NOT a GIF. The dashboard is dense (tables/charts); stills read
-  sharper and load faster than a blurry tab-cycling GIF. Suggested four below.
--->
-<!--
-| | |
-|---|---|
-| <img src="docs/media/dashboard/runs.png"        alt="Runs → run detail (module metrics)" />   | <img src="docs/media/dashboard/lineage.png"     alt="Column-lineage Sankey + SQL changelog" /> |
-| <img src="docs/media/dashboard/healing.png"     alt="Healing → patch before/after diff" />     | <img src="docs/media/dashboard/performance.png" alt="Performance → cost-vs-data trends" />      |
--->
 ## Getting started
 
 ### Installation
@@ -273,24 +231,9 @@ pip install aqueduct-core              # DuckDB engine included, no JVM needed
 pip install "aqueduct-core[spark]"     # adds Apache Spark + Delta Lake
 ```
 
-> [!NOTE]
-> Python 3.11+. Java 17 for the `spark` extra only (`JAVA_HOME` must point to it).
-> Every release is CI-tested against three pinned combos: LTS (Python 3.11 · Spark 4.1), Latest (Python 3.13 · Spark 4.1), Legacy (Python 3.12 · Spark 3.5). Live results in the [Compatibility Matrix](docs/compatibility.md).
+**Requires** Python 3.11+ and, for the `spark` extra only, Java 17. Every release is CI-tested from Spark 3.5 through 4.1; the exact tested combos live in the [Compatibility Matrix](docs/compatibility.md).
 
-Compose extras as needed, for example `pip install "aqueduct-core[spark,airflow,aws]"`:
-
-| Extra | Adds | Install when |
-|---|---|---|
-| `spark` | PySpark 4 + Delta Lake | Running pipelines on Spark on this host. |
-| `duckdb` | numpy, for DuckDB Python UDFs | Writing a Python UDF that runs on DuckDB. The engine itself needs nothing. |
-| `airflow` | Apache Airflow operator shim | Scheduler / worker host; the box submitting jobs. |
-| `secrets` | AWS + GCP + Azure secret-manager SDKs (or pick `aws` / `gcp` / `azure` individually) | Resolving `@aq.secret('KEY')` against a cloud vault. |
-| `stores` | Postgres, Redis, and object-store backends (or pick `postgres` / `redis` / `object-store` individually) | Replacing single-writer DuckDB defaults for obs / lineage / depot. |
-| `llm` | `json-repair`, last-ditch recovery of malformed LLM patch JSON | Healing with small local models that emit imperfect JSON. |
-| `all` | Every runtime extra above, plus `databricks` | Single-laptop dev. |
-
-> [!IMPORTANT]
-> `all` covers runtime capabilities only. The two local dev tools ship separately on purpose, so a production install never pulls a web framework: `pip install "aqueduct-core[dashboard]"` for the Streamlit viewer and `pip install "aqueduct-core[mcp]"` for the MCP diagnostics server.
+Extras exist for Airflow (`airflow`), cloud secret managers (`secrets`), networked stores (`stores`), and everything at once (`all`); compose them as needed, for example `pip install "aqueduct-core[spark,airflow,aws]"`. The full list with rationale is in `pyproject.toml` and the [Production Guide](docs/production_guide.md).
 
 ### A first blueprint
 
@@ -341,31 +284,36 @@ Engine-wide defaults live in a separate `aqueduct.yml` (target engine, LLM provi
 
 1. **`aqueduct doctor blueprints/hello.yml`** is the preflight check. It validates YAML, resolves paths, verifies LLM reachability, and opens stores.
 2. **`aqueduct run blueprints/hello.yml`** executes the pipeline. On failure, the agent generates a patch under `patches/pending/`.
-3. **`aqueduct patch apply patches/pending/<id>.json --blueprint blueprints/hello.yml`** reviews and accepts a staged patch, moving it to `patches/applied/`.
+3. **`aqueduct patch pr <id> --blueprint blueprints/hello.yml`** turns a staged patch into a pull request on a heal branch (or review locally with `patch apply`).
 4. **`aqueduct test blueprints/hello.aqtest.yml`** runs Channel / Junction / Funnel modules against inline data, without touching Ingress, Egress, or any external I/O.
-5. **`aqueduct benchmark gallery/aqscenarios/ --model claude-sonnet-4-6 --model qwen2.5-coder:7b`** compares LLM models against simulated failures. No engine required.
+5. **`aqueduct benchmark gallery/aqscenarios/ --model <a> --model <b>`** compares LLM models against simulated failures, so you can pick the cheapest model that heals your pipelines. No engine required.
 
 Full reference in [CLI Reference](docs/cli_reference.md).
 
-## How it compares
+## What you get
 
-<!-- TODO(positioning): tighten these one-liners with real benchmark/feature claims once verified. -->
-
-| | Aqueduct | dbt | Dagster / Airflow | Raw PySpark |
-|---|---|---|---|---|
-| Pipeline definition | Declarative YAML Blueprints | SQL models | Python DAG code | Imperative code |
-| Engine | Spark or DuckDB, capability-gated | Warehouse SQL | Orchestration only | Apache Spark |
-| On failure | **Autonomous LLM patch + gates** | Manual fix | Retry / alert | Manual fix |
-| Column lineage | Built-in, compile-time | Built-in | Plugin | DIY |
-| Built-in observability store | Yes (DuckDB/Postgres) | Partial | External | DIY |
-
-Aqueduct is a transformation engine with a repair loop attached. It is not a scheduler (pair it with Airflow via the `airflow` extra) and it is not a warehouse SQL tool.
+| Capability | What it does | Details |
+|---|---|---|
+| **Self-healing** | LLM diagnoses failures, emits gated, Git-diffable patches with human, CI, or auto approval | [Spec §8](docs/specs.md) |
+| **Heal-as-PR** | `aqueduct patch pr` applies a patch on a heal branch and opens a PR through your normal review | [CLI Reference](docs/cli_reference.md) |
+| **Heal memory** | Failure signatures cache validated fixes; repeat failures heal with zero LLM tokens | [Spec §8.2](docs/specs.md) |
+| **Engine capability gate** | Unsupported features fail at compile time with a named capability, never mid-run | [Compatibility Matrix](docs/compatibility.md) |
+| **Portable types** | One type vocabulary across engines; ambiguous spellings rejected at parse time | [Spec §9](docs/specs.md) |
+| **Heal provenance** | Blueprints record which engine healed them; cross-engine deploys warn at compile | [Spec §8.14](docs/specs.md) |
+| **Polyglot pipelines** | Per-module engine choice; automatic, observable handoff at engine boundaries | [Spec](docs/specs.md) |
+| **Observability store** | Runs, failures, heal attempts, metrics in queryable DuckDB/Postgres | [Observability Guide](docs/observability_guide.md) |
+| **Column lineage** | Compile-time, zero engine actions; powers the patch lineage gate | [Spec §7](docs/specs.md) |
+| **Data quality** | Inline `Assert` rules + Spillway quarantine: bad rows are routed to a typed error sink instead of being dropped | [Spec §4.4](docs/specs.md) |
+| **Module tests** | `aqueduct test` runs transforms against inline fixtures, with no I/O and no cluster | [CLI Reference](docs/cli_reference.md) |
+| **LLM benchmark** | `aqueduct benchmark` scores models against simulated failures | [CLI Reference](docs/cli_reference.md) |
+| **Safety rails** | Guardrails, multi-axis budgets, hourly heal caps, sandbox replay, a written threat model | [Threat Model](docs/threat_model.md) |
 
 ## References
 
 - **[Blueprint & Engine Spec](docs/specs.md)**: module types, configs, architecture, type system, healing loop
 - **[SKILL.md](SKILL.md)**: distilled Blueprint-authoring guide for LLMs (grammar, patterns, provider base_urls)
 - **[CLI Reference](docs/cli_reference.md)**: all commands and flags
+- **[Threat Model](docs/threat_model.md)**: trust boundaries, injection surface, mitigations
 - **[Spark Engine Guide](docs/spark_guide.md)**: warnings, performance, tuning
 - **[Observability Guide](docs/observability_guide.md)**: schemas + diagnostic query cookbook
 - **[Production Guide](docs/production_guide.md)**: cluster deployment, security, Delta operations

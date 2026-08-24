@@ -822,8 +822,10 @@ Two kinds of documents, two different jobs. These rules govern every edit to
 code blocks or literal CLI output examples). Violating them is rework, not
 taste.
 
-**README = the front door. It links, it does not explain.** Keep it well under
-150 lines, in exactly this shape:
+**README = the front door. It links, it does not explain.** No hard line
+budget (owner lifted the old <150 cap, 2026-08-24): visual life and a real
+example earn their lines; deep explanation never does — it moves to `docs/`.
+Keep this shape:
 
 1. Tagline + hook: what this is and why it exists, with one tiny example —
    enough to stop a reader from leaving.
