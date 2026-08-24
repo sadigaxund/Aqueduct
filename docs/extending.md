@@ -51,11 +51,10 @@ The module is wired in through the `aqueduct.engines` setuptools entry-point
 group, declared in `pyproject.toml`. Nothing in `aqueduct/compiler/`,
 `aqueduct/config.py`, or any other core module imports an engine's package by
 name. `aqueduct/executor/capabilities.py::load_engines()` resolves and
-imports every entry point in that group exactly once per process; each
-engine module registers itself as an import side effect of being imported.
-This is why adding DuckDB required zero edits to the compiler, the config
-loader, or the CLI's engine dispatch: the seam already existed and DuckDB
-plugged into it.
+imports every entry point in that group exactly once per process, which is
+what triggers the registration described above. This is why adding DuckDB
+required zero edits to the compiler, the config loader, or the CLI's engine
+dispatch: the seam already existed and DuckDB plugged into it.
 
 Two consequences follow directly from "registration is an import side
 effect":

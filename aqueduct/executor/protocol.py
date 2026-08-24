@@ -321,6 +321,21 @@ class ExecutorProtocol:
     ``_aq_stability`` class attribute below is a programmatically-checkable
     marker for the same fact — see ``tests/test_capabilities/test_executor_protocol.py``.
 
+    **Seven fields default to ``None``.** ``make_session``, ``close_session``,
+    ``cleanup_reused_session``, ``read_source_schema``, ``sample_source_rows``,
+    and ``render_type`` all degrade conservatively when left unset: each one
+    either raises a named ``EnginePluginError`` at the point of use
+    (``make_session``), returns a structured "unavailable" signal instead of
+    crashing or borrowing another engine's implementation
+    (``read_source_schema``/``sample_source_rows``), no-ops silently by design
+    (``close_session``/``cleanup_reused_session``), or narrows what a
+    Blueprint may compile against (``render_type``). ``execute_kwargs`` is the
+    seventh field and reads the OPPOSITE way: ``None`` there means "accept
+    everything a caller could reasonably pass," the most permissive setting,
+    not the most restrictive one. See that attribute's own entry below for
+    why the polarity is inverted; treat it as a separate case, not a member
+    of the degrade-conservatively group.
+
     Attributes:
         engine: Engine name (matches the ``aqueduct.engines`` entry-point
             name and ``deployment.engine`` values, e.g. ``"spark"``).

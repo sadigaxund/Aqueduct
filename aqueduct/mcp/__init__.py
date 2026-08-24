@@ -3,7 +3,7 @@
 Thin package: ``server.py`` owns the declaration builder + the stdio serve
 loop. Top-level ``import aqueduct.mcp`` must NOT require the ``mcp`` SDK —
 the SDK is only imported inside ``serve()`` (the ``[mcp]`` dev-tooling
-extra), mirroring how ``aqueduct dashboard`` guards on ``streamlit``.
+extra).
 """
 
 from __future__ import annotations

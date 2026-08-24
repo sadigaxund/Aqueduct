@@ -15,9 +15,8 @@ exactly this hand-off). The server is:
   subprocess and speaks JSON-RPC over stdin/stdout.
 - **SDK-gated.** The ``mcp`` SDK is a dev-tooling extra
   (``pip install aqueduct-core[mcp]``); this module's top level stays
-  SDK-free — only ``serve()`` (and the private builders it calls) import it,
-  mirroring the ``dashboard``/``streamlit`` pattern. ``build_tool_declarations()``
-  is pure and importable on a base install.
+  SDK-free — only ``serve()`` (and the private builders it calls) import it.
+  ``build_tool_declarations()`` is pure and importable on a base install.
 
 Tool handlers run synchronously on the event loop — acceptable for a local
 single-client stdio server whose tools are short DuckDB/Postgres reads; a

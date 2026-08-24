@@ -261,28 +261,28 @@ leaves:
       - tests/test_executor/test_funnel.py::test_zip_row_aligned
   healed_by.field.applied_at:
     support: supported
-    hint: Compiler-consumed provenance metadata — no engine executes it.
+    hint: Compiler-consumed provenance metadata; no engine executes it.
   healed_by.field.classification:
     support: supported
-    hint: Compiler-consumed provenance metadata — no engine executes it.
+    hint: Compiler-consumed provenance metadata; no engine executes it.
   healed_by.field.engine:
     support: supported
-    hint: Compiler-consumed provenance metadata — no engine executes it.
+    hint: Compiler-consumed provenance metadata; no engine executes it.
   healed_by.field.engine_config_delta:
     support: supported
-    hint: Patch-apply provenance metadata (effective session-config diff) — recorded by core, no engine executes it.
+    hint: Patch-apply provenance metadata (effective session-config diff), recorded by core; no engine executes it.
   healed_by.field.engine_version:
     support: supported
-    hint: Compiler-consumed provenance metadata — no engine executes it.
+    hint: Compiler-consumed provenance metadata; no engine executes it.
   healed_by.field.patch_id:
     support: supported
-    hint: Compiler-consumed provenance metadata — no engine executes it.
+    hint: Compiler-consumed provenance metadata; no engine executes it.
   healed_by.field.run_id:
     support: supported
-    hint: Compiler-consumed provenance metadata — no engine executes it.
+    hint: Compiler-consumed provenance metadata; no engine executes it.
   healed_by.field.validated_on:
     support: supported
-    hint: Compiler-consumed provenance metadata — no engine executes it.
+    hint: Compiler-consumed provenance metadata; no engine executes it.
   hook_entry.field.blueprint: supported
   hook_entry.field.command: supported
   hook_entry.field.in_process: supported
@@ -372,7 +372,7 @@ leaves:
       - tests/test_executor/test_executor_orchestration.py::test_execute_funnel_union_all
   module.type.Handoff:
     support: supported
-    hint: "Compiler-synthesized only — a Blueprint can never declare one (see aqueduct/compiler/handoff.py). Real engine-native parquet transport: df.write.parquet on the write side, spark.read.parquet on the read side. A Handoff module's id is never a member of any island's module_ids (islands are derived from the pre-insertion graph), so this verdict is never actually consulted by the per-island capability gate; it is declared supported here because the transport is real and tested, not because the gate depends on it."
+    hint: "Compiler-synthesized only: a Blueprint can never declare one (see aqueduct/compiler/handoff.py). Real engine-native parquet transport: df.write.parquet on the write side, spark.read.parquet on the read side. A Handoff module's id is never a member of any island's module_ids (islands are derived from the pre-insertion graph), so this verdict is never actually consulted by the per-island capability gate; it is declared supported here because the transport is real and tested, not because the gate depends on it."
     tests:
       - tests/test_executor/test_orchestrator_e2e.py::test_spark_to_duckdb_handoff_e2e_success
       - tests/test_executor/test_orchestrator_e2e.py::test_duckdb_to_spark_handoff_e2e_success
@@ -704,7 +704,7 @@ leaves:
       - tests/test_executor/test_executor_egress.py::test_egress_format_parquet_roundtrip
   ingress.format.iceberg:
     support: supported
-    hint: "Requires the Iceberg Spark runtime jar (org.apache.iceberg:iceberg-spark-runtime-<line>_<scala>) on the driver classpath — not bundled with pyspark. See docs/compatibility.md for the AQ_LAKEHOUSE-gated test setup."
+    hint: "Requires the Iceberg Spark runtime jar (org.apache.iceberg:iceberg-spark-runtime-<line>_<scala>) on the driver classpath, not bundled with pyspark. See docs/compatibility.md for the AQ_LAKEHOUSE-gated test setup."
     tests:
       - tests/test_executor/test_executor_lakehouse.py::test_ingress_format_iceberg_reads_written_table
   ingress.format.json:

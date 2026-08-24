@@ -41,14 +41,7 @@ _LOCKS = [
 # exactly the bug class this file exists to catch (duckdb/typehub/deploy were
 # all silently main-only before this guard existed). Keyed by the directory's
 # repo-relative posix path (no trailing slash).
-_MAIN_ONLY_TEST_DIR_ALLOWLIST: dict[str, str] = {
-    "tests/test_dashboard": (
-        "aqueduct/dashboard needs the `dashboard` extra (streamlit/plotly) — a "
-        "local, read-only, on-demand observability viewer, same dev-tooling "
-        "carve-out as `tui`/`mcp` (AGENTS.md Packaging & Extras Policy). Out of "
-        "scope for the reproducible pre-merge lanes; stays main-only/manual."
-    ),
-}
+_MAIN_ONLY_TEST_DIR_ALLOWLIST: dict[str, str] = {}
 
 
 def _workflow(name: str) -> dict:
@@ -668,11 +661,6 @@ def test_every_test_file_is_selected_by_some_pre_merge_lane():
 #   - `tests/test_airflow.py` falls back to MOCK Operator/Sensor/Trigger
 #     classes and runs green either way, so a lane that never installs real
 #     airflow silently tests nothing real — a fake-green, not a skip.
-#   - `tests/test_dashboard/` (see its allowlist entry) calls
-#     `pytest.importorskip`, which honestly SKIPS instead of faking a pass —
-#     lower severity, but still only meaningful in a lane that installs the
-#     extra; it is exempted here, same as everywhere else in this file, via
-#     `_MAIN_ONLY_TEST_DIR_ALLOWLIST` because it has NO pre-merge lane at all.
 #
 # Detection is restricted to MODULE-LEVEL (column-0) constructs on purpose —
 # a `pytest.importorskip(...)` or `try/except ImportError` nested inside an
@@ -719,7 +707,7 @@ _CAPABILITY_AGGREGATES = {"secrets", "stores", "schedulers", "all"}
 _ENGINE_LEAVES = {"spark", "duckdb"}
 # Dev-tooling extras: the one documented exception to the two-axis rule.
 # Never a runtime-capability dep, never in `all`.
-_DEV_TOOLING_EXTRAS = {"dev", "dashboard", "mcp"}
+_DEV_TOOLING_EXTRAS = {"dev", "mcp"}
 
 # Runtime-capability leaves that must roll up into a capability aggregate —
 # per-vendor leaves belonging to `secrets`/`stores`/`schedulers`. Engine

@@ -257,7 +257,7 @@ def _load_config_with_env(
     from CWD (same ``_resolve_project_root`` logic as every CLI command).
 
     ``quiet`` suppresses the stderr notice — useful for long-running
-    processes (dashboard) that re-load config on every refresh.
+    processes that re-load config on every refresh.
     """
     from pathlib import Path as _Path2
 

@@ -65,7 +65,7 @@ def test_declarations_are_json_schema_shaped():
 
 def test_server_module_top_level_is_sdk_free():
     """`import aqueduct.mcp` must work on a base install — the SDK import
-    lives inside serve()/_build_server() only (the dashboard/streamlit pattern)."""
+    lives inside serve()/_build_server() only."""
     import aqueduct.mcp.server as srv
 
     for line in inspect.getsource(srv).splitlines():
@@ -78,10 +78,9 @@ def test_server_module_top_level_is_sdk_free():
 def test_import_aqueduct_mcp_leaves_sdk_out_of_sys_modules():
     """AGENTS.md's stdio-server section claims a `sys.modules` check backs
     the "import aqueduct.mcp never pulls the SDK" contract, alongside the
-    source-scan test above — mirrors test_dashboard_cli.py's parallel check
-    for `streamlit`. Runs in a clean subprocess so an unrelated test that
-    already imported `mcp`/`anyio` elsewhere in the same process can't mask
-    a real regression here."""
+    source-scan test above. Runs in a clean subprocess so an unrelated test
+    that already imported `mcp`/`anyio` elsewhere in the same process can't
+    mask a real regression here."""
     import subprocess
     import sys
 

@@ -404,7 +404,7 @@ Per-pipeline DuckDB files are the right default: zero setup, single-writer is fi
 - **Fleet questions**: "which of my N pipelines healed last night", "heal-rate trend across all blueprints" require querying N separate `.db` files; with Postgres every pipeline writes to one database (the engine creates `observability` / `depots` schemas per store automatically).
 - **Many pipelines**: dozens of per-pipeline files under `.aqueduct/observability/*/` get awkward to back up, retain, and dashboard.
 - **Ephemeral drivers**: Kubernetes Jobs / CI runners lose local files on every restart; a network DSN removes the PVC requirement above entirely.
-- **Concurrent access**: a dashboard or `aqueduct runs` polling while a run is writing hits DuckDB's single-writer lock; Postgres MVCC does not care.
+- **Concurrent access**: a BI tool or `aqueduct runs` polling while a run is writing hits DuckDB's single-writer lock; Postgres MVCC does not care.
 
 The switch is one config change (plus `pip install aqueduct-core[postgres]`):
 
