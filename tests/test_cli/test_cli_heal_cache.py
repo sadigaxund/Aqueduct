@@ -12,6 +12,7 @@ import pytest
 pytestmark = pytest.mark.unit
 
 from click.testing import CliRunner
+
 from aqueduct.agent.budget import StopReason
 from aqueduct.cli import cli
 from aqueduct.exit_codes import HEAL_PENDING
@@ -31,6 +32,10 @@ modules:
 edges: []
 agent:
   %s
+  # 2.2.0: approval: auto denies file-touching ops by default unless an
+  # allowlist is configured (item A, security workstream) — these fixtures
+  # patch a `path` config key under auto mode, so they need one.
+  guardrails: {allowed_paths: ["*"]}
 """
         % extra
     )
@@ -505,6 +510,7 @@ def test_heal_coverage_aggregates_resolutions(tmp_path):
     """aqueduct runs --heal-coverage aggregates by resolution and reports zero-token %."""
     import duckdb
     from click.testing import CliRunner
+
     from aqueduct.cli import cli
 
     # Build a observability DB with known healing_outcomes data
@@ -550,6 +556,7 @@ def test_heal_coverage_empty_db_shows_no_healings(tmp_path):
     """No healing_outcomes → 'No healing outcomes recorded yet' message."""
     import duckdb
     from click.testing import CliRunner
+
     from aqueduct.cli import cli
 
     obs_dir = tmp_path / ".aqueduct" / "observability" / "test_bp"
@@ -586,6 +593,7 @@ def test_heal_coverage_empty_db_shows_no_healings(tmp_path):
 def test_heal_coverage_no_db_no_runs(tmp_path):
     """No observability.db → 'No runs found' message."""
     from click.testing import CliRunner
+
     from aqueduct.cli import cli
 
     runner = CliRunner()

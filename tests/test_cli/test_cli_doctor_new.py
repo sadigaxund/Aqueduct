@@ -930,6 +930,56 @@ class TestJavaCheck:
         assert r.status == "warn" and "no java found" in r.detail
 
 
+# ── Phase 87: `gh` CLI presence + auth (the `patch pr` transport) ───────────
+
+from aqueduct.doctor import check_gh_pr
+
+
+class TestGhPrCheck:
+    def test_gh_not_found_is_skip_not_fail(self, monkeypatch):
+        """Soft/skippable: `gh` is only needed for `patch pr` — its absence
+        must never fail `aqueduct doctor` for users who don't use that flow."""
+        monkeypatch.setattr("shutil.which", lambda _: None)
+        r = check_gh_pr()
+        assert r.status == "skip"
+        assert "patch pr" in r.detail
+
+    def test_gh_found_and_authenticated_is_ok(self, monkeypatch):
+        import subprocess
+
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/gh")
+
+        def fake_run(args, **kw):
+            if args[1:] == ["--version"]:
+                return MagicMock(returncode=0, stdout="gh version 2.50.0 (2024-01-01)", stderr="")
+            if args[1:] == ["auth", "status"]:
+                return MagicMock(returncode=0, stdout="", stderr="")
+            raise AssertionError(f"unexpected gh invocation: {args}")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        r = check_gh_pr()
+        assert r.status == "ok"
+        assert "authenticated" in r.detail
+
+    def test_gh_found_but_not_authenticated_warns(self, monkeypatch):
+        import subprocess
+
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/gh")
+
+        def fake_run(args, **kw):
+            if args[1:] == ["--version"]:
+                return MagicMock(returncode=0, stdout="gh version 2.50.0", stderr="")
+            if args[1:] == ["auth", "status"]:
+                return MagicMock(returncode=1, stdout="", stderr="not logged in")
+            raise AssertionError(f"unexpected gh invocation: {args}")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        r = check_gh_pr()
+        assert r.status == "warn"
+        assert "not authenticated" in r.detail
+        assert "gh auth login" in r.detail
+
+
 # ── T27 Part 2: preflight checks (agent ping, UDF import) ───────────────────────
 
 from aqueduct.doctor import _check_udf_registry, check_agent as _check_agent

@@ -1,9 +1,11 @@
 """Tests for the Patch layer: Guardrails and rollback functionality."""
 
 from __future__ import annotations
+
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
 import pytest
 
 pytestmark = pytest.mark.unit
@@ -22,16 +24,17 @@ _CFG = AqueductConfig()
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 
 
-def _bp_with_guardrails(allowed_paths=(), forbidden_ops=(), deny_patterns=()):
-    return {
-        "agent": {
-            "guardrails": {
-                "allowed_paths": list(allowed_paths),
-                "forbidden_ops": list(forbidden_ops),
-                "deny_patterns": list(deny_patterns),
-            }
+def _bp_with_guardrails(allowed_paths=(), forbidden_ops=(), deny_patterns=(), approval=None):
+    agent: dict = {
+        "guardrails": {
+            "allowed_paths": list(allowed_paths),
+            "forbidden_ops": list(forbidden_ops),
+            "deny_patterns": list(deny_patterns),
         }
     }
+    if approval is not None:
+        agent["approval"] = approval
+    return {"agent": agent}
 
 
 def _patch(*ops):
@@ -333,6 +336,106 @@ class TestDenyPatternsGate:
         )  # arcade-expanded id skipped here, same as allowed_paths
 
 
+class TestAutoModeDenyByDefault:
+    """Item A (2.2.0): under `agent.approval: auto` — the only mode a patch
+    applies with zero human review — an empty `allowed_paths` must DENY
+    file-touching ops instead of allowing all paths. `human`/`ci` keep the
+    historical empty-means-unrestricted behavior."""
+
+    def test_auto_mode_empty_allowlist_blocks_set_module_config_key(self):
+        bp = _bp_with_guardrails(approval="auto")
+        spec = _patch(
+            {
+                "op": "set_module_config_key",
+                "module_id": "x",
+                "key": "path",
+                "value": "s3a://attacker/data/",
+            }
+        )
+        with pytest.raises(PatchError, match="agent.approval: auto"):
+            _check_guardrails(spec, bp, cfg=_CFG)
+
+    def test_auto_mode_empty_allowlist_blocks_replace_module_config(self):
+        bp = _bp_with_guardrails(approval="auto")
+        spec = _patch(
+            {
+                "op": "replace_module_config",
+                "module_id": "x",
+                "config": {"format": "parquet", "path": "s3a://attacker/data/"},
+            }
+        )
+        with pytest.raises(PatchError, match="agent.approval: auto"):
+            _check_guardrails(spec, bp, cfg=_CFG)
+
+    def test_auto_mode_empty_allowlist_blocks_insert_module(self):
+        bp = _bp_with_guardrails(approval="auto")
+        spec = _patch(
+            {
+                "op": "insert_module",
+                "module": {
+                    "id": "new_ingress",
+                    "type": "Ingress",
+                    "label": "x",
+                    "config": {"format": "parquet", "path": "s3a://attacker/data/"},
+                },
+                "edges_to_add": [],
+                "edges_to_remove": [],
+            }
+        )
+        with pytest.raises(PatchError, match="agent.approval: auto"):
+            _check_guardrails(spec, bp, cfg=_CFG)
+
+    def test_auto_mode_configured_allowlist_still_enforces_normally(self):
+        # allowed_paths configured → normal fnmatch enforcement, not the
+        # deny-by-default path; a matching value still passes.
+        bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",), approval="auto")
+        spec = _patch(
+            {
+                "op": "set_module_config_key",
+                "module_id": "x",
+                "key": "path",
+                "value": "s3a://prod/orders/",
+            }
+        )
+        assert _check_guardrails(spec, bp, cfg=_CFG).status == "not_applicable"
+
+    def test_auto_mode_configured_allowlist_non_matching_still_blocks(self):
+        bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",), approval="auto")
+        spec = _patch(
+            {
+                "op": "set_module_config_key",
+                "module_id": "x",
+                "key": "path",
+                "value": "s3a://staging/orders/",
+            }
+        )
+        with pytest.raises(PatchError, match="s3a://staging/orders/"):
+            _check_guardrails(spec, bp, cfg=_CFG)
+
+    def test_auto_mode_empty_allowlist_does_not_block_non_path_ops(self):
+        # remove_module never touches a path — deny-by-default is scoped to
+        # file-touching ops only.
+        bp = _bp_with_guardrails(approval="auto")
+        spec = _patch({"op": "remove_module", "module_id": "x"})
+        assert _check_guardrails(spec, bp, cfg=_CFG).status == "not_applicable"
+
+    @pytest.mark.parametrize("approval", ["human", "ci", "disabled", None])
+    def test_non_auto_modes_keep_empty_allowlist_unrestricted(self, approval):
+        # A human reviews the patch in human/ci mode (and disabled never
+        # auto-applies), so the pre-2.2.0 empty-means-unrestricted behavior
+        # is preserved for every mode except auto.
+        bp = _bp_with_guardrails(approval=approval)
+        spec = _patch(
+            {
+                "op": "set_module_config_key",
+                "module_id": "x",
+                "key": "path",
+                "value": "s3a://anywhere/data/",
+            }
+        )
+        assert _check_guardrails(spec, bp, cfg=_CFG).status == "not_applicable"
+
+
 class TestEngineConfigAllowlistGate:
     """Gate 1 enforcement of `set_engine_config` against each engine's core
     `engine_config_allowlist.yml` (cross-engine remediation follow-up).
@@ -557,7 +660,7 @@ edges: []
         runner = CliRunner()
         with patch("subprocess.run") as mock_run:
             mock_log = MagicMock(
-                returncode=0, stdout=f"h1\x1fSubject line\nBody with abc123\x1eENDCOMMIT"
+                returncode=0, stdout="h1\x1fSubject line\nBody with abc123\x1eENDCOMMIT"
             )
 
             def side_effect(cmd, **kw):

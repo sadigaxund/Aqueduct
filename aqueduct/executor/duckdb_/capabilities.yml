@@ -180,14 +180,14 @@ leaves:
   config.checkpoint_root: supported
   config.danger.allow_full_probe_actions:
     support: supported
-    hint: "Inverted into block_full_actions and threaded into the DuckDB executor's Probe dispatch (Pass F) — genuinely gates null_rates/value_distribution/distinct_count/data_freshness (unless allow_sample). row_count_estimate and threshold are NOT gated on this engine — see duckdb_/probe.py's module docstring for why an exact single-node count and the Regulator-gate signal are never blocked."
+    hint: "Inverted into block_full_actions and threaded into the DuckDB executor's Probe dispatch (Pass F); genuinely gates null_rates/value_distribution/distinct_count/data_freshness (unless allow_sample). row_count_estimate and threshold are NOT gated on this engine; see duckdb_/probe.py's module docstring for why an exact single-node count and the Regulator-gate signal are never blocked."
     tests:
       - tests/test_executor_duckdb/test_probe.py::test_config_danger_allow_full_probe_actions_gates_via_block_full_actions
       - tests/test_executor_duckdb/test_probe.py::test_row_count_estimate_not_gated_by_block_full_actions
       - tests/test_executor_duckdb/test_probe.py::test_threshold_not_gated_by_block_full_actions
   config.deployment.target:
     support: supported
-    hint: "DuckDB is a single-node engine — only target=local is meaningful. Remote-submit / cluster targets (emr, dataproc, yarn, kubernetes, standalone) have no DuckDB execution path; use the spark engine for those."
+    hint: "DuckDB is a single-node engine; only target=local is meaningful. Remote-submit / cluster targets (emr, dataproc, yarn, kubernetes, standalone) have no DuckDB execution path; use the spark engine for those."
   config.engine.duckdb.database_path:
     support: supported
     tests:
@@ -195,7 +195,7 @@ leaves:
       - tests/test_executor_duckdb/test_engine_config.py::TestMakeSessionDatabasePath::test_unset_database_path_is_memory_only
   config.engine.duckdb.extension_repository:
     support: supported
-    hint: "SET custom_extension_repository, applied before any extension install — the airgapped/hermetic-CI escape hatch for the first s3://-style path a Blueprint touches (DuckDB's own httpfs extension autoinstalls over the network otherwise). See also a pre-populated ~/.duckdb/extensions, which needs no config at all."
+    hint: "SET custom_extension_repository, applied before any extension install; the airgapped/hermetic-CI escape hatch for the first s3://-style path a Blueprint touches (DuckDB's own httpfs extension autoinstalls over the network otherwise). See also a pre-populated ~/.duckdb/extensions, which needs no config at all."
     tests:
       - tests/test_executor_duckdb/test_engine_config.py::TestEnsureExtension::test_ensure_extension_sets_custom_repository_before_install
   config.engine.duckdb.memory_limit:
@@ -204,7 +204,7 @@ leaves:
       - tests/test_executor_duckdb/test_engine_config.py::TestMakeSessionMemoryAndThreads::test_memory_limit_applied
   config.engine.duckdb.s3_key_id_secret:
     support: supported
-    hint: "A secret KEY NAME, resolved through the configured secrets: provider (same aqueduct.secrets.resolve_secret() @aq.secret() uses) and fed into DuckDB's own CREATE SECRET (TYPE S3, ...) via parameter binding — never a literal credential in aqueduct.yml, never string-interpolated into SQL."
+    hint: "A secret KEY NAME, resolved through the configured secrets: provider (same aqueduct.secrets.resolve_secret() @aq.secret() uses) and fed into DuckDB's own CREATE SECRET (TYPE S3, ...) via parameter binding; never a literal credential in aqueduct.yml, never string-interpolated into SQL."
     tests:
       - tests/test_executor_duckdb/test_engine_config.py::TestS3SecretResolution::test_make_session_wires_s3_secret_via_engine_options
   config.engine.duckdb.s3_region:
@@ -213,7 +213,7 @@ leaves:
       - tests/test_executor_duckdb/test_engine_config.py::TestS3SecretResolution::test_configure_s3_secret_creates_duckdb_secret_no_network
   config.engine.duckdb.s3_secret_access_key_secret:
     support: supported
-    hint: "A secret KEY NAME — see config.engine.duckdb.s3_key_id_secret. Must be set together with it."
+    hint: "A secret KEY NAME; see config.engine.duckdb.s3_key_id_secret. Must be set together with it."
     tests:
       - tests/test_executor_duckdb/test_engine_config.py::TestS3SecretResolution::test_make_session_wires_s3_secret_via_engine_options
   config.engine.duckdb.threads:
@@ -222,18 +222,18 @@ leaves:
       - tests/test_executor_duckdb/test_engine_config.py::TestMakeSessionMemoryAndThreads::test_threads_applied
   config.handoff.root:
     support: supported
-    hint: "A remote handoff.root (s3://, gs://, ...) is reached the same way any other remote path is on this engine — DuckDB's httpfs extension, autoloaded on first touch, plus engine.duckdb.s3_* credentials if the target requires authentication. Not reachable before httpfs work landed; now genuinely probed (aqueduct doctor's handoff-access:duckdb check attempts a real round trip, no longer a blanket skip)."
+    hint: "A remote handoff.root (s3://, gs://, ...) is reached the same way any other remote path is on this engine; DuckDB's httpfs extension, autoloaded on first touch, plus engine.duckdb.s3_* credentials if the target requires authentication. Not reachable before httpfs work landed; now genuinely probed (aqueduct doctor's handoff-access:duckdb check attempts a real round trip, no longer a blanket skip)."
   config.metrics.use_observe:
     support: unsupported
-    hint: "use_observe toggles Spark's Observation API (a SparkListener-driven zero-cost row-count mechanism); DuckDB has no equivalent listener hook. This engine writes per-module module_metrics (see observability.module_metrics.per_module) via a direct write after each dispatch branch, not a listener callback, so there is no existing collection path for this flag to toggle either way — the key is inert here, not superseded by an always-on alternative."
+    hint: "use_observe toggles Spark's Observation API (a SparkListener-driven zero-cost row-count mechanism); DuckDB has no equivalent listener hook. This engine writes per-module module_metrics (see observability.module_metrics.per_module) via a direct write after each dispatch branch, not a listener callback, so there is no existing collection path for this flag to toggle either way; the key is inert here, not superseded by an always-on alternative."
   config.probes.default_sample_fraction:
     support: supported
-    hint: "Genuinely consumed by the DuckDB Probe implementation (Pass F, duckdb_/probe.py's ProbeSampling) — the default fraction for null_rates/value_distribution/distinct_count/data_freshness sampled queries when a signal omits its own fraction:."
+    hint: "Genuinely consumed by the DuckDB Probe implementation (Pass F, duckdb_/probe.py's ProbeSampling); the default fraction for null_rates/value_distribution/distinct_count/data_freshness sampled queries when a signal omits its own fraction:."
     tests:
       - tests/test_executor_duckdb/test_probe.py::test_config_probes_sampling_knobs_threaded_through_execute
   config.probes.max_sample_rows:
     support: supported
-    hint: "Genuinely consumed by the DuckDB Probe implementation (Pass F) — caps sample_rows' n: regardless of what a signal requests."
+    hint: "Genuinely consumed by the DuckDB Probe implementation (Pass F); caps sample_rows' n: regardless of what a signal requests."
     tests:
       - tests/test_executor_duckdb/test_probe.py::test_config_probes_sampling_knobs_threaded_through_execute
       - tests/test_executor_duckdb/test_probe.py::test_sample_rows_capped_by_max_sample_rows
@@ -249,7 +249,7 @@ leaves:
   # via COPY ... TO; only write modes COPY can express natively ───────────
   egress.format.custom:
     support: unsupported
-    hint: "format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB."
+    hint: "format: custom is the pyspark>=4.0 Python DataSource registry; Spark-only. Not applicable to DuckDB."
   egress.format.hudi:
     support: unsupported
     hint: "Hudi is not implemented for the DuckDB engine."
@@ -258,7 +258,7 @@ leaves:
     hint: "Iceberg is not implemented for the DuckDB engine."
   egress.mode.append:
     support: supported
-    hint: "Implemented as a NON-ATOMIC read-existing + UNION ALL BY NAME + rewrite (DuckDB's COPY ... TO has no native append). A crash mid-rewrite can lose the prior file, and two concurrent appenders race — acceptable for single-process local batch, not a substitute for a transactional sink."
+    hint: "Implemented as a NON-ATOMIC read-existing + UNION ALL BY NAME + rewrite (DuckDB's COPY ... TO has no native append). A crash mid-rewrite can lose the prior file, and two concurrent appenders race; acceptable for single-process local batch, not a substitute for a transactional sink."
     tests:
       - tests/test_executor_duckdb/test_executor.py::test_write_egress_append_to_existing_target_unions_rows
   egress.mode.error:
@@ -309,7 +309,7 @@ leaves:
     hint: "Requires a delta-rs bridge (the deltalake Python package writes a Delta log DuckDB has no writer for). Not implemented."
   egress.format.depot:
     support: supported
-    hint: "format: depot writes a single KV entry via the DepotStore Python interface (depot.put(key, value)) — a plain Python call, engine-independent, never routed through this engine's own SQL/relation layer. value_expr opts into a single DuckDB aggregate query (rel.aggregate(expr).fetchone()), mirroring Spark's single .collect() action."
+    hint: "format: depot writes a single KV entry via the DepotStore Python interface (depot.put(key, value)); a plain Python call, engine-independent, never routed through this engine's own SQL/relation layer. value_expr opts into a single DuckDB aggregate query (rel.aggregate(expr).fetchone()), mirroring Spark's single .collect() action."
     tests:
       - tests/test_executor_duckdb/test_executor.py::test_write_egress_format_depot_value
       - tests/test_executor_duckdb/test_executor.py::test_write_egress_format_depot_value_expr
@@ -324,16 +324,16 @@ leaves:
       - tests/test_executor_duckdb/test_executor.py::test_feature_checkpoint_driven_through_execute
   feature.custom_datasource:
     support: unsupported
-    hint: "Custom Python DataSource is a pyspark>=4.0 API — Spark-only."
+    hint: "Custom Python DataSource is a pyspark>=4.0 API; Spark-only."
   feature.java_udf:
     support: unsupported
     hint: "lang: java UDFs require a JVM UDF registry (Spark-only). Not applicable to DuckDB."
   feature.metrics_boundary:
     support: unsupported
-    hint: "metrics_boundary works around Spark's stage-fusion by forcing a shuffle boundary so SparkListener attributes metrics per module — a fix for a problem specific to that collection mechanism. DuckDB has no stage-fusion concept to work around; this engine's executor writes per-module module_metrics directly after each dispatch branch (see observability.module_metrics.per_module), with no fusion/attribution ambiguity for this flag to configure either way."
+    hint: "metrics_boundary works around Spark's stage-fusion by forcing a shuffle boundary so SparkListener attributes metrics per module; a fix for a problem specific to that collection mechanism. DuckDB has no stage-fusion concept to work around; this engine's executor writes per-module module_metrics directly after each dispatch branch (see observability.module_metrics.per_module), with no fusion/attribution ambiguity for this flag to configure either way."
   feature.python_udf:
     support: supported
-    hint: "conn.create_function(name, fn, parameters=None, return_type) defaults to NATIVE (row-at-a-time) execution, matching Spark's UDF semantics — measured: a per-row call log shows one call per input row, not a batch. null_handling='special' is set explicitly (DuckDB's own default silently skips the call on a NULL argument instead of invoking the function — measured, the opposite of Spark's always-call behavior). Exception propagation is DuckDB's default (an uncaught exception aborts the query, matching Spark). return_type renders through the same Arrow type hub as schema_hint/schema_match. Parameterized (factory) UDFs via params: are supported, same contract as Spark. deterministic maps onto DuckDB's side_effects (inverted) — Spark's own udf.py never reads this field either, so this is a strict improvement, not a divergence. lang: java/scala UDFs stay unsupported — see feature.java_udf; DuckDB is not on the JVM."
+    hint: "conn.create_function(name, fn, parameters=None, return_type) defaults to NATIVE (row-at-a-time) execution, matching Spark's UDF semantics; measured: a per-row call log shows one call per input row, not a batch. null_handling='special' is set explicitly (DuckDB's own default silently skips the call on a NULL argument instead of invoking the function; measured, the opposite of Spark's always-call behavior). Exception propagation is DuckDB's default (an uncaught exception aborts the query, matching Spark). return_type renders through the same Arrow type hub as schema_hint/schema_match. Parameterized (factory) UDFs via params: are supported, same contract as Spark. deterministic maps onto DuckDB's side_effects (inverted); Spark's own udf.py never reads this field either, so this is a strict improvement, not a divergence. lang: java/scala UDFs stay unsupported; see feature.java_udf; DuckDB is not on the JVM."
     tests:
       - tests/test_executor_duckdb/test_udf.py::test_successful_registration_and_call
       - tests/test_executor_duckdb/test_udf.py::test_row_at_a_time_not_batched
@@ -346,7 +346,7 @@ leaves:
       - tests/test_executor_duckdb/test_executor.py::test_feature_spillway_driven_through_execute
   feature.table_addressing:
     support: supported
-    hint: "table: reads via con.table() (Ingress) and writes via CREATE OR REPLACE/CREATE/INSERT INTO against DuckDB's own catalog (Egress), mode-mapped onto DuckDB's own DDL guards (overwrite/error/errorifexists/ignore/append) — see duckdb_/ingress.py::_read_table and duckdb_/egress.py::_write_table for the full catalog defaulting rule (unqualified name -> current catalog+schema memory.main; two-part -> schema.table within the current catalog; three-part -> a specific, already-ATTACHed catalog; Aqueduct never performs an implicit ATTACH). An unresolvable name is DuckDB's own CatalogException, wrapped into IngressError/EgressError."
+    hint: "table: reads via con.table() (Ingress) and writes via CREATE OR REPLACE/CREATE/INSERT INTO against DuckDB's own catalog (Egress), mode-mapped onto DuckDB's own DDL guards (overwrite/error/errorifexists/ignore/append); see duckdb_/ingress.py::_read_table and duckdb_/egress.py::_write_table for the full catalog defaulting rule (unqualified name -> current catalog+schema memory.main; two-part -> schema.table within the current catalog; three-part -> a specific, already-ATTACHed catalog; Aqueduct never performs an implicit ATTACH). An unresolvable name is DuckDB's own CatalogException, wrapped into IngressError/EgressError."
     tests:
       - tests/test_executor_duckdb/test_executor.py::test_ingress_table_reads_existing_catalog_table
       - tests/test_executor_duckdb/test_executor.py::test_ingress_table_unresolvable_name_raises_ingress_error
@@ -365,7 +365,7 @@ leaves:
     hint: "Requires a delta-rs bridge (the deltalake Python package writes a Delta log DuckDB has no writer for). Not implemented."
   feature.parallel_mode:
     support: unsupported
-    hint: "Requires a Python ThreadPoolExecutor over independent DAG subtrees. Measured: a single DuckDBPyConnection object is NOT safe for concurrent queries from multiple threads — two threads calling .sql() on the SAME connection object concurrently raise 'Invalid Input Error: Attempting to execute an unsuccessful or closed pending query result'. Each thread needs its OWN cursor (con.cursor()), which IS safe for concurrent reads — a real but small additional wiring cost this engine has not built yet. Not implemented: the executor runs the topological order serially today."
+    hint: "Requires a Python ThreadPoolExecutor over independent DAG subtrees. Measured: a single DuckDBPyConnection object is NOT safe for concurrent queries from multiple threads; two threads calling .sql() on the SAME connection object concurrently raise 'Invalid Input Error: Attempting to execute an unsuccessful or closed pending query result'. Each thread needs its OWN cursor (con.cursor()), which IS safe for concurrent reads; a real but small additional wiring cost this engine has not built yet. Not implemented: the executor runs the topological order serially today."
 
   # ── Funnel modes — Stage A scope: union_all, union, coalesce, zip (each
   # has a real handler + a DuckDB test) ────────────────────────────────────
@@ -390,28 +390,28 @@ leaves:
   # engine executes this block, so it is trivially supported everywhere ────
   healed_by.field.applied_at:
     support: supported
-    hint: Compiler-consumed provenance metadata — no engine executes it.
+    hint: Compiler-consumed provenance metadata; no engine executes it.
   healed_by.field.classification:
     support: supported
-    hint: Compiler-consumed provenance metadata — no engine executes it.
+    hint: Compiler-consumed provenance metadata; no engine executes it.
   healed_by.field.engine:
     support: supported
-    hint: Compiler-consumed provenance metadata — no engine executes it.
+    hint: Compiler-consumed provenance metadata; no engine executes it.
   healed_by.field.engine_config_delta:
     support: supported
-    hint: Patch-apply provenance metadata (effective session-config diff) — recorded by core, no engine executes it.
+    hint: Patch-apply provenance metadata (effective session-config diff); recorded by core, no engine executes it.
   healed_by.field.engine_version:
     support: supported
-    hint: Compiler-consumed provenance metadata — no engine executes it.
+    hint: Compiler-consumed provenance metadata; no engine executes it.
   healed_by.field.patch_id:
     support: supported
-    hint: Compiler-consumed provenance metadata — no engine executes it.
+    hint: Compiler-consumed provenance metadata; no engine executes it.
   healed_by.field.run_id:
     support: supported
-    hint: Compiler-consumed provenance metadata — no engine executes it.
+    hint: Compiler-consumed provenance metadata; no engine executes it.
   healed_by.field.validated_on:
     support: supported
-    hint: Compiler-consumed provenance metadata — no engine executes it.
+    hint: Compiler-consumed provenance metadata; no engine executes it.
 
   # ── Hooks / webhooks — fire off ExecutionResult, engine-independent ─────
   hook_entry.field.blueprint: supported
@@ -433,10 +433,10 @@ leaves:
       - tests/test_executor_duckdb/test_executor.py::test_read_ingress_csv
   ingress.format.custom:
     support: unsupported
-    hint: "format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB."
+    hint: "format: custom is the pyspark>=4.0 Python DataSource registry; Spark-only. Not applicable to DuckDB."
   ingress.format.kafka:
     support: unsupported
-    hint: "Kafka streaming ingress has no DuckDB equivalent — DuckDB is a batch, single-process engine."
+    hint: "Kafka streaming ingress has no DuckDB equivalent; DuckDB is a batch, single-process engine."
 
   # ── DEFERRED (Stage B candidates) — see the Egress deferred block above
   # for the grouping rationale; same "one-line flip later" intent. ─────────
@@ -506,7 +506,7 @@ leaves:
       - tests/test_executor_duckdb/test_executor.py::test_module_type_funnel_driven_through_execute
   module.type.Handoff:
     support: supported
-    hint: "Compiler-synthesized only — a Blueprint can never declare one (see aqueduct/compiler/handoff.py). Real engine-native parquet transport: COPY ... TO ... (FORMAT PARQUET) on the write side, read_parquet on the read side. A Handoff module's id is never a member of any island's module_ids (islands are derived from the pre-insertion graph), so this verdict is never actually consulted by the per-island capability gate; it is declared supported here because the transport is real and tested, not because the gate depends on it."
+    hint: "Compiler-synthesized only; a Blueprint can never declare one (see aqueduct/compiler/handoff.py). Real engine-native parquet transport: COPY ... TO ... (FORMAT PARQUET) on the write side, read_parquet on the read side. A Handoff module's id is never a member of any island's module_ids (islands are derived from the pre-insertion graph), so this verdict is never actually consulted by the per-island capability gate; it is declared supported here because the transport is real and tested, not because the gate depends on it."
     tests:
       - tests/test_executor/test_orchestrator_e2e.py::test_spark_to_duckdb_handoff_e2e_success
       - tests/test_executor/test_orchestrator_e2e.py::test_duckdb_to_spark_handoff_e2e_success
@@ -520,7 +520,7 @@ leaves:
       - tests/test_executor_duckdb/test_executor.py::test_module_type_junction_driven_through_execute
   module.type.Probe:
     support: supported
-    hint: "Pass F — 8 of Spark's 9 built-in signals (schema_snapshot, row_count_estimate, null_rates, sample_rows, value_distribution, distinct_count, data_freshness, threshold) plus custom, each a SQL aggregate/sample query or metadata read on the DuckDB relation (see duckdb_/probe.py). row_count_estimate is EXACT here, not an estimate. execution_partitions stays unsupported — no partition concept on this engine (see feature parity note in duckdb_/probe.py); it emits its own dedicated runtime warning rather than silently doing nothing."
+    hint: "Pass F: 8 of Spark's 9 built-in signals (schema_snapshot, row_count_estimate, null_rates, sample_rows, value_distribution, distinct_count, data_freshness, threshold) plus custom, each a SQL aggregate/sample query or metadata read on the DuckDB relation (see duckdb_/probe.py). row_count_estimate is EXACT here, not an estimate. execution_partitions stays unsupported: no partition concept on this engine (see feature parity note in duckdb_/probe.py); it emits its own dedicated runtime warning rather than silently doing nothing."
     tests:
       - tests/test_executor_duckdb/test_probe.py::test_module_type_probe_driven_through_execute
       - tests/test_executor_duckdb/test_probe.py::test_regulator_gated_by_probe_threshold_end_to_end
@@ -675,21 +675,21 @@ leaves:
   # capability_leaves.py::execution_leaves(), which excludes this category).
   config.engine.duckdb.s3_endpoint:
     support: supported
-    hint: "S3-compatible endpoint override for CREATE SECRET (TYPE S3, ..., ENDPOINT ...) — the non-AWS escape hatch (MinIO, on-prem object storage). Verified end-to-end against a real MinIO instance."
+    hint: "S3-compatible endpoint override for CREATE SECRET (TYPE S3, ..., ENDPOINT ...); the non-AWS escape hatch (MinIO, on-prem object storage). Verified end-to-end against a real MinIO instance."
     tests:
       - tests/test_executor_duckdb/test_engine_config.py::TestS3SecretResolution::test_resolve_s3_secret_from_config_includes_minio_overrides
       - tests/test_executor_duckdb/test_engine_config.py::TestS3SecretResolution::test_configure_s3_secret_with_minio_overrides_no_network
       - tests/test_executor_duckdb/test_s3_minio.py::TestDuckDBS3RoundTrip::test_duckdb_ingress_egress_round_trip_against_minio
   config.engine.duckdb.s3_url_style:
     support: supported
-    hint: "URL_STYLE for CREATE SECRET (TYPE S3, ...) — MinIO and most non-AWS S3-compatible stores need 'path' rather than AWS's default virtual-hosted 'vhost' style. Verified end-to-end against a real MinIO instance."
+    hint: "URL_STYLE for CREATE SECRET (TYPE S3, ...); MinIO and most non-AWS S3-compatible stores need 'path' rather than AWS's default virtual-hosted 'vhost' style. Verified end-to-end against a real MinIO instance."
     tests:
       - tests/test_executor_duckdb/test_engine_config.py::TestS3SecretResolution::test_resolve_s3_secret_from_config_includes_minio_overrides
       - tests/test_executor_duckdb/test_engine_config.py::TestS3SecretResolution::test_configure_s3_secret_with_minio_overrides_no_network
       - tests/test_executor_duckdb/test_s3_minio.py::TestDuckDBS3RoundTrip::test_duckdb_ingress_egress_round_trip_against_minio
   config.engine.duckdb.s3_use_ssl:
     support: supported
-    hint: "USE_SSL for CREATE SECRET (TYPE S3, ...) — a local/dev MinIO instance typically serves plain HTTP. Verified end-to-end against a real MinIO instance."
+    hint: "USE_SSL for CREATE SECRET (TYPE S3, ...); a local/dev MinIO instance typically serves plain HTTP. Verified end-to-end against a real MinIO instance."
     tests:
       - tests/test_executor_duckdb/test_engine_config.py::TestS3SecretResolution::test_resolve_s3_secret_from_config_includes_minio_overrides
       - tests/test_executor_duckdb/test_engine_config.py::TestS3SecretResolution::test_configure_s3_secret_with_minio_overrides_no_network
@@ -714,14 +714,14 @@ leaves:
   channel.field.allow_missing_columns: supported
   channel.field.broadcast_side:
       support: ignored_with_warning
-      hint: "Accepted but never inspected — DuckDB's join planner has no broadcast-hint concept; the query still runs correctly, just without the hint."
+      hint: "Accepted but never inspected; DuckDB's join planner has no broadcast-hint concept; the query still runs correctly, just without the hint."
   channel.field.col:
       support: unsupported
-      hint: "op: repartition's optional target column is unimplemented on DuckDB — see channel.op.repartition."
+      hint: "op: repartition's optional target column is unimplemented on DuckDB; see channel.op.repartition."
   channel.field.cols: supported
   channel.field.column:
       support: unsupported
-      hint: "op: repartition's optional target column is unimplemented on DuckDB — see channel.op.repartition."
+      hint: "op: repartition's optional target column is unimplemented on DuckDB; see channel.op.repartition."
   channel.field.columns: supported
   channel.field.condition: supported
   channel.field.expr: supported
@@ -735,13 +735,13 @@ leaves:
         - tests/test_executor_duckdb/test_incremental.py::test_incremental_two_runs_real_incremental_behavior
   channel.field.metrics_boundary:
       support: unsupported
-      hint: "See feature.metrics_boundary — DuckDB has no stage-fusion concept for this key to configure a boundary around."
+      hint: "See feature.metrics_boundary; DuckDB has no stage-fusion concept for this key to configure a boundary around."
   channel.field.num:
       support: unsupported
-      hint: "op: repartition/coalesce is unimplemented on DuckDB — see channel.op.repartition / channel.op.coalesce."
+      hint: "op: repartition/coalesce is unimplemented on DuckDB; see channel.op.repartition / channel.op.coalesce."
   channel.field.num_partitions:
       support: unsupported
-      hint: "op: repartition is unimplemented on DuckDB (no partition concept) — see channel.op.repartition."
+      hint: "op: repartition is unimplemented on DuckDB (no partition concept); see channel.op.repartition."
   channel.field.op: supported
   channel.field.order_by: supported
   channel.field.query: supported
@@ -749,24 +749,24 @@ leaves:
   channel.field.spillway_condition: supported
   channel.field.storage_level:
       support: unsupported
-      hint: "op: cache is unimplemented on DuckDB (single-process, no distributed cache tier) — see channel.op.cache."
+      hint: "op: cache is unimplemented on DuckDB (single-process, no distributed cache tier); see channel.op.cache."
   channel.field.watermark_column:
       support: supported
       tests:
         - tests/test_executor_duckdb/test_incremental.py::test_incremental_watermark_with_prior
   egress.field.class_:
       support: unsupported
-      hint: "format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB."
+      hint: "format: custom is the pyspark>=4.0 Python DataSource registry; Spark-only. Not applicable to DuckDB."
   egress.field.coalesce: supported
   egress.field.format: supported
   egress.field.header: supported
   egress.field.key: supported
   egress.field.maintenance:
       support: unsupported
-      hint: "DuckDB has no OPTIMIZE/VACUUM/compaction operation for parquet or any format it writes here — post-write maintenance is a no-op it cannot perform. Not implemented."
+      hint: "DuckDB has no OPTIMIZE/VACUUM/compaction operation for parquet or any format it writes here; post-write maintenance is a no-op it cannot perform. Not implemented."
   egress.field.merge_key:
       support: unsupported
-      hint: "mode: merge (upsert) requires a target table format with a transaction log (Delta). Not implemented — see egress.mode.merge."
+      hint: "mode: merge (upsert) requires a target table format with a transaction log (Delta). Not implemented; see egress.mode.merge."
   egress.field.merge_schema:
       support: unsupported
       hint: "Schema-evolution flags apply to Delta/Iceberg writers DuckDB does not have. Not implemented."
@@ -780,7 +780,7 @@ leaves:
   egress.field.path: supported
   egress.field.register_as_table:
       support: supported
-      hint: "Registers a CREATE OR REPLACE VIEW over the just-written file (read_parquet/read_csv), the DuckDB analog of Spark's CREATE EXTERNAL TABLE ... LOCATION — a live pointer to the file's current contents, not a snapshot copy. Non-fatal on failure (logged), same as Spark's version. Ignored (with a warning, never silently) when 'table:' is also set — writing directly to a catalog table already IS the registration."
+      hint: "Registers a CREATE OR REPLACE VIEW over the just-written file (read_parquet/read_csv), the DuckDB analog of Spark's CREATE EXTERNAL TABLE ... LOCATION; a live pointer to the file's current contents, not a snapshot copy. Non-fatal on failure (logged), same as Spark's version. Ignored (with a warning, never silently) when 'table:' is also set; writing directly to a catalog table already IS the registration."
       tests:
         - tests/test_executor_duckdb/test_executor.py::test_egress_register_as_table_readable_back_by_ingress
         - tests/test_executor_duckdb/test_executor.py::test_egress_register_as_table_reflects_current_file_contents
@@ -790,44 +790,44 @@ leaves:
       hint: "DuckDB's COPY has no shuffle/partition-count concept for a write target: PARTITION_BY groups rows by column VALUE, not by a target file count, and PER_THREAD_OUTPUT (the only file-count lever this engine has) cannot even combine with PARTITION_BY. This field has no effect. Use partition_by for a grouped file layout, or coalesce (this engine already writes the minimum file count for a given write shape)."
   egress.field.replace_where:
       support: unsupported
-      hint: "mode: overwrite_partitions is unimplemented on DuckDB — see egress.mode.overwrite_partitions."
+      hint: "mode: overwrite_partitions is unimplemented on DuckDB; see egress.mode.overwrite_partitions."
   egress.field.table:
       support: supported
-      hint: "Writes via CREATE OR REPLACE/CREATE/INSERT INTO against DuckDB's own catalog, mode-mapped onto DuckDB's own DDL guards — see feature.table_addressing for the defaulting rule and mutual exclusivity with path:."
+      hint: "Writes via CREATE OR REPLACE/CREATE/INSERT INTO against DuckDB's own catalog, mode-mapped onto DuckDB's own DDL guards; see feature.table_addressing for the defaulting rule and mutual exclusivity with path:."
   egress.field.value: supported
   egress.field.value_expr: supported
   egress_maintenance.field.clean:
       support: unsupported
-      hint: "Hudi maintenance procedures require a Hudi table DuckDB does not write. Not implemented — see egress.field.maintenance."
+      hint: "Hudi maintenance procedures require a Hudi table DuckDB does not write. Not implemented; see egress.field.maintenance."
   egress_maintenance.field.compaction:
       support: unsupported
-      hint: "Hudi maintenance procedures require a Hudi table DuckDB does not write. Not implemented — see egress.field.maintenance."
+      hint: "Hudi maintenance procedures require a Hudi table DuckDB does not write. Not implemented; see egress.field.maintenance."
   egress_maintenance.field.expire_snapshots:
       support: unsupported
-      hint: "Iceberg maintenance procedures require an Iceberg catalog DuckDB does not write through. Not implemented — see egress.field.maintenance."
+      hint: "Iceberg maintenance procedures require an Iceberg catalog DuckDB does not write through. Not implemented; see egress.field.maintenance."
   egress_maintenance.field.optimize:
       support: unsupported
-      hint: "DuckDB has no OPTIMIZE/compaction operation for the formats it writes. Not implemented — see egress.field.maintenance."
+      hint: "DuckDB has no OPTIMIZE/compaction operation for the formats it writes. Not implemented; see egress.field.maintenance."
   egress_maintenance.field.rewrite_data_files:
       support: unsupported
-      hint: "Iceberg maintenance procedures require an Iceberg catalog DuckDB does not write through. Not implemented — see egress.field.maintenance."
+      hint: "Iceberg maintenance procedures require an Iceberg catalog DuckDB does not write through. Not implemented; see egress.field.maintenance."
   egress_maintenance.field.vacuum:
       support: unsupported
-      hint: "DuckDB has no VACUUM/cleanup operation for the formats it writes. Not implemented — see egress.field.maintenance."
+      hint: "DuckDB has no VACUUM/cleanup operation for the formats it writes. Not implemented; see egress.field.maintenance."
   egress_maintenance.field.zorder_by:
       support: unsupported
-      hint: "DuckDB has no OPTIMIZE/ZORDER operation for the formats it writes. Not implemented — see egress.field.maintenance."
+      hint: "DuckDB has no OPTIMIZE/ZORDER operation for the formats it writes. Not implemented; see egress.field.maintenance."
   funnel.field.inputs: supported
   funnel.field.mode: supported
   funnel.field.schema_check: supported
   ingress.field.class_:
       support: unsupported
-      hint: "format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB."
+      hint: "format: custom is the pyspark>=4.0 Python DataSource registry; Spark-only. Not applicable to DuckDB."
   ingress.field.format: supported
   ingress.field.header: supported
   ingress.field.infer_schema:
       support: ignored_with_warning
-      hint: "DuckDB's CSV reader always infers types; this flag is accepted but has no effect — there is no toggle to force a fixed/string schema."
+      hint: "DuckDB's CSV reader always infers types; this flag is accepted but has no effect; there is no toggle to force a fixed/string schema."
   ingress.field.known_columns: supported
   ingress.field.on_new_columns: supported
   ingress.field.options:
@@ -838,16 +838,16 @@ leaves:
   ingress.field.schema_hint: supported
   ingress.field.table:
       support: supported
-      hint: "Reads via con.table() against DuckDB's own catalog — see feature.table_addressing for the defaulting rule and mutual exclusivity with path:."
+      hint: "Reads via con.table() against DuckDB's own catalog; see feature.table_addressing for the defaulting rule and mutual exclusivity with path:."
   ingress.field.time_travel:
       support: unsupported
-      hint: "Requires a delta-rs bridge to read a Delta table's transaction log at a version/timestamp. Not implemented — see feature.delta_time_travel."
+      hint: "Requires a delta-rs bridge to read a Delta table's transaction log at a version/timestamp. Not implemented; see feature.delta_time_travel."
   ingress_time_travel.field.timestamp:
       support: unsupported
-      hint: "time_travel is unimplemented on DuckDB — see feature.delta_time_travel."
+      hint: "time_travel is unimplemented on DuckDB; see feature.delta_time_travel."
   ingress_time_travel.field.version:
       support: unsupported
-      hint: "time_travel is unimplemented on DuckDB — see feature.delta_time_travel."
+      hint: "time_travel is unimplemented on DuckDB; see feature.delta_time_travel."
   junction.field.branches: supported
   junction.field.mode: supported
   junction.field.partition_key: supported
@@ -865,7 +865,7 @@ leaves:
   probe_signal.field.fraction: supported
   probe_signal.field.method:
       support: ignored_with_warning
-      hint: "Accepted but never inspected — row_count_estimate is always an exact count on this engine regardless of method: sample/spark_listener (see module.type.Probe's hint); the field is authoring-parity only."
+      hint: "Accepted but never inspected; row_count_estimate is always an exact count on this engine regardless of method: sample/spark_listener (see module.type.Probe's hint); the field is authoring-parity only."
   probe_signal.field.module: supported
   probe_signal.field.n: supported
   probe_signal.field.passed_when: supported
@@ -895,7 +895,7 @@ leaves:
       - tests/test_executor_duckdb/test_probe.py::test_null_rates_blocked_by_block_full_actions
   probe.signal.row_count_estimate:
     support: supported
-    hint: "EXACT on this engine (parquet-footer read for a direct Ingress tap, COUNT(*) otherwise) rather than a sampled estimate — see duckdb_/probe.py's module docstring; the field name and probe_signals schema stay identical to Spark's."
+    hint: "EXACT on this engine (parquet-footer read for a direct Ingress tap, COUNT(*) otherwise) rather than a sampled estimate; see duckdb_/probe.py's module docstring; the field name and probe_signals schema stay identical to Spark's."
     tests:
       - tests/test_executor_duckdb/test_probe.py::test_row_count_estimate_parquet_footer_when_attached_directly_to_ingress
       - tests/test_executor_duckdb/test_probe.py::test_row_count_estimate_exact_count_when_no_target_module
@@ -943,10 +943,10 @@ leaves:
       removes leave the resolved session config before `_make_session` runs.
   probe.signal.execution_partitions:
     support: unsupported
-    hint: "DuckDB is a single-process, single-node engine with no partition concept to report — there is no analog to Spark's df.rdd.getNumPartitions(). A Probe declaring this signal against a DuckDB-executed Ingress/Channel is rejected at compile time instead of silently writing an empty/missing probe_signals row."
+    hint: "DuckDB is a single-process, single-node engine with no partition concept to report; there is no analog to Spark's df.rdd.getNumPartitions(). A Probe declaring this signal against a DuckDB-executed Ingress/Channel is rejected at compile time instead of silently writing an empty/missing probe_signals row."
   egress.format.json:
     support: supported
-    hint: "DuckDB writes JSON via COPY ... TO '<path>' (FORMAT JSON, ...) — newline-delimited JSON objects by default; options: {array: true} switches to a single JSON array, options: {compression: gzip} (or any DuckDB-recognised compression codec) is passed through, both mirroring the FORMAT JSON option vocabulary DuckDB itself accepts (disjoint from CSV's HEADER/DELIMITER and Parquet's per-column knobs)."
+    hint: "DuckDB writes JSON via COPY ... TO '<path>' (FORMAT JSON, ...); newline-delimited JSON objects by default; options: {array: true} switches to a single JSON array, options: {compression: gzip} (or any DuckDB-recognised compression codec) is passed through, both mirroring the FORMAT JSON option vocabulary DuckDB itself accepts (disjoint from CSV's HEADER/DELIMITER and Parquet's per-column knobs)."
     tests:
       - tests/test_executor_duckdb/test_executor.py::test_write_egress_json_overwrite
       - tests/test_executor_duckdb/test_executor.py::test_write_egress_json_append_to_existing_target_unions_rows
@@ -956,7 +956,7 @@ leaves:
       - tests/test_executor_duckdb/test_executor.py::test_write_egress_parquet_overwrite
   ingress.format.iceberg:
     support: unsupported
-    hint: "Iceberg has no DuckDB Ingress reader implemented — reading a table's transaction log would require the iceberg DuckDB extension (ATTACH ... or the iceberg_scan table function); duckdb_/ingress.py dispatches only parquet/csv/json. Not implemented."
+    hint: "Iceberg has no DuckDB Ingress reader implemented; reading a table's transaction log would require the iceberg DuckDB extension (ATTACH ... or the iceberg_scan table function); duckdb_/ingress.py dispatches only parquet/csv/json. Not implemented."
   ingress.format.json:
     support: supported
     tests:
@@ -973,26 +973,26 @@ leaves:
   # by test_verdict_test_links.py.
   tooling.test_runner:
     support: unsupported
-    hint: "There is no DuckDB test runner — aqueduct/executor/duckdb_ has no test_runner.py at all. aqueduct test's test_cmd (aqueduct/cli/project.py) unconditionally imports aqueduct.executor.spark.test_runner/make_spark_session regardless of deployment.engine, so today it runs module unit tests against Spark's SQL/type semantics even for a duckdb-deployed project. Until a native DuckDB test runner ships, treat `aqueduct test` results for a DuckDB project as Spark-semantics results, not DuckDB-accurate ones."
+    hint: "There is no DuckDB test runner; aqueduct/executor/duckdb_ has no test_runner.py at all. aqueduct test's test_cmd (aqueduct/cli/project.py) unconditionally imports aqueduct.executor.spark.test_runner/make_spark_session regardless of deployment.engine, so today it runs module unit tests against Spark's SQL/type semantics even for a duckdb-deployed project. Until a native DuckDB test runner ships, treat `aqueduct test` results for a DuckDB project as Spark-semantics results, not DuckDB-accurate ones."
   tooling.drift_schema_read:
     support: supported
-    hint: "aqueduct.executor.duckdb_.schema_reader.read_source_schema implements the ExecutorProtocol read_source_schema seam aqueduct drift needs (metadata-only — no query execution). Not yet wired into aqueduct/cli/drift.py, which still hardcodes the Spark reader regardless of manifest engine; the capability itself is real and tested."
+    hint: "aqueduct.executor.duckdb_.schema_reader.read_source_schema implements the ExecutorProtocol read_source_schema seam aqueduct drift needs (metadata-only; no query execution). Not yet wired into aqueduct/cli/drift.py, which still hardcodes the Spark reader regardless of manifest engine; the capability itself is real and tested."
     tests:
       - tests/test_agent/test_toolbox_engine_routing.py::TestDuckDBRoutesThroughDuckDB::test_get_source_schema_reads_via_duckdb_not_spark
   tooling.doctor.table_exists:
     support: unsupported
-    hint: "No DuckDB table-existence probe exists — aqueduct doctor's check unconditionally builds a SparkSession and calls spark.catalog.tableExists(), with no branch for a duckdb-resolved module, and reports pyspark-not-installed rather than 'not implemented for duckdb' when it fails. A real check would be an information_schema.tables query over the project's engine.duckdb.* connection; not built yet."
+    hint: "No DuckDB table-existence probe exists; aqueduct doctor's check unconditionally builds a SparkSession and calls spark.catalog.tableExists(), with no branch for a duckdb-resolved module, and reports pyspark-not-installed rather than 'not implemented for duckdb' when it fails. A real check would be an information_schema.tables query over the project's engine.duckdb.* connection; not built yet."
   tooling.doctor.cloud_preflight:
     support: unsupported
-    hint: "No DuckDB object-existence preflight exists — aqueduct doctor --preflight's cloud-URI check unconditionally builds a SparkSession and probes via Spark's Hadoop FileSystem using engine.spark.conf credentials, even for a module that resolves to duckdb (which would need engine.duckdb.s3_*/httpfs instead). A DuckDB-native probe using duckdb_/extensions.py's ensure_extension + httpfs is not built yet; until it is, --preflight gives no coverage for duckdb-resolved sources."
+    hint: "No DuckDB object-existence preflight exists; aqueduct doctor --preflight's cloud-URI check unconditionally builds a SparkSession and probes via Spark's Hadoop FileSystem using engine.spark.conf credentials, even for a module that resolves to duckdb (which would need engine.duckdb.s3_*/httpfs instead). A DuckDB-native probe using duckdb_/extensions.py's ensure_extension + httpfs is not built yet; until it is, --preflight gives no coverage for duckdb-resolved sources."
   tooling.doctor.session_preflight:
     support: unsupported
-    hint: "There is no check_duckdb()/session-preflight analog to check_java()+check_spark(preflight=True) — DuckDB session/extension/S3-secret verification only happens incidentally inside _probe_duckdb_handoff, gated on handoff.root being remote with credentials configured. A blueprint whose DuckDB Ingress/Egress modules read/write s3:// while handoff.root stays local gets zero doctor-time verification that httpfs can install/load; that failure only surfaces mid-run. Not built yet."
+    hint: "There is no check_duckdb()/session-preflight analog to check_java()+check_spark(preflight=True); DuckDB session/extension/S3-secret verification only happens incidentally inside _probe_duckdb_handoff, gated on handoff.root being remote with credentials configured. A blueprint whose DuckDB Ingress/Egress modules read/write s3:// while handoff.root stays local gets zero doctor-time verification that httpfs can install/load; that failure only surfaces mid-run. Not built yet."
   tooling.sandbox_dry_run:
     support: supported
     hint: "aqueduct run --sandbox builds a DuckDB session through ExecutorProtocol.session_factory() and replays the compiled Manifest with every Egress skipped."
   observability.module_metrics.per_module:
     support: supported
-    hint: "The DuckDB executor writes a module_metrics row (duration_ms + row/byte counts where cheaply derivable) for every real module type (Ingress, Channel, Junction, Funnel, Egress), not only the synthetic Handoff module, via the same generic write_module_metrics used by Handoff. records_read is left NULL for every type (DuckDB relations re-execute per consumer, so counting would be a genuine extra source scan); records_written/bytes_written are left NULL for mode=append onto an existing path and for depot/table targets with no filesystem path — a number core cannot derive honestly is left NULL, never guessed."
+    hint: "The DuckDB executor writes a module_metrics row (duration_ms + row/byte counts where cheaply derivable) for every real module type (Ingress, Channel, Junction, Funnel, Egress), not only the synthetic Handoff module, via the same generic write_module_metrics used by Handoff. records_read is left NULL for every type (DuckDB relations re-execute per consumer, so counting would be a genuine extra source scan); records_written/bytes_written are left NULL for mode=append onto an existing path and for depot/table targets with no filesystem path; a number core cannot derive honestly is left NULL, never guessed."
     tests:
       - tests/test_executor_duckdb/test_module_metrics.py::test_multi_module_run_writes_one_module_metrics_row_per_module

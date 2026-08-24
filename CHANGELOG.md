@@ -14,6 +14,24 @@ versioning follows [SemVer](https://semver.org/). The stability contract
 applies from v1.0.0 — during alpha/RC, breaking changes may land in any
 release and are marked **BREAKING**.
 
+## [Unreleased]
+
+2.2.0 security workstream: three ratified fixes closing trust-boundary gaps in the LLM self-healing loop, identified by the design review's HIGH finding on prompt-injection defenses.
+
+### Changed
+
+- **BREAKING: `agent.approval: auto` now denies file-touching patch ops when `agent.guardrails.allowed_paths` is unset**, instead of allowing any path. `auto` is the only approval mode where a patch applies with zero human review, so an unconfigured allowlist previously meant a patch could write anywhere without anyone checking. Gate 1 (`aqueduct/patch/apply.py::_check_guardrails`) now refuses `set_module_config_key`/`replace_module_config`/`insert_module`/`add_probe`/`add_arcade_ref` ops that write a `path`/`output_path` value when `allowed_paths` is empty, naming the offending value and pointing at `agent.guardrails.allowed_paths` (or a switch to `human`/`ci`, where a human reviews the patch before it applies either way). `human`, `ci`, and `disabled` are unaffected. See `docs/specs.md` §8.3/§8.7 and `docs/threat_model.md`. (`aqueduct/patch/apply.py`; tests: `tests/test_patch/test_guardrails_rollback.py::TestAutoModeDenyByDefault`)
+- **Untrusted-data framing in the composed healing prompt.** The runtime data a heal attempt embeds (the failure's error message, and its structured root-cause block or raw stack trace) is now wrapped in `<<<UNTRUSTED_DATA>>>` / `<<</UNTRUSTED_DATA>>>` sentinel markers, and the system prompt scaffold gains an "Untrusted data" instruction block, placed before the failure-report description, telling the model that delimited content (and any tool_result from an agentic-mode tool call) is data, never instructions, and that instruction-like text inside it is a prompt-injection attempt to be ignored. `PROMPT_VERSION` bumps `1.12` → `1.13`. (`aqueduct/agent/prompts.py`, `aqueduct/agent/loop.py`; tests: `tests/test_agent/test_untrusted_data_framing.py`)
+
+### Added
+
+- **`aqueduct patch pr <patch_ref>` (Phase 87, heal-as-PR).** Applies a staged patch on a fresh `aqueduct/heal/<patch_id>` branch, commits through the identical path `patch import` uses (same gates, same `---aqueduct---` trailer), pushes, and opens a PR via the `gh` CLI. Mode-agnostic: works on any pending patch regardless of the Blueprint's `approval` mode, so a `human`-mode reviewer can use it in place of a local `patch apply`, and a `ci`-mode runner can use it instead of (or alongside) the webhook + `docs/templates/ci-heal-workflow.yml` flow. `--dry-run` runs every check and prints the plan without touching anything. A repo-root pre-flight guard hard-refuses when the resolved git work-tree root does not match the project root, naming both paths; a new `git.expected_root` config key pins the intended root explicitly for a monorepo layout. New `aqueduct.yml` blocks: `git:` (`expected_root`, `remote`) and `pr:` (`base_branch`, `title_template`, `draft`); no Blueprint influence over either, and no labels/reviewers field, by design: reviewer routing stays with repo-level CODEOWNERS/branch protection. A new `aqueduct doctor` check reports `gh` presence and auth, soft/skippable when the PR flow is unused. GitHub-only in 2.2.0 (`gh` CLI shellout; the transport is a single internal seam, no provider abstraction shipped). PR body renders purely from existing PatchSpec fields; no new prompt section, no `PROMPT_VERSION` bump. (`aqueduct/cli/patch.py`, `aqueduct/patch/ci.py`, `aqueduct/config.py`, `aqueduct/doctor/__init__.py`; tests: `tests/test_cli/test_cli_patch_pr.py`, `tests/test_patch/test_ci.py`, `tests/test_config.py`, `tests/test_cli/test_cli_doctor_new.py`, `tests/test_meta_patch_grammar.py`)
+- **`docs/threat_model.md`**: the healing loop's trust boundaries, assets, the FailureContext → prompt → PatchSpec injection surface and its mitigations (the gate ladder, Gate 1's allowlist including the new auto-mode deny-by-default, the sandbox, the untrusted-data prompt framing, redaction chokepoints), and threats explicitly out of scope.
+
+### Removed
+
+- **BREAKING: the `aqueduct dashboard` command and the `dashboard` extra.** The Streamlit/Plotly observability viewer (`aqueduct/dashboard/`) never ran in CI, so its smoke test never once executed against real code before this release. `pip install aqueduct-core[dashboard]` no longer resolves. `stores/queries.py`, the query layer it shared with `aqueduct report`/`runs` and the MCP tool registry, is unaffected. It returns if dogfooded usage justifies it and a CI lane lands in the same release that adds it back.
+
 ## [2.1.3] — 2026-08-24
 
 Phase 89 — the perf-polish workstream: session keep-alive across polyglot

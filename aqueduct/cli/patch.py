@@ -701,8 +701,7 @@ def patch_policy(engine_name: str | None, out_format: str) -> None:
 
     if engine_name is not None and engine_name not in registered:
         style.error(
-            f"engine {engine_name!r} is not registered. Registered engines: "
-            f"{sorted(registered)}"
+            f"engine {engine_name!r} is not registered. Registered engines: {sorted(registered)}"
         )
         sys.exit(exit_codes.USAGE_ERROR)
 
@@ -2055,3 +2054,369 @@ def rollback_cmd(blueprint: str, patch_id: str) -> None:
     click.echo(f"✓ rolled back patch {patch_id!r}  [{short}]")
     for f in touched_files:
         click.echo(f"  restored  {f}  (from {parent_hash[:8]})")
+
+
+# ── aqueduct patch pr (Phase 87 — heal-as-PR) ───────────────────────────────
+
+
+def _git_pr_preflight(
+    blueprint_path: Path, project_root: Path, expected_root: str | None
+) -> str | None:
+    """Read-only pre-flight for `patch pr`'s git-writing steps.
+
+    Work-tree check (same as `patch import`'s, `patch.py:1230-1242`) plus the
+    repo-root guard (2026-08-24 design audit, item 4): both footguns — a
+    parent `.git` above the project root, and a stale child `.git` between
+    the project root and the blueprint — are caught by the single
+    `resolve_repo_root_conflict` comparison. Returns a refusal message, or
+    `None` when the write is safe. Never mutates anything.
+    """
+    import subprocess
+
+    from aqueduct.patch.ci import resolve_repo_root_conflict
+
+    cwd = blueprint_path.parent or None
+    tree_check = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        capture_output=True,
+        text=True,
+        cwd=cwd,
+    )
+    if tree_check.returncode != 0 or tree_check.stdout.strip() != "true":
+        return (
+            "not inside a git work tree — `patch pr` branches, commits, and pushes. "
+            "Run inside the repo."
+        )
+    toplevel = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+        cwd=cwd,
+    )
+    if toplevel.returncode != 0 or not toplevel.stdout.strip():
+        detail = toplevel.stderr.strip() if toplevel.stderr else "no output"
+        return (
+            f"could not resolve the git work-tree root (`git rev-parse --show-toplevel`: {detail})"
+        )
+    return resolve_repo_root_conflict(toplevel.stdout.strip(), str(project_root), expected_root)
+
+
+def _current_branch(cwd) -> str | None:
+    import subprocess
+
+    result = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True,
+        text=True,
+        cwd=cwd,
+    )
+    return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else None
+
+
+def _restore_branch(cwd, original_branch: str | None) -> None:
+    """Best-effort return to *original_branch* after a failed `patch pr` step.
+
+    The ONE auto-rollback `patch pr` performs (2026-08-24 design audit):
+    never a reset/checkout that could discard the heal branch's commit,
+    never a branch delete — only switching HEAD back. Failure here is
+    swallowed; the caller already reports the repo's real state.
+    """
+    import subprocess
+
+    if original_branch is None:
+        return
+    subprocess.run(
+        ["git", "switch", original_branch],
+        capture_output=True,
+        text=True,
+        cwd=cwd,
+    )
+
+
+def _create_pr(
+    title: str,
+    body: str,
+    *,
+    base: str,
+    head: str,
+    draft: bool,
+    cwd,
+) -> tuple[bool, str]:
+    """Shell to `gh pr create`. Returns ``(ok, url_or_error)``.
+
+    The ONE seam Phase 87's transport decision names (2026-08-24 design
+    audit, item 2): everything above this function is provider-agnostic, a
+    future non-GitHub provider swaps only this. `gh` shellout, not an API
+    client — Aqueduct never acquires/stores a git-hosting credential itself.
+    """
+    import subprocess
+
+    args = [
+        "gh",
+        "pr",
+        "create",
+        "--title",
+        title,
+        "--body",
+        body,
+        "--base",
+        base,
+        "--head",
+        head,
+    ]
+    if draft:
+        args.append("--draft")
+    result = subprocess.run(args, capture_output=True, text=True, cwd=cwd)
+    if result.returncode != 0:
+        return False, (result.stderr or result.stdout or "gh pr create failed").strip()
+    return True, result.stdout.strip()
+
+
+@patch.command("pr")
+@click.argument("patch_ref")
+@click.option(
+    "--blueprint",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Blueprint YAML file to patch",
+)
+@click.option(
+    "--patches-dir",
+    default=None,
+    help="Root directory for patch lifecycle subdirs (default: <blueprint-dir>/patches)",
+)
+@click.option(
+    "--config",
+    "config_path",
+    default=None,
+    help="Path to aqueduct.yml — resolves git:/pr: config and the patch store.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Run every check and print the plan; touch nothing (no branch, no commit, no push, no PR).",
+)
+@_env_options
+def patch_pr(
+    patch_ref: str,
+    blueprint: str,
+    patches_dir: str | None,
+    config_path: str | None,
+    dry_run: bool,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
+) -> None:
+    """Apply a staged patch on a fresh branch and open a PR for review (Phase 87).
+
+    PATCH_REF is a pending patch_id (or filename) in the configured patch
+    store, or a local patch JSON file — the same PATCH_REF grammar `patch
+    import` accepts. Approval-mode-agnostic: works on any staged/pending
+    patch regardless of the Blueprint's `approval` mode — a `human`-mode
+    reviewer can use this instead of a local `patch apply`, and a `ci`-mode
+    CI runner can use this instead of (or alongside) the webhook +
+    `docs/templates/ci-heal-workflow.yml` flow.
+
+    Flow: repo-root pre-flight guard, then `git switch -c
+    aqueduct/heal/<patch_id>`, apply + commit through the identical path
+    `patch import` uses (same gates, same `---aqueduct---` trailer), `git
+    push -u <remote> <branch>`, then `gh pr create`. Requires the `gh` CLI,
+    authenticated (`aqueduct doctor` checks this).
+
+    On any failure the branch is never rewritten or deleted; the command
+    reports exactly what state the repo is in and how to continue by hand.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path as _Path
+
+    from aqueduct.cli import _resolve_project_root
+    from aqueduct.cli.render.funnel import echo as _echo
+    from aqueduct.cli.render.funnel import error as _error
+    from aqueduct.cli.render.funnel import result as _result
+    from aqueduct.cli.render.funnel import success as _success
+    from aqueduct.config import ConfigError, load_config
+    from aqueduct.patch.apply import PatchError, apply_patch_file
+    from aqueduct.patch.ci import (
+        PATCH_META_KEY,
+        build_commit_message,
+        heal_branch_name,
+        render_pr_body,
+        render_pr_title,
+        validate_ci_payload,
+    )
+
+    blueprint_path = _Path(blueprint)
+    patches_root = (
+        _Path(patches_dir) if patches_dir else _patches_root_from_blueprint(blueprint_path)
+    )
+
+    try:
+        cfg = load_config(_Path(config_path) if config_path else None)
+    except ConfigError as exc:
+        _error(f"config error: {exc}")
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    project_root = _resolve_project_root(
+        blueprint_path, _Path(config_path) if config_path else None
+    )
+
+    # Pre-flight (read-only): work-tree + repo-root guard. Runs even under
+    # --dry-run — a check the dry-run mode exists to surface, not skip.
+    refusal = _git_pr_preflight(blueprint_path, project_root, cfg.git.expected_root)
+    if refusal is not None:
+        _error(refusal)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+    # Resolve the patch body — same source resolution `patch import` uses.
+    _ops_path, _ps, _pending_key = _resolve_patch_source(
+        patch_ref,
+        patches_root,
+        config_path,
+        env_file,
+        cli_env,
+        need_local=True,
+    )
+    patch_file = str(_ops_path)
+
+    _apply_path = _Path(patch_file)
+    _tmp_unwrapped: _Path | None = None
+    try:
+        _raw = json.loads(_Path(patch_file).read_text(encoding="utf-8"))
+    except Exception:
+        _raw = None
+    if isinstance(_raw, dict) and isinstance(_raw.get("patch"), dict):
+        violations = validate_ci_payload(_raw)
+        if violations:
+            _error("invalid CI webhook payload:\n  - " + "\n  - ".join(violations))
+            sys.exit(exit_codes.DATA_OR_RUNTIME)
+        patch_data = _raw["patch"]
+        fd, _tmp = tempfile.mkstemp(suffix=".json", prefix="aq_pr_patch_")
+        import os as _os
+
+        with _os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(patch_data, fh)
+        _tmp_unwrapped = _Path(_tmp)
+        _apply_path = _tmp_unwrapped
+    else:
+        patch_data = _raw if isinstance(_raw, dict) else {}
+
+    patch_id = patch_data.get("patch_id") or (Path(patch_ref).stem if patch_ref else "unknown")
+    meta = patch_data.get(PATCH_META_KEY, {}) or {}
+    module = meta.get("failed_module") or patch_data.get("failed_module")
+
+    try:
+        from aqueduct.parser.parser import parse as _parse
+
+        blueprint_id = _parse(blueprint).id
+    except Exception:
+        blueprint_id = blueprint_path.stem
+
+    branch = heal_branch_name(patch_id)
+    title = render_pr_title(
+        cfg.pr.title_template, patch_id=patch_id, blueprint_id=blueprint_id, module=module
+    )
+    commit_msg = build_commit_message(blueprint_id, [patch_data])
+    body = render_pr_body(patch_data, commit_msg)
+    cwd = blueprint_path.parent or None
+
+    if dry_run:
+        _echo(f"would create branch  {branch}")
+        _echo(f"would apply + commit  patch_id={patch_id}  blueprint={blueprint_id}")
+        _echo(f"would push  {cfg.git.remote}/{branch}")
+        _echo(f"would open PR  base={cfg.pr.base_branch}  draft={cfg.pr.draft}")
+        _echo(f"  title: {title}")
+        import shutil as _shutil
+
+        if _shutil.which("gh") is None:
+            _echo("  note: `gh` CLI not found on PATH — `aqueduct doctor` will flag this")
+        _result({"dry_run": True, "branch": branch, "title": title, "patch_id": patch_id})
+        if _tmp_unwrapped is not None and _tmp_unwrapped.exists():
+            _tmp_unwrapped.unlink()
+        return
+
+    original_branch = _current_branch(cwd)
+
+    switch = subprocess.run(
+        ["git", "switch", "-c", branch], capture_output=True, text=True, cwd=cwd
+    )
+    if switch.returncode != 0:
+        _error(f"git switch -c {branch} failed: {switch.stderr.strip()}")
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+    try:
+        apply_result = apply_patch_file(
+            blueprint_path=blueprint_path,
+            patch_path=_apply_path,
+            patches_dir=patches_root,
+            obs_store=_patch_index_obs_store(blueprint_path),
+            patch_store=_ps,
+            pending_key=_pending_key,
+            cfg=cfg,
+        )
+    except PatchError as exc:
+        _error(f"patch failed: {exc} — branch {branch!r} created, nothing applied")
+        _restore_branch(cwd, original_branch)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+    finally:
+        if _tmp_unwrapped is not None and _tmp_unwrapped.exists():
+            _tmp_unwrapped.unlink()
+
+    add = subprocess.run(
+        ["git", "add", blueprint_path.name], capture_output=True, text=True, cwd=cwd
+    )
+    if add.returncode != 0:
+        _error(
+            f"git add failed: {add.stderr.strip()} — the patched blueprint is left "
+            f"uncommitted in the worktree (branch {branch!r} exists, empty); switching back"
+        )
+        _restore_branch(cwd, original_branch)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+    commit = subprocess.run(
+        ["git", "commit", "-m", commit_msg], capture_output=True, text=True, cwd=cwd
+    )
+    if commit.returncode != 0:
+        _error(
+            f"git commit failed: {commit.stderr.strip()} — the patched blueprint is left "
+            f"staged but uncommitted in the worktree (branch {branch!r} exists); switching back"
+        )
+        _restore_branch(cwd, original_branch)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+    push = subprocess.run(
+        ["git", "push", "-u", cfg.git.remote, branch], capture_output=True, text=True, cwd=cwd
+    )
+    if push.returncode != 0:
+        _error(
+            f"git push failed: {push.stderr.strip()} — branch {branch!r} is committed locally. "
+            f"Recover with: git push -u {cfg.git.remote} {branch}"
+        )
+        _restore_branch(cwd, original_branch)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+    ok, pr_result = _create_pr(
+        title, body, base=cfg.pr.base_branch, head=branch, draft=cfg.pr.draft, cwd=cwd
+    )
+    if not ok:
+        _error(
+            f"gh pr create failed: {pr_result} — branch {branch!r} is pushed to "
+            f"{cfg.git.remote}. Recover with: gh pr create --title {title!r} "
+            f"--base {cfg.pr.base_branch} --head {branch}"
+        )
+        _restore_branch(cwd, original_branch)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+    _success(
+        f"PR opened  patch_id={patch_id}  branch={branch}  "
+        f"operations={apply_result.operations_applied}"
+    )
+    _result(
+        {
+            "pr_url": pr_result,
+            "branch": branch,
+            "patch_id": patch_id,
+            "blueprint_id": blueprint_id,
+            "operations_applied": apply_result.operations_applied,
+        }
+    )

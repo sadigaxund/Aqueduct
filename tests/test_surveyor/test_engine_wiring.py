@@ -101,7 +101,7 @@ def test_root_exception_redacted_before_persist(manifest, tmp_path):
     assigned straight from the structured extractor with no scrub. A
     secret embedded in an exception message (a DSN, a token) would
     persist unredacted in failure_contexts and reach every consumer
-    (dashboard, tools, MCP, the LLM prompt) unscrubbed."""
+    (tools, MCP, the LLM prompt) unscrubbed."""
     from aqueduct import redaction
 
     redaction.clear()

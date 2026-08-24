@@ -187,7 +187,8 @@ metadata overhead, Hive metastore thrash).
 1. `partition_by: [high_cardinality_col, ...]`: organises files into a directory tree;
    each partition gets its own subdirectory so per-partition file counts stay bounded.
 2. `repartition: N` or `coalesce: N`: reduces output file count at the cost of a shuffle
-   (`repartition`) or potential skew (`coalesce`). Target 128-512 MB per file.
+   (`repartition`) or potential skew (`coalesce`). See the file-size rule of thumb under
+   [Parquet and JSON output](#parquet-and-json-output-one-file-per-partition).
 3. External `OPTIMIZE` job (Delta): runs periodically to compact small files outside
    the pipeline. See the [post-write maintenance](#iceberg-hudi) table.
 

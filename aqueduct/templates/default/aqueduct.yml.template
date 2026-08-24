@@ -637,6 +637,34 @@ webhooks:
   # Every delivery also carries an X-Aqueduct-Delivery: <uuid> header for receiver-side dedup.
 
 
+# ── Heal-as-PR (`aqueduct patch pr`, 2.2.0) ──────────────────────────────────
+#
+# Connection-level mechanics for the `aqueduct patch pr <patch_ref>` command:
+# apply a staged patch on a fresh branch, push it, and open a PR via the `gh`
+# CLI (see `aqueduct doctor` for a `gh` presence/auth check). Not required for
+# any other command — `patch apply`/`import`/`commit`/`rollback` all work
+# without this section.
+#
+# No Blueprint influence over either block, ever: reviewer/label routing
+# belongs to repo-level CODEOWNERS / branch protection, never to a healed
+# pipeline's own config.
+
+# git:
+#   expected_root: null   # pin the git work-tree root patch pr / import / commit /
+#                          # rollback are allowed to write into. Unset (default):
+#                          # the resolved `git rev-parse --show-toplevel` must equal
+#                          # this file's directory (the project root); a mismatch
+#                          # (project nested inside a larger repo) hard-refuses.
+#                          # Set this to make a monorepo layout explicit instead:
+#                          #   expected_root: "/path/to/the/actual/repo/root"
+#   remote: origin         # git remote `patch pr` pushes the heal branch to
+
+# pr:
+#   base_branch: main                                        # `gh pr create --base`
+#   title_template: "aqueduct heal: {blueprint_id} ({module}) [{patch_id}]"
+#   draft: false            # open as a draft PR
+
+
 # ── OpenLineage Emission ─────────────────────────────────────────────────────
 #
 # Emit OpenLineage run events (START on run begin, COMPLETE/FAIL on end) to an

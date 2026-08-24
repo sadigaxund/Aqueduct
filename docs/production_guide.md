@@ -404,7 +404,7 @@ Per-pipeline DuckDB files are the right default: zero setup, single-writer is fi
 - **Fleet questions**: "which of my N pipelines healed last night", "heal-rate trend across all blueprints" require querying N separate `.db` files; with Postgres every pipeline writes to one database (the engine creates `observability` / `depots` schemas per store automatically).
 - **Many pipelines**: dozens of per-pipeline files under `.aqueduct/observability/*/` get awkward to back up, retain, and dashboard.
 - **Ephemeral drivers**: Kubernetes Jobs / CI runners lose local files on every restart; a network DSN removes the PVC requirement above entirely.
-- **Concurrent access**: a dashboard or `aqueduct runs` polling while a run is writing hits DuckDB's single-writer lock; Postgres MVCC does not care.
+- **Concurrent access**: a BI tool or `aqueduct runs` polling while a run is writing hits DuckDB's single-writer lock; Postgres MVCC does not care.
 
 The switch is one config change (plus `pip install aqueduct-core[postgres]`):
 
@@ -539,6 +539,8 @@ aqueduct patch import received-patch.json --blueprint pipeline.yml
 
 `patch import` is the **one CI command**: it is `patch apply` + `patch commit` in a single atomic step (use `--no-commit` to stage only). A copy-paste example workflow wiring `import` + `gh pr create` lives at [`docs/templates/ci-heal-workflow.yml`](templates/ci-heal-workflow.yml), a snippet you own, not a maintained Action.
 
+**`aqueduct patch pr` (2.2.0).** Instead of wiring the webhook and template workflow above, `aqueduct patch pr <patch_ref> --blueprint <bp>` does the same branch + apply + commit + push + `gh pr create` sequence in one command, run locally or from any CI runner with `gh` installed and authenticated. It works on any staged patch regardless of `approval` mode, so a `human`-mode reviewer can use it too, in place of a local `patch apply`. Configure `git:`/`pr:` in `aqueduct.yml` (base branch, title template, draft state, and an optional `git.expected_root` pin for a monorepo layout); `aqueduct doctor` checks `gh` presence and auth. See [CLI Reference](cli_reference.md#5-patch-management).
+
 **`on_patch_pending` webhook:** When a patch is staged (`approval: human`), Aqueduct fires `agent.webhooks.on_patch_pending` so teams receive a Slack/PagerDuty notification.
 
 **Webhook hardening.** All webhook deliveries run in a daemon thread (never block or fail a run), redact registered `@aq.secret()` values from the body (headers/URL are left intact, that is how you authenticate to the endpoint), and carry an `X-Aqueduct-Delivery: <uuid>` header for receiver-side dedup. Two opt-in fields on any endpoint:
@@ -577,10 +579,12 @@ No code change needed to add a rule. Edit the file, commit it, rules apply on ne
 
 ## Security considerations
 
+See [Threat Model](threat_model.md) for the healing loop's trust boundaries, the injection surface, and how each mitigation below is enforced in code.
+
 | Concern | Mitigation |
 |---|---|
 | API keys in Blueprint YAML | Never. Use `${ENV_VAR}` refs. Inject via K8s Secrets / Vault. |
-| LLM modifying paths beyond guardrails | Set `agent.guardrails.allowed_paths` to cloud URI patterns. |
+| LLM modifying paths beyond guardrails | Set `agent.guardrails.allowed_paths` to cloud URI patterns. Under `agent.approval: auto`, an unset `allowed_paths` now refuses file-touching patch ops outright (2.2.0) rather than allowing any path. |
 | `auto` mode with `max_patches > 1` in production | Requires `danger.allow_multi_patch: true`: do not set in prod config. |
 | `observability.db` exposure | Contains resolved config and error details. Restrict filesystem access. |
 | Patch tampering | Planned: patch signature verification for `auto` multi-patch mode. |

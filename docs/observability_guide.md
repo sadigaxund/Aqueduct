@@ -624,11 +624,11 @@ WHERE run_id = '<run_id>'
 ORDER BY attempt_num;
 ```
 
-> `signature_hash`/`escalated` are no longer populated (2.85+, C1: both
-> were write-only, never read by any query); the columns still exist in the
-> DDL but every write leaves them NULL/FALSE. Group by
-> `(error_class, where_field, normalized_message)` directly instead of a
-> precomputed hash.
+> `signature_hash` is no longer populated (see the schema reference above);
+> `escalated` is the same story (2.85+, C1: write-only, never read by any
+> query), the column still exists in the DDL but every write leaves it
+> FALSE. Group by `(error_class, where_field, normalized_message)` directly
+> instead of a precomputed hash.
 
 **When** a multi-patch heal (auto + `max_patches > 1`) ran multiple iterations and you want the full
 picture from the outer (user-visible) `run_id` (1.1.0+).
@@ -816,8 +816,8 @@ LIMIT 10;
 
 ### Most common failure signatures
 
-`signature_hash` is no longer populated (2.85+, C1: write-only, never
-read); group by the fields it used to hash instead:
+`signature_hash` is no longer populated (see the schema reference above);
+group by the fields it used to hash instead:
 
 ```sql
 SELECT error_class,
@@ -904,16 +904,12 @@ columns or aggregation tables:
 DuckDB: the functions iterate discovered per‑pipeline files. Postgres: a single
 schema‑scoped query. Both backends return the same shape.
 
-### Read‑only viewer
+### Read‑only access
 
-One local, on‑demand observability viewer; it does not run in the data path:
-
-| Viewer | Command | Extra | Description |
-|---|---|---|---|
-| Dashboard | `aqueduct dashboard` | `dashboard` (Streamlit + Plotly) | Fleet overview: cross‑blueprint runs, success/heal rates, per‑run module metrics, column‑lineage Sankey, doctor, config. Manual refresh; no background polling. |
-
-It is read‑only: it issues `SET read_only = true` on DuckDB and uses a
-read‑only connection on Postgres.
+`aqueduct report`, `aqueduct runs`, and the MCP tool registry consume these
+functions to answer fleet questions on demand; none of them run in the data
+path. Every read is read‑only: DuckDB connections issue `SET read_only =
+true`, and Postgres connections use a read‑only role.
 
 ---
 

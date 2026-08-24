@@ -59,7 +59,11 @@ def test_prompt_version_bumped_for_schema_hint_rule():
     # changes together — the `declare_dependency` never-installs sentence in
     # "Other rules", and the required `defer_reason` bucket list in the
     # runtime-assembled defer section.
-    assert PROMPT_VERSION == "1.12"
+    # 2.2.0 security workstream item B bumped 1.12 -> 1.13: the scaffold
+    # gains an "Untrusted data" instruction block plus untrusted-data
+    # sentinel markers wrapped around the user prompt's error message and
+    # root-cause/stack-trace section.
+    assert PROMPT_VERSION == "1.13"
 
 
 def test_schema_hint_rule_never_leaks_defer_op_token(tmp_path: Path):

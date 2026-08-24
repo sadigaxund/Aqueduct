@@ -7,7 +7,6 @@ commands register onto `cli` when imported at the bottom of __init__.
 from __future__ import annotations
 
 import json
-import os
 import sys
 from datetime import UTC
 from pathlib import Path
@@ -1680,70 +1679,3 @@ def signal(
             )
             if msg_note:
                 _funnel_echo(msg_note, err=False)
-
-
-# ── aqueduct dashboard (Phase 68) ─────────────────────────────────────────────
-
-
-@cli.command()
-@click.option("--config", "config_path", default=None, help="Path to aqueduct.yml")
-@click.option(
-    "--store-dir",
-    default=None,
-    help="Observability store dir (default: scan .aqueduct/observability/*)",
-)
-@click.option(
-    "--port", default=8501, show_default=True, help="Local port for the Streamlit server."
-)
-@click.option("--no-browser", is_flag=True, default=False, help="Do not auto-open a browser.")
-def dashboard(
-    config_path: str | None,
-    store_dir: str | None,
-    port: int,
-    no_browser: bool,
-) -> None:
-    """Launch the local, read-only observability dashboard (Streamlit).
-
-    Requires the optional 'dashboard' extra: pip install aqueduct-core[dashboard]
-
-    This is a LOCAL dev viewer (like the Spark UI) — on-demand, read-only, never a
-    production server and never required by a pipeline. Shells out to
-    `streamlit run` on the dashboard app; Ctrl-C to stop.
-    """
-    import importlib.util
-    import subprocess
-
-    if importlib.util.find_spec("streamlit") is None:
-        _error(
-            "aqueduct dashboard needs the 'dashboard' extra: pip install aqueduct-core[dashboard]"
-        )
-        sys.exit(exit_codes.CONFIG_ERROR)
-
-    app_path = str(Path(__file__).resolve().parent.parent / "dashboard" / "app.py")
-    env = dict(os.environ)
-    if config_path:
-        env["AQ_DASH_CONFIG"] = config_path
-    if store_dir:
-        env["AQ_DASH_STORE_DIR"] = store_dir
-
-    args = [
-        # -P (PEP 706): don't prepend CWD to sys.path. `-m` normally does,
-        # which lets a project-local `secrets/` package (a common custom
-        # secrets-resolver layout) shadow the stdlib `secrets` module for
-        # every downstream import in the subprocess — including starlette's
-        # `from secrets import token_hex` in recent streamlit releases.
-        sys.executable,
-        "-P",
-        "-m",
-        "streamlit",
-        "run",
-        app_path,
-        "--server.port",
-        str(port),
-        "--server.headless",
-        "true" if no_browser else "false",
-    ]
-    try:
-        sys.exit(subprocess.call(args, env=env))
-    except KeyboardInterrupt:
-        sys.exit(130)

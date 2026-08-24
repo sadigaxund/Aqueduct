@@ -250,7 +250,7 @@ class KVStoreConfig(BaseModel):
     path: Annotated[str, FsPath()] = Field(
         ...,
         description=(
-            "DuckDB: local file path. Postgres: libpq DSN. " "Redis: `redis://host:port/db` URL."
+            "DuckDB: local file path. Postgres: libpq DSN. Redis: `redis://host:port/db` URL."
         ),
     )
 
@@ -1051,6 +1051,69 @@ class AgentConnectionConfig(AgentPolicySchema):
     )
 
 
+class GitConfig(BaseModel):
+    """Phase 87 — mechanics shared by every git-writing flow (``patch import``,
+    ``patch commit``, ``patch rollback``, and the new ``patch pr``).
+
+    Connection-level only: which repository/remote a git-writing command is
+    allowed to act on. No Blueprint influence — see ``PrConfig`` for why.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    expected_root: str | None = Field(
+        default=None,
+        description=(
+            "Pin the git work-tree root a patch command is allowed to write "
+            "into. When unset, the resolved `git rev-parse --show-toplevel` "
+            "must equal the project root (the aqueduct.yml directory); a "
+            "mismatch (project nested in a larger repo, or a stray .git "
+            "between the project root and the blueprint) hard-refuses. Set "
+            "this to the intended repo root to make a monorepo layout "
+            "explicit instead of refusing it."
+        ),
+        json_schema_extra={"engine_scoped": False},
+    )
+    remote: str = Field(
+        default="origin",
+        description="git remote `patch pr` pushes the heal branch to.",
+        json_schema_extra={"engine_scoped": False},
+    )
+
+
+class PrConfig(BaseModel):
+    """Phase 87 — ``aqueduct patch pr`` presentation.
+
+    Connection-level PR mechanics only: base branch, title, draft state. No
+    labels or reviewers field, and no Blueprint influence, ever: reviewer
+    routing belongs to repo-level CODEOWNERS / branch protection. A healed
+    pipeline, potentially steered by an injected upstream dataset, must
+    never influence who reviews its own fix or how the PR is classified.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    base_branch: str = Field(
+        default="main",
+        description="Base branch `gh pr create --base` targets.",
+        json_schema_extra={"engine_scoped": False},
+    )
+    title_template: str = Field(
+        default="aqueduct heal: {blueprint_id} ({module}) [{patch_id}]",
+        description=(
+            "PR title template. Available tokens: {patch_id}, "
+            "{blueprint_id}, {module} (the healed run's failed_module, or "
+            "'unknown' when the patch carries none)."
+        ),
+        json_schema_extra={"engine_scoped": False},
+    )
+    draft: bool = Field(
+        default=False,
+        description="Open the PR as a draft (`gh pr create --draft`).",
+        json_schema_extra={"engine_scoped": False},
+    )
+
+
 class WebhookEndpointConfig(BaseModel):
     """Configuration for a single webhook endpoint.
 
@@ -1663,6 +1726,8 @@ class AqueductConfig(BaseModel):
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     danger: DangerConfig = Field(default_factory=DangerConfig)
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
+    git: GitConfig = Field(default_factory=GitConfig)
+    pr: PrConfig = Field(default_factory=PrConfig)
     webhooks: WebhooksConfig = Field(default_factory=WebhooksConfig)
     lineage: LineageConfig = Field(default_factory=LineageConfig)
     agent: AgentConnectionConfig = Field(default_factory=AgentConnectionConfig)
