@@ -120,9 +120,9 @@ def _manifest_touching_every_module_type() -> Manifest:
 @pytest.mark.parametrize("engine", ["spark", "duckdb"])
 def test_no_blueprint_can_fail_compile_on_a_tooling_leaf(engine):
     """The defining property of this leaf family. DuckDB's declaration marks
-    FOUR of the six tooling.* leaves `unsupported`
-    (tooling.test_runner/doctor.table_exists/doctor.cloud_preflight/
-    doctor.session_preflight) — if the gate ever looked one up for a real
+    TWO of the six tooling.* leaves `unsupported`
+    (tooling.test_runner/doctor.cloud_preflight) — if
+    the gate ever looked one up for a real
     module, this manifest (which touches every module type) would report a
     CompileError for it. It must not: no Blueprint field spells a
     tooling.*/observability.* leaf id, so leaves_for_module() /
@@ -142,16 +142,23 @@ def test_duckdb_declares_unsupported_tooling_leaves_that_never_gate():
     """Companion to the parametrized test above, stated the other way round:
     confirm DuckDB really DOES mark these unsupported (so the previous test
     is not vacuous), then confirm compiling the same manifest against
-    DuckDB is still clean."""
+    DuckDB is still clean.
+
+    ``tooling.doctor.session_preflight`` flipped to ``supported`` (Part A —
+    ``check_duckdb()`` now runs whenever ``deployment.engine == 'duckdb'``,
+    see ``aqueduct/doctor/__init__.py`` and this leaf's hint in
+    ``duckdb_/capabilities.yml``) and ``tooling.doctor.table_exists`` flipped
+    to ``supported`` (Part B — ``_table_exists_check`` now runs a real
+    ``information_schema.tables`` probe for a duckdb-resolved module), so
+    both are EXCLUDED from the still-genuinely-unsupported set checked
+    here."""
     caps = CAPABILITY_REGISTRY["duckdb"]
     truly_unsupported = {
         leaf for leaf in _TOOLING_LEAVES if caps.verdict(leaf).support is Support.UNSUPPORTED
     }
     assert truly_unsupported == {
         "tooling.test_runner",
-        "tooling.doctor.table_exists",
         "tooling.doctor.cloud_preflight",
-        "tooling.doctor.session_preflight",
     }, truly_unsupported
 
     m = _manifest_touching_every_module_type()
@@ -193,17 +200,42 @@ def test_duckdb_drift_schema_read_and_module_metrics_are_supported():
     assert caps.verdict("observability.module_metrics.per_module").support is Support.SUPPORTED
 
 
-def test_duckdb_doctor_leaves_are_unsupported_with_hints():
-    """None of the three doctor tooling checks exist for DuckDB yet
-    (tmp/phase85/engine_parity_audit.md findings #3/#4/#5) — every one must
-    be `unsupported` and every `unsupported` row must carry a hint telling
-    the user what is and is not covered."""
+def test_duckdb_doctor_cloud_preflight_is_unsupported_with_hint():
+    """cloud_preflight doctor check still doesn't exist for DuckDB
+    (tmp/phase85/engine_parity_audit.md finding #4) — must be `unsupported`
+    with a hint telling the user what is not covered. table_exists is
+    checked separately below (it flipped to `supported` in Part B);
+    session_preflight is checked separately below too (it flipped to
+    `supported` in Part A)."""
     caps = CAPABILITY_REGISTRY["duckdb"]
-    for leaf in (
-        "tooling.doctor.table_exists",
-        "tooling.doctor.cloud_preflight",
-        "tooling.doctor.session_preflight",
-    ):
-        cap = caps.verdict(leaf)
-        assert cap.support is Support.UNSUPPORTED, f"{leaf} should be unsupported on duckdb"
-        assert cap.hint, f"{leaf} unsupported verdict has no hint"
+    cap = caps.verdict("tooling.doctor.cloud_preflight")
+    assert (
+        cap.support is Support.UNSUPPORTED
+    ), "tooling.doctor.cloud_preflight should be unsupported on duckdb"
+    assert cap.hint, "tooling.doctor.cloud_preflight unsupported verdict has no hint"
+
+
+def test_duckdb_session_preflight_is_supported_with_a_hint():
+    """Part A: `aqueduct doctor` now runs `check_duckdb()` whenever
+    `deployment.engine == 'duckdb'` (see `aqueduct/doctor/__init__.py`),
+    verifying the session builds + SELECT 1, and — under --preflight — the
+    httpfs/S3-secret wiring `_make_session` applies. The hint must still
+    name what --preflight leaves unverified when no S3 config is present."""
+    caps = CAPABILITY_REGISTRY["duckdb"]
+    cap = caps.verdict("tooling.doctor.session_preflight")
+    assert cap.support is Support.SUPPORTED
+    assert cap.hint
+    assert "check_duckdb" in cap.hint
+
+
+def test_duckdb_table_exists_is_supported_with_a_hint():
+    """Part B: `_table_exists_check` now runs a real
+    `information_schema.tables` probe for a duckdb-resolved module, against
+    a connection to `engine.duckdb.database_path` (see
+    `aqueduct/doctor/__init__.py::_table_exists_check_duckdb`). The hint
+    must still name the database_path-unset skip case."""
+    caps = CAPABILITY_REGISTRY["duckdb"]
+    cap = caps.verdict("tooling.doctor.table_exists")
+    assert cap.support is Support.SUPPORTED
+    assert cap.hint
+    assert "database_path" in cap.hint

@@ -14,6 +14,17 @@ versioning follows [SemVer](https://semver.org/). The stability contract
 applies from v1.0.0 — during alpha/RC, breaking changes may land in any
 release and are marked **BREAKING**.
 
+## [Unreleased]
+
+### Added
+
+- **`aqueduct doctor` DuckDB session/extension preflight (`check_duckdb`).** A `check_java`/`check_spark(preflight=True)` analog for the embedded DuckDB engine: whenever `deployment.engine == 'duckdb'`, doctor now connects the way `_make_session` would (`engine.duckdb.database_path` if set, else `:memory:`) and runs `SELECT 1`, reporting the DuckDB version. Runs unconditionally (a bare `duckdb.connect` is near-instant, unlike a SparkSession) — never gated behind `--skip-spark`. Under `--preflight`, it additionally exercises `_make_session`'s httpfs/S3-secret wiring (`resolve_s3_secret_from_config` + `configure_s3_secret` + `ensure_extension(con, "httpfs", ...)`) when S3 credentials or an explicit `extension_repository` are configured; when neither is configured the ok detail says so explicitly (`no s3 config — httpfs check skipped`). A non-`duckdb` deployment gets an honest `skip` naming the resolved engine instead of a probe attempt. `tooling.doctor.session_preflight` (`aqueduct/executor/duckdb_/capabilities.yml`) flips `unsupported` → `supported`. (`aqueduct/doctor/__init__.py`; tests: `tests/test_cli/test_cli_doctor_new.py::TestCheckDuckDB`, `tests/test_cli/test_cli_doctor_engine_routing.py::test_run_doctor_skips_duckdb_check_for_spark_engine`)
+- **`aqueduct doctor` real DuckDB table-existence probe.** A `table:`-addressed Ingress/Egress resolved to the DuckDB engine now gets a real check instead of an unimplemented-for-this-engine skip: `_table_exists_check` opens a READ-ONLY connection to `engine.duckdb.database_path` and queries `information_schema.tables` (matches base tables AND views, unlike `duckdb_tables()`) for the module's 1/2/3-part `table:` name, using the same catalog-defaulting rule as the DuckDB executor's own `table:` resolution. When `database_path` is unset (the default `:memory:`), the check is an honest `skip` — that run's catalog only exists inside its own session, so a fresh doctor connection would have an empty catalog and falsely report every table missing. A configured `database_path` file that does not exist yet reports `fail` ("table not found"), never a crash. `tooling.doctor.table_exists` (`aqueduct/executor/duckdb_/capabilities.yml`) flips `unsupported` → `supported`. (`aqueduct/doctor/__init__.py`; tests: `tests/test_cli/test_cli_doctor_engine_routing.py`, `tests/test_capabilities/test_tooling_leaves.py::test_duckdb_table_exists_is_supported_with_a_hint`)
+
+### Changed
+
+- `ProbeSampling` hoisted to an engine-agnostic `aqueduct/executor/probe_sampling.py`; `aqueduct/cli/run_setup.py` no longer imports a Spark module to build every engine's sampling config. Per-engine copies (`aqueduct/executor/spark/probe.py`, `aqueduct/executor/duckdb_/probe.py`) are now re-exports — existing import paths are unchanged.
+
 ## [2.2.0] — 2026-08-24
 
 The 2.2.0 milestone (Phases 87 + 90): heal-as-PR becomes a first-class,

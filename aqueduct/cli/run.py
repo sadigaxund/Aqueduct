@@ -1665,7 +1665,9 @@ def run(
                 from aqueduct.doctor import check_blueprint_sources_from_manifest
 
                 _dr = check_blueprint_sources_from_manifest(
-                    manifest, deployment_env=cfg.deployment.env
+                    manifest,
+                    deployment_env=cfg.deployment.env,
+                    duckdb_engine_config=cfg.engine.duckdb.model_dump(),
                 )
                 _hints = tuple(
                     f"{r.name} — {r.detail}" for r in _dr if r.status in ("warn", "fail")
