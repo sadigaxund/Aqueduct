@@ -71,7 +71,7 @@ def _mock_agent_result(patch):
 @patch("aqueduct.agent.generate_agent_patch")
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 @patch("aqueduct.cli._agent_usable", return_value=True)
-def test_aggressive_mode_invalid_patch_stops_loop(
+def test_auto_mode_invalid_patch_stops_loop(
     mock_agent_usable,
     mock_surveyor_cls,
     mock_gen_patch,
@@ -80,7 +80,7 @@ def test_aggressive_mode_invalid_patch_stops_loop(
     mock_agent_patch,
 ):
     """
-    Scenario: aggressive mode + patch produces invalid Blueprint (compile fail) -> loop stops.
+    Scenario: auto mode + patch produces invalid Blueprint (compile fail) -> loop stops.
     """
     runner = CliRunner()
     mock_exec = MagicMock()
@@ -122,7 +122,7 @@ def test_aggressive_mode_invalid_patch_stops_loop(
 @patch("aqueduct.agent.generate_agent_patch")
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 @patch("aqueduct.cli._agent_usable", return_value=True)
-def test_aggressive_mode_fails_then_continues(
+def test_auto_mode_fails_then_continues(
     mock_agent_usable,
     mock_surveyor_cls,
     mock_gen_patch,
@@ -131,7 +131,7 @@ def test_aggressive_mode_fails_then_continues(
     mock_agent_patch,
 ):
     """
-    Scenario: aggressive mode + patch valid but re-run fails -> on_heal_failure applied (staged), loop continues.
+    Scenario: auto mode + patch valid but re-run fails -> on_heal_failure applied (staged), loop continues.
     """
     runner = CliRunner()
     mock_exec = MagicMock()
@@ -216,7 +216,7 @@ def test_aggressive_mode_fails_then_continues(
 @patch("aqueduct.agent.generate_agent_patch")
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 @patch("aqueduct.cli._agent_usable", return_value=True)
-def test_aggressive_mode_succeeds_stops_loop(
+def test_auto_mode_succeeds_stops_loop(
     mock_agent_usable,
     mock_surveyor_cls,
     mock_gen_patch,
@@ -225,7 +225,7 @@ def test_aggressive_mode_succeeds_stops_loop(
     mock_agent_patch,
 ):
     """
-    Scenario: aggressive mode + patch valid + re-run succeeds -> Blueprint written to disk, loop stops.
+    Scenario: auto mode + patch valid + re-run succeeds -> Blueprint written to disk, loop stops.
     """
     runner = CliRunner()
     mock_exec = MagicMock()

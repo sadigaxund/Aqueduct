@@ -1,7 +1,7 @@
 """run_records per-iteration rows + parent_run_id linkage (1.1.0).
 
 Covers TEST_MANIFEST.md ⏳ item:
-  "Aggressive heal with 3 iterations produces 3 `run_records` rows. Iteration
+  "Auto-mode heal with 3 iterations produces 3 `run_records` rows. Iteration
    0 row carries `parent_run_id=NULL`, iterations 1+ carry the outer run_id."
 """
 

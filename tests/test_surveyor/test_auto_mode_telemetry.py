@@ -21,8 +21,8 @@ def manifest():
     )
 
 
-def test_aggressive_iteration_recording(manifest, tmp_path):
-    """Verify aggressive heal records multiple iterations with correct parent_run_id relationship."""
+def test_auto_iteration_recording(manifest, tmp_path):
+    """Verify auto-mode heal records multiple iterations with correct parent_run_id relationship."""
     surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
 
     outer_run_id = "outer-run"
