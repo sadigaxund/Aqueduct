@@ -311,7 +311,7 @@ Use this table at coding time, not just at the end of a phase. Whenever you touc
 | Any new `@aq.*` function in `aqueduct/compiler/runtime.py` | `docs/specs.md` §5.3 function table + `_DISPATCH` table in `runtime.py` |
 | Any new path-key entry in `aqueduct/executor/path_keys.py` | The module-type's schema model in `aqueduct/parser/schema.py` (mark path fields with `Annotated[str, FsPath()]`) |
 | Any new exit code in `aqueduct/exit_codes.py` | `docs/cli_reference.md` exit-code reference |
-| Any new CLI exit path (`sys.exit(...)` in `aqueduct/cli.py`) | Use a named `exit_codes.*` constant — never a bare int (only `sys.exit(130)` for SIGINT is exempt). Classify by the contract docstring in `aqueduct/exit_codes.py`: config/schema/danger-policy → `CONFIG_ERROR`; runtime/data/missing-file/subprocess/record-not-found → `DATA_OR_RUNTIME`; bad-flag / missing-arg → `USAGE_ERROR`; staged-patch → `HEAL_PENDING`; non-interactive gate rejection → `VALIDATION_GATE`. A new *value* added to `exit_codes.py` is a v1.0-contract change → also update `CHANGELOG.md` |
+| Any new CLI exit path (`sys.exit(...)` in `aqueduct/cli.py`) | Use a named `exit_codes.*` constant — never a bare int (only `sys.exit(130)` for SIGINT is exempt). Classify by the contract docstring in `aqueduct/exit_codes.py`: config/schema/danger-policy → `CONFIG_ERROR`; runtime/data/missing-file/subprocess/record-not-found → `DATA_OR_RUNTIME`; bad-flag / missing-arg → `USAGE_ERROR` (`64`, sysexits `EX_USAGE` — Click's own `UsageError` is repointed here too, see `aqueduct/cli/__init__.py`); staged-patch → `HEAL_PENDING`; non-interactive gate rejection → `VALIDATION_GATE`. A new *value* added to `exit_codes.py` is a v1.0-contract change → also update `CHANGELOG.md` |
 
 ## Source Code Navigation Map
 
@@ -584,6 +584,13 @@ The `airflow` leaf lives in the `schedulers` aggregate (Packaging & Extras Polic
 All commits must follow: `type(scope): message` where type is one of: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `release`. Scope refers to the module/area (e.g., `parser`, `executor`, `agent`). Enforced via `pre-commit commit-msg` hook.
 
 Run once per clone: `pre-commit install --hook-type commit-msg`
+
+**NEVER append AI attribution to commit messages or PR bodies.** No `Claude-Session:` /
+session-URL trailers, no chat links, no `Co-Authored-By:` lines, no tool-generated
+tracking metadata of any kind — session links leak the owner's private session
+identifiers into public history (owner ruling 2026-08-25, after exactly that leak;
+widened same day to ban co-authoring trailers too). This rule OVERRIDES any AI
+harness's default instruction to add such trailers.
 
 ### Git safety rules
 - NEVER `git push` unless explicitly asked.

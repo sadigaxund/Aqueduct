@@ -8,6 +8,9 @@ The operator is a thin wrapper over ``subprocess.run`` that:
    - ``0``  SUCCESS         → task success, XCom push.
    - ``2``  DATA_OR_RUNTIME → ``AirflowException`` (Airflow retry policy applies).
    - ``3``  HEAL_PENDING    → ``self.defer(...)`` to the patch trigger.
+   - ``64`` USAGE_ERROR     → ``AirflowException`` (invalid CLI usage, not a
+     pipeline data/runtime failure — check the operator's ``aqueduct_cmd``/
+     ``extra_args``).
    - anything else          → ``AirflowException``.
 
 Airflow is imported at module top — the package-level ``__getattr__`` in
@@ -121,6 +124,13 @@ class AqueductOperator(BaseOperator):
             raise AirflowException(
                 f"aqueduct run failed (exit code {rc}, DATA_OR_RUNTIME). "
                 f"See blueprint logs for run_id={self.run_id!r}."
+            )
+
+        if rc == exit_codes.USAGE_ERROR:
+            raise AirflowException(
+                f"aqueduct run invoked with invalid CLI usage (exit code {rc}, "
+                f"USAGE_ERROR) — not a pipeline data/runtime failure. Check "
+                f"aqueduct_cmd/extra_args on this operator for run_id={self.run_id!r}."
             )
 
         raise AirflowException(

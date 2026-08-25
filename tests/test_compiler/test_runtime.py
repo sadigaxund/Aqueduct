@@ -1,15 +1,18 @@
 """Tests for the Compiler layer: Tier 1 runtime functions."""
 
 from __future__ import annotations
+
 from datetime import date
 from pathlib import Path
+
 import pytest
 
-pytestmark = pytest.mark.unit
-from aqueduct.compiler.runtime import AqFunctions, resolve_tier1_str
 from aqueduct.compiler.compiler import compile
+from aqueduct.compiler.runtime import AqFunctions, resolve_tier1_str
 from aqueduct.errors import CompileError
 from aqueduct.parser.parser import parse
+
+pytestmark = pytest.mark.unit
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 
@@ -61,9 +64,13 @@ class TestTier1Resolution:
         result = resolve_tier1_str("@aq.run.id()", self.reg)
         assert result == "test-run-001"
 
-    def test_runtime_prev_run_id_empty(self):
-        result = resolve_tier1_str("@aq.run.prev_id()", self.reg)
-        assert result == ""
+    def test_runtime_prev_run_id_no_depot_raises(self):
+        """No depot backend configured + @aq.run.prev_id() referenced in the
+        Blueprint must fail loud (CompileError) rather than silently return
+        "" — that silent fallback causes incremental pipelines to re-read
+        all data every run. See depot_get for the same ruling."""
+        with pytest.raises(CompileError, match=r"@aq\.run\.prev_id"):
+            resolve_tier1_str("@aq.run.prev_id()", self.reg)
 
     def test_runtime_prev_run_id_exists(self, tmp_path):
         from aqueduct.depot.depot import DepotStore
@@ -92,13 +99,46 @@ class TestTier1Resolution:
         with pytest.raises(CompileError, match="not set"):
             resolve_tier1_str("@aq.env('MISSING_VAR')", self.reg)
 
-    def test_depot_get_default_when_no_depot(self):
-        result = resolve_tier1_str("@aq.depot.get('key', 'fallback')", self.reg)
+    def test_depot_get_no_depot_raises(self):
+        """No depot backend configured + @aq.depot.get referenced in the
+        Blueprint must fail loud (CompileError), not silently fall back to
+        the default — that silent fallback causes incremental pipelines to
+        re-read all data every run."""
+        with pytest.raises(CompileError, match="stores.depots") as exc_info:
+            resolve_tier1_str("@aq.depot.get('key', 'fallback')", self.reg)
+        assert "aqueduct.yml" in str(exc_info.value)
+
+    def test_depot_get_no_depot_empty_default_raises(self):
+        with pytest.raises(CompileError, match="stores.depots"):
+            resolve_tier1_str("@aq.depot.get('some.key')", self.reg)
+
+    def test_depot_get_configured_missing_key_returns_default(self, tmp_path):
+        from aqueduct.depot.depot import DepotStore
+
+        store = DepotStore(tmp_path / "depot.db")
+        reg = AqFunctions(run_id="test-run-001", depot=store)
+        result = resolve_tier1_str("@aq.depot.get('missing.key', 'fallback')", reg)
         assert result == "fallback"
 
-    def test_depot_get_empty_default(self):
-        result = resolve_tier1_str("@aq.depot.get('some.key')", self.reg)
-        assert result == ""
+    def test_depot_get_configured_present_key_returns_value(self, tmp_path):
+        from aqueduct.depot.depot import DepotStore
+
+        store = DepotStore(tmp_path / "depot.db")
+        store.put("some.key", "the-value")
+        reg = AqFunctions(run_id="test-run-001", depot=store)
+        result = resolve_tier1_str("@aq.depot.get('some.key')", reg)
+        assert result == "the-value"
+
+    def test_no_depot_reference_resolves_fine_without_depot_configured(self):
+        """An unconfigured depot must not raise for a Blueprint that never
+        touches @aq.depot.* / @aq.run.prev_id() — the raise only fires when
+        the function is actually called during resolution."""
+        result = resolve_tier1_str("@aq.date.today()", self.reg)
+        assert result == date.today().isoformat()
+
+    def test_run_prev_id_no_depot_raises_names_the_function(self):
+        with pytest.raises(CompileError, match=r"@aq\.run\.prev_id"):
+            resolve_tier1_str("@aq.run.prev_id()", self.reg)
 
     def test_nested_call_resolved(self):
         result = resolve_tier1_str("@aq.date.offset(base='@aq.date.today()', days=1)", self.reg)
@@ -177,9 +217,10 @@ class TestCompilerEdgeCases:
 
     def test_post_tier1_ctx_reresolution(self, tmp_path):
         """Context values that contain ${ctx.*} after Tier1 resolution should be re-resolved."""
-        from aqueduct.parser.parser import parse
-        from aqueduct.compiler.compiler import compile as compiler_compile
         from unittest.mock import MagicMock
+
+        from aqueduct.compiler.compiler import compile as compiler_compile
+        from aqueduct.parser.parser import parse
 
         bp_file = tmp_path / "bp.yml"
         bp_file.write_text(
@@ -195,9 +236,10 @@ class TestCompilerEdgeCases:
     def test_compile_with_retry_policy_and_append_egress_warns(self, tmp_path):
         """max_attempts > 1 on append Egress should emit a warning."""
         import warnings
-        from aqueduct.parser.parser import parse
-        from aqueduct.compiler.compiler import compile as compiler_compile
         from unittest.mock import MagicMock
+
+        from aqueduct.compiler.compiler import compile as compiler_compile
+        from aqueduct.parser.parser import parse
 
         bp_file = tmp_path / "bp.yml"
         bp_file.write_text(
@@ -214,6 +256,109 @@ class TestCompilerEdgeCases:
             warnings.simplefilter("always")
             compiler_compile(bp, blueprint_path=bp_file, depot=MagicMock())
         assert any("append" in str(warning.message) for warning in w)
+
+
+class TestDepotReadsRecording:
+    """`AqFunctions.depot_reads` — recorded during Tier 1 resolution, consumed by
+    Gate 3's staleness notice (aqueduct/patch/preview.py::run_sandbox_gate)."""
+
+    def test_no_depot_function_used_records_nothing(self):
+        reg = AqFunctions(run_id="test-run-001")
+        resolve_tier1_str("@aq.date.today()", reg)
+        assert reg.depot_reads == {}
+
+    def test_default_mount_depot_get_records_key_and_value(self, tmp_path):
+        from aqueduct.depot.depot import DepotStore
+
+        store = DepotStore(tmp_path / "depot.db")
+        store.put("some.key", "the-value")
+        reg = AqFunctions(run_id="test-run-001", depot=store)
+        resolve_tier1_str("@aq.depot.get('some.key')", reg)
+        assert reg.depot_reads == {"some.key": "the-value"}
+
+    def test_run_prev_id_records_under_last_run_id_key(self, tmp_path):
+        from aqueduct.depot.depot import DepotStore
+
+        store = DepotStore(tmp_path / "depot.db")
+        store.put("_last_run_id", "test-run-999")
+        reg = AqFunctions(run_id="test-run-001", depot=store)
+        resolve_tier1_str("@aq.run.prev_id()", reg)
+        assert reg.depot_reads == {"_last_run_id": "test-run-999"}
+
+    def test_named_mount_records_namespaced_key(self, tmp_path):
+        from aqueduct.depot.depot import DepotStore
+
+        store = DepotStore(tmp_path / "depot.db")
+        store.put("some.key", "named-value")
+        reg = AqFunctions(run_id="test-run-001", depots={"other": store})
+        resolve_tier1_str("@aq.depot.other.get('some.key')", reg)
+        assert reg.depot_reads == {"other:some.key": "named-value"}
+
+    def test_default_and_named_mount_same_key_do_not_collide(self, tmp_path):
+        from aqueduct.depot.depot import DepotStore
+
+        default_store = DepotStore(tmp_path / "default.db")
+        default_store.put("k", "default-value")
+        named_store = DepotStore(tmp_path / "named.db")
+        named_store.put("k", "named-value")
+        reg = AqFunctions(
+            run_id="test-run-001",
+            depot=default_store,
+            depots={"default": default_store, "other": named_store},
+        )
+        resolve_tier1_str("@aq.depot.get('k')", reg)
+        resolve_tier1_str("@aq.depot.other.get('k')", reg)
+        assert reg.depot_reads == {"k": "default-value", "other:k": "named-value"}
+
+
+class TestCompileDepotReadsOut:
+    """`compile(depot_reads_out=...)` — the sink populated from AqFunctions.depot_reads."""
+
+    def test_sink_populated_from_module_config_depot_read(self, tmp_path):
+        from aqueduct.depot.depot import DepotStore
+
+        store = DepotStore(tmp_path / "depot.db")
+        store.put("watermark", "2026-01-01")
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: p\nname: P\n"
+            "modules:\n"
+            "  - id: out\n    type: Egress\n    label: Out\n"
+            "    config:\n"
+            "      format: parquet\n"
+            '      path: "/tmp/${ctx.watermark}"\n'
+            "      mode: append\n"
+            "      partition_by: [d]\n"
+            "context:\n"
+            "  watermark: \"@aq.depot.get('watermark')\"\n"
+            "edges: []\n",
+            encoding="utf-8",
+        )
+        bp = parse(str(bp_file))
+        sink: dict[str, str] = {}
+        compile(bp, blueprint_path=bp_file, depot=store, depot_reads_out=sink)
+        assert sink == {"watermark": "2026-01-01"}
+
+    def test_sink_untouched_when_no_depot_function_used(self, tmp_path):
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: p\nname: P\nmodules: []\nedges: []\n",
+            encoding="utf-8",
+        )
+        bp = parse(str(bp_file))
+        sink: dict[str, str] = {}
+        compile(bp, blueprint_path=bp_file, depot_reads_out=sink)
+        assert sink == {}
+
+    def test_sink_omitted_does_not_raise(self, tmp_path):
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: p\nname: P\nmodules: []\nedges: []\n",
+            encoding="utf-8",
+        )
+        bp = parse(str(bp_file))
+        manifest = compile(bp, blueprint_path=bp_file)
+        assert manifest is not None
 
 
 class TestAqMeta:

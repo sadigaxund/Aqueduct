@@ -97,9 +97,28 @@ def drift(
 
     try:
         bp = parse(blueprint)
+
+        depot = None
+        depots = None
+        try:
+            from aqueduct.depot.depot import preview_depots
+
+            depot, depots = preview_depots(cfg, bp.id)
+        except Exception as exc:  # pragma: no cover — depot build must never crash drift
+            import logging as _logging
+
+            _logging.getLogger(__name__).warning(
+                "aqueduct drift: could not build preview depot (%s) — "
+                "@aq.depot.*/@aq.run.prev_id will hard-fail if this Blueprint uses them",
+                exc,
+            )
+            depot, depots = None, None
+
         manifest = compiler_compile(
             bp,
             blueprint_path=Path(blueprint),
+            depot=depot,
+            depots=depots,
             deployment_env=getattr(cfg.deployment, "env", None),
             deployment_target=getattr(cfg.deployment, "target", None),
             # `compile()` defaults `engine="spark"` when not given — omitting

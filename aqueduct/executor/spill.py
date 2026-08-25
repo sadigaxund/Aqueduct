@@ -281,6 +281,32 @@ def _list_hash_dirs(root: str) -> list[str]:
         return []
 
 
+def find_run_under_other_hash(root: str, run_id: str, current_hash: str) -> str | None:
+    """Best-effort scan of every OTHER ``manifest_hash`` directory under
+    *root* for a *run_id* subdirectory.
+
+    The handoff spill layout is ``<root>/<manifest_hash>/<run_id>/<edge_id>``
+    (``spill_dir_for`` above) — strictly keyed by the CURRENT compiled
+    Manifest's hash, so a ``--resume <run_id>`` after a Blueprint edit finds
+    nothing under the new hash and, left unchecked, silently proceeds as a
+    fresh run (P4: resume fail-closed). This is the detector CLI callers use
+    to tell that apart from a genuinely-fresh ``run_id``: it looks for
+    *run_id* under every hash directory OTHER than *current_hash* and
+    returns the first one found — the run_id existed, just under a stale
+    hash — or ``None`` when *run_id* is not found anywhere but
+    *current_hash* (nothing to warn about; either it resumes normally there,
+    or it's a run_id nobody has used before).
+    """
+    if not local_only_or_fsspec_available(root):
+        return None
+    for h in _list_hash_dirs(root):
+        if h == current_hash:
+            continue
+        if run_id in _list_run_dirs(root, h):
+            return h
+    return None
+
+
 def _dir_is_empty(uri: str) -> bool:
     """True when *uri* exists and has no children — used to decide whether a
     manifest-hash directory can be reclaimed once every run underneath it
@@ -709,6 +735,7 @@ __all__ = [
     "delete_spill_tree",
     "dir_size_bytes",
     "ensure_parent_exists",
+    "find_run_under_other_hash",
     "is_remote_uri",
     "local_only_or_fsspec_available",
     "parse_duration",

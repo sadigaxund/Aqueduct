@@ -146,3 +146,74 @@ def test_benign_addition_does_not_heal(project):
     res = _invoke(tmp_path, store)
     assert res.exit_code == 0, res.output
     assert "benign" in res.output
+
+
+def test_drift_compile_resolves_real_depot_value_with_run_namespacing(project, monkeypatch):
+    """`aqueduct drift` compiles with a real depot wired in (Item 1) — a
+    Blueprint using `@aq.depot.get()` in an Ingress path resolves the value a
+    real `aqueduct run` (`aqueduct.stores.get_stores`) would have written for
+    this SAME blueprint_id, not the literal default."""
+    tmp_path, store, schema = project
+
+    (tmp_path / "aqueduct.yml").write_text(
+        _AQ
+        + f"stores:\n  depots:\n    default:\n      backend: duckdb\n      path: {tmp_path}/depot.db\n"
+    )
+    bp_with_depot = _BP.replace(
+        "config: { format: parquet, path: data/in }",
+        "config: { format: parquet, path: \"data/@aq.depot.get('watermark','2020-01-01')/in\" }",
+    )
+    (tmp_path / "bp.yml").write_text(bp_with_depot)
+
+    # Write the depot value the SAME way a real `aqueduct run` would — through
+    # `get_stores(cfg, blueprint_id=...)`, which namespaces the key.
+    from aqueduct.config import load_config
+    from aqueduct.depot.depot import DepotStore
+    from aqueduct.stores import get_stores
+
+    cfg = load_config(tmp_path / "aqueduct.yml")
+    bundle = get_stores(cfg, blueprint_id="drift.demo")  # bp.yml's `id:`
+    DepotStore(backend=bundle.depot).put("watermark", "2099-12-31")
+
+    captured: dict[str, str] = {}
+    ingress_mod = sys.modules["aqueduct.executor.spark.ingress"]
+    orig_read = ingress_mod.read_source_schema
+
+    def _spy(mod, spark):
+        captured["path"] = mod.config.get("path")
+        return orig_read(mod, spark)
+
+    monkeypatch.setattr(ingress_mod, "read_source_schema", _spy)
+
+    schema["schema"] = {"a": "int", "b": "string"}
+    res = _invoke(tmp_path, store)
+    assert res.exit_code == 0, res.output
+    assert captured["path"] == str(tmp_path / "data" / "2099-12-31" / "in")
+
+
+def test_drift_unconfigured_depot_raises_when_config_load_fails(project, monkeypatch):
+    """When even loading config fails / a depot cannot be built, the preview
+    depot wiring falls back gracefully and the pre-existing loud
+    `_depot_get_or_raise` CompileError backstop still fires — Blueprint
+    compilation must never crash with an unrelated traceback."""
+    tmp_path, store, schema = project
+
+    bp_with_depot = _BP.replace(
+        "config: { format: parquet, path: data/in }",
+        "config: { format: parquet, path: \"data/@aq.depot.get('watermark')/in\" }",
+    )
+    (tmp_path / "bp.yml").write_text(bp_with_depot)
+
+    # Force the shared preview-depot helper to fail, simulating a depot
+    # backend that cannot be constructed (e.g. unreachable) — the CLI must
+    # fall back to depot=None rather than propagate the exception.
+    import aqueduct.depot.depot as depot_mod
+
+    def _boom(cfg, blueprint_id):
+        raise RuntimeError("simulated depot construction failure")
+
+    monkeypatch.setattr(depot_mod, "preview_depots", _boom)
+
+    res = _invoke(tmp_path, store)
+    assert res.exit_code == exit_codes.CONFIG_ERROR, res.output
+    assert "no depot backend is configured" in res.output

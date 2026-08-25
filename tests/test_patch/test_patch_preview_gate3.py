@@ -7,11 +7,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
-
 from aqueduct.config import AqueductConfig
 from aqueduct.patch.gate_status import sandbox_gate_permits_auto_apply
 from aqueduct.patch.preview import run_sandbox_gate
+
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 try:
     from aqueduct.executor.spark.ingress import read_ingress
@@ -424,6 +424,173 @@ def test_ingress_limit_after_filter(spark, sample_data):
     assert df.count() == 2
     # Verify both rows are US
     assert df.filter("region != 'US'").count() == 0
+
+
+class _FakeDepotStore:
+    """Minimal DepotStore stand-in for the depot-staleness tests — avoids
+    depending on real stores.depots config wiring in AqueductConfig()."""
+
+    def __init__(self, values: dict[str, str]):
+        self._values = values
+
+    def get(self, key: str, default: str = "") -> str:
+        return self._values.get(key, default)
+
+
+def _bp_reading_depot_key(orders_path: str, out_path: str) -> dict:
+    """An Ingress -> Egress Blueprint whose Egress path is derived from a
+    depot read, so run_sandbox_gate's compile resolves @aq.depot.get."""
+    return {
+        "aqueduct": "1.0",
+        "id": "test.gate3.depot",
+        "name": "Test Gate 3 depot staleness",
+        "context": {"wm": "@aq.depot.get('wm')"},
+        "modules": [
+            {
+                "id": "in",
+                "type": "Ingress",
+                "label": "Input",
+                "config": {"format": "parquet", "path": orders_path},
+            },
+            {
+                "id": "out",
+                "type": "Egress",
+                "label": "Output",
+                "config": {"format": "parquet", "path": out_path, "mode": "overwrite"},
+            },
+        ],
+        "edges": [{"from": "in", "to": "out"}],
+    }
+
+
+def test_gate3_depot_staleness_notice_on_changed_key(
+    spark, sample_data, tmp_path, capsys, monkeypatch
+):
+    """A depot key whose value moved between the failure and this recompile
+    gets exactly one 'depot key ... changed since failure' line — printed to
+    stderr and folded into the pass detail — without touching gate status."""
+    fake_depot = _FakeDepotStore({"wm": "2026-02-01"})
+    monkeypatch.setattr(
+        "aqueduct.depot.depot.preview_depots",
+        lambda cfg, blueprint_id: (fake_depot, {"default": fake_depot}),
+    )
+
+    orders_path = str(sample_data / "orders.parquet")
+    bp = _bp_reading_depot_key(orders_path, str(tmp_path / "out"))
+
+    result = run_sandbox_gate(
+        bp,
+        blueprint_path=tmp_path / "bp.yml",
+        patch_id="p-depot-1",
+        failed_module=None,
+        engine="spark",
+        cfg=AqueductConfig(),
+        sample_rows=5,
+        spark_session=spark,
+        depot_reads_at_failure={"wm": "2026-01-01"},
+    )
+
+    assert result.status == "pass"
+    expected_line = "depot key 'wm' changed since failure: '2026-01-01' → '2026-02-01'"
+    assert expected_line in result.detail
+    captured = capsys.readouterr()
+    assert captured.err.count(expected_line) == 1
+    # Exactly one notice line total — no other changed key exists.
+    assert captured.err.strip().splitlines() == [expected_line]
+
+
+def test_gate3_no_depot_staleness_notice_when_value_unchanged(
+    spark, sample_data, tmp_path, capsys, monkeypatch
+):
+    fake_depot = _FakeDepotStore({"wm": "2026-01-01"})
+    monkeypatch.setattr(
+        "aqueduct.depot.depot.preview_depots",
+        lambda cfg, blueprint_id: (fake_depot, {"default": fake_depot}),
+    )
+
+    orders_path = str(sample_data / "orders.parquet")
+    bp = _bp_reading_depot_key(orders_path, str(tmp_path / "out"))
+
+    result = run_sandbox_gate(
+        bp,
+        blueprint_path=tmp_path / "bp.yml",
+        patch_id="p-depot-2",
+        failed_module=None,
+        engine="spark",
+        cfg=AqueductConfig(),
+        sample_rows=5,
+        spark_session=spark,
+        depot_reads_at_failure={"wm": "2026-01-01"},
+    )
+
+    assert result.status == "pass"
+    assert "changed since failure" not in result.detail
+    captured = capsys.readouterr()
+    assert "changed since failure" not in captured.err
+
+
+def test_gate3_no_depot_staleness_notice_when_depot_reads_at_failure_is_none(
+    spark, sample_data, tmp_path, capsys, monkeypatch
+):
+    fake_depot = _FakeDepotStore({"wm": "2026-02-01"})
+    monkeypatch.setattr(
+        "aqueduct.depot.depot.preview_depots",
+        lambda cfg, blueprint_id: (fake_depot, {"default": fake_depot}),
+    )
+
+    orders_path = str(sample_data / "orders.parquet")
+    bp = _bp_reading_depot_key(orders_path, str(tmp_path / "out"))
+
+    result = run_sandbox_gate(
+        bp,
+        blueprint_path=tmp_path / "bp.yml",
+        patch_id="p-depot-3",
+        failed_module=None,
+        engine="spark",
+        cfg=AqueductConfig(),
+        sample_rows=5,
+        spark_session=spark,
+        # depot_reads_at_failure omitted — defaults to None
+    )
+
+    assert result.status == "pass"
+    assert "changed since failure" not in result.detail
+    captured = capsys.readouterr()
+    assert "changed since failure" not in captured.err
+
+
+def test_gate3_no_depot_staleness_notice_for_key_present_on_only_one_side(
+    spark, sample_data, tmp_path, capsys, monkeypatch
+):
+    """A key present only in depot_reads_at_failure (patch removed the read)
+    or only in the fresh compile (patch added it) is not a staleness signal
+    — the current recompile only reads 'wm', so an unrelated failure-side
+    key must produce no notice."""
+    fake_depot = _FakeDepotStore({"wm": "2026-01-01"})
+    monkeypatch.setattr(
+        "aqueduct.depot.depot.preview_depots",
+        lambda cfg, blueprint_id: (fake_depot, {"default": fake_depot}),
+    )
+
+    orders_path = str(sample_data / "orders.parquet")
+    bp = _bp_reading_depot_key(orders_path, str(tmp_path / "out"))
+
+    result = run_sandbox_gate(
+        bp,
+        blueprint_path=tmp_path / "bp.yml",
+        patch_id="p-depot-4",
+        failed_module=None,
+        engine="spark",
+        cfg=AqueductConfig(),
+        sample_rows=5,
+        spark_session=spark,
+        depot_reads_at_failure={"only_on_failure_side": "gone-now"},
+    )
+
+    assert result.status == "pass"
+    assert "changed since failure" not in result.detail
+    captured = capsys.readouterr()
+    assert "changed since failure" not in captured.err
 
 
 def test_ingress_limit_before_schema_hint(spark, sample_data):

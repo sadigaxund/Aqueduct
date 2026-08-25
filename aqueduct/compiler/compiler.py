@@ -122,6 +122,7 @@ def compile(  # noqa: A001
     warnings_silence_all: bool = False,
     warnings_strict: set[str] | None = None,
     engine: str = "spark",
+    depot_reads_out: dict[str, str] | None = None,
 ) -> Manifest:
     """Compile a parsed Blueprint into a fully-resolved Manifest.
 
@@ -144,6 +145,15 @@ def compile(  # noqa: A001
 
     Returns:
         A frozen Manifest ready for the Executor.
+        depot_reads_out: Optional output sink. When given, populated in place
+                        with every depot key resolved during this compile's
+                        Tier 1 resolution (`{key: value}`, named-mount reads
+                        namespaced "<name>:<key>") — used by Gate 3's
+                        depot-staleness notice (see
+                        aqueduct/patch/preview.py::run_sandbox_gate). Kept out
+                        of the Manifest itself: it is not a field there
+                        because it would ripple through serialization and
+                        manifest hashing.
 
     Raises:
         CompileError: On any Tier 1 resolution, expansion, wiring, or
@@ -939,5 +949,8 @@ def compile(  # noqa: A001
                 _emit(_rid, _msg, suppress=_supp)
         except Exception:
             pass  # warnings must never block compilation
+
+    if depot_reads_out is not None:
+        depot_reads_out.update(registry.depot_reads)
 
     return manifest

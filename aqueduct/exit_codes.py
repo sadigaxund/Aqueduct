@@ -15,14 +15,22 @@ Codes:
     4   VALIDATION_GATE      a validation-pyramid gate (guardrails / lineage /
                              sandbox / explain) rejected a patch in
                              non-interactive mode
-    5   USAGE_ERROR          CLI invoked with invalid flag / missing arg.
-                             NOTE: Click's own `UsageError` (unknown flag,
-                             missing required argument) exits 2, not 5 —
-                             verified empirically, Click does not know this
-                             taxonomy exists. This constant is reachable only
-                             from the manual `sys.exit(exit_codes.USAGE_ERROR)`
-                             call sites for an Aqueduct-detected usage
-                             mistake (e.g. an unsupported `--store` value).
+    64  USAGE_ERROR          CLI invoked with invalid flag / missing arg —
+                             sysexits(3) EX_USAGE. Covers BOTH an
+                             Aqueduct-detected usage mistake raised via the
+                             manual `sys.exit(exit_codes.USAGE_ERROR)` call
+                             sites (e.g. an unsupported `--store` value) AND
+                             Click's own `UsageError` (unknown command,
+                             unknown flag, missing required argument, a bad
+                             `click.Choice` value, ...) — `aqueduct/cli/__init__.py`
+                             patches `click.exceptions.UsageError.exit_code`
+                             to this constant at import time so every Click
+                             usage error, not just Aqueduct's own, exits the
+                             same code. One taxonomy, one number.
+
+RETIRED: 5 was USAGE_ERROR's value before this constant was repointed to 64
+to unify it with Click's own UsageError (which Click hardcodes to exit 2,
+colliding with DATA_OR_RUNTIME). Never reuse 5.
 
 Add a code by appending to this module — never reuse a retired number.
 """
@@ -34,7 +42,7 @@ CONFIG_ERROR: int = 1
 DATA_OR_RUNTIME: int = 2
 HEAL_PENDING: int = 3
 VALIDATION_GATE: int = 4
-USAGE_ERROR: int = 5
+USAGE_ERROR: int = 64
 
 __all__ = [
     "SUCCESS",

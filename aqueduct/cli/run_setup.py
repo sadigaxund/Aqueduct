@@ -264,6 +264,7 @@ class _CompileResult:
     execution_date: object
     cli_overrides: dict
     compile_warnings: list  # captured AQ-WARN records, emitted after the run header
+    depot_reads: dict  # depot keys resolved during this compile's Tier 1 (Gate 3 staleness notice)
 
 
 def _emit_explain_regressions(g4) -> None:
@@ -357,6 +358,7 @@ def _do_compile(
     depots_wrapped = {n: _DS(backend=s) for n, s in bundle.depots.items()}
 
     # ── Compile ────────────────────────────────────────────────────────────────
+    depot_reads: dict[str, str] = {}
     try:
         manifest, compile_warnings = _compile_with_warnings(
             compiler_compile,
@@ -371,6 +373,7 @@ def _do_compile(
             deployment_env=getattr(cfg.deployment, "env", None),
             deployment_target=getattr(cfg.deployment, "target", None),
             engine=getattr(cfg.deployment, "engine", "spark"),
+            depot_reads_out=depot_reads,
             _verbose=verbosity >= 1,
             _defer=True,  # emit after the run header (tier-2 blueprint warnings)
         )
@@ -386,6 +389,7 @@ def _do_compile(
         execution_date=execution_date,
         cli_overrides=cli_overrides,
         compile_warnings=compile_warnings,
+        depot_reads=depot_reads,
     )
 
 

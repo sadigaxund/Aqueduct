@@ -19,7 +19,7 @@ Exit codes (stable, see `aqueduct/exit_codes.py`):
 
     0  SUCCESS                 1  CONFIG_ERROR
     2  DATA_OR_RUNTIME         3  HEAL_PENDING
-    4  VALIDATION_GATE         5  USAGE_ERROR
+    4  VALIDATION_GATE         64 USAGE_ERROR
 """
 
 from __future__ import annotations

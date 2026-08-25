@@ -1,8 +1,9 @@
 import json
-import pytest
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 from click.testing import CliRunner
-from unittest.mock import patch, MagicMock
 
 from aqueduct.cli import cli
 from aqueduct.surveyor.scenario import ScenarioResult
@@ -10,7 +11,7 @@ from aqueduct.surveyor.scenario import ScenarioResult
 pytestmark = pytest.mark.integration
 
 
-def test_benchmark_no_target_exits_5():
+def test_benchmark_no_target_exits_usage_error():
     from aqueduct.exit_codes import USAGE_ERROR
 
     runner = CliRunner()

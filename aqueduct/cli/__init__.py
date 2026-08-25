@@ -15,6 +15,23 @@ from typing import Any
 
 import click
 
+# Click hardcodes `UsageError.exit_code = 2` (a class attribute, not set per
+# instance) — every UsageError subclass (BadParameter, MissingParameter,
+# NoSuchOption, BadOptionUsage, BadArgumentUsage, the bare "no such command"
+# UsageError, ...) inherits it and none override it. That collides with
+# `exit_codes.DATA_OR_RUNTIME == 2`, so a wrapper (Airflow operator, shell
+# script) cannot tell "typo'd flag" from "pipeline failed at runtime" by exit
+# code alone. Repointing the class attribute here — once, at CLI import time
+# — makes every Click usage error exit `exit_codes.USAGE_ERROR` (64,
+# sysexits EX_USAGE) instead, unifying it with Aqueduct's own
+# usage-mistake code. This does not touch Click's message rendering
+# (`UsageError.show()` is untouched) or its dispatch — only the exit code
+# `BaseCommand.main()` passes to `sys.exit()`. See `aqueduct/exit_codes.py`
+# for the full contract.
+from aqueduct import exit_codes as _exit_codes
+
+click.exceptions.UsageError.exit_code = _exit_codes.USAGE_ERROR
+
 _PROJECT_ROOT_MAX_DEPTH = 8
 _DEFAULT_CONFIG_FILENAME = "aqueduct.yml"
 
@@ -565,6 +582,7 @@ def _run_patch_gates_inline(  # noqa: F811
     sandbox_master_url: str | None = None,
     warnings_suppress=None,
     timezone: str | None = None,
+    depot_reads_at_failure: dict[str, str] | None = None,
 ):
     """Phase 29a/b — run the lineage, sandbox, and explain gates inline.
 
@@ -617,6 +635,14 @@ def _run_patch_gates_inline(  # noqa: F811
     real run would use, instead of the sandbox gate seeing no engine config
     at all. Every caller already has ``cfg`` resolved by the time it reaches
     here — none of the three call sites in ``aqueduct/cli/run.py`` lack one.
+
+    ``depot_reads_at_failure`` -- optional; the depot keys/values resolved
+    while compiling the Manifest that FAILED (``_CompileResult.depot_reads``
+    from ``cli/run_setup.py``). Forwarded to ``run_sandbox_gate`` so Gate 3
+    can print a staleness notice when a depot-derived value moved between
+    the failure and this recompile. ``None`` (the default, used by
+    ``aqueduct/agent/gate_validation.py``'s caller) means no failed run is
+    in play here, so no notice is possible.
     """
     from aqueduct.patch.apply import _yaml_load, apply_patch_to_dict
     from aqueduct.patch.explain_gate import run_explain_gate
@@ -700,6 +726,7 @@ def _run_patch_gates_inline(  # noqa: F811
             warnings_suppress=warnings_suppress,
             timezone=timezone,
             patch_spec=patch,
+            depot_reads_at_failure=depot_reads_at_failure,
         )
     try:
         surveyor.record_patch_simulation(

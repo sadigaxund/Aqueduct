@@ -103,6 +103,11 @@ class AqFunctions:
         # `_require` guard — a blueprint can put it in an output path or a tag
         # without a "not configured" failure mode.
         self._deployment_engine = deployment_engine
+        # Depot reads resolved during this compile, for Gate 3's staleness notice
+        # (aqueduct/patch/preview.py::run_sandbox_gate). Named-mount reads are
+        # namespaced "<name>:<key>" so two mounts with the same key don't collide;
+        # the default mount (@aq.depot.get / @aq.run.prev_id) uses the bare key.
+        self.depot_reads: dict[str, str] = {}
 
     def _base_date(self) -> date:
         return self._execution_date if self._execution_date is not None else date.today()
@@ -135,7 +140,12 @@ class AqFunctions:
         return self._run_id
 
     def run_prev_id(self) -> str:
-        return self.depot_get("_last_run_id", "")
+        return self._depot_get_or_raise(
+            "@aq.run.prev_id()",
+            "_last_run_id",
+            "",
+            extra=" It reads '_last_run_id' from the Depot.",
+        )
 
     # ── secret / env ──────────────────────────────────────────────────────────
 
@@ -165,17 +175,25 @@ class AqFunctions:
     # ── depot ─────────────────────────────────────────────────────────────────
 
     def depot_get(self, key: str, default: str = "") -> str:
-        if self._depot is not None:
-            return str(self._depot.get(key, default))
-        import logging as _logging
+        return self._depot_get_or_raise(f"@aq.depot.get({key!r})", key, default)
 
-        _logging.getLogger(__name__).warning(
-            "@aq.depot.get('%s') called but no depot backend is configured — "
-            "returning default '%s'. Incremental pipelines will re-read all data.",
-            key,
-            default,
+    def _depot_get_or_raise(
+        self, caller_label: str, key: str, default: str, extra: str = ""
+    ) -> str:
+        """Shared implementation for `@aq.depot.get` and `@aq.run.prev_id`.
+
+        Raises when no depot backend is configured at all — a Blueprint that
+        references a depot read needs a real depot mount, or the read would
+        silently fall back and cause a full re-read every run.
+        """
+        if self._depot is not None:
+            value = str(self._depot.get(key, default))
+            self.depot_reads[key] = value
+            return value
+        raise CompileError(
+            f"{caller_label} called but no depot backend is configured.{extra} "
+            "Add it under stores.depots in aqueduct.yml."
         )
-        return default
 
     def depot_get_named(self, name: str, key: str, default: str = "") -> str:
         """`@aq.depot.<name>.get('key')` — read from a named depot mount."""
@@ -186,7 +204,9 @@ class AqFunctions:
                 f"@aq.depot.{name}.get: no depot mount named {name!r}. "
                 f"Configured mounts: {known}. Add it under stores.depots in aqueduct.yml."
             )
-        return str(store.get(key, default))
+        value = str(store.get(key, default))
+        self.depot_reads[f"{name}:{key}"] = value
+        return value
 
     # ── blueprint / deployment / version — identity & deploy context ─────────────
     # Resolvable only during blueprint compilation (NOT in aqueduct.yml, where no

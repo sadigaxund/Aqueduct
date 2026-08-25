@@ -335,6 +335,7 @@ def run_sandbox_gate(
     warnings_suppress: Iterable[str] | None = None,
     timezone: str | None = None,
     patch_spec: Any = None,
+    depot_reads_at_failure: dict[str, str] | None = None,
 ) -> SandboxGateResult:
     """Compile and replay the patched Blueprint with a row limit + Egress skipped.
 
@@ -438,6 +439,20 @@ def run_sandbox_gate(
     are opposite facts, and reporting them with one word let a patch that
     was never replayed auto-apply as though it had been. ``not_requested``
     is a third, later fact again: "nobody asked" is neither of those two.
+
+    ``depot_reads_at_failure``, if given, is the ``{key: value}`` map of
+    depot reads resolved while compiling the Manifest that FAILED (see
+    ``AqFunctions.depot_reads`` / ``compile(depot_reads_out=...)``). A
+    failing run may itself have written to the depot (an Egress with
+    ``format: depot``) before it failed, so the patch here is being
+    validated against different inputs than the failure saw. This gate
+    recompiles the patched Blueprint with its OWN depot-read sink and, for
+    every key present in BOTH maps whose value differs, prints one
+    ``depot key 'X' changed since failure: 'old' -> 'new'`` line to stderr
+    and folds the same lines into a ``pass`` result's ``detail``. Purely
+    informational: it NEVER changes ``status`` — a key present on only one
+    side is not a staleness signal (the patch may have added/removed a
+    depot reference) and is skipped.
     """
     t0 = time.monotonic()
     egress_targets: list[dict[str, Any]] = []
@@ -498,14 +513,52 @@ def run_sandbox_gate(
                 duration_ms=int((time.monotonic() - t0) * 1000),
             )
 
+        depot = None
+        depots = None
         try:
-            manifest = compiler_compile(bp, blueprint_path=_bp_orig, engine=engine)
+            from aqueduct.depot.depot import preview_depots
+
+            depot, depots = preview_depots(cfg, bp.id)
+        except Exception as exc:  # pragma: no cover — depot build must never crash the gate
+            logger.warning(
+                "sandbox gate: could not build preview depot (%s) — "
+                "@aq.depot.*/@aq.run.prev_id will hard-fail if this patch's Blueprint uses them",
+                exc,
+            )
+            depot, depots = None, None
+
+        _depot_reads_now: dict[str, str] = {}
+        try:
+            manifest = compiler_compile(
+                bp,
+                blueprint_path=_bp_orig,
+                engine=engine,
+                depot=depot,
+                depots=depots,
+                depot_reads_out=_depot_reads_now,
+            )
         except CompileError as exc:
             return SandboxGateResult(
                 status=GateStatus.FAIL,
                 detail=f"patched Blueprint failed to compile: {exc}",
                 duration_ms=int((time.monotonic() - t0) * 1000),
             )
+
+        # ── Depot staleness notice (informational only — never touches status) ──
+        # See this function's docstring, `depot_reads_at_failure` paragraph.
+        _depot_staleness_notices: list[str] = []
+        if depot_reads_at_failure is not None:
+            for _key, _new_val in _depot_reads_now.items():
+                _old_val = depot_reads_at_failure.get(_key)
+                if _old_val is not None and _old_val != _new_val:
+                    _depot_staleness_notices.append(
+                        f"depot key {_key!r} changed since failure: {_old_val!r} → {_new_val!r}"
+                    )
+            if _depot_staleness_notices:
+                import sys as _sys
+
+                for _line in _depot_staleness_notices:
+                    print(_line, file=_sys.stderr)
 
         # ── Polyglot Blueprints are not sandbox-replayed in v1 ──────────────────
         # A single-`engine` replay session (this function's whole design —
@@ -654,6 +707,8 @@ def run_sandbox_gate(
                     f"sandbox replay succeeded against {sample_rows or '∞'} "
                     f"row(s) per Ingress; {len(egress_targets)} Egress module(s) skipped"
                 )
+            if _depot_staleness_notices:
+                pass_detail = pass_detail + " | " + "; ".join(_depot_staleness_notices)
             return SandboxGateResult(
                 status=GateStatus.PASS,
                 detail=pass_detail,

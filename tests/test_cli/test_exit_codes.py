@@ -14,7 +14,7 @@ def test_exit_codes_exposed():
     assert exit_codes.DATA_OR_RUNTIME == 2
     assert exit_codes.HEAL_PENDING == 3
     assert exit_codes.VALIDATION_GATE == 4
-    assert exit_codes.USAGE_ERROR == 5
+    assert exit_codes.USAGE_ERROR == 64  # sysexits EX_USAGE; 5 is retired, never reused
 
 
 def test_exit_codes_in_all():

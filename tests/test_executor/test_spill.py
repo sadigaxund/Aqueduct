@@ -15,6 +15,7 @@ from aqueduct.executor.spill import (
     delete_spill_tree,
     dir_size_bytes,
     ensure_parent_exists,
+    find_run_under_other_hash,
     is_remote_uri,
     local_only_or_fsspec_available,
     parse_duration,
@@ -72,6 +73,36 @@ def test_spill_dir_for_layout():
 
 def test_spill_dir_for_strips_trailing_slash_on_root():
     assert spill_dir_for("/root/", "hash123", "run1", "edge1") == "/root/hash123/run1/edge1"
+
+
+# ── find_run_under_other_hash (P4: --resume fail-closed detector) ───────────
+
+
+def test_find_run_under_other_hash_finds_stale_hash(tmp_path):
+    root = tmp_path / "handoff"
+    (root / "old_hash" / "r1" / "edge1").mkdir(parents=True)
+    (root / "new_hash").mkdir(parents=True)
+
+    assert find_run_under_other_hash(str(root), "r1", "new_hash") == "old_hash"
+
+
+def test_find_run_under_other_hash_none_when_only_under_current_hash(tmp_path):
+    root = tmp_path / "handoff"
+    (root / "new_hash" / "r1" / "edge1").mkdir(parents=True)
+
+    assert find_run_under_other_hash(str(root), "r1", "new_hash") is None
+
+
+def test_find_run_under_other_hash_none_when_run_id_not_found_anywhere(tmp_path):
+    root = tmp_path / "handoff"
+    (root / "some_hash" / "r_other" / "edge1").mkdir(parents=True)
+
+    assert find_run_under_other_hash(str(root), "r1", "new_hash") is None
+
+
+def test_find_run_under_other_hash_none_when_root_does_not_exist(tmp_path):
+    root = tmp_path / "does-not-exist"
+    assert find_run_under_other_hash(str(root), "r1", "new_hash") is None
 
 
 # ── ensure_parent_exists / delete_spill_tree (local) ─────────────────────────

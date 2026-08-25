@@ -64,8 +64,9 @@ def _connect_with_retry(path: Path):
 class _DuckDBRelational:
     """Mixin providing the duckdb-flavoured `connect()` context manager."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, read_only: bool = False) -> None:
         self._path = Path(path)
+        self._read_only = read_only
 
     @property
     def backend(self) -> str:
@@ -77,8 +78,18 @@ class _DuckDBRelational:
 
     @contextlib.contextmanager
     def connect(self) -> Iterator[RelationalCursor]:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        conn = _connect_with_retry(self._path)
+        if self._read_only:
+            # Preview/read-only callers must never create the file or its
+            # parent directory, and must never take the writer lock —
+            # `duckdb.connect(..., read_only=True)` requires the file to
+            # already exist. Callers that reach here on a missing file get
+            # DuckDB's own error; `_RelationalDepotMixin.kv_get`/`kv_delete`
+            # guard on `_path.exists()` before ever calling `connect()`, so
+            # in practice this path is only hit for a file that exists.
+            conn = duckdb.connect(str(self._path), read_only=True)
+        else:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            conn = _connect_with_retry(self._path)
         try:
             cur = conn.cursor()
             yield RelationalCursor(cur, paramstyle="qmark")

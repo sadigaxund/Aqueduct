@@ -107,7 +107,8 @@ aqueduct completion fish > ~/.config/fish/completions/aqueduct.fish
 | `--from <module_id>` | n/a | Start execution at this module. Refused (`CONFIG_ERROR`) for a polyglot Blueprint (2.37): cross-island module-range selection isn't implemented. |
 | `--to <module_id>` | n/a | Stop execution after this module. Same polyglot refusal as `--from` above. |
 | `--execution-date YYYY-MM-DD` | today (UTC) | Logical date for `@aq.date.*`: enables idempotent backfills |
-| `--resume <run_id>` | n/a | Resume from checkpoints of a previous run |
+| `--resume <run_id>` | n/a | Resume from checkpoints of a previous run. **Fails closed** (`CONFIG_ERROR`) if the checkpointed run's manifest hash doesn't match this run's compiled Manifest (the Blueprint, context, or profile changed since that run) — the error names both hashes. Pass `--force` to reuse the checkpoints anyway. |
+| `--force` | off | With `--resume`: proceed even when the checkpointed run's manifest hash differs from this run's. Invalid without `--resume` (Click `UsageError`, exit `64`). |
 | `--parallel` | off | Execute independent DAG branches concurrently (one thread per connected component) |
 | `--sandbox` | off | Dev dry-run: execute against sampled inputs with every Egress skipped (no writes, no self-healing, no observability persistence). Fast feedback loop for iterating on transforms. Runs on any engine that declares the `tooling.sandbox_dry_run` capability leaf (both shipped engines, `spark` and `duckdb`, do); refused (`CONFIG_ERROR`) with the leaf's hint for an engine that does not, and also refused (`CONFIG_ERROR`) for a polyglot Blueprint (2.37): a single-session dry-run can't replay a multi-engine Manifest. |
 | `--sample <N>` | `1000` | Row cap per Ingress in `--sandbox` mode (`0` = no limit). Ignored without `--sandbox`. |
@@ -446,9 +447,9 @@ The build stays red while any row is `undeclared`: it is a sentinel ("nobody has
 | `2` | DATA_OR_RUNTIME | Runtime / Spark / data error |
 | `3` | HEAL_PENDING | Patch staged for human review |
 | `4` | VALIDATION_GATE | Patch rejected by validation |
-| `5` | USAGE_ERROR | Invalid command usage |
+| `64` | USAGE_ERROR | Invalid command usage |
 
-Note: Click's own usage errors (unknown flag, missing required argument) exit `2`, not `5`: Click does not know this taxonomy. Code `5` is reachable only from an Aqueduct-detected usage mistake that a command raises explicitly.
+Note: `USAGE_ERROR` is `64` (sysexits `EX_USAGE`). It covers both an Aqueduct-detected usage mistake that a command raises explicitly (e.g. an unsupported `--store` value) and Click's own usage errors (unknown command, unknown flag, missing required argument, a bad `click.Choice` value) — `aqueduct/cli/__init__.py` repoints `click.exceptions.UsageError.exit_code` to this constant at import time so both sources agree. `5` was this constant's value before the unification; it is retired and never reused.
 
 ---
 

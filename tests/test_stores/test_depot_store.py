@@ -1,4 +1,5 @@
 import pytest
+
 from aqueduct.config import AqueductConfig
 from aqueduct.stores.base import BackendUnsupportedError
 
@@ -57,9 +58,10 @@ def test_redis_depot_ok():
 def test_depot_per_blueprint_isolation_and_shared(tmp_path):
     """Default mount keys are blueprint-prefixed (isolated); shared mounts are raw."""
     import duckdb
+
     from aqueduct.config import AqueductConfig
-    from aqueduct.stores import get_stores
     from aqueduct.depot.depot import DepotStore
+    from aqueduct.stores import get_stores
 
     cfg = AqueductConfig(
         **{
@@ -94,10 +96,11 @@ def test_depot_per_blueprint_isolation_and_shared(tmp_path):
 def test_aq_depot_named_dispatch(tmp_path):
     """@aq.depot.<name>.get resolves a named mount; unknown name errors."""
     import pytest
-    from aqueduct.config import AqueductConfig
-    from aqueduct.stores import get_stores
-    from aqueduct.depot.depot import DepotStore
+
     from aqueduct.compiler.runtime import AqFunctions, resolve_tier1_str
+    from aqueduct.config import AqueductConfig
+    from aqueduct.depot.depot import DepotStore
+    from aqueduct.stores import get_stores
 
     cfg = AqueductConfig(
         **{
@@ -119,3 +122,79 @@ def test_aq_depot_named_dispatch(tmp_path):
 
     with pytest.raises(CompileError, match="no depot mount named 'nope'"):
         resolve_tier1_str("@aq.depot.nope.get('x')", reg)
+
+
+class TestDuckDBReadOnly:
+    """`_DuckDBRelational(read_only=True)` — the preview-facing read-only pathway.
+
+    `kv_get`/`kv_delete`'s file-existence guard (`_RelationalDepotMixin`,
+    ``aqueduct/stores/base.py``) must still fire BEFORE ever calling
+    ``connect()`` on a missing file — a read-only ``duckdb.connect()`` raises
+    on a nonexistent path, so if the guard were bypassed a preview against an
+    unwritten depot would crash instead of returning the default.
+    """
+
+    def test_kv_get_missing_file_returns_default_without_connecting(self, tmp_path):
+        from aqueduct.stores.duckdb_ import DuckDBDepotStore
+
+        store = DuckDBDepotStore(tmp_path / "nope.db", read_only=True)
+        assert not (tmp_path / "nope.db").exists()
+        assert store.kv_get("k", default="fallback") == "fallback"
+        # The guard must never have created the file (no writer ever ran).
+        assert not (tmp_path / "nope.db").exists()
+
+    def test_kv_get_existing_file_reads_real_value(self, tmp_path):
+        from aqueduct.stores.duckdb_ import DuckDBDepotStore
+
+        db_path = tmp_path / "depot.db"
+        writer = DuckDBDepotStore(db_path)
+        writer.kv_put("k", "real-value")
+
+        reader = DuckDBDepotStore(db_path, read_only=True)
+        assert reader.kv_get("k", default="fallback") == "real-value"
+
+    def test_kv_put_on_read_only_store_raises(self, tmp_path):
+        from aqueduct.stores.base import StoreConnectionError
+        from aqueduct.stores.duckdb_ import DuckDBDepotStore
+
+        db_path = tmp_path / "depot.db"
+        DuckDBDepotStore(db_path).kv_put("k", "v")  # seed the file
+
+        reader = DuckDBDepotStore(db_path, read_only=True)
+        with pytest.raises(StoreConnectionError, match="read-only"):
+            reader.kv_put("k", "new-value")
+        # Confirm no silent no-op: value is unchanged.
+        assert DuckDBDepotStore(db_path).kv_get("k") == "v"
+
+    def test_kv_delete_on_read_only_store_raises(self, tmp_path):
+        from aqueduct.stores.base import StoreConnectionError
+        from aqueduct.stores.duckdb_ import DuckDBDepotStore
+
+        db_path = tmp_path / "depot.db"
+        DuckDBDepotStore(db_path).kv_put("k", "v")
+
+        reader = DuckDBDepotStore(db_path, read_only=True)
+        with pytest.raises(StoreConnectionError, match="read-only"):
+            reader.kv_delete("k")
+        assert DuckDBDepotStore(db_path).kv_get("k") == "v"
+
+    def test_kv_delete_on_read_only_store_raises_even_for_missing_file(self, tmp_path):
+        """The read-only guard fires before the file-existence check — a
+        read-only store refuses a delete attempt outright rather than
+        silently no-opping, regardless of whether the file exists."""
+        from aqueduct.stores.base import StoreConnectionError
+        from aqueduct.stores.duckdb_ import DuckDBDepotStore
+
+        reader = DuckDBDepotStore(tmp_path / "nope.db", read_only=True)
+        with pytest.raises(StoreConnectionError, match="read-only"):
+            reader.kv_delete("k")
+
+    def test_read_only_defaults_false(self, tmp_path):
+        """Existing (non-preview) construction is unaffected — plain writer
+        behaviour by default."""
+        from aqueduct.stores.duckdb_ import DuckDBDepotStore
+
+        store = DuckDBDepotStore(tmp_path / "depot.db")
+        assert store._read_only is False
+        store.kv_put("k", "v")  # must not raise
+        assert store.kv_get("k") == "v"

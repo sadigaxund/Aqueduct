@@ -11,6 +11,7 @@ imported at the bottom of `aqueduct/cli/__init__.py`.
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from typing import Any
 
@@ -105,12 +106,29 @@ def compile(
         click.echo(f"✗ {exc}", err=True)
         sys.exit(exit_codes.CONFIG_ERROR)
 
+    depot = None
+    depots = None
+    if _cfg is not None:
+        try:
+            from aqueduct.depot.depot import preview_depots
+
+            depot, depots = preview_depots(_cfg, bp.id)
+        except Exception as exc:  # pragma: no cover — depot build must never crash preview
+            logging.getLogger(__name__).warning(
+                "aqueduct compile: could not build preview depot (%s) — "
+                "@aq.depot.*/@aq.run.prev_id will hard-fail if this Blueprint uses them",
+                exc,
+            )
+            depot, depots = None, None
+
     try:
         _dep = getattr(_cfg, "deployment", None) if _cfg is not None else None
         manifest = _compile_with_warnings(
             compiler_compile,
             bp,
             blueprint_path=Path(blueprint),
+            depot=depot,
+            depots=depots,
             execution_date=execution_date,
             deployment_env=getattr(_dep, "env", None),
             deployment_target=getattr(_dep, "target", None),

@@ -189,7 +189,14 @@ class _RelationalDepotMixin:
             return default
         try:
             with self.connect() as cur:
-                cur.execute(self._DDL)
+                # A read-only connection rejects DDL outright (DuckDB: "Cannot
+                # execute statement of type CREATE ... in read-only mode").
+                # Skip it: a read-only store never creates schema — the file
+                # existence guard above already established there's a file to
+                # read, and `depot_kv` is created on first WRITE by a normal
+                # (non-read-only) store.
+                if not getattr(self, "_read_only", False):
+                    cur.execute(self._DDL)
                 row = cur.execute("SELECT value FROM depot_kv WHERE key = ?", [key]).fetchone()
                 return row[0] if row else default
         except Exception as exc:
@@ -199,6 +206,12 @@ class _RelationalDepotMixin:
     def kv_put(self, key: str, value: str) -> None:
         from datetime import datetime
 
+        if getattr(self, "_read_only", False):
+            raise StoreConnectionError(
+                f"{type(self).__name__}.kv_put({key!r}): store opened read-only "
+                "(preview compile paths never write) — refusing to write rather than "
+                "silently no-op."
+            )
         with self.connect() as cur:
             cur.execute(self._DDL)
             cur.execute(
@@ -213,6 +226,12 @@ class _RelationalDepotMixin:
             )
 
     def kv_delete(self, key: str) -> None:
+        if getattr(self, "_read_only", False):
+            raise StoreConnectionError(
+                f"{type(self).__name__}.kv_delete({key!r}): store opened read-only "
+                "(preview compile paths never write) — refusing to delete rather than "
+                "silently no-op."
+            )
         path = getattr(self, "_path", None)
         if path is not None and isinstance(path, Path) and not path.exists():
             return
@@ -291,10 +310,7 @@ def get_stores(
             path lets `aqueduct run --store-dir` redirect persistence.
     """
     # Lazy imports keep optional backends optional.
-    from aqueduct.stores.duckdb_ import (
-        DuckDBDepotStore,
-        DuckDBObservabilityStore,
-    )
+    from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
 
     def _resolve_obs_duckdb_path(store_cfg: RelationalStoreConfig) -> Path:
         # 2.0 — the duckdb OBSERVABILITY path is always a routing BASE
@@ -313,21 +329,7 @@ def get_stores(
             _base = Path(_OBS_ROUTING_ROOT)
         return _base / (blueprint_id or "default") / DEFAULT_OBS_DB_FILENAME
 
-    def _resolve_depot_duckdb_path(mount: Any) -> Path:
-        # Depot mounts: `path` names the db FILE (e.g. .aqueduct/depot.db).
-        if mount.path is None:
-            from aqueduct.config import DEFAULT_OBS_DB_FILENAME
-            from aqueduct.stores.read import _OBS_ROUTING_ROOT
-
-            _base = Path(store_dir_override) if store_dir_override else Path(_OBS_ROUTING_ROOT)
-            return _base / (blueprint_id or "default") / DEFAULT_OBS_DB_FILENAME
-        p = Path(mount.path)
-        if store_dir_override is not None and not p.is_absolute():
-            return Path(store_dir_override) / p.name
-        return p
-
     obs: ObservabilityStore
-    depot: DepotStore
 
     # ── observability (includes column lineage — merged in Phase 38) ──────────
     if cfg.stores.observability.backend == "duckdb":
@@ -342,12 +344,57 @@ def get_stores(
         )
 
     # ── depot mounts ───────────────────────────────────────────────────────────
-    # Build every mount in stores.depots (incl. the implicit `default`). Each is
-    # per-blueprint key-isolated (prefixed) unless shared: true. With no
-    # blueprint_id (some non-run contexts) keys are raw — same as pre-isolation.
+    depots = build_depot_mounts(
+        cfg, blueprint_id=blueprint_id, store_dir_override=store_dir_override
+    )
+    depot = depots["default"]
+
+    return StoreBundle(observability=obs, depot=depot, depots=depots)
+
+
+def build_depot_mounts(
+    cfg: AqueductConfig,
+    *,
+    blueprint_id: str | None = None,
+    store_dir_override: Path | str | None = None,
+    read_only: bool = False,
+) -> dict[str, DepotStore]:
+    """Build every configured depot mount (incl. the implicit ``default``).
+
+    The SAME logic ``get_stores`` uses to build ``StoreBundle.depots`` — factored
+    out so preview compile paths (``aqueduct compile``/``drift``, patch-preview
+    Gate 3 — see ``aqueduct.depot.depot.preview_depots``) can build depots with
+    IDENTICAL blueprint-id namespacing to a real ``aqueduct run``, instead of
+    reimplementing the ``_NamespacedDepot`` wrapping rules.
+
+    Each mount is per-blueprint key-isolated (prefixed ``<blueprint_id>:``)
+    unless ``shared: true``. With no ``blueprint_id`` (some non-run contexts)
+    keys are raw — same as pre-isolation.
+
+    ``read_only``: when True and a mount resolves to the DuckDB backend, the
+    returned store connects read-only (see ``_DuckDBRelational``) so a preview
+    read never contends with a live run's DuckDB single-writer lock. Ignored
+    for backends that don't support/need it (postgres, redis — both tolerate
+    concurrent readers already).
+    """
+    from aqueduct.stores.duckdb_ import DuckDBDepotStore
+
+    def _resolve_depot_duckdb_path(mount: Any) -> Path:
+        # Depot mounts: `path` names the db FILE (e.g. .aqueduct/depot.db).
+        if mount.path is None:
+            from aqueduct.config import DEFAULT_OBS_DB_FILENAME
+            from aqueduct.stores.read import _OBS_ROUTING_ROOT
+
+            _base = Path(store_dir_override) if store_dir_override else Path(_OBS_ROUTING_ROOT)
+            return _base / (blueprint_id or "default") / DEFAULT_OBS_DB_FILENAME
+        p = Path(mount.path)
+        if store_dir_override is not None and not p.is_absolute():
+            return Path(store_dir_override) / p.name
+        return p
+
     def _build_depot(mount: Any) -> DepotStore:
         if mount.backend == "duckdb":
-            return DuckDBDepotStore(_resolve_depot_duckdb_path(mount))
+            return DuckDBDepotStore(_resolve_depot_duckdb_path(mount), read_only=read_only)
         if mount.backend == "postgres":
             from aqueduct.stores.postgres import PostgresDepotStore
 
@@ -367,9 +414,7 @@ def get_stores(
             depots[name] = _NamespacedDepot(raw, f"{blueprint_id}:")  # type: ignore[assignment]
         else:
             depots[name] = raw
-    depot = depots["default"]
-
-    return StoreBundle(observability=obs, depot=depot, depots=depots)
+    return depots
 
 
 # Field placeholder so static analysis tools don't complain about the

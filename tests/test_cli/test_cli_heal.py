@@ -1,8 +1,8 @@
 import json
-import pytest
-from pathlib import Path
-from click.testing import CliRunner
 from unittest.mock import MagicMock, patch
+
+import pytest
+from click.testing import CliRunner
 
 from aqueduct.cli import cli
 
@@ -144,7 +144,7 @@ agent:
     assert "## SYSTEM PROMPT" in result.output
 
 
-def test_heal_no_args_exit_5():
+def test_heal_no_args_exits_usage_error():
     from aqueduct.exit_codes import USAGE_ERROR
 
     runner = CliRunner()

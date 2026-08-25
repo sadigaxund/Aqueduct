@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.67: Reference Document**
+**Version 2.69: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -778,10 +778,10 @@ Two rules to keep in mind:
 | `@aq.date.format(date_str, pattern)` | Reformat an ISO date string into a custom pattern. |
 | `@aq.run.id()` | Auto-generated UUID for this pipeline run. |
 | `@aq.run.timestamp()` | ISO-8601 timestamp of compilation. |
-| `@aq.run.prev_id()` | Run ID of the previous pipeline execution (reads `_last_run_id` from Depot). |
+| `@aq.run.prev_id()` | Run ID of the previous pipeline execution (reads `_last_run_id` from Depot). Fails compilation (2.68) if no depot backend is configured — see `@aq.depot.get` below. |
 | `@aq.env('KEY')` | Read environment variable. Fails fast when absent, unlike `${VAR:-default}` which supports a fallback. |
 | `@aq.secret('KEY')` | Read from AWS/GCP/Azure secrets manager or environment fallback. |
-| `@aq.depot.get('key')` | Read from the default Depot KV store at compile time. `@aq.depot.<name>.get('key')` reads a named mount (see the Depot glossary entry + Observability Guide). |
+| `@aq.depot.get('key')` | Read from the default Depot KV store at compile time. `@aq.depot.<name>.get('key')` reads a named mount (see the Depot glossary entry + Observability Guide). **Fails compilation (`CompileError`, 2.68)** if no depot backend is configured at all — a Blueprint that references a depot read needs a real mount, or the read would silently fall back to the default and mask the pipeline going incremental-in-name-only. A configured depot with the key simply absent is unaffected: that still returns the default, unchanged. |
 | `@aq.blueprint.id()` | This Blueprint's `id`. |
 | `@aq.blueprint.name()` | This Blueprint's `name`. |
 | `@aq.blueprint.dir()` | Absolute directory of the Blueprint file: the safe "relative-to-this-pipeline" anchor for output paths (e.g. `path: @aq.blueprint.dir()/out`). |
@@ -1059,6 +1059,8 @@ Before a patch touches the Blueprint, five numbered gates plus an unnumbered com
 6. **Gate 5, resolvability** (2.66, `patch/resolvability_gate.py`): asks whether every `declare_dependency` op in the patch names a requirement that is at least resolvable; never whether Aqueduct can or should install it (Aqueduct never installs anything). Five statuses: `not_applicable` (no `declare_dependency` op in the patch; no check owed), `pass` (already installed; auto-apply eligible), `warn` (resolves on PyPI but is not installed; **a deliberate defer to a human**: install it, then `aqueduct patch apply <id>`; a `warn` here, unlike Gate 4's, **never auto-applies**), `fail` (no such package on PyPI, or no published version satisfies the specifier; rejection, feeds the reprompt loop), `unavailable` (the PyPI check itself could not run; fail-closed, same posture as Gate 3's `unavailable`). Multiple `declare_dependency` ops in one patch: every requirement is checked and the WORST verdict wins, ranked `fail` > `unavailable` > `warn` > `pass`.
 
 §8.7 below describes the same sequence in full detail. If the two ever disagree, the code wins: `_check_guardrails` is Gate 1, `run_lineage_gate` is Gate 2, `run_sandbox_gate` is Gate 3, `run_explain_gate` is Gate 4, `run_resolvability_gate` is Gate 5.
+
+**Depot staleness notice (2.69).** A failing run may itself have written to the Depot (an Egress with `format: depot`) before it failed, so by the time Gate 3 recompiles the patched Blueprint for its sandbox replay, a depot-derived value the failure saw may have moved. When the caller passes the depot reads resolved at failure time (`_CompileResult.depot_reads`, threaded from `aqueduct run`'s own compile), `run_sandbox_gate` recompiles with its own depot-read sink and, for every key present in BOTH maps whose value differs, prints `depot key 'X' changed since failure: 'old' → 'new'` to stderr and folds the same line(s) into a `pass` result's `detail`. A key present on only one side is not a staleness signal (the patch may have added or removed a depot reference) and is skipped. This is purely informational: it never changes the gate's `status`, never blocks auto-apply, and is not built on any new snapshot/versioned-depot store — it is a diff of two already-resolved Tier 1 reads.
 
 **Sandbox gate on a polyglot Blueprint (2.37).** The sandbox gate replays through one target engine's own `ExecutorProtocol`: a single session, a single engine. Against a Blueprint compiled to more than one island (§4.3's cross-engine handoff, §10.9), that shape can only ever validate ONE of the Blueprint's engines, which would look like a real pre-apply check while actually covering nothing about the rest. So it does not attempt a partial or single-engine-shaped replay: it returns `unavailable` immediately, and **that blocks auto-apply** (2.63); like a missing engine dependency, this is a replay that was owed and could not happen, so the patch stops for a human rather than going through unverified. The run prints the reason at the moment it happens (not only into `patch_simulation`) because a user who expects every patch to be sandbox-replayed before it touches their Blueprint needs to be told this one wasn't. `--sandbox`'s whole-Blueprint dry-run refuses a polyglot Manifest outright for the same reason (`CONFIG_ERROR`); it runs on any single-engine `deployment.engine` that declares the `tooling.sandbox_dry_run` capability leaf (both shipped engines do), refusing loudly with the leaf's hint for one that does not. A genuine multi-session polyglot replay is future work, not this release.
 
@@ -1933,17 +1935,25 @@ at config-load with an actionable error: remote checkpoint roots require
 Hadoop-FS-API bookkeeping that Aqueduct does not yet implement. A relative path is
 resolved against the project root (the `aqueduct.yml` directory).
 
-**Resume is permissive, not strict.** Every checkpointed run writes a
-`_manifest_hash` file alongside its checkpoints. On `--resume`, both engines
-compare that stored hash against the current Manifest's hash and, on a
-mismatch, emit a suppressible `runtime_resume_hash_changed` warning through
-`aqueduct.warnings.emit()`: suppressible via the engine-level
-`aqueduct.yml` `warnings.suppress` / `--suppress-warning` (§4.2), the same
-mechanism session-startup warnings use: and then PROCEED anyway, reusing
-whatever checkpoints exist. Aqueduct does not refuse a resume just because
-the Manifest changed since the checkpointed run; the warning is the only
-signal. This is the direct counterpart to the handoff spill's STRICT
-behavior below: see §10.4.3's callout.
+**`--resume` fails closed at the CLI, then stays permissive at the engine
+(2.68).** Every checkpointed run writes a `_manifest_hash` file alongside its
+checkpoints. Before `aqueduct run --resume <run_id>` builds any engine
+session, the CLI itself reads that stored hash back and compares it against
+this run's freshly-compiled Manifest hash; on a mismatch it refuses
+outright (`CONFIG_ERROR`), naming both hashes and pointing at `--force`.
+Pass `--force` to reuse the checkpoints anyway — with `--force` (or on a
+matching hash), execution proceeds exactly as before 2.68: both engines'
+`execute()` independently re-compare that same stored hash against the
+current Manifest's hash and, on a mismatch, emit a suppressible
+`runtime_resume_hash_changed` warning through `aqueduct.warnings.emit()`
+(suppressible via the engine-level `aqueduct.yml` `warnings.suppress` /
+`--suppress-warning`, §4.2, the same mechanism session-startup warnings
+use) and then PROCEED anyway, reusing whatever checkpoints exist. That
+engine-level comparison is unchanged and, on its own (i.e. calling
+`execute()` directly rather than through `aqueduct run`), is still purely
+permissive — it is the CLI's fail-closed check, not the engine, that makes
+`aqueduct run --resume` refuse by default. This is the direct counterpart
+to the handoff spill's fail-closed detection below: see §10.4.3's callout.
 
 ### **10.4.3 Cross-engine handoff spill (2.35)**
 
@@ -1956,7 +1966,7 @@ handoff:
   prune_eagerly: true         # default, see the same-run pruning paragraph below
 ```
 
-Unlike `checkpoint_root`, `root` is **not** local-filesystem-only: a handoff spill must be reachable by BOTH engines on either side of a boundary, so a remote URI scheme (`s3://`, `gs://`, `abfss://`, ...) is accepted with no rejection. `handoff:` borrows `checkpoint`'s LIFECYCLE semantics (kept on failure, cleaned up on success); not its location or its local-only constraint, and not its config key (`handoff:` is its own top-level block, never nested under `checkpoint_root`). The two diverge past that shared lifecycle shape, though: a module checkpoint resumes across a CHANGED Manifest too, permissively, with a suppressible `runtime_resume_hash_changed` warning (§10.4.2, above; the comparison is mirrored on both engines' own `executor.py`). A handoff spill has no such path: the Manifest hash is part of the spill's own directory (see layout below), so a changed Manifest resolves to a different directory outright and the prior spill is simply never looked at, silently, with no warning of any kind. On the DuckDB side, a remote root is reached the same way any other remote path is (§10.9's `engine.duckdb:` subsection); `httpfs`, autoloaded on first touch, plus `engine.duckdb.s3_*` credentials (including the `s3_endpoint`/`s3_url_style`/`s3_use_ssl` non-AWS escape hatch) if the target requires authentication or is not AWS S3 itself. For an S3-flavored root touched by BOTH engines, use `s3a://`; Spark's bundled Hadoop FS registers `s3a://` (via the `hadoop-aws` package, resolved through `engine.spark.conf.spark.jars.packages`), not the legacy `s3://` scheme; DuckDB's `httpfs` accepts either scheme identically. See `docs/production_guide.md`'s "Object storage: MinIO / other non-AWS S3-compatible stores" for verified settings.
+Unlike `checkpoint_root`, `root` is **not** local-filesystem-only: a handoff spill must be reachable by BOTH engines on either side of a boundary, so a remote URI scheme (`s3://`, `gs://`, `abfss://`, ...) is accepted with no rejection. `handoff:` borrows `checkpoint`'s LIFECYCLE semantics (kept on failure, cleaned up on success); not its location or its local-only constraint, and not its config key (`handoff:` is its own top-level block, never nested under `checkpoint_root`). The two diverge past that shared lifecycle shape, though: a module checkpoint resumes across a CHANGED Manifest too, and (as of 2.68) `aqueduct run` itself refuses that by default before proceeding permissively under `--force` (§10.4.2, above). A handoff spill has no engine-level hash to compare in the first place: the Manifest hash is part of the spill's own directory (see layout below), so at the orchestrator layer a changed Manifest just resolves to a different directory and the prior spill is never looked at — no comparison, no warning, nothing to suppress. `aqueduct run --resume <run_id>` (2.68) closes that gap one layer up, the same CLI check described in §10.4.2: before building any engine session it scans `handoff.root` for *run_id* under every OTHER manifest-hash directory. Finding it there means the run_id exists but under a stale hash — refused (`CONFIG_ERROR`, both hashes named), unless `--force`. Finding nothing anywhere is not a mismatch (a run_id nobody has used, or one whose only checkpoints are the module kind above) and is left exactly as permissive as before: that island simply executes fresh. On the DuckDB side, a remote root is reached the same way any other remote path is (§10.9's `engine.duckdb:` subsection); `httpfs`, autoloaded on first touch, plus `engine.duckdb.s3_*` credentials (including the `s3_endpoint`/`s3_url_style`/`s3_use_ssl` non-AWS escape hatch) if the target requires authentication or is not AWS S3 itself. For an S3-flavored root touched by BOTH engines, use `s3a://`; Spark's bundled Hadoop FS registers `s3a://` (via the `hadoop-aws` package, resolved through `engine.spark.conf.spark.jars.packages`), not the legacy `s3://` scheme; DuckDB's `httpfs` accepts either scheme identically. See `docs/production_guide.md`'s "Object storage: MinIO / other non-AWS S3-compatible stores" for verified settings.
 
 Directory layout: `<root>/<manifest_hash>/<run_id>/<edge_id>/`, one subdirectory per boundary per run. Deleted when the run succeeds; kept when it fails and `keep_on_failure` is true (the default), so a manual `aqueduct run --resume <run_id>` after a plain failure (with no Blueprint edit in between) can read the upstream island's already-materialized spill instead of recomputing it. A heal-triggered rerun does NOT get this: a heal patches the Manifest, which changes the whole-Manifest hash (and therefore `<manifest_hash>` in the path above) even when the patch touched only a downstream island, and the CLI's heal-retry path passes no `resume_run_id` at all once a patch has been applied; the two mechanisms never line up. Parquet is a fixed internal transport detail: there is no format knob, on either the Blueprint or the config side.
 
@@ -2004,9 +2014,9 @@ Aqueduct stays orchestrator-agnostic. Schedulers (Airflow, Dagster, Prefect) wra
 | 2 | DATA_OR_RUNTIME | Runtime / Spark / data error (includes remote job failure) |
 | 3 | HEAL_PENDING | Patch staged for human review |
 | 4 | VALIDATION_GATE | Patch rejected by validation |
-| 5 | USAGE_ERROR | Invalid command usage |
+| 64 | USAGE_ERROR | Invalid command usage |
 
-Note: Click's own `UsageError` (unknown flag, missing required argument) exits **2**, not 5; Click does not know this taxonomy. Code 5 is reachable only from an Aqueduct-detected usage mistake that a command raises explicitly (e.g. an unsupported `--store` value).
+Note: `USAGE_ERROR` is 64 (sysexits `EX_USAGE`), covering both an Aqueduct-detected usage mistake raised explicitly by a command (e.g. an unsupported `--store` value) and Click's own `UsageError` (unknown command, unknown flag, missing required argument, a bad `click.Choice` value) — `aqueduct/cli/__init__.py` repoints `click.exceptions.UsageError.exit_code` to this constant at import time, so both sources exit the same code. `5` was `USAGE_ERROR`'s value before this unification; it is retired and never reused.
 
 ## **10.8 Remote-submit targets**
 

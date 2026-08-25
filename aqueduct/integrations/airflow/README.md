@@ -49,7 +49,8 @@ with DAG(
 | `0` SUCCESS | task success, XCom push `{run_id, exit_code}` |
 | `2` DATA_OR_RUNTIME | `AirflowException` — Airflow retry policy applies |
 | `3` HEAL_PENDING | `self.defer(...)` — worker slot released; trigger polls for approval |
-| anything else | `AirflowException` (`CONFIG_ERROR`, `VALIDATION_GATE`, `USAGE_ERROR`) |
+| `64` USAGE_ERROR | `AirflowException` — invalid CLI usage (bad flag / missing arg, incl. Click's own usage errors), not a pipeline data/runtime failure |
+| anything else | `AirflowException` (`CONFIG_ERROR`, `VALIDATION_GATE`) |
 
 ## HEAL_PENDING flow
 
