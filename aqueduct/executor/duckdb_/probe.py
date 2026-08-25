@@ -18,6 +18,13 @@ concept to report (see the dispatcher's dedicated warning below) — an
 "unsupported signal type" is not the same state as "unknown signal type" and
 gets its own rule id so the two are never confused in the observability log.
 
+``ProbeSampling`` is the one exception to the deliberate-duplication rule
+above: it now lives in the engine-agnostic ``aqueduct/executor/probe_sampling.py``
+and is re-exported here. The deliberate-duplication discipline forbids
+CROSS-ENGINE (spark<->duckdb) imports; importing a shared top-level
+engine-agnostic module is the sanctioned alternative for a piece with no
+engine dependency at all.
+
 Zero-cost-observability accounting (AGENTS.md's rule, translated for this
 engine — the question is "does this signal force an extra pass over the
 relation?", not "does it call a Spark action?"):
@@ -68,7 +75,6 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -80,24 +86,11 @@ if TYPE_CHECKING:
 from aqueduct.errors import ConfigError
 from aqueduct.executor.duckdb_.egress import _escape
 from aqueduct.executor.models import _add_module_warning
+from aqueduct.executor.probe_sampling import ProbeSampling
 from aqueduct.models import Module, ModuleType
 from aqueduct.redaction import redact as _redact
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class ProbeSampling:
-    """Duplicated from ``executor/spark/probe.py`` — same fields, same
-    defaults, same ``aqueduct.yml`` `probes:`/`observability.retention:`
-    blocks behind it. See this module's docstring for why this is a
-    deliberate copy, not an import."""
-
-    max_sample_rows: int = 100
-    default_sample_fraction: float = 0.1
-    # Phase 85 A1 — per-probe retention cap for the sample_rows signal type.
-    # From `aqueduct.yml`'s `observability.retention.sample_rows_keep_last_n`.
-    sample_rows_keep_last_n: int = 20
 
 
 # ── DuckDB DDL — byte-identical to spark/probe.py's, same observability
