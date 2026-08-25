@@ -63,7 +63,7 @@ observability:
 
 
 def test_probe_sampling_and_surveyor_retention_wiring(tmp_path, monkeypatch):
-    import aqueduct.executor.spark.probe as probe_module
+    import aqueduct.executor.probe_sampling as probe_module
     import aqueduct.surveyor.surveyor as surveyor_module
 
     captured: dict = {}
@@ -71,7 +71,17 @@ def test_probe_sampling_and_surveyor_retention_wiring(tmp_path, monkeypatch):
     _real_probe_sampling = probe_module.ProbeSampling
 
     def _spy_probe_sampling(**kwargs):
-        captured["probe_kwargs"] = kwargs
+        # `aqueduct.executor.probe_sampling.ProbeSampling` is now the SAME
+        # symbol both engines' probe modules import as a `sampling: ProbeSampling
+        # = ProbeSampling()` function default — so patching it here also
+        # intercepts the no-arg default-argument evaluations that fire the
+        # first time `aqueduct.executor.duckdb_.probe` is imported (which
+        # happens later in this run, when the engine actually executes the
+        # failing Ingress module, not from any Probe — this blueprint has
+        # none). Keep every call, and below assert on the one that actually
+        # carries `_load_engine_config`'s wired kwargs rather than "the last
+        # call wins" (which would land on an unrelated no-arg default).
+        captured.setdefault("probe_calls", []).append(kwargs)
         return _real_probe_sampling(**kwargs)
 
     _real_surveyor = surveyor_module.Surveyor
@@ -95,8 +105,13 @@ def test_probe_sampling_and_surveyor_retention_wiring(tmp_path, monkeypatch):
     runner = CliRunner()
     runner.invoke(cli, ["run", str(bp), "--config", str(cfg)])
 
-    assert "probe_kwargs" in captured, "ProbeSampling was never constructed — seam not reached"
-    assert captured["probe_kwargs"]["sample_rows_keep_last_n"] == 7
+    probe_calls = captured.get("probe_calls") or []
+    assert probe_calls, "ProbeSampling was never constructed — seam not reached"
+    wired_calls = [kw for kw in probe_calls if kw.get("sample_rows_keep_last_n") == 7]
+    assert wired_calls, (
+        "no ProbeSampling(...) call carried the wired retention value "
+        f"(sample_rows_keep_last_n=7); calls were: {probe_calls}"
+    )
 
     retention = captured.get("surveyor_retention")
     assert retention is not None, "Surveyor(retention=...) was not passed at all"

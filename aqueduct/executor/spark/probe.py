@@ -112,7 +112,6 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -123,21 +122,11 @@ if TYPE_CHECKING:
 
 from aqueduct.errors import ConfigError
 from aqueduct.executor.models import _add_module_warning
+from aqueduct.executor.probe_sampling import ProbeSampling
 from aqueduct.models import Module
 from aqueduct.redaction import redact as _redact
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class ProbeSampling:
-    max_sample_rows: int = 100
-    default_sample_fraction: float = 0.1
-    # Phase 85 A1 — per-probe retention cap for the sample_rows signal type,
-    # the one signal that persists actual data ROW content (redacted, but
-    # still row content) rather than aggregate statistics. From
-    # `aqueduct.yml`'s `observability.retention.sample_rows_keep_last_n`.
-    sample_rows_keep_last_n: int = 20
 
 
 # ── DuckDB DDL ────────────────────────────────────────────────────────────────

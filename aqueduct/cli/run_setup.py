@@ -50,7 +50,7 @@ from typing import TYPE_CHECKING as _t  # noqa: E402  (intentional mid-file impo
 
 if _t:
     from aqueduct.config import AqueductConfig, WebhookEndpointConfig
-    from aqueduct.executor.spark.probe import ProbeSampling as _PS
+    from aqueduct.executor.probe_sampling import ProbeSampling as _PS
 
 
 @_dc_frozen(frozen=True)
@@ -224,7 +224,7 @@ def _load_engine_config(
         _sys.exit(exit_codes.CONFIG_ERROR)
 
     # ── Probe sampling ────────────────────────────────────────────────────────
-    from aqueduct.executor.spark.probe import ProbeSampling
+    from aqueduct.executor.probe_sampling import ProbeSampling
 
     probes_cfg = cfg.probes
     probe_sampling = ProbeSampling(
