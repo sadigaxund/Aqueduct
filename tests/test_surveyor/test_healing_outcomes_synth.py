@@ -1,9 +1,9 @@
-"""healing_outcomes synthesis + non-aggressive parent_run_id NULL (1.1.0).
+"""healing_outcomes synthesis + single-patch parent_run_id NULL (1.1.0).
 
 Covers TEST_MANIFEST.md ⏳ items under "healing_outcomes.parent_run_id" that
-aren't already covered by test_aggressive_telemetry.py:
+aren't already covered by test_auto_mode_telemetry.py:
 
-  * Non-aggressive paths leave `parent_run_id` NULL on healing_outcomes.
+  * Single-patch paths leave `parent_run_id` NULL on healing_outcomes.
   * When the unified loop exits with `patch=None`, CLI synthesises one
     healing_outcomes row per attempt_records entry with patch_applied=false,
     failure_category derived from the attempt signature.
@@ -37,8 +37,8 @@ def manifest():
     )
 
 
-def test_non_aggressive_healing_outcome_has_null_parent_run_id(manifest, tmp_path):
-    """A single-patch (non-aggressive) healing outcome leaves `parent_run_id` NULL."""
+def test_single_patch_healing_outcome_has_null_parent_run_id(manifest, tmp_path):
+    """A single-patch healing outcome leaves `parent_run_id` NULL."""
     surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     surveyor.start("solo-run")
 
@@ -66,8 +66,8 @@ def test_non_aggressive_healing_outcome_has_null_parent_run_id(manifest, tmp_pat
     assert rows[0][0] is None
 
 
-def test_aggressive_healing_outcome_carries_parent_run_id(manifest, tmp_path):
-    """Aggressive-mode healing rows carry `parent_run_id=<outer>`."""
+def test_auto_mode_healing_outcome_carries_parent_run_id(manifest, tmp_path):
+    """Auto-mode healing rows carry `parent_run_id=<outer>`."""
     surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     surveyor.start("outer-r")
 

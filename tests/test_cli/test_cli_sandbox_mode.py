@@ -28,12 +28,12 @@ aqueduct_config: "1.0"
 danger:
   allow_full_preflight: {allow_preflight}
   allow_skip_sandbox: {allow_skip}
-  allow_multi_patch: {allow_aggressive}
+  allow_multi_patch: {allow_multi_patch}
 """
 
 
 def _write_project(
-    tmp_path, approval, sandbox, allow_preflight=False, allow_skip=False, allow_aggressive=False
+    tmp_path, approval, sandbox, allow_preflight=False, allow_skip=False, allow_multi_patch=False
 ):
     bp = tmp_path / "bp.yml"
     bp.write_text(_BP_TEMPLATE.format(approval=approval, sandbox=sandbox), encoding="utf-8")
@@ -42,7 +42,7 @@ def _write_project(
         _CFG_TEMPLATE.format(
             allow_preflight=str(allow_preflight).lower(),
             allow_skip=str(allow_skip).lower(),
-            allow_aggressive=str(allow_aggressive).lower(),
+            allow_multi_patch=str(allow_multi_patch).lower(),
         ),
         encoding="utf-8",
     )
@@ -151,7 +151,7 @@ def test_danger_combo_warning(mock_get_exec, mock_surveyor_cls, tmp_path):
         _CFG_TEMPLATE.format(
             allow_preflight="false",
             allow_skip="true",
-            allow_aggressive="true",
+            allow_multi_patch="true",
         ),
         encoding="utf-8",
     )
