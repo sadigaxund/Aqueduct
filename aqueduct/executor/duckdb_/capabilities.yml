@@ -980,14 +980,28 @@ leaves:
     tests:
       - tests/test_agent/test_toolbox_engine_routing.py::TestDuckDBRoutesThroughDuckDB::test_get_source_schema_reads_via_duckdb_not_spark
   tooling.doctor.table_exists:
-    support: unsupported
-    hint: "No DuckDB table-existence probe exists; aqueduct doctor's check unconditionally builds a SparkSession and calls spark.catalog.tableExists(), with no branch for a duckdb-resolved module, and reports pyspark-not-installed rather than 'not implemented for duckdb' when it fails. A real check would be an information_schema.tables query over the project's engine.duckdb.* connection; not built yet."
+    support: supported
+    hint: "aqueduct doctor's check now branches for a duckdb-resolved module: it opens a READ-ONLY connection to engine.duckdb.database_path and queries information_schema.tables (matches both base tables and views, unlike duckdb_tables() which misses views) for the module's 1/2/3-part table: name, using the same catalog-defaulting rule as the DuckDB executor's own table: resolution (unqualified -> current catalog+schema; two-part -> schema.table in the current catalog; three-part -> catalog.schema.table, which must already be ATTACHed — this check never ATTACHes anything itself). It is SKIPPED entirely when database_path is unset (the default :memory:), because that run's catalog only exists inside its own session — a fresh doctor connection would have an empty catalog and falsely report every table missing. A database_path file that does not exist yet is reported as table-not-found (fail), not a crash."
+    tests:
+      - tests/test_cli/test_cli_doctor_engine_routing.py::test_table_exists_duckdb_missing_database_path_skips_and_never_touches_spark
+      - tests/test_cli/test_cli_doctor_engine_routing.py::test_table_exists_duckdb_table_present_ok
+      - tests/test_cli/test_cli_doctor_engine_routing.py::test_table_exists_duckdb_view_present_ok
+      - tests/test_cli/test_cli_doctor_engine_routing.py::test_table_exists_duckdb_table_absent_fails
+      - tests/test_cli/test_cli_doctor_engine_routing.py::test_table_exists_duckdb_database_file_missing_fails
+      - tests/test_cli/test_cli_doctor_engine_routing.py::test_table_exists_duckdb_two_part_name_resolves_schema
+      - tests/test_cli/test_cli_doctor_engine_routing.py::test_table_exists_duckdb_declared_supported
   tooling.doctor.cloud_preflight:
     support: unsupported
     hint: "No DuckDB object-existence preflight exists; aqueduct doctor --preflight's cloud-URI check unconditionally builds a SparkSession and probes via Spark's Hadoop FileSystem using engine.spark.conf credentials, even for a module that resolves to duckdb (which would need engine.duckdb.s3_*/httpfs instead). A DuckDB-native probe using duckdb_/extensions.py's ensure_extension + httpfs is not built yet; until it is, --preflight gives no coverage for duckdb-resolved sources."
   tooling.doctor.session_preflight:
-    support: unsupported
-    hint: "There is no check_duckdb()/session-preflight analog to check_java()+check_spark(preflight=True); DuckDB session/extension/S3-secret verification only happens incidentally inside _probe_duckdb_handoff, gated on handoff.root being remote with credentials configured. A blueprint whose DuckDB Ingress/Egress modules read/write s3:// while handoff.root stays local gets zero doctor-time verification that httpfs can install/load; that failure only surfaces mid-run. Not built yet."
+    support: supported
+    hint: "aqueduct doctor now runs check_duckdb() whenever deployment.engine == 'duckdb': it connects the way _make_session would (database_path if set, else :memory:) and runs SELECT 1, reporting the duckdb version. With --preflight it additionally exercises _make_session's httpfs/S3-secret wiring — resolve_s3_secret_from_config + configure_s3_secret + ensure_extension(con, 'httpfs', ...) — when S3 credentials or an explicit extension_repository are configured; when neither is configured, --preflight verifies nothing extra and the ok detail says so explicitly (no s3 config — httpfs check skipped)."
+    tests:
+      - tests/test_cli/test_cli_doctor_new.py::TestCheckDuckDB::test_duckdb_not_installed_skips
+      - tests/test_cli/test_cli_doctor_new.py::TestCheckDuckDB::test_duckdb_session_ok_reports_version
+      - tests/test_cli/test_cli_doctor_new.py::TestCheckDuckDB::test_duckdb_preflight_no_s3_config_says_skipped
+      - tests/test_cli/test_cli_doctor_new.py::TestCheckDuckDB::test_duckdb_preflight_with_s3_creds_configures_secret_and_httpfs
+      - tests/test_cli/test_cli_doctor_engine_routing.py::test_run_doctor_skips_duckdb_check_for_spark_engine
   tooling.sandbox_dry_run:
     support: supported
     hint: "aqueduct run --sandbox builds a DuckDB session through ExecutorProtocol.session_factory() and replays the compiled Manifest with every Egress skipped."

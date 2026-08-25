@@ -930,6 +930,85 @@ class TestJavaCheck:
         assert r.status == "warn" and "no java found" in r.detail
 
 
+# ── Part A: DuckDB session/extension preflight (tooling.doctor.session_preflight) ──
+
+from aqueduct.doctor import check_duckdb
+
+
+class TestCheckDuckDB:
+    def test_duckdb_not_installed_skips(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "duckdb", None)
+        r = check_duckdb({}, {})
+        assert r.status == "skip"
+        assert "duckdb not installed" in r.detail
+
+    def test_duckdb_session_ok_reports_version(self):
+        import duckdb
+
+        r = check_duckdb({}, {})
+        assert r.status == "ok"
+        assert duckdb.__version__ in r.detail
+
+    def test_duckdb_preflight_no_s3_config_says_skipped(self):
+        r = check_duckdb({}, {}, preflight=True)
+        assert r.status == "ok"
+        assert "no s3 config — httpfs check skipped" in r.detail
+
+    def test_duckdb_preflight_with_s3_creds_configures_secret_and_httpfs(self, monkeypatch):
+        import aqueduct.executor.duckdb_.extensions as ext
+
+        calls = []
+        monkeypatch.setattr(
+            ext,
+            "resolve_s3_secret_from_config",
+            lambda engine_cfg, secrets_cfg: {
+                "key_id": "AKIAFAKE",
+                "secret": "shh",
+                "region": None,
+                "endpoint": None,
+                "url_style": None,
+                "use_ssl": None,
+            },
+        )
+        monkeypatch.setattr(
+            ext,
+            "ensure_extension",
+            lambda con, name, extension_repository=None: calls.append((name, extension_repository)),
+        )
+        r = check_duckdb(
+            {"s3_key_id_secret": "X", "s3_secret_access_key_secret": "Y"}, {}, preflight=True
+        )
+        assert r.status == "ok"
+        assert "httpfs installed/loaded + S3 secret configured" in r.detail
+        assert calls == [("httpfs", None)]  # no network — ensure_extension was monkeypatched
+
+    def test_duckdb_preflight_failure_reported_honestly(self, monkeypatch):
+        import aqueduct.executor.duckdb_.extensions as ext
+
+        monkeypatch.setattr(
+            ext,
+            "resolve_s3_secret_from_config",
+            lambda engine_cfg, secrets_cfg: {
+                "key_id": "AKIAFAKE",
+                "secret": "shh",
+                "region": None,
+                "endpoint": None,
+                "url_style": None,
+                "use_ssl": None,
+            },
+        )
+
+        def _boom(con, name, extension_repository=None):
+            raise RuntimeError("simulated extension load failure")
+
+        monkeypatch.setattr(ext, "ensure_extension", _boom)
+        r = check_duckdb(
+            {"s3_key_id_secret": "X", "s3_secret_access_key_secret": "Y"}, {}, preflight=True
+        )
+        assert r.status == "fail"
+        assert "simulated extension load failure" in r.detail
+
+
 # ── Phase 87: `gh` CLI presence + auth (the `patch pr` transport) ───────────
 
 from aqueduct.doctor import check_gh_pr

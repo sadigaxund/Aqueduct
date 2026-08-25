@@ -66,6 +66,7 @@ __all__ = [
     "check_capabilities",
     "check_cascade_tiers",
     "check_cloudpickle_compat",
+    "check_duckdb",
     "check_handoff_engine_access",
     "check_handoff_free_space",
     "check_gh_pr",
@@ -354,6 +355,78 @@ def check_java() -> CheckResult:
         # strictly better than failing a health check over a cosmetic hint.
         pass
     return CheckResult("java", "ok", detail, _ms(t))
+
+
+def check_duckdb(
+    engine_cfg: dict[str, Any], secrets_cfg: dict[str, Any], preflight: bool = False
+) -> CheckResult:
+    """Verify the embedded DuckDB session this project would actually build.
+
+    A ``check_java``/``check_spark(preflight=True)`` analog for DuckDB —
+    neither existed before (see ``tooling.doctor.session_preflight`` in
+    ``duckdb_/capabilities.yml``). Connects the same way ``_make_session``
+    (``aqueduct/executor/duckdb_/engine.py``) does — ``engine_cfg``'s
+    ``database_path`` if set, else ``:memory:`` — and runs ``SELECT 1``. A
+    bare ``duckdb.connect(":memory:")`` is near-instant (no JVM, no cluster)
+    so, like ``_probe_duckdb_handoff``, this runs unconditionally whenever
+    ``deployment.engine == "duckdb"`` — there is no cheaper-vs-honest
+    tradeoff to make the way there is for Spark.
+
+    ``preflight=True`` additionally exercises the same httpfs/S3-secret
+    wiring ``_make_session`` applies: ``resolve_s3_secret_from_config`` +
+    ``configure_s3_secret`` + ``ensure_extension(con, "httpfs", ...)``, in
+    that order, when S3 credentials (or an explicit ``extension_repository``)
+    are configured. When nothing is configured, this is a deliberate no-op
+    and the ok detail says so — a project with no S3/httpfs intent gets zero
+    new behaviour, same as ``_make_session`` itself.
+
+    ``duckdb`` is imported lazily inside the body — a base install / a
+    Spark-only project never pulls it in just by calling ``run_doctor``.
+    """
+    t = time.monotonic()
+    try:
+        import duckdb
+    except ImportError:
+        return CheckResult("duckdb", "skip", "duckdb not installed", _ms(t), group="stores")
+
+    engine_cfg = engine_cfg or {}
+    database_path = engine_cfg.get("database_path") or ":memory:"
+    con = None
+    try:
+        con = duckdb.connect(database_path)
+        con.sql("SELECT 1").fetchone()
+        detail = f"session ok  duckdb={duckdb.__version__}"
+
+        if preflight:
+            from aqueduct.executor.duckdb_.extensions import (
+                configure_s3_secret,
+                ensure_extension,
+                resolve_s3_secret_from_config,
+            )
+
+            extension_repository = engine_cfg.get("extension_repository")
+            s3_creds = resolve_s3_secret_from_config(engine_cfg, secrets_cfg or {})
+            if s3_creds is not None:
+                configure_s3_secret(con, **s3_creds)
+                ensure_extension(con, "httpfs", extension_repository=extension_repository)
+                detail += "  httpfs installed/loaded + S3 secret configured  [preflight]"
+            elif extension_repository:
+                ensure_extension(con, "httpfs", extension_repository=extension_repository)
+                detail += (
+                    f"  httpfs installed/loaded via custom repository "
+                    f"({extension_repository})  [preflight]"
+                )
+            else:
+                detail += "  no s3 config — httpfs check skipped  [preflight]"
+
+        return CheckResult("duckdb", "ok", detail, _ms(t), group="stores")
+    except Exception as exc:
+        return CheckResult(
+            "duckdb", "fail", f"session preflight failed: {exc}", _ms(t), group="stores"
+        )
+    finally:
+        if con is not None:
+            con.close()
 
 
 def check_gh_pr() -> CheckResult:
@@ -836,7 +909,11 @@ def check_storage(
 
 
 def check_blueprint_sources_from_manifest(
-    manifest: Any, deployment_env: str = "local", *, preflight: bool = False
+    manifest: Any,
+    deployment_env: str = "local",
+    *,
+    preflight: bool = False,
+    duckdb_engine_config: dict[str, Any] | None = None,
 ) -> list[CheckResult]:
     """Check all Ingress/Egress paths using an already-compiled Manifest.
 
@@ -846,6 +923,11 @@ def check_blueprint_sources_from_manifest(
     - No re-parsing; no workarounds for sub-blueprint context injection
 
     Falls back to check_blueprint_sources() if provenance_map is unavailable.
+
+    duckdb_engine_config: ``cfg.engine.duckdb.model_dump()`` — threaded into
+        ``_table_exists_check`` for any module resolved to the DuckDB engine,
+        so its real probe connects to the project's configured
+        ``database_path`` rather than guessing.
     """
     import re
     import socket
@@ -918,7 +1000,15 @@ def check_blueprint_sources_from_manifest(
         # ── Table-addressed Ingress/Egress (catalog.schema.table) ──────────────
         table_val: str | None = cfg.get("table")
         if table_val:
-            results.append(_table_exists_check(name, table_val, module.engine or "spark", t))
+            results.append(
+                _table_exists_check(
+                    name,
+                    table_val,
+                    module.engine or "spark",
+                    t,
+                    duckdb_engine_config=duckdb_engine_config,
+                )
+            )
             continue
 
         # ── JDBC ──────────────────────────────────────────────────────────────
@@ -1363,26 +1453,49 @@ def check_cascade_tiers(
     return results
 
 
-def _table_exists_check(name: str, table_val: str, engine: str, t: float) -> CheckResult:
+def _table_exists_check(
+    name: str,
+    table_val: str,
+    engine: str,
+    t: float,
+    *,
+    duckdb_engine_config: dict[str, Any] | None = None,
+) -> CheckResult:
     """Probe an Ingress/Egress ``table:`` config for existence, per the
     module's RESOLVED engine — never unconditionally through Spark.
 
-    Only Spark implements a real probe today (``spark.catalog.tableExists``).
-    Any other engine (a DuckDB-resolved module, or any future engine) gets an
-    honest "not implemented for engine X" skip sourced from that engine's
-    ``tooling.doctor.table_exists`` capability-leaf hint, instead of the
-    Spark path's ``ModuleNotFoundError`` being misreported as "pyspark not
-    installed" for a module that was never going to use Spark in the first
-    place (``tmp/phase85/engine_parity_audit.md``, category (c) finding #3).
-    A real DuckDB ``information_schema``-based probe is explicitly deferred,
-    not built here — see the leaf hint.
+    Spark: ``spark.catalog.tableExists()`` against a live SparkSession.
+
+    DuckDB: a real ``information_schema.tables`` query, per Pass G2's
+    catalog-addressing rule (``duckdb_/ingress.py::_read_table``'s docstring
+    — unqualified -> current catalog+schema; two-part -> schema.table within
+    the current catalog; three-part -> an already-ATTACHed catalog). The
+    connection is opened against the project's ``engine.duckdb.database_path``
+    (``duckdb_engine_config``), the exact same knob ``_make_session`` reads —
+    anything else would probe a database the run never touches. When
+    ``database_path`` is unset (the default ``:memory:``), the run's catalog
+    only exists inside its own session — a fresh doctor connection has an
+    EMPTY catalog and would report every table "not found", a guaranteed
+    false alarm — so that case is an honest ``skip``, never a probe attempt.
+    The doctor connection is opened READ-ONLY so this check can never mutate
+    or lock the project's database file.
+
+    Any other engine (or any future engine that has not wired a branch in
+    here yet) gets an honest "not implemented for engine X" skip sourced
+    from that engine's ``tooling.doctor.table_exists`` capability-leaf hint,
+    instead of the Spark path's ``ModuleNotFoundError`` being misreported as
+    "pyspark not installed" for a module that was never going to use Spark
+    in the first place (``tmp/phase85/engine_parity_audit.md``, category (c)
+    finding #3).
     """
+    if engine == "duckdb":
+        return _table_exists_check_duckdb(name, table_val, t, duckdb_engine_config)
     if engine != "spark":
         from aqueduct.executor.capabilities import Support, get_capabilities
 
         leaf = get_capabilities(engine).verdict("tooling.doctor.table_exists")
         if leaf.support == Support.SUPPORTED:
-            # No non-Spark engine implements this probe yet. A future engine
+            # No branch is wired in here for this engine yet. A future engine
             # that declares the leaf supported still needs its own branch
             # wired in here — this must never silently claim coverage.
             return CheckResult(
@@ -1414,6 +1527,93 @@ def _table_exists_check(name: str, table_val: str, engine: str, t: float) -> Che
         )
     except Exception as exc:
         return CheckResult(name, "warn", f"table {table_val!r}: {exc}", _ms(t))
+
+
+def _table_exists_check_duckdb(
+    name: str,
+    table_val: str,
+    t: float,
+    duckdb_engine_config: dict[str, Any] | None,
+) -> CheckResult:
+    """Real DuckDB probe for ``_table_exists_check`` — split out for
+    readability, never called directly except by its caller above.
+
+    Uses ``information_schema.tables`` rather than DuckDB's own
+    ``duckdb_tables()`` function: measured on duckdb 1.5.2,
+    ``duckdb_tables()`` lists only base tables, while
+    ``information_schema.tables`` lists both base tables AND views. A
+    Blueprint's ``table:`` is read via ``_read_table`` -> ``con.table()``,
+    which resolves either kind — so ``information_schema.tables`` is the
+    semantically matching catalog to query; ``duckdb_tables()`` would
+    silently miss a view and misreport it as "not found".
+    """
+    engine_cfg = duckdb_engine_config or {}
+    database_path = engine_cfg.get("database_path")
+    if not database_path or database_path == ":memory:":
+        return CheckResult(
+            name,
+            "skip",
+            "engine.duckdb.database_path is unset — the run uses a per-run, "
+            "in-memory DuckDB catalog with nothing for doctor to connect to "
+            "ahead of time; table-existence cannot be checked until the run "
+            "creates it in its own session",
+            _ms(t),
+        )
+
+    con = None
+    try:
+        import duckdb
+
+        try:
+            # Read-only: doctor must never create, mutate, or lock the
+            # project's database file. A path that does not exist yet is
+            # itself an honest "table not found" — no database means no
+            # table — rather than a crash or a misleading generic warn.
+            con = duckdb.connect(database_path, read_only=True)
+        except duckdb.IOException:
+            return CheckResult(
+                name,
+                "fail",
+                f"table not found: {table_val} (database file does not exist: " f"{database_path})",
+                _ms(t),
+            )
+
+        parts = table_val.split(".")
+        if len(parts) == 1:
+            catalog_name, schema_name = con.execute(
+                "SELECT current_catalog(), current_schema()"
+            ).fetchone()
+            table_name = parts[0]
+        elif len(parts) == 2:
+            catalog_name = con.execute("SELECT current_catalog()").fetchone()[0]
+            schema_name, table_name = parts
+        elif len(parts) == 3:
+            catalog_name, schema_name, table_name = parts
+        else:
+            return CheckResult(
+                name,
+                "warn",
+                f"table {table_val!r}: not a valid 1/2/3-part table name",
+                _ms(t),
+            )
+
+        row = con.execute(
+            "SELECT count(*) FROM information_schema.tables "
+            "WHERE table_catalog = ? AND table_schema = ? AND table_name = ?",
+            [catalog_name, schema_name, table_name],
+        ).fetchone()
+        if row and row[0] > 0:
+            return CheckResult(name, "ok", f"table exists: {table_val}", _ms(t))
+        return CheckResult(name, "fail", f"table not found: {table_val}", _ms(t))
+    except (ImportError, ModuleNotFoundError):
+        return CheckResult(
+            name, "skip", "duckdb not installed — cannot verify table existence", _ms(t)
+        )
+    except Exception as exc:
+        return CheckResult(name, "warn", f"table {table_val!r}: {exc}", _ms(t))
+    finally:
+        if con is not None:
+            con.close()
 
 
 def _cloud_uri_check(
@@ -1673,6 +1873,7 @@ def check_blueprint_sources(
     preflight: bool = False,
     _visited: frozenset[Path] | None = None,
     default_engine: str = "spark",
+    duckdb_engine_config: dict[str, Any] | None = None,
 ) -> list[CheckResult]:
     """Parse a Blueprint and probe every Ingress/Egress path or JDBC endpoint.
 
@@ -1699,6 +1900,10 @@ def check_blueprint_sources(
         function parses a raw Blueprint, not a compiled Manifest, so engine
         resolution is redone here via ``resolve_module_engines`` rather than
         reading an already-resolved ``Module.engine``).
+    duckdb_engine_config: ``cfg.engine.duckdb.model_dump()`` — threaded into
+        ``_table_exists_check`` for any module resolved to the DuckDB engine
+        (including modules inside recursed Arcade sub-blueprints), so its
+        real probe connects to the project's configured ``database_path``.
     """
     import re
     import socket
@@ -1800,7 +2005,11 @@ def check_blueprint_sources(
         if table_val:
             results.append(
                 _table_exists_check(
-                    name, table_val, _module_engines.get(module.id, default_engine), t
+                    name,
+                    table_val,
+                    _module_engines.get(module.id, default_engine),
+                    t,
+                    duckdb_engine_config=duckdb_engine_config,
                 )
             )
             continue
@@ -1924,6 +2133,7 @@ def check_blueprint_sources(
             preflight=preflight,
             _visited=_visited,
             default_engine=default_engine,
+            duckdb_engine_config=duckdb_engine_config,
         )
         # Prefix each result name so the user knows which arcade it came from
         for r in sub_results:
@@ -2292,6 +2502,36 @@ def run_doctor(
     # Java runtime the JVM/Spark launches (pure detection — no Spark session)
     results.append(check_java())
 
+    # DuckDB session/extension preflight — check_java's analog for the
+    # embedded engine `_make_session` (executor/duckdb_/engine.py) actually
+    # builds. Unlike check_java (fires for every deployment, since Spark
+    # itself needs the JVM either way), this is gated on
+    # deployment.engine == "duckdb": a Spark-deployed project never builds a
+    # DuckDB session at run time, so a duckdb-import failure there would be
+    # a false alarm, not a real finding.
+    if cfg.deployment.engine == "duckdb":
+        results.append(
+            check_duckdb(
+                cfg.engine.duckdb.model_dump(),
+                {
+                    "provider": cfg.secrets.provider,
+                    "region": cfg.secrets.region,
+                    "resolver": cfg.secrets.resolver,
+                    "base_dir": str(_handoff_project_root),
+                },
+                preflight=preflight,
+            )
+        )
+    else:
+        results.append(
+            CheckResult(
+                "duckdb",
+                "skip",
+                f"deployment.engine={cfg.deployment.engine} — duckdb session check not applicable",
+                group="stores",
+            )
+        )
+
     # `gh` CLI presence + auth — the transport `aqueduct patch pr` shells to
     # (Phase 87). Pure detection, cheap, never fatal — soft/skippable when the
     # PR flow isn't used (see check_gh_pr's docstring).
@@ -2371,7 +2611,11 @@ def run_doctor(
         results.append(check_storage(cfg.engine.spark.conf, spark_ok=False, skipped=True))
         if blueprint_path is not None:
             results.extend(
-                check_blueprint_sources(blueprint_path, default_engine=cfg.deployment.engine)
+                check_blueprint_sources(
+                    blueprint_path,
+                    default_engine=cfg.deployment.engine,
+                    duckdb_engine_config=cfg.engine.duckdb.model_dump(),
+                )
             )
             results.extend(check_capabilities(blueprint_path, engine=cfg.deployment.engine))
         if aqtest_path is not None:
@@ -2397,6 +2641,7 @@ def run_doctor(
                 blueprint_path,
                 preflight=preflight and spark_result.status != "fail",
                 default_engine=cfg.deployment.engine,
+                duckdb_engine_config=cfg.engine.duckdb.model_dump(),
             )
         )
         results.extend(check_capabilities(blueprint_path, engine=cfg.deployment.engine))
