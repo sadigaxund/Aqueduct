@@ -1542,7 +1542,6 @@ from .diagnostics import doctor, lint_cmd, schema, validate  # noqa: E402,F401
 from .drift import drift  # noqa: E402,F401
 from .handoff import handoff, handoff_sweep  # noqa: E402,F401
 from .heal import heal  # noqa: E402,F401
-from .mcp import mcp_group, mcp_serve  # noqa: E402,F401
 from .observability import lineage, report, runs, signal  # noqa: E402,F401
 from .patch import (  # noqa: E402,F401,F811
     log_cmd,

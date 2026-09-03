@@ -906,10 +906,11 @@ schema‑scoped query. Both backends return the same shape.
 
 ### Read‑only access
 
-`aqueduct report`, `aqueduct runs`, and the MCP tool registry consume these
-functions to answer fleet questions on demand; none of them run in the data
-path. Every read is read‑only: DuckDB connections issue `SET read_only =
-true`, and Postgres connections use a read‑only role.
+`aqueduct report`, `aqueduct runs`, and the diagnostics tool registry
+(`aqueduct/tools/`) consume these functions to answer fleet questions on
+demand; none of them run in the data path. Every read is read‑only: DuckDB
+connections issue `SET read_only = true`, and Postgres connections use a
+read‑only role.
 
 ---
 

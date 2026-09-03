@@ -4,7 +4,7 @@ Wave 1 built the render funnel (``aqueduct/cli/render/{funnel,wrap,width,
 tables}.py``) and wired it into ``run.py``/``patch.py``/``diagnostics.py``.
 Wave 2 (this worker) rewires the remaining raw ``click.echo`` call sites in
 ``observability.py``, ``project.py``, ``dev.py``, ``benchmark.py``,
-``drift.py``, ``blueprint.py``, ``stores.py``, ``hooks.py``, and ``mcp.py``.
+``drift.py``, ``blueprint.py``, ``stores.py``, and ``hooks.py``.
 
 These tests assert the property that matters, not the exact copy: narrative
 lines land on stderr, the final/structured result lands on stdout, a

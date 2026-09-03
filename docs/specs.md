@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.69: Reference Document**
+**Version 2.70: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -1276,8 +1276,8 @@ best-effort after the heal has already succeeded.
 ## **8.10 Diagnostics & the Tool Registry**
 
 `aqueduct/tools/` holds a single internal **ToolRegistry**: the enumeration
-surface both the MCP server (below) and the agentic-heal ToolBox (§8.12)
-read from. Every registered tool is:
+surface the agentic-heal ToolBox (§8.12) reads from. Every registered tool
+is:
 
 - **A thin wrapper over an existing read function.** No tool contains inline
   SQL; each one calls `stores/queries.py` (the one read-time observability
@@ -1312,29 +1312,10 @@ loading ships, it will require explicit config allowlisting, a tool is CODE
 that runs on the driver, the same trust model as a probe plugin or UDF, so
 v1's tool surface stays closed to exactly the built-ins above.
 
-**MCP server (`aqueduct mcp serve`).** The registry is exposed over the
-Model Context Protocol as a **stdio, local-only** server: an MCP client
-(Claude Desktop, an IDE) spawns `aqueduct mcp serve` as a subprocess and
-speaks JSON-RPC over stdin/stdout: no network transport, no ports. Every
-registered tool becomes one MCP tool with its name, description, and
-`params_schema` handed through verbatim as the MCP declaration; invocation
-goes through the same redacted `call_tool()` path (results AND surfaced
-error messages are secret-scrubbed), and the same read-only contract holds,
-the server has no write tool and imports no store write API. Tool-handler
-failures return as structured MCP tool-call errors; they never terminate
-the server. `--config <aqueduct.yml>` scopes every tool call to one engine
-config (a client-supplied `config_path` argument wins). Requires the
-optional `mcp` dev-tooling extra: `pip install aqueduct-core[mcp]`, a
-local, on-demand diagnostic surface, never part of the data path.
-
-**MCP is for external clients only.** The internal heal LLM (§8.12's
-agentic mode) never speaks MCP: its tool calls go straight through the
-provider API request as native tool-use blocks (`ToolBox` calls
-`tools.call_tool()` in-process, same redaction chokepoint, zero IPC). MCP
-is the transport `aqueduct mcp serve` exposes to an *external* MCP client
-(Claude Desktop, an IDE) that wants the same read-only registry from
-outside the heal loop; the two paths share the registry and the
-redaction guarantee but never share a process boundary or a protocol.
+The internal heal LLM (§8.12's agentic mode) speaks to the registry
+in-process: its tool calls go straight through the provider API request as
+native tool-use blocks (`ToolBox` calls `tools.call_tool()` in-process, the
+same redaction chokepoint, zero IPC).
 
 ## **8.11 Remediation domains**
 
@@ -1357,9 +1338,9 @@ Every domain, present or future, follows the same principle:
   code; the agent cannot ship an arbitrary script to remediate a failure.
 
 Diagnostics are domain-aware and read-only: the tool registry (§8.10) gives
-the agent (and any future MCP client) visibility into a domain's state,
-patch history, run outcomes, probe signals: without ever granting it a
-write handle. Framing self-healing this way keeps each domain's contract
+the agent visibility into a domain's state, patch history, run outcomes,
+probe signals: without ever granting it a write handle. Framing self-healing
+this way keeps each domain's contract
 explicit and gives any domain added later the same shape to slot into,
 rather than a one-off extension of the patch grammar.
 

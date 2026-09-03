@@ -160,9 +160,9 @@ def test_discover_allowlist_paths_resolves_without_importing_engine_modules():
     aqueduct.executor.spark.engine / aqueduct.executor.duckdb_.engine, which
     would pull in pyspark / register capabilities as a side effect.
 
-    Runs in a FRESH INTERPRETER (subprocess), the same pattern
-    ``tests/test_mcp/test_server.py`` uses to prove ``import aqueduct.mcp``
-    leaves the SDK out of ``sys.modules``.
+    Runs in a FRESH INTERPRETER (subprocess), the same pattern used to prove
+    that importing a module leaves unrelated third-party SDKs out of
+    ``sys.modules``.
 
     An in-process version of this check cannot work: it has to assert the
     engine modules are absent, which is only true if no earlier test in the

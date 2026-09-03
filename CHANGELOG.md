@@ -16,6 +16,10 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Removed
+
+- **BREAKING: `aqueduct mcp serve`, the `aqueduct/mcp/` package, and the `[mcp]` extra are gone, with no shim.** The stdio MCP diagnostics server that exposed the read-only `aqueduct/tools/` `ToolRegistry` over the Model Context Protocol (for MCP clients such as Claude Desktop or an IDE) has been removed outright: `pip install aqueduct-core[mcp]` no longer resolves, `aqueduct mcp serve` no longer exists as a CLI command, and there is no compatibility shim or deprecation warning. The underlying `ToolRegistry` (`aqueduct/tools/`) is unaffected and continues to back the agentic-heal `ToolBox` and the `blueprint_history` CLI tool; only the MCP transport on top of it is removed. Diagnostics remain available through the existing CLI equivalents (`aqueduct report`, `aqueduct runs`, `aqueduct lineage`, `aqueduct blueprint history`, `aqueduct doctor`). (`aqueduct/mcp/`, `aqueduct/cli/mcp.py`; tests: `tests/test_mcp/`, `tests/test_cli/test_cli_mcp.py`; docs: `docs/cli_reference.md`, `docs/specs.md` §8.10)
+
 ### Changed
 
 - **BREAKING: `aqueduct run --resume <run_id>` now fails closed on a manifest-hash mismatch.** Previously a `--resume` against a checkpointed run whose Manifest had since changed either silently proceeded with a suppressible warning (module checkpoints) or silently re-executed from scratch with no signal at all (cross-engine handoff spill). Both paths now refuse up front (`CONFIG_ERROR`), before any engine session is built, naming both the checkpoint's stored manifest hash and the current run's — unless the new `--force` flag is passed, which restores the prior (permissive) behavior exactly. `--force` is only valid together with `--resume`; using it alone is a Click `UsageError` (exit `USAGE_ERROR`, see below). (`aqueduct/cli/run.py`, `aqueduct/executor/spill.py::find_run_under_other_hash`; docs: `docs/cli_reference.md`, `docs/specs.md` §10.4.2/§10.4.3; tests: `tests/test_cli/test_cli_run_resume_force.py`, `tests/test_executor/test_spill.py`)

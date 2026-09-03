@@ -13,7 +13,7 @@ the exact bug the capability framework was just fixed to prevent. So the tool sh
 
 `dev` is a dev-tooling surface, not a runtime one — it reads and writes source
 files in a checkout of an engine package. It follows the same group conventions
-as `patch`, `stores`, `mcp` and `blueprint`: a `@cli.group`, commands registered
+as `patch`, `stores` and `blueprint`: a `@cli.group`, commands registered
 onto it, re-exported from the bottom of `aqueduct/cli/__init__.py`.
 """
 

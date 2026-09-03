@@ -65,11 +65,9 @@ OpenLineage adds **no** extra — `httpx` is already a base dep.)
 **Documented exception — dev-tooling extras.** The two-axis rule governs
 *runtime-capability* deps (vendor SDKs / store backends used while a pipeline
 runs). A small separate class is allowed for **developer/inspection tooling that
-never runs in the data path**: `dev` (pytest/black/ruff), `dashboard`
+never runs in the data path**: `dev` (pytest/black/ruff) and `dashboard`
 (`streamlit`+`plotly`, for `aqueduct dashboard` — a local, read-only, on-demand
-observability viewer like the Spark UI), and `mcp` (the `mcp` SDK, for `aqueduct
-mcp serve` — the local stdio MCP diagnostics server over the read-only tool
-registry). These stay OUT of `all` and out of the runtime axes — a
+observability viewer like the Spark UI). These stay OUT of `all` and out of the runtime axes — a
 pipeline never needs them, so bundling them into base/`all` would bloat headless
 Spark-driver / CI installs. This is the *only* sanctioned feature-named-extra
 category; it is not a loophole for runtime features (those still follow the axes).
@@ -519,7 +517,6 @@ keep working. Command families live in submodules:
 | `project.py` | `init`, `completion`, `test` |
 | `blueprint.py` | `blueprint` group: `history` (Phase 73 — chronological remediation timeline for one blueprint; merges `stores/queries.py::blueprint_history` with `git_blueprint_commits`; also registered as the `blueprint_history` tool in `aqueduct/tools/`) |
 | `dev.py` | `dev` group: `capabilities` sub-group (`scaffold`, `sync`, `check`, `docs`) — the SHIPPED engine-authoring tooling (Phase 78). Logic lives in `aqueduct/executor/capability_tooling.py`; this module is rendering + exit codes only |
-| `mcp.py` | `mcp` group: `serve` (Phase 74 — stdio MCP server over `aqueduct/tools/`; guards on `find_spec("mcp")` with an `[mcp]`-extra install hint, same pattern as `dashboard`/`streamlit`; the server itself lives in `aqueduct/mcp/server.py`) |
 
 **Rules:** submodules import the group + non-patched helpers from `aqueduct.cli`;
 the 6 monkeypatched helpers (`_agent_usable`, `_resolve_obs_db`,
@@ -539,8 +536,8 @@ helpers go in `__init__`.
 Every handler is a thin wrapper over `stores/queries.py` (never inline SQL) —
 add a new tool by adding a query function there first, then a `_handler` +
 `register(Tool(...))` call in `registry.py`. This is the enumeration surface
-the MCP server (below) and the agentic-heal ToolBox (`agent/toolbox.py`)
-both read from — see specs.md §8.10.
+the agentic-heal ToolBox (`agent/toolbox.py`) reads from — see specs.md
+§8.10.
 
 ### `aqueduct/dev/` — extension-seam scaffolds (`aqueduct dev scaffold`, Phase 78)
 
@@ -552,19 +549,6 @@ both read from — see specs.md §8.10.
 Rendering lives in `aqueduct/cli/dev.py`; generators return values. Adding a seam →
 add a generator here + its acceptance test (the stub must load through that seam's
 REAL loader, never a string comparison).
-
-### `aqueduct/mcp/` — stdio MCP server over the ToolRegistry (Phase 74)
-
-| Module | What it owns |
-|--------|--------------|
-| `server.py` | `build_tool_declarations()` (pure, SDK-free: registry Tools → MCP declaration dicts, `params_schema` passed through verbatim — fix a malformed schema in `tools/registry.py`, never translate here), `_build_server()` + `serve()` (lazy-import the `mcp` SDK — the `[mcp]` dev-tooling extra; stdio transport only). Invocation goes through `tools.call_tool()` ONLY (the redaction chokepoint); handler exceptions are re-raised with `redaction.redact()`-scrubbed messages so the SDK's structured `isError` result never leaks a secret. `--config` is injected into calls whose tool accepts `config_path` (client-set value wins). NO store write APIs anywhere in the module (a test greps for them). Omitted from the plain `coverage` job (`pyproject [tool.coverage.run] omit`) — covered by the `mcp-tests` CI job with the extra installed. |
-| `__init__.py` | Re-export shim (`serve`, `build_tool_declarations`); top-level `import aqueduct.mcp` must never pull the SDK |
-
-Package is named `aqueduct/mcp/` (not `mcp_`) — absolute imports mean an
-`import mcp` inside it still resolves the SDK; verified by a source-scan
-structural test (`test_server_module_top_level_is_sdk_free`) plus a
-subprocess `sys.modules` check (`test_import_aqueduct_mcp_leaves_sdk_out_of_sys_modules`),
-both in `tests/test_mcp/test_server.py`.
 
 ### `aqueduct/integrations/` — third-party orchestrator bindings
 
@@ -938,7 +922,6 @@ push to `feat/**` or `phase/**`, and PRs into `main`/`feat/**`/`phase/**`.
 | `stores-tests` | `aqueduct/stores/**`, `tests/test_stores/**`, `tests/test_depot/**` (PG + Redis services) | `pytest tests/test_stores/ tests/test_depot/ tests/test_benchmark_store.py` — no `-m` filter: this job is the ONLY pre-merge lane pointing at those two directories, so a `unit`-marked test living in either (mocked, no real PG/Redis touched) needs to run here too, alongside the genuinely-`integration` ones and the one `spark`-marked test |
 | `misc-tests` | `aqueduct/models.py`, `utils.py`, `lint.py`, `overrides.py`, `infra/module_loading.py`, `integrations/airflow/**`, `compiler/warnings/**`, `executor/spark/warnings/**`, `templates/default/aqueduct.yml.template`, `.github/workflows/**`, `requirements/**`, `pyproject.toml`, or their tests | `pytest tests/test_airflow.py tests/test_backlog.py tests/test_infra_http.py tests/test_lint.py tests/test_meta_ci.py tests/test_meta_quality.py tests/test_models.py tests/test_module_loading.py tests/test_overrides.py tests/test_utils.py tests/test_template_warning_sync.py -m "not spark"` — groups loose top-level `tests/test_*.py` files with no dedicated subdirectory/lane of their own (the same way `config-tests` already groups its own); none of these were referenced by path in any pre-merge job before, including `test_meta_ci.py` and `test_meta_quality.py` themselves |
 | `tools-tests` | `aqueduct/tools/**`, `aqueduct/stores/**`, `aqueduct/doctor/**`, or `tests/test_tools/**` | `pytest tests/test_tools/ -m "not spark"` |
-| `mcp-tests` | `aqueduct/mcp/**`, `aqueduct/tools/**`, or `tests/test_mcp/**` (installs the `mcp` extra) | `pytest tests/test_mcp/ -m "not spark"` |
 | `capabilities-tests` | `aqueduct/executor/capabilities.py`, `capability_leaves.py`, `config_leaves.py`, `channel_ops.py`, `spark/capabilities.py`, `duckdb_/capabilities.py`, `aqueduct/compiler/capability_check.py`, `aqueduct/config.py`, `aqueduct/doctor/**`, or `tests/test_capabilities/**` | `pytest tests/test_capabilities/ -m "not spark"` |
 | `duckdb-tests` | `aqueduct/executor/duckdb_/**` or `tests/test_executor_duckdb/**` | `pytest tests/test_executor_duckdb/ -m "not spark"` |
 | `typehub-tests` | `aqueduct/typehub.py` or `tests/test_typehub/**` | `pytest tests/test_typehub/ -m "not spark"` |

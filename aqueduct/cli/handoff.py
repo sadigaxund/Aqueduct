@@ -4,7 +4,7 @@ A ``handoff`` group (not a flat ``handoff-sweep`` command): unlike ``report``
 (which could not become a click ``Group`` because it already carries an
 optional positional argument, forcing the ``report-prune``/``report-costs``
 flat-command precedent), there is no pre-existing ``handoff`` command for
-``sweep`` to collide with, and ``patch``/``stores``/``mcp``/``blueprint``/
+``sweep`` to collide with, and ``patch``/``stores``/``blueprint``/
 ``dev`` already establish "a bare noun is a group" as the repo's default
 shape. ``sweep`` is the group's first verb; a future ``handoff list`` or
 ``handoff show <run_id>`` has a natural home here.

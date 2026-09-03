@@ -707,7 +707,7 @@ _CAPABILITY_AGGREGATES = {"secrets", "stores", "schedulers", "all"}
 _ENGINE_LEAVES = {"spark", "duckdb"}
 # Dev-tooling extras: the one documented exception to the two-axis rule.
 # Never a runtime-capability dep, never in `all`.
-_DEV_TOOLING_EXTRAS = {"dev", "mcp"}
+_DEV_TOOLING_EXTRAS = {"dev"}
 
 # Runtime-capability leaves that must roll up into a capability aggregate —
 # per-vendor leaves belonging to `secrets`/`stores`/`schedulers`. Engine

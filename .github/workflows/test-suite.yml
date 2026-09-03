@@ -43,7 +43,6 @@ jobs:
       gallery:   ${{ steps.filter.outputs.gallery }}
       drift:     ${{ steps.filter.outputs.drift }}
       tools:     ${{ steps.filter.outputs.tools }}
-      mcp:       ${{ steps.filter.outputs.mcp }}
       capabilities: ${{ steps.filter.outputs.capabilities }}
       duckdb:    ${{ steps.filter.outputs.duckdb }}
       typehub:   ${{ steps.filter.outputs.typehub }}
@@ -117,10 +116,6 @@ jobs:
               - 'aqueduct/stores/**'
               - 'aqueduct/doctor/**'
               - 'tests/test_tools/**'
-            mcp:
-              - 'aqueduct/mcp/**'
-              - 'aqueduct/tools/**'
-              - 'tests/test_mcp/**'
             capabilities:
               - 'aqueduct/executor/capabilities.py'
               - 'aqueduct/executor/capability_leaves.py'
@@ -475,35 +470,6 @@ jobs:
           pytest tests/test_capabilities/ -m "not spark" --junitxml=results.xml
           rc=$?
           python scripts/ci-summary.py results.xml --name "Capabilities"
-          exit $rc
-
-  mcp-tests:
-    needs: changes
-    if: ${{ needs.changes.outputs.mcp == 'true' || github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-      # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env.
-      # A stale/missing entry still re-resolves and re-verifies every
-      # package; this only skips re-downloading wheels pip already has by
-      # exact filename/hash, so it cannot change what version gets installed.
-      # Same key as every other python-3.11 / ci-py311.txt job on purpose —
-      # they share one dependency tree, so they should share one cache entry.
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
-          restore-keys: |
-            pip-${{ runner.os }}-py3.11-
-      - run: pip install -e ".[dev,mcp]"
-      - run: |
-          set +e
-          pytest tests/test_mcp/ -m "not spark" --junitxml=results.xml
-          rc=$?
-          python scripts/ci-summary.py results.xml --name "MCP"
           exit $rc
 
   duckdb-tests:
