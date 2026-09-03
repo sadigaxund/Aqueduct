@@ -46,7 +46,6 @@ leaves:
   agent.field.patch_validation: supported
   agent.field.progressive: supported
   agent.field.prompt_context: supported
-  agent.field.regression_artifact: supported
   agent.field.sandbox_mode: supported
   agent.field.supports_tools: supported
   agent_guardrails.field.allowed_paths: supported

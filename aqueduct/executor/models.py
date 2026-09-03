@@ -302,8 +302,8 @@ def _collect_module_warnings() -> tuple[tuple[str, str], ...]:
 # contract that can run against fixture data; an Ingress/Egress/Probe/
 # Regulator/Arcade does not), not of which engine runs it — so this lives
 # here, engine-agnostic, rather than only inside spark/test_runner.py.
-# Audit-fixed 2026-08: aqueduct/agent/regression_artifact.py previously
-# imported test_runner.py's PRIVATE `_TESTABLE_TYPES` directly
+# Audit-fixed 2026-08: a former aqueduct/agent/ module previously imported
+# test_runner.py's PRIVATE `_TESTABLE_TYPES` directly
 # (`from aqueduct.executor.spark.test_runner import _TESTABLE_TYPES`) — a
 # private-symbol cross-module import that also violated AGENTS.md's "do
 # NOT re-add an engine import to aqueduct/agent/" rule (agent/ resolves

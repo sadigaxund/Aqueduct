@@ -145,7 +145,6 @@ class TestPolicyFieldsStillLegalOnBlueprint:
         assert s.max_heal_attempts_per_hour is None
         assert s.patch_validation is None
         assert s.block_on_explain_regression is None
-        assert s.regression_artifact is None
 
     def test_shared_policy_field_override_accepted(self):
         s = AgentSchema(mode="agentic", max_tool_calls=3, progressive=True, max_chain=5)
@@ -191,7 +190,6 @@ class TestEngineAgentConnectionConfigAcceptsFullSet:
         assert cfg.max_reprompts == 3
         assert cfg.patch_validation == "full_run"
         assert cfg.block_on_explain_regression is False
-        assert cfg.regression_artifact is False
 
     def test_engine_only_policy_fields_have_no_blueprint_equivalent(self):
         # approval/on_pending_patches/max_patches/guardrails/

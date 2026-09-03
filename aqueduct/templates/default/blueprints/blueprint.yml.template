@@ -296,15 +296,6 @@ agent:
   #               ⚠ DANGER COMBO line at startup; use only on tiny trusted scopes.
   # sandbox_mode: sample
 
-  # regression_artifact: on a SUCCESSFUL heal (patch applied AND the re-run
-  # succeeded), optionally emit an `.aqtest.yml` regression test for the
-  # patched module under `aqtests/` next to this Blueprint — guards against
-  # the fix being silently undone later (hand-edit, SQL refactor, revert).
-  # Conservative: skips (info log, no file) when the healed module/failure
-  # shape can't be expressed as a valid aqtest. Never overwrites a file.
-  # Leave unset to inherit aqueduct.yml agent.regression_artifact (= false).
-  # regression_artifact: false
-
   # mode (agentic heal, opt-in): oneshot (default) is today's single
   # prompt → PatchSpec turn. agentic lets the model call READ-ONLY
   # diagnostic tools (run/patch/lineage history, the Blueprint YAML, a live

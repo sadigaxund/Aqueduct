@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.71: Reference Document**
+**Version 2.72: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -986,7 +986,7 @@ The LLM agent operates within a grammar, not in free-form code generation mode. 
 
 **Model-agnostic design.** The PatchSpec grammar is deliberately narrow, 14 schema-checked operations with no code generation, so the agent works reliably across model sizes. A 7B parameter local model handles ~70% of production failures (path typos, format mismatches, column renames, simple SQL fixes) in a single attempt. Larger models unlock `agent.deep_loop` (in-conversation sandbox feedback) and multi-model cascading for complex cases like OOM tuning and multi-module restructures. The deterministic guardrails, gate pyramid, and structured prompt apply the same safety guarantees regardless of model size.
 
-**The `agent:` block is split by kind, at both levels (2.59).** A Blueprint's `agent:` block is **POLICY-ONLY**: risk decisions about THIS pipeline; `approval`, `on_pending_patches`, `max_patches`, `guardrails`, `confidence_threshold`, `on_heal_failure`, `allow_defer`, `deep_loop`, `sandbox_mode`, plus a shared subset (`max_reprompts`, `mode`, `max_tool_calls`, `supports_tools`, `progressive`, `max_chain`, `prompt_context`, `max_heal_attempts_per_hour`, `patch_validation`, `block_on_explain_regression`, `regression_artifact`) that overrides the engine's own default when set. `aqueduct.yml`'s `agent:` block (`AgentConnectionConfig`) is the **only** place CONNECTION settings live (`provider`, `base_url`, `api_key`, `model`, `provider_options`, `timeout`, `cascade`) an endpoint fact about the deployment, not a per-pipeline decision. A Blueprint cannot set or override any connection field; writing one into a Blueprint's `agent:` block is a schema-level rejection naming the field (`AgentSchema` uses `extra="forbid"`), not a silent no-op. This is the same split already applied to `engine:` (§10.1): `engine.spark`'s Blueprint-level block omits `master_url`, `engine.duckdb`'s omits `database_path`/`s3_*`; a Blueprint does not get to decide deployment/connection concerns. The security reasoning is sharper here: the healing loop ships `FailureContext` (pruned manifest, provenance, error text, and, in agentic mode, sampled data rows) to whichever endpoint is configured, so if a Blueprint could pick that endpoint, any pipeline failure would be an exfiltration opportunity to a host the pipeline's author (not the operator) controls.
+**The `agent:` block is split by kind, at both levels (2.59).** A Blueprint's `agent:` block is **POLICY-ONLY**: risk decisions about THIS pipeline; `approval`, `on_pending_patches`, `max_patches`, `guardrails`, `confidence_threshold`, `on_heal_failure`, `allow_defer`, `deep_loop`, `sandbox_mode`, plus a shared subset (`max_reprompts`, `mode`, `max_tool_calls`, `supports_tools`, `progressive`, `max_chain`, `prompt_context`, `max_heal_attempts_per_hour`, `patch_validation`, `block_on_explain_regression`) that overrides the engine's own default when set. `aqueduct.yml`'s `agent:` block (`AgentConnectionConfig`) is the **only** place CONNECTION settings live (`provider`, `base_url`, `api_key`, `model`, `provider_options`, `timeout`, `cascade`) an endpoint fact about the deployment, not a per-pipeline decision. A Blueprint cannot set or override any connection field; writing one into a Blueprint's `agent:` block is a schema-level rejection naming the field (`AgentSchema` uses `extra="forbid"`), not a silent no-op. This is the same split already applied to `engine:` (§10.1): `engine.spark`'s Blueprint-level block omits `master_url`, `engine.duckdb`'s omits `database_path`/`s3_*`; a Blueprint does not get to decide deployment/connection concerns. The security reasoning is sharper here: the healing loop ships `FailureContext` (pruned manifest, provenance, error text, and, in agentic mode, sampled data rows) to whichever endpoint is configured, so if a Blueprint could pick that endpoint, any pipeline failure would be an exfiltration opportunity to a host the pipeline's author (not the operator) controls.
 
 **Solo vs cascade.** With a single `agent.model:` in `aqueduct.yml`, healing runs **solo**, one model, the flat `agent.*` connection (`model`, `base_url`, `timeout`, `budget`, …). Configuring `agent.cascade:` (also `aqueduct.yml` only) switches to **cascade** mode: a list of tiers tried in the order you define them.
 
@@ -1222,57 +1222,6 @@ failure analytics a record of real failures. Exit codes: `0` (no drift /
 baseline set), `HEAL_PENDING` (patch staged), `DATA_OR_RUNTIME` (source
 undiffable).
 
-## **8.9 Post-heal regression artifacts (opt-in, `agent.regression_artifact`)**
-
-A successful heal fixes today's failure. Nothing stops tomorrow's hand-edit,
-SQL refactor, or `git revert` from silently reintroducing the exact same root
-cause: and without a regression test, the pipeline won't find out until it
-fails in production again. This is a **different job** from the signature
-memory described in §8.1:
-
-| | Signature memory (heal cache) | Post-heal regression artifact |
-| :- | :- | :- |
-| **Triggers on** | The same failure **recurring** in production | A **successful** heal (patch applied AND the re-run succeeded) |
-| **Acts** | AFTER the failure recurs: zero-token patch replay | BEFORE the next run: a CI test run by `aqueduct test` |
-| **Guards against** | Re-solving a known failure with fresh tokens | The fix being **undone** (hand-edit, refactor, revert) |
-| **Failure required to fire?** | Yes: a real pipeline failure | No: catches reintroduction with **no failure and no heal** |
-
-The two are complementary: the same reason a human writes a regression test
-immediately after fixing a bug by hand, in addition to whatever runtime
-safety net already exists.
-
-**Behavior.** When `agent.regression_artifact: true` (default `false`; engine
-default in `aqueduct.yml`, per-blueprint override in the Blueprint `agent:`
-block: `null` inherits the engine value, same inheritance shape as
-`block_on_explain_regression`), a heal that reaches
-`healing_outcomes.run_success_after_patch = true` in `auto` mode's full-run
-validation path optionally emits an `.aqtest.yml` file under `aqtests/` next
-to the Blueprint: the same isolated-module test format `aqueduct test` already
-runs (§ see `docs/cli_reference.md`), auto-populated with a fixture reflecting
-the healed module and a smoke assertion. The test exists purely to fail loudly
-if the patched module ever throws again on the same input shape, i.e. if the
-fix is undone.
-
-**Generation is conservative: it never emits a broken test file.** Aqueduct
-only builds a `.aqtest.yml` when the patch shape maps cleanly onto one:
-
-- The patch touches exactly **one** module via `set_module_config_key` or
-  `replace_module_config` (multi-module or structural patches are skipped,
-  their regression risk isn't expressible as a single-module fixture test).
-- The patched module's type is one `aqueduct test` can run in isolation
-  (`Channel`, `Junction`, `Funnel`, `Assert`: Ingress/Egress are out of scope,
-  same limitation the test framework itself has).
-- Every direct upstream module supplying the patched module declares a
-  `schema_hint` Aqueduct can turn into one synthetic fixture row (Spark SQL
-  DDL type → a small in-domain dummy value; an unmapped type skips
-  generation).
-
-Any other shape: no schema_hint to synthesize from, an untestable module
-type, a multi-module patch: produces an **info-level skip message**, not a
-file. Generation never overwrites an existing file (uniquifies the filename
-instead) and never blocks or fails the heal itself, it is strictly
-best-effort after the heal has already succeeded.
-
 ## **8.10 Diagnostics & the Tool Registry**
 
 `aqueduct/tools/` holds a single internal **ToolRegistry**: the enumeration
@@ -1362,7 +1311,7 @@ By default (`agent.mode: oneshot`) a heal is a single prompt → PatchSpec
 turn (plus reprompts on an invalid response, §8.2), exactly the flow this
 document describes elsewhere in §8. Setting `agent.mode: agentic` (engine
 `aqueduct.yml` default, per-blueprint override: same `None` = inherit
-shape as `agent.regression_artifact`) lets the model call **read-only**
+shape as `agent.block_on_explain_regression`) lets the model call **read-only**
 diagnostic tools before answering, so it can investigate the failure
 instead of guessing from the failure report alone.
 
@@ -1427,7 +1376,7 @@ model can diagnose bug #1 correctly on every single attempt and it is
 thrown away every time, because the pipeline still fails downstream at bug
 #2 and nothing carries bug #1's fix forward. `agent.progressive` (default
 `False`, engine `aqueduct.yml` + per-blueprint override: same `None` =
-inherit shape as `agent.regression_artifact`/`agent.mode`) fixes this
+inherit shape as `agent.block_on_explain_regression`/`agent.mode`) fixes this
 independently of `max_patches`, whose semantics stay **unchanged**: N
 independent retries of the same failure.
 

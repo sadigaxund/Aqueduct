@@ -169,7 +169,6 @@ class AgentPolicySchema(BaseModel):
     max_heal_attempts_per_hour: int | None = Field(default=None, ge=1)
     patch_validation: Literal["full_run", "sandbox"] | None = None
     block_on_explain_regression: bool | None = None
-    regression_artifact: bool | None = None
     mode: Literal["oneshot", "agentic"] | None = None
     max_tool_calls: int | None = Field(default=None, ge=1)
     supports_tools: Literal["auto", True, False] | None = None

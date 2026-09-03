@@ -498,7 +498,6 @@ def parse_dict(
             patch_validation=validated.agent.patch_validation,
             block_on_explain_regression=validated.agent.block_on_explain_regression,
             sandbox_mode=validated.agent.sandbox_mode,
-            regression_artifact=validated.agent.regression_artifact,
             mode=validated.agent.mode,
             max_tool_calls=validated.agent.max_tool_calls,
             supports_tools=validated.agent.supports_tools,

@@ -145,9 +145,6 @@ class AgentConfig:
     # (full dataset, requires danger.allow_full_preflight), "off" (skip,
     # requires danger.allow_skip_sandbox).
     sandbox_mode: str = "sample"
-    # Opt-in post-heal regression artifact. None = inherit engine default
-    # (agent.regression_artifact in aqueduct.yml, False if also unset).
-    regression_artifact: bool | None = None
     # Phase 75 — agentic heal mode. None = inherit engine default
     # (agent.mode in aqueduct.yml, "oneshot" if also unset).
     mode: str | None = None
@@ -180,7 +177,6 @@ class AgentConfig:
             "confidence_threshold": self.confidence_threshold,
             "patch_validation": self.patch_validation,
             "block_on_explain_regression": self.block_on_explain_regression,
-            "regression_artifact": self.regression_artifact,
             "mode": self.mode,
             "progressive": self.progressive,
             "max_chain": self.max_chain,

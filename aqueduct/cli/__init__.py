@@ -214,7 +214,7 @@ def resolve_agent_connection(engine_agent, blueprint_agent=None):
     r.max_reprompts = (bp.max_reprompts or eng.max_reprompts) if bp else eng.max_reprompts
     r.engine_prompt_context = eng.prompt_context
     r.blueprint_prompt_context = bp.prompt_context if bp else None
-    # Phase 75 — same `is not None` inheritance shape as regression_artifact:
+    # Phase 75 — same `is not None` inheritance shape as block_on_explain_regression:
     # these are tri-state (None must mean "inherit"), so `or` merge is wrong
     # (a blueprint explicitly setting supports_tools: false is falsy but valid).
     r.mode = bp.mode if bp and bp.mode is not None else eng.mode

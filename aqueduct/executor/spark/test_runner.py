@@ -196,8 +196,8 @@ def _sql_literal(val: Any) -> str:
 # Which module types are testable in isolation is engine-agnostic (a property
 # of the type itself) — the canonical set lives in
 # aqueduct/executor/models.py::TESTABLE_MODULE_TYPES (imported above as
-# _TESTABLE_TYPES) so agent/regression_artifact.py doesn't have to import a
-# private symbol out of this pyspark-importing module.
+# _TESTABLE_TYPES) so other modules don't have to import a private symbol
+# out of this pyspark-importing module.
 
 
 def _execute_module(

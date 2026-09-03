@@ -12,7 +12,7 @@ named). Per-blueprint POLICY (approval, on_pending_patches, max_patches,
 guardrails, ...) lives in the Blueprint agent: block; a shared subset of
 policy fields (max_reprompts, mode, max_tool_calls, supports_tools,
 progressive, max_chain, prompt_context, max_heal_attempts_per_hour,
-patch_validation, block_on_explain_regression, regression_artifact) is
+patch_validation, block_on_explain_regression) is
 ALSO settable here as the engine-wide default, and the Blueprint's own
 value, when set, wins — see aqueduct.cli.resolve_agent_connection. See
 AgentConnectionConfig's docstring below for the full rationale.
@@ -810,7 +810,7 @@ class AgentConnectionConfig(AgentPolicySchema):
     with the Blueprint (``max_reprompts``, ``mode``, ``max_tool_calls``,
     ``supports_tools``, ``progressive``, ``max_chain``, ``prompt_context``,
     ``max_heal_attempts_per_hour``, ``patch_validation``,
-    ``block_on_explain_regression``, ``regression_artifact``) — each
+    ``block_on_explain_regression``) — each
     overridden below with this level's concrete engine-wide default (the
     base class's default is ``None``, meaning "inherit", which has no
     meaning at the level that IS the thing being inherited from). A
@@ -959,26 +959,6 @@ class AgentConnectionConfig(AgentPolicySchema):
             "Phase 46 — retry on transient provider errors (429/503/529) with "
             "exponential backoff, capped by the heal budget deadline."
         ),
-    )
-    regression_artifact: bool = Field(
-        default=False,
-        description=(
-            "When True, a SUCCESSFUL heal (patch applied AND the re-run "
-            "succeeded) optionally emits an `.aqtest.yml` regression test for "
-            "the patched module under `aqtests/` next to the Blueprint, so a "
-            "later hand-edit/SQL refactor/revert that reintroduces the root "
-            "cause is caught by `aqueduct test` before the next production "
-            "run instead of by another heal. Complementary to signature-"
-            "memory heal-cache replay, not a replacement for it: the cache "
-            "resolves a RECURRING failure for zero tokens; this artifact is "
-            "a CI guard against the FIX being undone. Generation is "
-            "conservative — it silently no-ops (info log only) whenever the "
-            "healed failure/module shape can't be expressed as a valid "
-            "aqtest (e.g. non-testable module type, no upstream schema_hint "
-            "to synthesize fixture rows from, or a multi-module patch). "
-            "Default False. Per-blueprint override: agent.regression_artifact."
-        ),
-        json_schema_extra={"engine_scoped": False},
     )
     mode: Literal["oneshot", "agentic"] = Field(
         default="oneshot",

@@ -2946,44 +2946,6 @@ def run(
                         hook_status="healed",
                         ctx=failure_ctx,
                     )
-                    # Opt-in (agent.regression_artifact): a SUCCESSFUL heal — patch
-                    # applied AND the re-run just succeeded — may emit an .aqtest.yml
-                    # CI regression guard for the patched module. Different job from
-                    # the signature-memory heal cache above: this catches the fix
-                    # being undone later (hand-edit/SQL refactor/revert), not a
-                    # recurring production failure. Best-effort — never blocks heal.
-                    _regression_artifact = (
-                        manifest.agent.regression_artifact
-                        if manifest.agent.regression_artifact is not None
-                        else cfg.agent.regression_artifact
-                    )
-                    if _regression_artifact:
-                        from aqueduct.agent.regression_artifact import (
-                            generate as _gen_regression_artifact,
-                        )
-                        from aqueduct.cli.render.style import info as _ra_info
-                        from aqueduct.cli.render.style import success as _ra_success
-
-                        try:
-                            _ra_result = _gen_regression_artifact(
-                                new_manifest, patch, failure_ctx, Path(blueprint)
-                            )
-                            # style.* status functions print directly and return
-                            # None — never wrap them in click.echo (stray blank
-                            # line + message on the wrong stream).
-                            if _ra_result.written:
-                                _ra_success(
-                                    f"regression test written → {_ra_result.path}", err=True
-                                )
-                            else:
-                                _ra_info(
-                                    f"regression artifact skipped: {_ra_result.skip_reason}",
-                                    err=True,
-                                )
-                        except Exception as _ra_exc:
-                            # Best-effort: never let artifact generation break a
-                            # successful heal.
-                            _ra_info(f"regression artifact generation failed: {_ra_exc}", err=True)
                     # Phase 85 Wave 2 — re-list the (now fixed) tree so a
                     # piped log tells the whole story without cross-
                     # referencing the heal block above (SCREEN 2 notes).
