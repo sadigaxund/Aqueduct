@@ -6,7 +6,6 @@ tools must degrade to a structured "unavailable" result, never raise).
 
 from __future__ import annotations
 
-import sys
 import types
 from unittest.mock import MagicMock, patch
 
@@ -38,7 +37,6 @@ class TestDeclarations:
             "patch_list",
             "patch_show",
             "probe_signals",
-            "blueprint_history",
             "read_blueprint",
             "get_source_schema",
             "sample_rows",

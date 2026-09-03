@@ -5,7 +5,7 @@ that ``loop.py``'s agentic-mode conversation drives:
 
 - **Registry diagnostics** (Phase 73's ``aqueduct/tools/registry.py``) —
   ``list_runs``, ``run_detail``, ``lineage``, ``patch_list``, ``patch_show``,
-  ``probe_signals``, ``blueprint_history``. Invoked ONLY via
+  ``probe_signals``. Invoked ONLY via
   ``aqueduct.tools.call_tool()`` — the redaction chokepoint — never a handler
   directly. ``doctor`` is deliberately excluded here: it is a health-probe,
   not a failure-diagnosis tool, and its Spark/network checks are out of place
@@ -47,7 +47,6 @@ _REGISTRY_TOOL_NAMES: tuple[str, ...] = (
     "patch_list",
     "patch_show",
     "probe_signals",
-    "blueprint_history",
 )
 
 # Size cap for read_blueprint — a pathological Blueprint YAML shouldn't blow

@@ -4,7 +4,7 @@ Wave 1 built the render funnel (``aqueduct/cli/render/{funnel,wrap,width,
 tables}.py``) and wired it into ``run.py``/``patch.py``/``diagnostics.py``.
 Wave 2 (this worker) rewires the remaining raw ``click.echo`` call sites in
 ``observability.py``, ``project.py``, ``dev.py``, ``benchmark.py``,
-``drift.py``, ``blueprint.py``, ``stores.py``, and ``hooks.py``.
+``drift.py``, ``stores.py``, and ``hooks.py``.
 
 These tests assert the property that matters, not the exact copy: narrative
 lines land on stderr, the final/structured result lands on stdout, a
@@ -16,7 +16,6 @@ never wraps or truncates).
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 
 import duckdb
@@ -120,55 +119,6 @@ def test_dev_scaffold_config_snippet_unwrapped_when_piped(tmp_path):
     # marker, no mid-line ellipsis).
     assert "(more lines)" not in result.stdout
     assert "…" not in result.stdout
-
-
-# ---------------------------------------------------------------------------
-# blueprint.py — the table-format result is on stdout; --format json stays
-# pure JSON with no ANSI leaking in.
-# ---------------------------------------------------------------------------
-
-
-def _seed_history_store(store_dir):
-    conn = duckdb.connect(str(store_dir / "observability.db"))
-    from aqueduct.patch.index import PATCH_INDEX_DDL
-    from aqueduct.surveyor.ddl import _DDL, _HEAL_ATTEMPTS_DDL
-
-    conn.execute(_DDL)
-    conn.execute(_HEAL_ATTEMPTS_DDL)
-    conn.execute(PATCH_INDEX_DDL)
-    conn.execute(
-        "INSERT INTO run_records VALUES "
-        "('run1','bp1','error','2026-01-01T00:00:00','2026-01-01T00:01:00', '[]', NULL, NULL)"
-    )
-    conn.execute(
-        "INSERT INTO heal_attempts (id, run_id, attempt_num, recorded_at) "
-        "VALUES ('a1','run1',1,'2026-01-01T00:00:30')"
-    )
-    conn.close()
-
-
-def test_blueprint_history_no_activity_message_on_stdout(tmp_path):
-    store_dir = tmp_path / "store"
-    store_dir.mkdir()
-    _seed_history_store(store_dir)
-
-    result = _invoke(["blueprint", "history", "no-such-bp", "--store-dir", str(store_dir)])
-    assert result.exit_code == 0, result.output
-    assert "No remediation history for blueprint 'no-such-bp'." in result.stdout
-
-
-def test_blueprint_history_json_is_clean_stdout(tmp_path):
-    store_dir = tmp_path / "store"
-    store_dir.mkdir()
-    _seed_history_store(store_dir)
-
-    result = _invoke(
-        ["blueprint", "history", "bp1", "--store-dir", str(store_dir), "--format", "json"]
-    )
-    assert result.exit_code == 0, result.output
-    assert "\x1b[" not in result.stdout
-    data = json.loads(result.stdout)
-    assert data["blueprint_id"] == "bp1"
 
 
 # ---------------------------------------------------------------------------

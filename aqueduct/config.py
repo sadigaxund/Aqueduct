@@ -986,7 +986,7 @@ class AgentConnectionConfig(AgentPolicySchema):
             "Phase 75 — 'oneshot' (default) is today's single-turn prompt→"
             "PatchSpec loop, unchanged. 'agentic' lets the model call "
             "read-only diagnostic tools (list_runs, run_detail, lineage, "
-            "patch_list/show, probe_signals, blueprint_history, "
+            "patch_list/show, probe_signals, "
             "read_blueprint, get_source_schema, sample_rows) before "
             "answering with a PatchSpec — see docs/specs.md §8.11. "
             "Per-blueprint override: agent.mode."

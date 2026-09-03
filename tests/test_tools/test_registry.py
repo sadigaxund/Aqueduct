@@ -47,7 +47,6 @@ def test_registry_has_expected_built_ins():
         "patch_show",
         "probe_signals",
         "doctor",
-        "blueprint_history",
     }
 
 

@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.70: Reference Document**
+**Version 2.71: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -1302,7 +1302,6 @@ is:
 | `patch_show` | `patch/index.py` + `queries.load_patch_file` | One patch's metadata (+ body, best-effort) |
 | `probe_signals` | `queries.probe_signals` | Probe signal payloads for a blueprint |
 | `doctor` | `aqueduct.doctor.run_doctor` | Structured `CheckResult`s (supports `skip_spark`) |
-| `blueprint_history` | `queries.blueprint_history` + git (§8.11) | The remediation timeline below, as a tool |
 
 **Reserved extensibility seam: not implemented.** `AQ_TOOLS_ENTRYPOINT_GROUP
 = "aqueduct.tools"` names the setuptools entry-point group a custom-tool
@@ -1369,8 +1368,8 @@ instead of guessing from the failure report alone.
 
 **Tool list.** Every tool registry entry (§8.10) except `doctor` (a
 health-probe, not a failure-diagnosis tool): `list_runs`, `run_detail`,
-`lineage`, `patch_list`, `patch_show`, `probe_signals`,
-`blueprint_history`: plus three heal-context tools built for this mode:
+`lineage`, `patch_list`, `patch_show`, `probe_signals`: plus three
+heal-context tools built for this mode:
 
 | Tool | Returns | Notes |
 | :- | :- | :- |

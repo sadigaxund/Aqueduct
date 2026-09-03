@@ -529,6 +529,5 @@ inheriting tier, but not a tier that declares its own `timeout:`).
 
 A failing run isn't a dead end — it's inspectable through the same read-only
 diagnostics tools the self-healer itself uses, via their CLI equivalents:
-`aqueduct report`, `aqueduct runs`, `aqueduct lineage`,
-`aqueduct blueprint history`, and `aqueduct doctor`. See `docs/specs.md`
-§8.10 for the full tool registry.
+`aqueduct report`, `aqueduct runs`, `aqueduct lineage`, and `aqueduct doctor`.
+See `docs/specs.md` §8.10 for the full tool registry.

@@ -1527,7 +1527,6 @@ if __name__ == "__main__":
 
 # ── extracted command families (registered + re-exported) ──────────────────────
 from .benchmark import benchmark, benchmark_diff_cmd, benchmark_stats_cmd  # noqa: E402,F401
-from .blueprint import blueprint_group, blueprint_history_cmd  # noqa: E402,F401
 from .compile_cmd import compile  # noqa: E402,F401
 from .dev import (  # noqa: E402,F401
     capabilities_check,

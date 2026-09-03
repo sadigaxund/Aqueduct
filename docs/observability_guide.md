@@ -844,40 +844,6 @@ $ aqueduct report-costs --store-dir .aqueduct
 $ aqueduct report-costs --blueprint my.pipeline --format json
 ```
 
-### Blueprint remediation timeline
-
-**When:** a blueprint has been through several heal cycles and hand-edits,
-and you need one chronological answer to "what actually happened to this
-pipeline definition": did a patch fix it, did someone revert the fix by
-hand, is there a pending patch waiting on review.
-
-**What you learn:** `aqueduct blueprint history <id|blueprint.yml>` joins
-`patch_index` (status transitions) with `healing_outcomes`
-(`run_success_after_patch`, confidence) and, when a blueprint **file path**
-is given and the file is git-tracked, the file's git commit history, a
-commit carrying no `---aqueduct---` trailer (the same trailer `aqueduct
-patch commit`/`import` write) is shown as a manual edit.
-
-```
-$ aqueduct blueprint history pipelines/orders.yml
-
-Blueprint history — orders_pipeline
-
-  · 2026-01-01 00:00:00  heal_run_started   heal run started (run_id=run1)
-  ✓ 2026-01-01 00:02:00  patch_apply        patch applied: fix null check  confidence=0.90  [a1b2c3d]
-  ✓ 2026-01-01 00:03:00  outcome            run succeeded after patch
-  ⚠ 2026-01-05 09:12:00  manual_edit        manual edit: tweak retry count
-```
-
-**What to do next:** a `manual_edit` shortly after a `patch_apply` for the
-same failure signature is the classic "the fix got reverted by hand"
-pattern: cross-check with `aqueduct patch log <blueprint.yml>` (git-only
-view) or `aqueduct report --trend <column> --blueprint <id>` to see whether
-the original failure mode is trending back. `--format json` gives the same
-event list as structured records for scripting. This command also backs the
-`blueprint_history` diagnostics tool (`aqueduct/tools/`, specs.md §8.10):
-the same query logic, callable without the CLI.
-
 ### Column lineage
 
 ```sql
@@ -898,7 +864,6 @@ columns or aggregation tables:
 | `runs_over_time` | `list[DayCount]` | Daily run counts over a configurable window (`days` default 30) |
 | `failure_categories` | `dict[str, int]` | Count of failures grouped by `error_class` |
 | `heal_coverage` | `dict[str, int]` | Heals resolved by the signature memory cache (`memory`) vs the LLM (`agent`), per blueprint |
-| `blueprint_history` | `list[BlueprintHistoryEvent]` | One blueprint's store-side remediation timeline (heal run starts, patch apply/reject, outcomes), `aqueduct blueprint history` merges this with `git_blueprint_commits` for the full picture |
 | `gate_rejection_rates` | `dict[str, int]` | Count of `patch_simulation` rows with `status = 'fail'`, per `gate` (`engine_config`/`lineage`/`sandbox`/`explain`/`resolvability`). `warn`, `not_applicable` and `unavailable` are not rejections: see the function's docstring for why. Note `unavailable` is not a rejection but *is* blocking for the `sandbox` gate, so a rising `unavailable` count means heals are stalling for humans without any patch being judged wrong; count it separately rather than reading it as health. A rising `resolvability` `warn` count (not counted here, see above) similarly means heals are stalling on missing packages rather than bad patches. Falls back to `heal_attempts.gate_that_rejected` counts when `patch_simulation` is unavailable |
 
 DuckDB: the functions iterate discovered per‑pipeline files. Postgres: a single
@@ -924,7 +889,6 @@ read‑only role.
 | Column lineage             | `aqueduct lineage <blueprint.yml>`        |
 | Override a Probe signal    | `aqueduct signal <signal_id> --value false` |
 | Heal a failed run          | `aqueduct heal <run_id>`                  |
-| Remediation timeline for a blueprint | `aqueduct blueprint history <blueprint.yml>` |
 | Cascade tier vs outcome    | `aqueduct runs --cascade`                 |
 | LLM cost per blueprint per month | `aqueduct report-costs`             |
 | Deep-clean old rows        | `aqueduct report-prune`                   |

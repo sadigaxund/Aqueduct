@@ -2,8 +2,7 @@
 
 The single enumeration surface a future MCP server and an agentic ToolBox
 will both read from — today it backs `call_tool()` / `get_tools()` (used by
-tests) and the `blueprint_history` tool, which dogfoods the registry from
-`aqueduct/cli/blueprint.py`.
+tests).
 
 Design:
 - Every ``Tool`` is a thin wrapper over an EXISTING read function — never
@@ -260,21 +259,6 @@ def _doctor(
     return {"passed": not any(c["status"] == "fail" for c in checks), "checks": checks}
 
 
-def _blueprint_history(
-    blueprint_id: str,
-    blueprint_path: str | None = None,
-    config_path: str | None = None,
-    store_dir: str | None = None,
-) -> list[dict]:
-    # Reuses the CLI's merge helper (store events + git commits) so the
-    # registry tool and `aqueduct blueprint history` never drift apart.
-    from aqueduct.cli.blueprint import blueprint_history_events
-
-    cfg = _load_cfg(config_path)
-    path = Path(blueprint_path) if blueprint_path else None
-    return blueprint_history_events(cfg, blueprint_id, path, store_dir=store_dir)
-
-
 # ── registration ─────────────────────────────────────────────────────────────
 
 register(
@@ -402,24 +386,5 @@ register(
             },
         },
         handler=_doctor,
-    )
-)
-
-register(
-    Tool(
-        name="blueprint_history",
-        description="Chronological remediation timeline for one blueprint "
-        "(heal runs, patch apply/reject, outcomes, manual git edits).",
-        params_schema={
-            "type": "object",
-            "properties": {
-                "blueprint_id": {"type": "string"},
-                "blueprint_path": {"type": ["string", "null"], "default": None},
-                "config_path": {"type": ["string", "null"], "default": None},
-                "store_dir": {"type": ["string", "null"], "default": None},
-            },
-            "required": ["blueprint_id"],
-        },
-        handler=_blueprint_history,
     )
 )
