@@ -1,6 +1,6 @@
-# Progressive multi-patch healing
+# Chained multi-patch healing
 
-Demonstrates `agent.progressive`: chained multi-patch self-healing. The
+Demonstrates chained multi-patch self-healing. The
 pre-existing `max_patches > 1` loop re-diagnoses the SAME first failure on
 every attempt. It patches a candidate in memory, re-runs, and if the
 pipeline still fails, discards the candidate and starts over against the
@@ -18,11 +18,11 @@ pip install -r requirements.txt
 
 `blueprint_bugged.yml` is the deliberately-broken pipeline this demo is
 built around (see the two bugs below); it's the file the commands below
-run to trigger the progressive chain. `blueprint.yml` is the same
+run to trigger the chain. `blueprint.yml` is the same
 pipeline already healed; it's the file CI's snippet lane runs via
 `aqueduct run blueprint.yml`, so the lane stays green with no LLM key.
-Both files share the identical `agent: {approval: auto, progressive:
-true, max_chain: 3, sandbox_mode: sample}` block.
+Both files share the identical `agent: {approval: auto, max_patches: 3,
+sandbox_mode: sample}` block.
 
 ## How it works
 
@@ -32,7 +32,7 @@ This blueprint has two independent bugs in two different Channels:
 2. `discounted` (downstream of `priced`) filters on `quantity`. The real
    column carried through `priced` is `qty`.
 
-With `agent.progressive: true`, a candidate patch that validates but still
+A candidate patch that validates but still
 leaves the pipeline failing checks *where* the new failure surfaced:
 
 - **Different module** than the one just patched (`discounted`, after
@@ -46,16 +46,18 @@ patch is re-validated end-to-end and the pipeline now fails at
 `discounted`, a different module, so the chain advances. Link 2 diagnoses
 `discounted` (bug #2) against the manifest with link 1's fix already
 applied. Nothing is written to the Blueprint until the full 2-op combined
-patch passes the pipeline end-to-end. See `run_progressive_chain`
-(`aqueduct/agent/progressive.py`).
+patch passes the pipeline end-to-end. The loop lives in
+`aqueduct/cli/run.py`; `merge_patch_specs`
+(`aqueduct/agent/merge.py`) folds the links into the one patch that is
+staged or applied.
 
-`agent.max_chain` (default 3, set explicitly here) caps the number of
+`agent.max_patches` (set to 3 here) caps the number of
 links, independent of each link's own `max_reprompts`/budget ceiling.
 
 **Sandbox requirement.** Each link's validation IS its advancement test:
 without per-link sandbox replay, a link has no way to check a candidate
 before folding it into the accumulated patch. `require_sandbox_for_
-progressive` refuses to start progressive healing when
+` refuses to start chained healing when
 `agent.sandbox_mode: off`; this blueprint sets `sandbox_mode: sample`
 explicitly (the same as the default) so the requirement is visible.
 
@@ -67,7 +69,7 @@ aqueduct run blueprint_bugged.yml
 ```
 
 The run fails at `priced` (bug #1). Because `approval: auto` and
-`agent.progressive: true`, self-healing chains straight through both bugs
+chained healing goes straight through both bugs
 in one heal cycle rather than stopping after the first fix stops "working".
 
 ```bash

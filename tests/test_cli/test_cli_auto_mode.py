@@ -109,8 +109,11 @@ def test_auto_mode_invalid_patch_stops_loop(
         result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-multi-patch"])
 
     assert "✗ Agent patch produces invalid Blueprint, discarding" in result.output
-    # Loop should have stopped after the first invalid patch
-    assert mock_gen_patch.call_count == 1
+    # A candidate that will not compile is a wrong candidate: it is discarded
+    # and the same failure is retried, spending one unit of max_patches each
+    # time, until the cap. (Before chaining became the only loop behavior an
+    # uncompilable patch ended the heal outright after one attempt.)
+    assert mock_gen_patch.call_count == 2
     # Blueprint should NOT have been updated (check its content)
     assert "New Label" not in base_blueprint.read_text()
 
@@ -204,7 +207,9 @@ def test_auto_mode_fails_then_continues(
     assert "⚠  Agent: max_patches=2 reached" in result.output
 
     assert mock_gen_patch.call_count == 2
-    assert mock_stage.call_count == 2
+    # Chained healing stages exactly ONE combined patch per heal, at the
+    # end — not one per failed attempt (the old per-attempt behavior).
+    assert mock_stage.call_count == 1
     # Blueprint should NOT have been updated permanently
     assert "New Label" not in base_blueprint.read_text()
 

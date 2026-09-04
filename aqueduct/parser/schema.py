@@ -171,8 +171,6 @@ class AgentPolicySchema(BaseModel):
     mode: Literal["oneshot", "agentic"] | None = None
     max_tool_calls: int | None = Field(default=None, ge=1)
     supports_tools: Literal["auto", True, False] | None = None
-    progressive: bool | None = None
-    max_chain: int | None = Field(default=None, ge=1)
 
 
 class AgentSchema(AgentPolicySchema):

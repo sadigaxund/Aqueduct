@@ -31,7 +31,6 @@ leaves:
   agent.field.confidence_threshold: supported
   agent.field.deep_loop: supported
   agent.field.guardrails: supported
-  agent.field.max_chain: supported
   agent.field.max_heal_attempts_per_hour: supported
   agent.field.max_patches: supported
   agent.field.max_reprompts: supported
@@ -40,7 +39,6 @@ leaves:
   agent.field.on_heal_failure: supported
   agent.field.on_pending_patches: supported
   agent.field.patch_validation: supported
-  agent.field.progressive: supported
   agent.field.prompt_context: supported
   agent.field.sandbox_mode: supported
   agent.field.supports_tools: supported

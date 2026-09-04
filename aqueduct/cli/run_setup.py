@@ -32,6 +32,32 @@ if _t:
     from aqueduct.executor.probe_sampling import ProbeSampling as _PS
 
 
+def require_sandbox_for_chained_healing(max_patches: int, sandbox_mode: str) -> None:
+    """Refuse to chain multi-patch healing with sandbox validation disabled.
+
+    Phase 92 — chained (progressive) multi-patch healing is now the ONLY
+    heal-loop behavior; a single-attempt heal (``agent.max_patches`` left at
+    its default of 1) never needs to validate a candidate mid-chain, so
+    ``agent.sandbox_mode: off`` stays legal there (already gated behind
+    ``danger.allow_skip_sandbox`` separately). Chaining is what actually
+    needs per-link validation — each link's advancement test IS the
+    in-memory-apply + sandbox gate, and without a sandbox a chain link has
+    no way to validate a candidate before folding it into the accumulated
+    patch. So the refusal is scoped to ``max_patches > 1``, not unconditional.
+    Raises ``ConfigError`` rather than silently chaining unsafely.
+    """
+    from aqueduct.errors import ConfigError
+
+    if max_patches > 1 and sandbox_mode == "off":
+        raise ConfigError(
+            f"agent.max_patches={max_patches} (>1) enables chained multi-patch "
+            "healing, which requires per-link sandbox validation, but "
+            "agent.sandbox_mode: off disables sandbox replay entirely. Set "
+            "sandbox_mode to 'sample' (default) or 'preflight', or leave "
+            "max_patches at 1 for a single-attempt heal."
+        )
+
+
 @_dc_frozen(frozen=True)
 class _LoadConfigResult:
     """Return-type bundle for ``_load_engine_config`` — all values derived from
@@ -427,8 +453,6 @@ class _SurveyorSetupResult:
     resolved_agent_mode: str | None
     resolved_agent_max_tool_calls: int | None
     resolved_agent_supports_tools: object | None
-    resolved_agent_progressive: bool | None
-    resolved_agent_max_chain: int | None
     resolved_sandbox_master_url: str | None
     surveyor: object
     _obs_store: object
@@ -545,6 +569,15 @@ def _setup_surveyor(
                 "fully trust the model and blueprint scope is tiny.",
                 err=True,
             )
+
+        # \u2500\u2500 Chained healing requires per-link sandbox validation \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+        from aqueduct.errors import ConfigError as _ConfigError
+
+        try:
+            require_sandbox_for_chained_healing(_max_patches, _sandbox_mode)
+        except _ConfigError as _chain_sandbox_exc:
+            click.echo(f"\u2717 {_chain_sandbox_exc}", err=True)
+            _sys.exit(exit_codes.CONFIG_ERROR)
 
         # ── Pending patch check ────────────────────────────────────────────────────
         patches_dir = _project_root / "patches"
@@ -686,23 +719,7 @@ def _setup_surveyor(
     resolved_agent_mode = _rac.mode
     resolved_agent_max_tool_calls = _rac.max_tool_calls
     resolved_agent_supports_tools = _rac.supports_tools
-    # Phase 77 — progressive (chained) multi-patch healing, same inheritance
-    # shape as mode/supports_tools above.
-    resolved_agent_progressive = _rac.progressive
-    resolved_agent_max_chain = _rac.max_chain
     resolved_sandbox_master_url = cfg.agent.sandbox_master_url
-
-    # ── Progressive healing requires per-link sandbox validation ─────────────
-    if resolved_agent_progressive:
-        from aqueduct.agent.progressive import require_sandbox_for_progressive
-        from aqueduct.errors import ConfigError as _ConfigError
-
-        _prog_sandbox_mode = manifest.agent.sandbox_mode if manifest.agent else "sample"
-        try:
-            require_sandbox_for_progressive(resolved_agent_progressive, _prog_sandbox_mode)
-        except _ConfigError as _prog_exc:
-            click.echo(f"✗ {_prog_exc}", err=True)
-            sys.exit(exit_codes.CONFIG_ERROR)
 
     # ── Self-healing reachability pre-check (upfront) ────────────────────────────
     # Surface a misconfigured agent at startup rather than only at heal time. Gated
@@ -856,8 +873,6 @@ def _setup_surveyor(
         resolved_agent_mode=resolved_agent_mode,
         resolved_agent_max_tool_calls=resolved_agent_max_tool_calls,
         resolved_agent_supports_tools=resolved_agent_supports_tools,
-        resolved_agent_progressive=resolved_agent_progressive,
-        resolved_agent_max_chain=resolved_agent_max_chain,
         resolved_sandbox_master_url=resolved_sandbox_master_url,
         surveyor=surveyor,
         _obs_store=_obs_store,

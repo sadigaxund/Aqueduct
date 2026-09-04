@@ -143,7 +143,7 @@ One row per LLM turn inside the unified reprompt loop, finer-grained than
 | `prompt_version`    | VARCHAR             | `aqueduct.agent.PROMPT_VERSION` at attempt time |
 | `recorded_at`       | VARCHAR NOT NULL    | ISO-8601 |
 | `tool_calls_json`   | VARCHAR             | Agentic mode only (`agent.mode: agentic`): JSON array of `{name, duration_ms}` for every tool call made during this attempt; NULL/absent in oneshot mode. **Trimmed at write time since 2.85 (C1):** the in-memory log also carries `args_summary`/`result_preview` string previews of real argument/result content (the observability audit's single largest per-row bloat/sensitivity risk); only the op name and duration reach the store |
-| `chain_link`        | INTEGER             | Progressive healing only (`agent.progressive: true`): 1-based link index within the chain this attempt belongs to; NULL for a normal (non-progressive) heal attempt. Orthogonal to `attempt_num`, which still counts reprompts *within* one link |
+| `chain_link`        | INTEGER             | 1-based index of which attempt within the chain this heal-attempt row belongs to. Orthogonal to `attempt_num`, which still counts reprompts *within* one attempt |
 | `engine`            | VARCHAR             | Execution engine this attempt targeted (`spark` \| `duckdb`) |
 | `defer_reason`      | VARCHAR             | **(2.66+)** Queryable bucket from `DeferToHumanOp.defer_reason` (`infrastructure` \| `upstream_schema_change` \| `data_shape_change` \| `insufficient_context` \| `other`) when this attempt's patch deferred to a human; NULL for every non-deferring attempt. Filled on the loop's terminal row alongside `stop_reason` (via `update_heal_attempt_stop_reason`), same timing as `stop_reason` itself: the value isn't known at the per-turn `record_heal_attempt` INSERT |
 
@@ -650,11 +650,11 @@ FROM healing_outcomes
 GROUP BY engine;
 ```
 
-**When** a heal ran with `agent.progressive: true` and you want to see how
-many links the chain walked and which modules it diagnosed, in order.
-**What you learn** The chain's per-link trail, module diagnosed, attempts
+**When** a heal ran with `agent.max_patches > 1` and you want to see how
+many attempts the chain walked and which modules it diagnosed, in order.
+**What you learn** The chain's per-attempt trail, module diagnosed, attempts
 spent on that link, whether it advanced. A chain that never advances past
-link 1 despite `max_chain > 1` usually means the model isn't producing a
+link 1 despite `max_patches > 1` usually means the model isn't producing a
 patch that changes which module fails next (check `gate_that_rejected` on
 those rows too).
 **What to do next** If the chain repeatedly hits `chain_link` gaps (e.g.

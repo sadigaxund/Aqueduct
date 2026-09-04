@@ -169,9 +169,9 @@ def resolve_agent_connection(engine_agent, blueprint_agent=None):
     accept a blueprint override for these; that path was removed as a
     security fix (2.59) — see AgentSchema's docstring / CHANGELOG.
 
-    POLICY fields (max_reprompts, mode, max_tool_calls, supports_tools,
-    progressive, max_chain) use the blueprint value when set, falling back
-    to the engine default. Returns a simple object with resolved values
+    POLICY fields (max_reprompts, mode, max_tool_calls, supports_tools) use
+    the blueprint value when set, falling back to the engine default.
+    Returns a simple object with resolved values
     that can be destructured at the call site.
 
     prompt_context is NOT OR‑merged — the engine and blueprint versions
@@ -193,8 +193,6 @@ def resolve_agent_connection(engine_agent, blueprint_agent=None):
             "mode",
             "max_tool_calls",
             "supports_tools",
-            "progressive",
-            "max_chain",
         )
 
     bp = blueprint_agent
@@ -224,10 +222,6 @@ def resolve_agent_connection(engine_agent, blueprint_agent=None):
     r.supports_tools = (
         bp.supports_tools if bp and bp.supports_tools is not None else eng.supports_tools
     )
-    # Progressive (chained) multi-patch healing — same `is not None`
-    # inheritance shape as mode/supports_tools above.
-    r.progressive = bp.progressive if bp and bp.progressive is not None else eng.progressive
-    r.max_chain = bp.max_chain if bp and bp.max_chain is not None else eng.max_chain
     return r
 
 

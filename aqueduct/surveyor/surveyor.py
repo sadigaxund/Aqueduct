@@ -682,8 +682,8 @@ class Surveyor:
         tool_calls_json = (
             _json.dumps(tool_calls_trimmed, default=str) if tool_calls_trimmed else None
         )
-        # Phase 77 — chain link index, stamped by the progressive
-        # orchestrator's on_attempt wrapper. isinstance-guarded (not a bare
+        # Chain link index, stamped by the heal loop's on_attempt hook.
+        # isinstance-guarded (not a bare
         # getattr) so an unconfigured mock attribute in a caller's test
         # double never reaches the DB driver as a non-serializable value.
         _chain_link_raw = getattr(attempt_record, "chain_link", None)

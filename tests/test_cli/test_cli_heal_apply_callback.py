@@ -94,7 +94,10 @@ id: test_bp
 name: Test BP
 agent:
   approval: auto
-  sandbox_mode: "off"
+  # `sandbox_mode: off` with max_patches > 1 is refused now that chaining is
+  # the only loop behavior (a chain link has no way to validate a candidate
+  # without a sandbox), and this test is about apply-callback wiring.
+  sandbox_mode: "sample"
   max_patches: 2
   guardrails:
     forbidden_ops: ["remove_module"]

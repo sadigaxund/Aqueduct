@@ -644,8 +644,7 @@ webhooks:
 # POLICY (approval, forbidden_ops, on_pending_patches, guardrails, ...)
 # belongs in each Blueprint's agent: block — see blueprint.yml.template. A
 # handful of policy fields (mode, max_tool_calls, supports_tools,
-# progressive, max_chain, max_reprompts, prompt_context,
-# max_heal_attempts_per_hour, patch_validation)
+# max_reprompts, prompt_context, max_heal_attempts_per_hour, patch_validation)
 # are also settable here as the engine-wide default;
 # a Blueprint's own value for one of those, when set, still wins.
 #
@@ -744,24 +743,20 @@ agent:
   # Per-blueprint AND per-cascade-tier override available (cascade[].supports_tools).
   # supports_tools: auto
 
-  # ── Progressive (chained) multi-patch healing ───────────────────────────────
-  # Opt-in, separate from max_patches (whose semantics stay UNCHANGED: N
-  # independent retries of the SAME failure). When true, a candidate patch
-  # that passes its own validation but still leaves the pipeline failing is
-  # NOT discarded when the new failure surfaces at a DIFFERENT module than
-  # the one just patched — it folds into an accumulating multi-op patch and
-  # the next link diagnoses the new failure. Same module again = stuck, chain
-  # ends. Nothing is written to the Blueprint until the full accumulated
-  # patch passes the pipeline end-to-end. Requires agent.sandbox_mode other
-  # than "off" (refused at heal-start otherwise). See docs/specs.md §8.13.
-  # Per-blueprint override available.
-  #   false (default) — today's behaviour, unchanged.
-  # progressive: false
-  #
-  # Hard cap on links in a progressive chain, independent of each link's own
-  # max_reprompts/budget ceiling. Only meaningful when progressive: true.
-  # Per-blueprint override available.
-  # max_chain: 3
+  # ── Chained multi-patch healing ─────────────────────────────────────────────
+  # `agent.max_patches` (Blueprint-only, see blueprint.yml.template) is the
+  # ONE counter for the whole heal: `max_patches: 1` (default) is a single
+  # attempt; `max_patches: N` (N > 1) chains — a candidate patch that passes
+  # its own validation but still leaves the pipeline failing is NOT discarded
+  # when the new failure surfaces at a DIFFERENT module than the one just
+  # patched, it folds into an accumulating multi-op patch and the next link
+  # diagnoses the new failure. The SAME module failing again discards just
+  # that candidate (already-proven links are kept) and retries. Nothing is
+  # written to the Blueprint until the full accumulated patch passes the
+  # pipeline end-to-end. Requires agent.sandbox_mode other than "off" when
+  # max_patches > 1 (refused at run-start otherwise — chaining needs
+  # per-link sandbox validation). Cascade tiers (below) never chain — each
+  # tier still produces at most one patch per attempt.
 
   # ── Spend-cap on LLM healing attempts ──────────────────────────────────────
   # Surveyor counts rows written to observability.db `healing_outcomes` within the last

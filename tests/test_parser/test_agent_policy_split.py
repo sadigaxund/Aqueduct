@@ -139,18 +139,14 @@ class TestPolicyFieldsStillLegalOnBlueprint:
         assert s.mode is None
         assert s.max_tool_calls is None
         assert s.supports_tools is None
-        assert s.progressive is None
-        assert s.max_chain is None
         assert s.prompt_context is None
         assert s.max_heal_attempts_per_hour is None
         assert s.patch_validation is None
 
     def test_shared_policy_field_override_accepted(self):
-        s = AgentSchema(mode="agentic", max_tool_calls=3, progressive=True, max_chain=5)
+        s = AgentSchema(mode="agentic", max_tool_calls=3)
         assert s.mode == "agentic"
         assert s.max_tool_calls == 3
-        assert s.progressive is True
-        assert s.max_chain == 5
 
 
 class TestEngineAgentConnectionConfigAcceptsFullSet:
@@ -184,8 +180,6 @@ class TestEngineAgentConnectionConfigAcceptsFullSet:
         assert cfg.mode == "oneshot"
         assert cfg.max_tool_calls == 8
         assert cfg.supports_tools == "auto"
-        assert cfg.progressive is False
-        assert cfg.max_chain == 3
         assert cfg.max_reprompts == 3
         assert cfg.patch_validation == "full_run"
 

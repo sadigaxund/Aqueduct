@@ -13,6 +13,7 @@ Module layout (use the file name as your first search filter):
   budget.py      — multi-axis budget tracking (BudgetConfig, BudgetTracker)
   signature.py   — error signature engine (ErrorSignature, from_* helpers)
   memory.py      — Phase 45 signature memory (pending reuse, replay, coaching)
+  merge.py       — merge_patch_specs (fold N chain-link patches into one)
 
 All providers use httpx — no optional SDK dependency required.
 
@@ -46,6 +47,7 @@ from aqueduct.agent.loop import (
 from aqueduct.agent.loop import (
     stage_patch_for_human as stage_patch_for_human,
 )
+from aqueduct.agent.merge import merge_patch_specs as merge_patch_specs
 from aqueduct.agent.prompts import build_prompt as build_prompt
 
 

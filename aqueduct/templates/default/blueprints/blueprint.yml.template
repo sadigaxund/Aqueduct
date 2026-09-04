@@ -231,8 +231,13 @@ agent:
   #   human      — LLM generates patch → staged in patches/pending/ → run ends
   #                Review: aqueduct patch apply patches/pending/<id>.json --blueprint ...
   #   auto       — Auto-apply: patch applied in-memory → re-runs → written to disk only on success.
-  #                `max_patches: 1` (default) = single-shot. `max_patches: N` (N > 1) = multi-patch
-  #                reprompt loop; requires danger.allow_multi_patch: true in aqueduct.yml.
+  #                `max_patches: 1` (default) = single-shot. `max_patches: N` (N > 1) = chained
+  #                multi-patch healing: a candidate that fixes one bug but leaves the pipeline
+  #                failing at a DIFFERENT module folds into an accumulating patch instead of
+  #                being thrown away; the SAME module failing again discards just that candidate
+  #                and retries. `max_patches` is the total attempt cap for the whole chain.
+  #                Requires danger.allow_multi_patch: true in aqueduct.yml, and
+  #                agent.sandbox_mode != off (each link's advance test IS the sandbox gate).
   #
   approval: "human"
 
@@ -296,14 +301,6 @@ agent:
   # mode: oneshot
   # max_tool_calls: 8       # agentic mode only — cap per heal attempt
   # supports_tools: auto    # auto|true|false — tool-use capability probe
-
-  # progressive (chained multi-patch healing, opt-in): a candidate patch that
-  # fixes one bug but leaves the pipeline failing at a DIFFERENT module folds
-  # into an accumulating patch instead of being thrown away — max_patches
-  # semantics are unchanged. Requires sandbox_mode != off. Leave unset to
-  # inherit aqueduct.yml agent.progressive (= false). See docs/specs.md §8.13.
-  # progressive: false
-  # max_chain: 3             # hard cap on chain links; only meaningful with progressive: true
 
   # LLM Guardrails — per-blueprint restrictions on what the LLM may patch.
   # Violations → patch staged for human review instead of applied automatically.

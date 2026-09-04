@@ -11,8 +11,7 @@ aqueduct/parser/schema.py has no such fields; extra="forbid" rejects one
 named). Per-blueprint POLICY (approval, on_pending_patches, max_patches,
 guardrails, ...) lives in the Blueprint agent: block; a shared subset of
 policy fields (max_reprompts, mode, max_tool_calls, supports_tools,
-progressive, max_chain, prompt_context, max_heal_attempts_per_hour,
-patch_validation) is
+prompt_context, max_heal_attempts_per_hour, patch_validation) is
 ALSO settable here as the engine-wide default, and the Blueprint's own
 value, when set, wins — see aqueduct.cli.resolve_agent_connection. See
 AgentConnectionConfig's docstring below for the full rationale.
@@ -695,8 +694,8 @@ class AgentConnectionConfig(AgentPolicySchema):
 
     Extends ``AgentPolicySchema`` for the POLICY fields it shares by name
     with the Blueprint (``max_reprompts``, ``mode``, ``max_tool_calls``,
-    ``supports_tools``, ``progressive``, ``max_chain``, ``prompt_context``,
-    ``max_heal_attempts_per_hour``, ``patch_validation``) — each
+    ``supports_tools``, ``prompt_context``, ``max_heal_attempts_per_hour``,
+    ``patch_validation``) — each
     overridden below with this level's concrete engine-wide default (the
     base class's default is ``None``, meaning "inherit", which has no
     meaning at the level that IS the thing being inherited from). A
@@ -857,38 +856,6 @@ class AgentConnectionConfig(AgentPolicySchema):
             "emitting one [agent_tools_unsupported] warning). Set true/false "
             "to skip the probe. Per-blueprint / per-cascade-tier override: "
             "agent.supports_tools / cascade tier supports_tools."
-        ),
-        json_schema_extra={"engine_scoped": False},
-    )
-    progressive: bool = Field(
-        default=False,
-        description=(
-            "Progressive (chained) multi-patch healing. Opt-in, separate "
-            "from `max_patches` (whose semantics stay UNCHANGED — N "
-            "independent retries of the SAME failure). When True, a "
-            "candidate patch that passes its own validation but still "
-            "leaves the pipeline failing is NOT discarded if the new "
-            "failure surfaces at a DIFFERENT module than the one just "
-            "patched — it is folded into an accumulating multi-op patch "
-            "and the next link diagnoses the new failure. Same module "
-            "again = stuck, chain ends. Nothing is written to the "
-            "Blueprint until the full accumulated patch passes the "
-            "pipeline end-to-end — see docs/specs.md §8.13. Requires "
-            "`agent.sandbox_mode` other than 'off' (refused at heal-start "
-            "otherwise — each link's advancement test IS the sandbox "
-            "gate). Default False. Per-blueprint override: agent.progressive."
-        ),
-        json_schema_extra={"engine_scoped": False},
-    )
-    max_chain: int = Field(
-        default=3,
-        ge=1,
-        description=(
-            "Hard cap on the number of links in a progressive healing "
-            "chain — independent of each link's own reprompt/budget "
-            "ceiling (`max_reprompts`/`budget`). Only meaningful when "
-            "`agent.progressive: true`. Default 3. Per-blueprint override: "
-            "agent.max_chain."
         ),
         json_schema_extra={"engine_scoped": False},
     )

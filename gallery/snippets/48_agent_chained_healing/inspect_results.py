@@ -7,7 +7,7 @@ from rich.table import Table
 
 console = Console()
 
-BLUEPRINT_ID = "progressive_demo"
+BLUEPRINT_ID = "chained_healing_demo"
 
 
 def _find_store():
@@ -30,7 +30,7 @@ def main():
             columns = [d[0] for d in con.description]
         finally:
             con.close()
-        t = Table(title="Orders (after progressive healing)", header_style="bold cyan")
+        t = Table(title="Orders (after chained healing)", header_style="bold cyan")
         for c in columns:
             t.add_column(c)
         for row in rows:
@@ -41,7 +41,7 @@ def main():
             "[bold yellow]⚠[/bold yellow] Output not found. The pipeline fails on "
             "purpose at 'priced' (bug #1: 'unit_cost' doesn't exist).\n"
             "  Run [bold]aqueduct run blueprint.yml[/bold]. 'approval: auto' plus "
-            "'agent.progressive: true' chains both bugs' fixes into one combined patch."
+            "chained healing folds both bugs' fixes into one combined patch."
         )
 
     db_path = _find_store()
@@ -73,7 +73,7 @@ def main():
     console.print(t2)
     console.print(
         "\n[dim]A 'priced' row followed by a 'discounted' row is the "
-        "progressive chain advancing: link 1 diagnosed 'priced' (bug #1), "
+        "chain advancing: link 1 diagnosed 'priced' (bug #1), "
         "the re-run then failed at 'discounted' (bug #2, a DIFFERENT "
         "module), so link 1's fix was folded into the accumulated patch "
         "instead of discarded. Link 2 diagnosed 'discounted' against that "

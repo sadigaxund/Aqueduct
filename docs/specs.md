@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.77: Reference Document**
+**Version 2.78: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -966,7 +966,7 @@ The LLM agent operates within a grammar, not in free-form code generation mode. 
 
 **Model-agnostic design.** The PatchSpec grammar is deliberately narrow, 14 schema-checked operations with no code generation, so the agent works reliably across model sizes. A 7B parameter local model handles ~70% of production failures (path typos, format mismatches, column renames, simple SQL fixes) in a single attempt. Larger models unlock `agent.deep_loop` (in-conversation sandbox feedback) and multi-model cascading for complex cases like OOM tuning and multi-module restructures. The deterministic guardrails, gate pyramid, and structured prompt apply the same safety guarantees regardless of model size.
 
-**The `agent:` block is split by kind, at both levels (2.59).** A Blueprint's `agent:` block is **POLICY-ONLY**: risk decisions about THIS pipeline; `approval`, `on_pending_patches`, `max_patches`, `guardrails`, `confidence_threshold`, `on_heal_failure`, `allow_defer`, `deep_loop`, `sandbox_mode`, plus a shared subset (`max_reprompts`, `mode`, `max_tool_calls`, `supports_tools`, `progressive`, `max_chain`, `prompt_context`, `max_heal_attempts_per_hour`, `patch_validation`) that overrides the engine's own default when set. `aqueduct.yml`'s `agent:` block (`AgentConnectionConfig`) is the **only** place CONNECTION settings live (`provider`, `base_url`, `api_key`, `model`, `provider_options`, `timeout`, `cascade`) an endpoint fact about the deployment, not a per-pipeline decision. A Blueprint cannot set or override any connection field; writing one into a Blueprint's `agent:` block is a schema-level rejection naming the field (`AgentSchema` uses `extra="forbid"`), not a silent no-op. This is the same split already applied to `engine:` (§10.1): `engine.spark`'s Blueprint-level block omits `master_url`, `engine.duckdb`'s omits `database_path`/`s3_*`; a Blueprint does not get to decide deployment/connection concerns. The security reasoning is sharper here: the healing loop ships `FailureContext` (pruned manifest, provenance, error text, and, in agentic mode, sampled data rows) to whichever endpoint is configured, so if a Blueprint could pick that endpoint, any pipeline failure would be an exfiltration opportunity to a host the pipeline's author (not the operator) controls.
+**The `agent:` block is split by kind, at both levels (2.59).** A Blueprint's `agent:` block is **POLICY-ONLY**: risk decisions about THIS pipeline; `approval`, `on_pending_patches`, `max_patches`, `guardrails`, `confidence_threshold`, `on_heal_failure`, `allow_defer`, `deep_loop`, `sandbox_mode`, plus a shared subset (`max_reprompts`, `mode`, `max_tool_calls`, `supports_tools`, `prompt_context`, `max_heal_attempts_per_hour`, `patch_validation`) that overrides the engine's own default when set. `aqueduct.yml`'s `agent:` block (`AgentConnectionConfig`) is the **only** place CONNECTION settings live (`provider`, `base_url`, `api_key`, `model`, `provider_options`, `timeout`, `cascade`) an endpoint fact about the deployment, not a per-pipeline decision. A Blueprint cannot set or override any connection field; writing one into a Blueprint's `agent:` block is a schema-level rejection naming the field (`AgentSchema` uses `extra="forbid"`), not a silent no-op. This is the same split already applied to `engine:` (§10.1): `engine.spark`'s Blueprint-level block omits `master_url`, `engine.duckdb`'s omits `database_path`/`s3_*`; a Blueprint does not get to decide deployment/connection concerns. The security reasoning is sharper here: the healing loop ships `FailureContext` (pruned manifest, provenance, error text, and, in agentic mode, sampled data rows) to whichever endpoint is configured, so if a Blueprint could pick that endpoint, any pipeline failure would be an exfiltration opportunity to a host the pipeline's author (not the operator) controls.
 
 **Solo vs cascade.** With a single `agent.model:` in `aqueduct.yml`, healing runs **solo**, one model, the flat `agent.*` connection (`model`, `base_url`, `timeout`, `budget`, …). Configuring `agent.cascade:` (also `aqueduct.yml` only) switches to **cascade** mode: a list of tiers tried in the order you define them.
 
@@ -1044,6 +1044,31 @@ Before a patch touches the Blueprint, four numbered gates plus an unnumbered com
 ### 7. Confirm and write
 
 Only after every gate passes does the patch run against the real pipeline. The on-disk Blueprint is rewritten only if the full re-run succeeds. Failed patches stage to `patches/pending/` for inspection.
+
+### 8. Chained multi-patch healing
+
+`agent.max_patches` (default `1`, Blueprint-only) is the ONE counter for the whole heal: a single-attempt heal at the default, or, with `max_patches: N` (N > 1, `agent.approval: auto`, non-cascade path), chained multi-patch healing — the standard (and only) behavior of the multi-patch loop as of 2.78. There is no separate opt-in flag.
+
+**Motivation.** A naive "N independent retries of the same failure" loop re-diagnoses the SAME first failure on every attempt: it applies a candidate patch in memory, re-runs the pipeline, and, when the re-run still fails, discards the candidate and re-executes against the *original, unpatched* Blueprint. With two or more independent bugs, the model can diagnose bug #1 correctly on every single attempt and it is thrown away every time, because the pipeline still fails downstream at bug #2 and nothing carries bug #1's fix forward. Chaining fixes this.
+
+**Chain semantics.** On a candidate patch that validates in memory but still leaves the pipeline failing, the loop checks *where* the new failure surfaced:
+
+- **Different module than the one just patched** → the candidate was right: it is folded into an accumulating multi-op `PatchSpec` (operations concatenated in link order) and the loop advances to diagnose the new failure.
+- **Same module again** → the candidate was wrong: only THAT candidate is discarded (the already-proven accumulated patches are kept) and the SAME failure is retried.
+
+Every LLM diagnosis call spends one unit of `max_patches`, regardless of outcome — advance, same-module discard, or gate rejection. The loop ends when the pipeline is fully solved, `max_patches` is exhausted, the model returns no patch, or `agent.on_heal_failure: abort` fires on a same-module retry.
+
+Each attempt's diagnosis (oneshot or agentic, per `agent.mode`) and the pending-patch check (§8.2 step 2) operate independently: an attempt's failure has its own error signature (§8.6) and its own `blueprint_id` check.
+
+**Disk invariant.** Nothing is written to the Blueprint until the FULL accumulated patch passes the pipeline end-to-end. There is never a partial/half-correct Blueprint on disk mid-chain: every intermediate apply is the existing in-memory apply path (`_apply_patch_in_memory`), re-applied against the *original* on-disk Blueprint with the growing operation list, never against a previously-written file. Exactly ONE combined `PatchSpec` is ever staged or written for a given heal — never a chain of separate staged patches.
+
+**Sandbox requirement.** `agent.max_patches > 1` requires `agent.sandbox_mode` other than `"off"` — refused at run-start (`CONFIG_ERROR`) otherwise, since each attempt's advancement test IS the sandbox gate. A single-attempt heal (`max_patches: 1`, the default) is unaffected — `sandbox_mode: off` stays legal there.
+
+**Gates.** Each attempt's validation IS its advancement test: the existing in-memory apply + full pipeline re-run (the same gate `full_run` patch validation already performs for a single patch, just invoked once per attempt against the growing accumulated patch). The final combined multi-op patch that solves the pipeline still runs the standard gate pyramid before being written: no gate is skipped, only the *per-bug* diagnosis loop is new.
+
+**Approval composes once.** Because nothing hits disk mid-chain, `agent.approval: auto` applies the combined patch after the final full-run pass, one write, not N. `human`/`ci` modes stage exactly ONE combined patch (with each attempt's rationale folded into the staged patch's `rationale` field) instead of cycling through N separate pending-patch reviews.
+
+**Cascade scope.** Multi-model cascade (§8's cascade model) never chains — each cascade tier still produces at most one patch per attempt, bounded by `max_patches`, and a rejected cascade-tier patch is not folded into an accumulating multi-op patch. Chaining is exclusive to the single-model (non-cascade) path described above.
 
 ## **8.3 Approval modes**
 
@@ -1342,65 +1367,6 @@ same scenarios/models is possible. Scenario runs never start Spark, so
 `get_source_schema`/`sample_rows` always report unavailable there: the
 registry tools (run/patch/lineage history) still work.
 
-## **8.13 Progressive (chained) multi-patch healing (opt-in, `agent.progressive`)**
-
-**Motivation.** The pre-existing `max_patches > 1` loop re-diagnoses the
-SAME first failure on every attempt: its `full_run` validation applies a
-candidate patch in memory, re-runs the pipeline, and, when the re-run
-still fails: discards the candidate and re-executes against the
-*original, unpatched* Blueprint. With two or more independent bugs, the
-model can diagnose bug #1 correctly on every single attempt and it is
-thrown away every time, because the pipeline still fails downstream at bug
-#2 and nothing carries bug #1's fix forward. `agent.progressive` (default
-`False`, engine `aqueduct.yml` + per-blueprint override: same `None` =
-inherit shape as `agent.patch_validation`/`agent.mode`) fixes this
-independently of `max_patches`, whose semantics stay **unchanged**: N
-independent retries of the same failure.
-
-**Chain semantics.** On a candidate patch that validates in memory but
-still leaves the pipeline failing, the chain checks *where* the new
-failure surfaced:
-
-- **Different module than the one just patched** → the candidate is
-  folded into an accumulating multi-op `PatchSpec` (operations
-  concatenated in link order) and the *next* link diagnoses the new
-  failure. The chain **advances**.
-- **Same module again** → the chain is **stuck** and ends. The accumulated
-  patch (including the just-generated candidate) is discarded (`auto`
-  mode) or staged for human/CI review with per-link evidence in its
-  rationale (`human`/`ci` mode), per `agent.on_heal_failure`.
-
-Each link's diagnosis (oneshot or agentic, per `agent.mode`) and the
-pending-patch check (§8.2 step 2) operate independently: a link's failure
-has its own error signature (§8.6) and its own `blueprint_id` check.
-
-**Disk invariant.** Nothing is written to the Blueprint until the FULL
-accumulated patch passes the pipeline end-to-end. There is never a
-partial/half-correct Blueprint on disk mid-chain: every intermediate
-apply is the existing in-memory apply path (`_apply_patch_in_memory`),
-re-applied against the *original* on-disk Blueprint with the growing
-operation list, never against a previously-written file.
-
-**Chain cap.** `agent.max_chain` (default `3`, same inheritance shape) is
-a hard ceiling on the number of links, independent of each link's own
-`max_reprompts`/budget ceiling. A chain that exhausts `max_chain` without
-solving the pipeline ends with `chain_cap_exceeded`: same
-discard/stage-per-approval handling as a stuck chain.
-
-**Gates.** Each link's validation IS its advancement test: the existing
-in-memory apply + full pipeline re-run (the same gate `full_run` patch
-validation already performs for a single patch, just invoked once per
-link against the growing accumulated patch). The final combined multi-op
-patch that solves the pipeline still runs the standard gate pyramid before
-being written: no gate is skipped, only the *per-bug* diagnosis loop is
-new.
-
-**Approval composes once.** Because nothing hits disk mid-chain, `agent.
-approval: auto` applies the combined patch after the final full-run pass,
-one write, not N. `human`/`ci` modes stage exactly ONE combined patch
-(with each link's rationale folded into the staged patch's `rationale`
-field) instead of cycling through N separate pending-patch reviews.
-
 ## **8.14 Heal-patch cross-engine provenance**
 
 The healing system prompt is engine-flavored by design (§8's composed-prompt
@@ -1572,26 +1538,28 @@ wrote is no longer what the effective config resolves to, so the record's
 perf attribution no longer describes the live configuration and `patch
 revert` will refuse it.
 
-**Sandbox requirement.** Progressive healing refuses to run with
-`agent.sandbox_mode: off`: a `ConfigError` at heal-start with an
-actionable message. Each link's advancement test depends on validating a
-candidate before it is folded into the chain; without sandbox validation
-there is no safe way to tell "advanced" from "about to compound a wrong
-fix." `sample` (default) or `preflight` are required.
+**Sandbox requirement.** Chained multi-patch healing (`agent.max_patches >
+1`) refuses to run with `agent.sandbox_mode: off`: a `ConfigError` at
+run-start with an actionable message. Each attempt's advancement test
+depends on validating a candidate before it is folded into the chain;
+without sandbox validation there is no safe way to tell "advanced" from
+"about to compound a wrong fix." `sample` (default) or `preflight` are
+required. A single-attempt heal (`max_patches: 1`, the default) is
+unaffected — `sandbox_mode: off` stays legal there.
 
 **Observability.** `heal_attempts` (see `docs/observability_guide.md`)
-gains a `chain_link` column: the 1-based link index an attempt belongs
-to, `NULL` for a normal (non-progressive) heal attempt. `attempt_num`
-still carries the reprompt sequence *within* one link; `chain_link` is an
-orthogonal axis. Token totals aggregate across all links into the single
+carries a `chain_link` column: the 1-based index of which attempt within
+the heal an LLM-diagnosis row belongs to. `attempt_num` still carries the
+reprompt sequence *within* one attempt; `chain_link` is an orthogonal
+axis. Token totals aggregate across all attempts into the single
 `healing_outcomes` row the combined patch produces.
 
-**Scope note.** The current implementation wires progressive diagnosis
-into the single-model (`agent.approval: auto`, non-cascade) heal path.
-Multi-model cascade (§8's cascade model) interaction with progressive
-chaining is deferred: a cascade tier's escalation semantics and a chain
-link's advancement semantics are two independent axes that have not yet
-been reconciled.
+**Scope note.** Chaining is wired into the single-model (`agent.approval:
+auto`, non-cascade) heal path only. Multi-model cascade (§8's cascade
+model) never chains: a cascade tier's escalation semantics and a chain's
+advancement semantics are two independent axes that have not been
+reconciled — each cascade tier still produces at most one patch per
+attempt.
 
 ---
 

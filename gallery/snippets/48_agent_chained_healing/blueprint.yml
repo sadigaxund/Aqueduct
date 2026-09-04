@@ -1,5 +1,5 @@
 # blueprint.yml
-# Progressive (chained) multi-patch healing demo, shipped in its HEALED
+# Chained multi-patch healing demo, shipped in its HEALED
 # state (this is what `aqueduct run` in CI exercises, LLM-free).
 # `blueprint_bugged.yml` carries the two INDEPENDENT bugs this demo is
 # built around, in two DIFFERENT Channels:
@@ -8,12 +8,13 @@
 #   2. `discounted` (downstream of `priced`) filters on 'quantity'. The
 #      real column is 'qty'.
 #
-# A non-progressive multi-patch loop re-diagnoses bug #1 on every attempt:
-# it patches `priced` in memory, re-runs, sees the pipeline still fail (now
-# at `discounted`, bug #2), discards the candidate, and starts over against
-# the ORIGINAL unpatched Blueprint. Bug #1's fix is never carried forward.
+# A loop that discarded a candidate whenever the pipeline still failed would
+# re-diagnose bug #1 on every attempt: it patches `priced` in memory, re-runs,
+# sees the pipeline still fail (now at `discounted`, bug #2), throws the
+# candidate away, and starts over against the ORIGINAL unpatched Blueprint.
+# Bug #1's fix is never carried forward.
 #
-# `agent.progressive: true` fixes that: link 1 fixes `priced`, sees the
+# Chained healing fixes that: link 1 fixes `priced`, sees the
 # NEXT failure surface at a DIFFERENT module (`discounted`) and folds link
 # 1's fix into an accumulating patch instead of discarding it; link 2 then
 # diagnoses `discounted` against the manifest with link 1's fix already
@@ -22,14 +23,15 @@
 # `blueprint_bugged.yml`.
 
 aqueduct: "1.0"
-id: progressive_demo
-name: "Progressive Multi-Patch Healing"
+id: chained_healing_demo
+name: "Chained Multi-Patch Healing"
 
 agent:
   approval: auto
-  progressive: true
-  max_chain: 3
-  # Progressive healing is refused at heal-start unless sandbox_mode is not
+  # Chaining is the only heal-loop behavior, but it needs more than one
+  # attempt to chain: max_patches is the single total-attempt cap.
+  max_patches: 3
+  # Chained healing is refused at heal-start unless sandbox_mode is not
   # 'off' (each chain link's advancement test IS the sandbox gate). 'sample'
   # is the default, set explicitly here so the requirement is visible.
   sandbox_mode: sample
@@ -49,7 +51,7 @@ modules:
     config:
       op: sql
       # Healed: 'unit_price' is the real column (blueprint_bugged.yml has
-      # the original 'unit_cost' bug the README's progressive-healing
+      # the original 'unit_cost' bug the README's chained-healing
       # walkthrough exercises).
       query: "SELECT order_id, customer, qty, unit_price, qty * unit_price AS line_total FROM raw_orders"
 
