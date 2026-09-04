@@ -1,11 +1,11 @@
-# Agentic vs oneshot — Phase 92 Step 0 measurement (2026-09-04)
+# Agentic vs oneshot measurement (2026-09-04)
 
 Empirical A/B of `agent.mode=oneshot` vs `agent.mode=agentic` over the full
 `gallery/aqscenarios/` suite (19 scenarios), same cheap model, same budget,
 run sequentially (never in parallel) via `aqueduct benchmark`.
 
 - Model: `deepseek-v4-flash` (DeepSeek's OpenAI-compatible API). Discovered
-  via `GET https://api.deepseek.com/models` — a "v4" + "flash" id exists, so
+  via `GET https://api.deepseek.com/models`: a "v4" + "flash" id exists, so
   the `deepseek-chat` fallback named in the brief was not needed.
 - Provider: `openai_compat`, `base_url=https://api.deepseek.com/v1`.
 - `agent.provider_options.max_tokens=16000`, `agent.budget.max_seconds=600`,
@@ -44,24 +44,24 @@ Both failures are environmental, not aqueduct-side:
   600s socket read timeout (`budget_seconds_exceeded`: "The read operation
   timed out"). Agentic got an `api_error`: DeepSeek returned a
   `finish_reason='length'` truncation at the 16,000-token cap before
-  producing a parseable response — a token-budget problem, not a malformed
+  producing a parseable response: a token-budget problem, not a malformed
   response.
 - `guardrail_forbidden_op` failed **only** in agentic mode: it burned the
   full 600s budget and hit the same read-timeout stop reason
-  (`budget_seconds_exceeded`) instead of returning a PatchSpec — one slow
+  (`budget_seconds_exceeded`) instead of returning a PatchSpec: one slow
   DeepSeek tool-calling round trip ate the whole per-pair budget.
 
 ## Verdict
 
 Agentic mode does **not** beat oneshot on this suite: pass rate is lower
-(17/19 vs 18/19 — agentic introduced one additional environmental failure
+(17/19 vs 18/19: agentic introduced one additional environmental failure
 that oneshot didn't hit), total wall-clock time is ~24% higher (1,242s vs
 1,002s), and total input tokens are **~2.17x** higher (382,371 vs 176,469)
-for essentially the same output-token spend (48,405 vs 48,710) — the tool
+for essentially the same output-token spend (48,405 vs 48,710): the tool
 round trips inflate the prompt side of the bill without buying a
 diagnostic-quality or pass-rate improvement on this scenario suite. Per the
-Phase 92 Step 0 decision rule, this result favors deleting agentic mode
+cleanup decision rule, this result favors deleting agentic mode
 (`agent/toolbox.py`, `aqueduct/tools/`, `agent.mode`/`max_tool_calls`/
 `supports_tools`, `tool_calls_json`, schema-reader hooks, `tests/test_tools/`,
-`tools-tests` lane, specs §8.10/§8.12) rather than keeping it — that deletion
+`tools-tests` lane, specs §8.10/§8.12) rather than keeping it: that deletion
 is a separate, not-yet-taken action.
