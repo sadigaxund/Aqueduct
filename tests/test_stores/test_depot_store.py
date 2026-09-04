@@ -1,7 +1,10 @@
+import pathlib
+
 import pytest
 
 from aqueduct.config import AqueductConfig
 from aqueduct.stores.base import BackendUnsupportedError
+from aqueduct.stores.duckdb_ import DuckDBDepotStore
 
 
 def test_depot_store_kv_roundtrip(depot_store):
@@ -198,3 +201,110 @@ class TestDuckDBReadOnly:
         assert store._read_only is False
         store.kv_put("k", "v")  # must not raise
         assert store.kv_get("k") == "v"
+
+
+class TestReadOnlyUnderConcurrentWriter:
+    """A read-only open must survive a live writer on the same DuckDB file.
+
+    A read-only connection takes no writer lock, but DuckDB still refuses the
+    open while a writer is mid-transaction — precisely the case observability
+    reads exist for (inspecting a run while it runs). Before
+    `_connect_read_only_with_retry`, a bare `duckdb.connect(read_only=True)`
+    failed intermittently under that contention.
+    """
+
+    def test_read_only_connect_retries_past_a_transient_lock(self, tmp_path, monkeypatch):
+        """Deterministic: the first two opens raise a lock error, the third works."""
+        import duckdb as _duckdb
+
+        from aqueduct.stores import duckdb_ as duckdb_mod
+
+        db_path = tmp_path / "depot.db"
+        DuckDBDepotStore(db_path).kv_put("k", "v")
+
+        real_connect = _duckdb.connect
+        calls = {"n": 0}
+
+        def flaky_connect(path, *a, **kw):
+            if kw.get("read_only"):
+                calls["n"] += 1
+                if calls["n"] <= 2:
+                    raise RuntimeError("Could not set lock on file: Conflicting lock is held")
+            return real_connect(path, *a, **kw)
+
+        monkeypatch.setattr(duckdb_mod.duckdb, "connect", flaky_connect)
+
+        assert DuckDBDepotStore(db_path, read_only=True).kv_get("k") == "v"
+        assert calls["n"] == 3  # two refusals, then success — not a silent default
+
+    def test_read_only_connect_raises_after_exhausting_retries(self, tmp_path, monkeypatch):
+        """No silent fallback: a store that never unlocks is an error, not "empty"."""
+        from aqueduct.stores import duckdb_ as duckdb_mod
+        from aqueduct.stores.base import StoreLockedError
+
+        db_path = tmp_path / "depot.db"
+        DuckDBDepotStore(db_path).kv_put("k", "v")
+
+        def always_locked(path, *a, **kw):
+            raise RuntimeError("Could not set lock on file: Conflicting lock is held")
+
+        monkeypatch.setattr(duckdb_mod.duckdb, "connect", always_locked)
+
+        # StoreLockedError, not a bare StoreConnectionError: a locked store is
+        # explicitly NOT the same condition as an unopenable one, and only the
+        # former propagates through kv_get.
+        with pytest.raises(StoreLockedError, match="stayed locked"):
+            DuckDBDepotStore(db_path, read_only=True).kv_get("k")
+
+    def test_non_lock_errors_are_not_retried(self, tmp_path, monkeypatch):
+        """Only lock conflicts are worth retrying; anything else surfaces at once."""
+        from aqueduct.stores import duckdb_ as duckdb_mod
+
+        db_path = tmp_path / "depot.db"
+        DuckDBDepotStore(db_path).kv_put("k", "v")
+
+        calls = {"n": 0}
+
+        def boom(path, *a, **kw):
+            calls["n"] += 1
+            raise RuntimeError("database is corrupted")
+
+        monkeypatch.setattr(duckdb_mod.duckdb, "connect", boom)
+
+        # Surfaces as a warning-and-default (a corrupt store is not a lock
+        # error), but crucially without burning the retry budget.
+        DuckDBDepotStore(db_path, read_only=True).kv_get("k", default="d")
+        assert calls["n"] == 1
+
+    @pytest.mark.slow
+    def test_reads_succeed_while_another_process_writes(self, tmp_path):
+        """End-to-end: a separate OS process hammers writes; every read succeeds."""
+        import subprocess
+        import sys
+        import textwrap
+
+        db_path = tmp_path / "depot.db"
+        DuckDBDepotStore(db_path).kv_put("k", "seed")
+
+        writer_src = textwrap.dedent(
+            f"""
+            import sys
+            sys.path.insert(0, {str(pathlib.Path.cwd())!r})
+            from aqueduct.stores.duckdb_ import DuckDBDepotStore
+            store = DuckDBDepotStore({str(db_path)!r})
+            for i in range(60):
+                store.kv_put("k", f"v{{i}}")
+            """
+        )
+        writer = subprocess.Popen([sys.executable, "-c", writer_src])
+        try:
+            reader = DuckDBDepotStore(db_path, read_only=True)
+            failures = []
+            for _ in range(40):
+                try:
+                    assert reader.kv_get("k") != ""
+                except Exception as exc:  # noqa: BLE001 — this is what we're measuring
+                    failures.append(repr(exc))
+            assert not failures, f"{len(failures)}/40 read-only reads failed: {failures[:3]}"
+        finally:
+            writer.wait(timeout=120)

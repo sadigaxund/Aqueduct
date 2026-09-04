@@ -76,22 +76,27 @@ def resolve_duckdb_obs_path(
             return routed
 
     if run_id:
-        import duckdb as _duckdb
+        from aqueduct.stores.duckdb_ import _connect_read_only_with_retry
 
         for candidate in sorted(Path(routing_root).glob(f"*/{DEFAULT_OBS_DB_FILENAME}")):
+            # Lock contention is retried inside the connect helper and, if it
+            # still cannot open, PROPAGATES: silently skipping a locked store
+            # here would route the read to the wrong file (or to "no store at
+            # all") purely because a pipeline happened to be mid-commit.
+            conn = _connect_read_only_with_retry(candidate)
             try:
-                conn = _duckdb.connect(str(candidate), read_only=True)
-                try:
-                    hit = conn.execute(
-                        "SELECT 1 FROM run_records WHERE run_id = ? LIMIT 1",
-                        [run_id],
-                    ).fetchone()
-                finally:
-                    conn.close()
-                if hit:
-                    return candidate
+                hit = conn.execute(
+                    "SELECT 1 FROM run_records WHERE run_id = ? LIMIT 1",
+                    [run_id],
+                ).fetchone()
             except Exception:
-                continue
+                # A candidate file with no `run_records` table simply is not
+                # the store we are looking for — that is not an error.
+                hit = None
+            finally:
+                conn.close()
+            if hit:
+                return candidate
 
     return flat_default if flat_default.exists() else None
 

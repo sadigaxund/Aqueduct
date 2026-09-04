@@ -51,6 +51,18 @@ class StoreConnectionError(AqueductError):
     """
 
 
+class StoreLockedError(StoreConnectionError):
+    """A DuckDB store file stayed locked by a concurrent connection.
+
+    Split out of `StoreConnectionError` so callers can tell "another process
+    is holding this file right now" (transient, retryable, and NEVER the same
+    thing as "the data is not there") apart from "this store cannot be opened
+    at all" (access denied, corrupt file, missing driver). `kv_get` relies on
+    exactly that distinction: it swallows the latter to a default, as it
+    always has, but re-raises this one.
+    """
+
+
 class BackendUnsupportedError(AqueductError):
     """Raised when a call site asks a backend for an operation it does not support.
 
@@ -198,8 +210,20 @@ class _RelationalDepotMixin:
                 if not getattr(self, "_read_only", False):
                     cur.execute(self._DDL)
                 row = cur.execute("SELECT value FROM depot_kv WHERE key = ?", [key]).fetchone()
+                # A genuinely absent key is the ONLY thing that yields the
+                # default from here — see the except below.
                 return row[0] if row else default
-        except Exception as exc:
+        except StoreLockedError:
+            # A concurrent writer held the file past the retry budget. That is
+            # NOT "the key is missing": swallowing it would hand the caller a
+            # default that silently differs from the value actually stored,
+            # and on a preview path that means compiling against fabricated
+            # depot values. Let it propagate.
+            raise
+        except Exception as exc:  # noqa: BLE001 — schema/driver faults stay non-fatal
+            # Anything else (no `depot_kv` table yet on a store written by an
+            # older version, a driver-level oddity) keeps the historical
+            # non-fatal behaviour, but says so loudly.
             logger.warning("%s.kv_get(%r): %s — returning default", type(self).__name__, key, exc)
             return default
 

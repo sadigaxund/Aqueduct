@@ -25,8 +25,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import duckdb
-
 from aqueduct.config import DEFAULT_OBS_DB_FILENAME, DEFAULT_OBS_ROUTING_ROOT
 from aqueduct.executor.models import ExecutionStatus
 from aqueduct.stores.object_store import PatchStore
@@ -603,8 +601,14 @@ def channel_fingerprints(store: Any, blueprint_id: str) -> list[FingerprintRow]:
 def run_sql_readonly(
     duckdb_path: str | Path, query: str
 ) -> tuple[list[str], list[tuple[Any, ...]]]:
-    """Ad-hoc query over a **read-only** DuckDB connection → (columns, rows)."""
-    conn = duckdb.connect(str(duckdb_path), read_only=True)
+    """Ad-hoc query over a **read-only** DuckDB connection → (columns, rows).
+
+    Goes through `_connect_read_only_with_retry` so a concurrent writer's
+    commit does not turn an ad-hoc read into a spurious lock error.
+    """
+    from aqueduct.stores.duckdb_ import _connect_read_only_with_retry
+
+    conn = _connect_read_only_with_retry(Path(duckdb_path))
     try:
         cur = conn.execute(query)
         cols = [d[0] for d in cur.description] if cur.description else []
