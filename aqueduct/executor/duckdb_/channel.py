@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     import duckdb
 
 from aqueduct.errors import AqueductError
+from aqueduct.executor.duckdb_._temp_tables import track_temp_table
 from aqueduct.models import Module
 
 logger = logging.getLogger(__name__)
@@ -193,6 +194,7 @@ def _run_sql(
             con.execute(f'CREATE TEMP TABLE "{tmp_name}" AS {query}')
         except Exception as exc:
             raise ChannelError(f"[{module_id}] SQL execution failed: {exc}") from exc
+        track_temp_table(con, tmp_name)
         return con.table(tmp_name)
     finally:
         if single_input_registered:

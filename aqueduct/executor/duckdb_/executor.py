@@ -66,6 +66,7 @@ if TYPE_CHECKING:
     import duckdb
 
 from aqueduct.errors import ExecuteError
+from aqueduct.executor.duckdb_._temp_tables import drop_tracked_temp_tables
 from aqueduct.executor.duckdb_.assert_ import (
     _AQ_ERROR_MODULE,
     _AQ_ERROR_MSG,
@@ -746,678 +747,564 @@ def execute(
     # (Channel SQL, Funnel `inputs:`) transparently across a Handoff.
     modules_by_id: dict[str, Module] = {m.id: m for m in manifest.modules}
 
-    for module in order:
-        _collect_module_warnings()
+    try:
+        for module in order:
+            _collect_module_warnings()
 
-        if not getattr(module, "enabled", True):
-            module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
-            continue
-
-        if module.type not in _SUPPORTED_TYPES:
-            raise ExecuteError(
-                f"Module type {module.type!r} (id={module.id!r}) is not supported by the "
-                f"DuckDB engine in Stage A. Supported: {sorted(m.value for m in _SUPPORTED_TYPES)}."
-            )
-
-        if included_ids is not None and module.id not in included_ids:
-            module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
-            continue
-
-        if resume_dir:
-            module_ckpt = resume_dir / module.id
-            done_marker = module_ckpt / "_aq_done"
-            if done_marker.exists():
-                if module.type in (ModuleType.Ingress, ModuleType.Channel, ModuleType.Funnel):
-                    data_ckpt = module_ckpt / "data" / "part-0.parquet"
-                    if data_ckpt.exists():
-                        frame_store[module.id] = con.read_parquet(str(data_ckpt))
-                elif module.type == ModuleType.Junction:
-                    for branch in module.config.get("branches", []):
-                        bid = branch.get("id", "")
-                        branch_ckpt = module_ckpt / bid / "part-0.parquet"
-                        if branch_ckpt.exists():
-                            frame_store[f"{module.id}.{bid}"] = con.read_parquet(str(branch_ckpt))
-                module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
-                logger.info("Module %r: resumed from checkpoint, skipping execution", module.id)
+            if not getattr(module, "enabled", True):
+                module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
                 continue
 
-        # ── Ingress ──────────────────────────────────────────────────────
-        if module.type == ModuleType.Ingress:
-            mod_policy = _module_retry_policy(module, manifest.retry_policy)
-            _t0 = time.monotonic()
-            try:
-                rel = _with_retry(
-                    lambda: read_ingress(module, con, base_dir=manifest.base_dir),
-                    mod_policy,
-                    module.id,
+            if module.type not in _SUPPORTED_TYPES:
+                raise ExecuteError(
+                    f"Module type {module.type!r} (id={module.id!r}) is not supported by the "
+                    f"DuckDB engine in Stage A. Supported: {sorted(m.value for m in _SUPPORTED_TYPES)}."
                 )
-            except IngressError as exc:
-                gate_closed, fail_result = _on_retry_exhausted(
-                    exc, mod_policy, module, manifest.blueprint_id, run_id, module_results
-                )
-                if gate_closed:
-                    frame_store[module.id] = _GATE_CLOSED
+
+            if included_ids is not None and module.id not in included_ids:
+                module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
+                continue
+
+            if resume_dir:
+                module_ckpt = resume_dir / module.id
+                done_marker = module_ckpt / "_aq_done"
+                if done_marker.exists():
+                    if module.type in (ModuleType.Ingress, ModuleType.Channel, ModuleType.Funnel):
+                        data_ckpt = module_ckpt / "data" / "part-0.parquet"
+                        if data_ckpt.exists():
+                            frame_store[module.id] = con.read_parquet(str(data_ckpt))
+                    elif module.type == ModuleType.Junction:
+                        for branch in module.config.get("branches", []):
+                            bid = branch.get("id", "")
+                            branch_ckpt = module_ckpt / bid / "part-0.parquet"
+                            if branch_ckpt.exists():
+                                frame_store[f"{module.id}.{bid}"] = con.read_parquet(
+                                    str(branch_ckpt)
+                                )
+                    module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
+                    logger.info("Module %r: resumed from checkpoint, skipping execution", module.id)
                     continue
-                return fail_result
-            frame_store[module.id] = rel
-            # ``records_read`` is a real COUNT(*) over what this Ingress just
-            # read (see `_rel_rows` for why the extra scan is accepted rather
-            # than leaving the column permanently NULL as it was before).
-            # ``bytes_read`` is local-filesystem-only — a remote path has no
-            # cheap size to stat, so it stays NULL (see `_path_bytes`).
-            _write_module_metrics(
-                store_dir,
-                observability_store,
-                run_id,
-                module.id,
-                {
-                    **_null_metrics(),
-                    "records_read": _rel_rows(rel),
-                    "bytes_read": _path_bytes(module.config.get("path")),
-                    "duration_ms": int((time.monotonic() - _t0) * 1000),
-                },
-            )
-            _write_checkpoint(con, module, checkpoint_dir, manifest, data={"data": rel})
-            module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
 
-        # ── Channel ──────────────────────────────────────────────────────
-        elif module.type == ModuleType.Channel:
-            main_edges = _incoming_main(module.id, manifest.edges)
-            if not main_edges:
-                module_results.append(
-                    _mr(
-                        module_id=module.id,
-                        status=ExecutionStatus.ERROR,
-                        error=f"[{module.id}] Channel has no main-port incoming edges",
+            # ── Ingress ──────────────────────────────────────────────────────
+            if module.type == ModuleType.Ingress:
+                mod_policy = _module_retry_policy(module, manifest.retry_policy)
+                _t0 = time.monotonic()
+                try:
+                    rel = _with_retry(
+                        lambda: read_ingress(module, con, base_dir=manifest.base_dir),
+                        mod_policy,
+                        module.id,
                     )
+                except IngressError as exc:
+                    gate_closed, fail_result = _on_retry_exhausted(
+                        exc, mod_policy, module, manifest.blueprint_id, run_id, module_results
+                    )
+                    if gate_closed:
+                        frame_store[module.id] = _GATE_CLOSED
+                        continue
+                    return fail_result
+                frame_store[module.id] = rel
+                # ``records_read`` is a real COUNT(*) over what this Ingress just
+                # read (see `_rel_rows` for why the extra scan is accepted rather
+                # than leaving the column permanently NULL as it was before).
+                # ``bytes_read`` is local-filesystem-only — a remote path has no
+                # cheap size to stat, so it stays NULL (see `_path_bytes`).
+                _write_module_metrics(
+                    store_dir,
+                    observability_store,
+                    run_id,
+                    module.id,
+                    {
+                        **_null_metrics(),
+                        "records_read": _rel_rows(rel),
+                        "bytes_read": _path_bytes(module.config.get("path")),
+                        "duration_ms": int((time.monotonic() - _t0) * 1000),
+                    },
                 )
-                return _fail(manifest.blueprint_id, run_id, module_results)
+                _write_checkpoint(con, module, checkpoint_dir, manifest, data={"data": rel})
+                module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
 
-            upstream: dict[str, Any] = {}
-            gate_closed_upstream = False
-            for edge in main_edges:
-                # Two DIFFERENT keys, deliberately (same split as Funnel above):
-                # `store_key` is where the producer actually PUT the frame — a
-                # Junction branch writes `<from_id>.<branch_id>`, and a synthetic
-                # Handoff writes under its OWN id — while the `upstream` dict key
-                # is what the Channel's SQL NAMES, which resolves through a
-                # Handoff back to the original Blueprint id.
-                store_key = _frame_key(edge.from_id, edge.port)
-                src_key = _effective_frame_key(edge, modules_by_id)
-                val = frame_store.get(store_key)
+            # ── Channel ──────────────────────────────────────────────────────
+            elif module.type == ModuleType.Channel:
+                main_edges = _incoming_main(module.id, manifest.edges)
+                if not main_edges:
+                    module_results.append(
+                        _mr(
+                            module_id=module.id,
+                            status=ExecutionStatus.ERROR,
+                            error=f"[{module.id}] Channel has no main-port incoming edges",
+                        )
+                    )
+                    return _fail(manifest.blueprint_id, run_id, module_results)
+
+                upstream: dict[str, Any] = {}
+                gate_closed_upstream = False
+                for edge in main_edges:
+                    # Two DIFFERENT keys, deliberately (same split as Funnel above):
+                    # `store_key` is where the producer actually PUT the frame — a
+                    # Junction branch writes `<from_id>.<branch_id>`, and a synthetic
+                    # Handoff writes under its OWN id — while the `upstream` dict key
+                    # is what the Channel's SQL NAMES, which resolves through a
+                    # Handoff back to the original Blueprint id.
+                    store_key = _frame_key(edge.from_id, edge.port)
+                    src_key = _effective_frame_key(edge, modules_by_id)
+                    val = frame_store.get(store_key)
+                    if _is_gate_closed(val):
+                        frame_store[module.id] = _GATE_CLOSED
+                        module_results.append(
+                            _mr(module_id=module.id, status=ExecutionStatus.SKIPPED)
+                        )
+                        gate_closed_upstream = True
+                        break
+                    if val is None:
+                        module_results.append(
+                            _mr(
+                                module_id=module.id,
+                                status=ExecutionStatus.ERROR,
+                                error=f"[{module.id}] upstream {store_key!r} produced no relation.",
+                            )
+                        )
+                        return _fail(manifest.blueprint_id, run_id, module_results)
+                    upstream[src_key] = val
+                if gate_closed_upstream:
+                    continue
+
+                # ── Incremental watermark injection ────────────────────────
+                # `materialize`/`watermark_column` are declared module fields
+                # (2.40), not `config:` keys — see
+                # `aqueduct.parser.schema.ModuleSchema.materialize`. Mirrors
+                # `executor/spark/executor.py`'s Channel branch exactly.
+                _incremental = module.materialize == "incremental"
+                _channel_module = module
+                _watermark_col = ""
+                _depot_key = ""
+                if _incremental:
+                    _watermark_col = module.watermark_column or ""
+                    _depot_key = f"{manifest.blueprint_id}:{module.id}:_watermark"
+                    # Depot is the sole watermark store (same as Spark).
+                    _watermark_val = (
+                        depot.get(_depot_key, "") if depot else ""
+                    ) or "1900-01-01 00:00:00"
+                    _query = module.config.get("query", "")
+                    _patched_query = _query.replace("${ctx._watermark}", f"'{_watermark_val}'")
+                    if _patched_query != _query:
+                        _channel_module = dataclasses.replace(
+                            module,
+                            config={**module.config, "query": _patched_query},
+                        )
+                    # Warn if downstream Egress uses mode=overwrite (compiler
+                    # also warns statically; this is the runtime echo, same as
+                    # Spark's).
+                    _downstream_ids = {e.to_id for e in manifest.edges if e.from_id == module.id}
+                    for _ds_m in manifest.modules:
+                        if (
+                            _ds_m.id in _downstream_ids
+                            and _ds_m.type == ModuleType.Egress
+                            and _ds_m.config.get("mode") == "overwrite"
+                        ):
+                            logger.warning(
+                                "[runtime_incremental_overwrite] [%s] "
+                                "materialize=incremental → downstream Egress "
+                                "%r uses mode=overwrite; incremental rows will "
+                                "replace prior data.",
+                                module.id,
+                                _ds_m.id,
+                            )
+
+                mod_policy = _module_retry_policy(module, manifest.retry_policy)
+                _t0 = time.monotonic()
+                try:
+                    rel = _with_retry(
+                        lambda: execute_channel(_channel_module, upstream, con),
+                        mod_policy,
+                        module.id,
+                    )
+                except ChannelError as exc:
+                    gate_closed, fail_result = _on_retry_exhausted(
+                        exc, mod_policy, module, manifest.blueprint_id, run_id, module_results
+                    )
+                    if gate_closed:
+                        frame_store[module.id] = _GATE_CLOSED
+                        continue
+                    return fail_result
+                # ``records_read`` = rows on this Channel's main input (summed
+                # across inputs for a multi-input op such as a join). Spark still
+                # writes duration only here, because it has no free Observation to
+                # read at this point; DuckDB can afford the COUNT(*) (`_rel_rows`).
+                # ``bytes_read`` has no cheap DuckDB source for a mid-pipeline
+                # relation and stays NULL.
+                _write_module_metrics(
+                    store_dir,
+                    observability_store,
+                    run_id,
+                    module.id,
+                    {
+                        **_null_metrics(),
+                        "records_read": _sum_rel_rows(upstream.values()),
+                        "duration_ms": int((time.monotonic() - _t0) * 1000),
+                    },
+                )
+
+                spillway_condition: str | None = module.config.get("spillway_condition")
+                has_spillway_edge = any(
+                    e.from_id == module.id and e.port == "spillway" for e in manifest.edges
+                )
+                if spillway_condition and has_spillway_edge:
+                    frame_store[module.id] = rel.filter(f"NOT ({spillway_condition})")
+                    # Stamp the same error columns Spark's Channel spillway
+                    # branch does (executor/spark/executor.py's
+                    # SpillwayCondition path) so a typed spillway edge
+                    # (edge.error_types) filtering on _aq_error_type finds the
+                    # column on either engine instead of hitting a DuckDB
+                    # Binder error against a relation that never had it.
+                    frame_store[f"{module.id}.spillway"] = rel.filter(spillway_condition).project(
+                        f"*, {_sql_literal(module.id)} AS {_AQ_ERROR_MODULE}, "
+                        f"{_sql_literal('spillway_condition matched')} AS {_AQ_ERROR_MSG}, "
+                        f"{_sql_literal('SpillwayCondition')} AS {_AQ_ERROR_TYPE}, "
+                        f"current_timestamp AS {_AQ_ERROR_TS}"
+                    )
+                elif spillway_condition and not has_spillway_edge:
+                    frame_store[module.id] = rel
+                elif has_spillway_edge and not spillway_condition:
+                    frame_store[module.id] = rel
+                    frame_store[f"{module.id}.spillway"] = rel.filter("1=0")
+                else:
+                    frame_store[module.id] = rel
+
+                # ── Incremental watermark — defer update to post-Egress ────
+                # The actual MAX computation happens after the Egress write,
+                # reading from the materialized output instead of re-executing
+                # the DAG (same as Spark).
+                if _incremental and _watermark_col:
+                    for _eg_id in _find_downstream_egress_ids(module.id, manifest):
+                        _pending_watermarks[_eg_id] = (module.id, _watermark_col, _depot_key)
+
+                _write_checkpoint(
+                    con, module, checkpoint_dir, manifest, data={"data": frame_store[module.id]}
+                )
+                module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
+
+            # ── Junction ─────────────────────────────────────────────────────
+            elif module.type == ModuleType.Junction:
+                main_edges = _incoming_main(module.id, manifest.edges)
+                if not main_edges:
+                    module_results.append(
+                        _mr(
+                            module_id=module.id,
+                            status=ExecutionStatus.ERROR,
+                            error=f"[{module.id}] Junction has no main-port incoming edges",
+                        )
+                    )
+                    return _fail(manifest.blueprint_id, run_id, module_results)
+                # Branch-port aware (see `_incoming_main`): look the frame up where
+                # the producer PUT it — a Junction branch writes
+                # `<from_id>.<branch_id>` — exactly as Funnel does. NOT
+                # `_effective_frame_key`, which resolves through a Handoff to the
+                # original Blueprint id and would miss a READ-side handoff's frame.
+                upstream_id = _frame_key(main_edges[0].from_id, main_edges[0].port)
+                val = frame_store.get(upstream_id)
+                if _is_gate_closed(val):
+                    for branch in module.config.get("branches", []):
+                        frame_store[f"{module.id}.{branch.get('id', '')}"] = _GATE_CLOSED
+                    module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
+                    continue
+                if val is None:
+                    module_results.append(
+                        _mr(
+                            module_id=module.id,
+                            status=ExecutionStatus.ERROR,
+                            error=f"[{module.id}] upstream {upstream_id!r} produced no relation.",
+                        )
+                    )
+                    return _fail(manifest.blueprint_id, run_id, module_results)
+
+                mod_policy = _module_retry_policy(module, manifest.retry_policy)
+                _t0 = time.monotonic()
+                try:
+                    branch_rels = _with_retry(
+                        lambda: execute_junction(module, val), mod_policy, module.id
+                    )
+                except JunctionError as exc:
+                    gate_closed, fail_result = _on_retry_exhausted(
+                        exc, mod_policy, module, manifest.blueprint_id, run_id, module_results
+                    )
+                    if gate_closed:
+                        for branch in module.config.get("branches", []):
+                            frame_store[f"{module.id}.{branch.get('id', '')}"] = _GATE_CLOSED
+                        continue
+                    return fail_result
+                # ``records_read`` = rows on the Junction's main input, i.e. the
+                # relation it fanned out (`_rel_rows`). ``bytes_read`` has no cheap
+                # DuckDB source mid-pipeline and stays NULL.
+                _write_module_metrics(
+                    store_dir,
+                    observability_store,
+                    run_id,
+                    module.id,
+                    {
+                        **_null_metrics(),
+                        "records_read": _rel_rows(val),
+                        "duration_ms": int((time.monotonic() - _t0) * 1000),
+                    },
+                )
+                for branch_id, branch_rel in branch_rels.items():
+                    frame_store[f"{module.id}.{branch_id}"] = branch_rel
+                _write_checkpoint(con, module, checkpoint_dir, manifest, data=branch_rels)
+                module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
+
+            # ── Funnel ───────────────────────────────────────────────────────
+            elif module.type == ModuleType.Funnel:
+                data_edges = _incoming_data(module.id, manifest.edges)
+                if not data_edges:
+                    module_results.append(
+                        _mr(
+                            module_id=module.id,
+                            status=ExecutionStatus.ERROR,
+                            error=f"[{module.id}] Funnel has no incoming data edges",
+                        )
+                    )
+                    return _fail(manifest.blueprint_id, run_id, module_results)
+
+                funnel_upstream: dict[str, Any] = {}
+                skipped = False
+                for edge in data_edges:
+                    store_key = _frame_key(edge.from_id, edge.port)
+                    val = frame_store.get(store_key)
+                    if _is_gate_closed(val):
+                        skipped = True
+                        break
+                    if val is None:
+                        module_results.append(
+                            _mr(
+                                module_id=module.id,
+                                status=ExecutionStatus.ERROR,
+                                error=f"[{module.id}] upstream {store_key!r} produced no relation.",
+                            )
+                        )
+                        return _fail(manifest.blueprint_id, run_id, module_results)
+                    if edge.port == "spillway" and edge.error_types:
+                        val = val.filter(
+                            f"{_AQ_ERROR_TYPE} IN ("
+                            + ",".join(f"'{t}'" for t in edge.error_types)
+                            + ")"
+                        )
+                    funnel_upstream[_effective_frame_key(edge, modules_by_id)] = val
+                if skipped:
+                    frame_store[module.id] = _GATE_CLOSED
+                    module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
+                    continue
+
+                mod_policy = _module_retry_policy(module, manifest.retry_policy)
+                _t0 = time.monotonic()
+                try:
+                    rel = _with_retry(
+                        lambda: execute_funnel(module, funnel_upstream, con), mod_policy, module.id
+                    )
+                except FunnelError as exc:
+                    gate_closed, fail_result = _on_retry_exhausted(
+                        exc, mod_policy, module, manifest.blueprint_id, run_id, module_results
+                    )
+                    if gate_closed:
+                        frame_store[module.id] = _GATE_CLOSED
+                        continue
+                    return fail_result
+                frame_store[module.id] = rel
+                # ``records_read`` = rows across every input this Funnel merged.
+                # ``bytes_read`` has no cheap DuckDB source mid-pipeline: NULL.
+                _write_module_metrics(
+                    store_dir,
+                    observability_store,
+                    run_id,
+                    module.id,
+                    {
+                        **_null_metrics(),
+                        "records_read": _sum_rel_rows(funnel_upstream.values()),
+                        "duration_ms": int((time.monotonic() - _t0) * 1000),
+                    },
+                )
+                _write_checkpoint(con, module, checkpoint_dir, manifest, data={"data": rel})
+                module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
+
+            # ── Assert (Pass D — quality gates, quarantine via spillway port) ──
+            elif module.type == ModuleType.Assert:
+                main_edges = _incoming_main(module.id, manifest.edges)
+                if not main_edges:
+                    module_results.append(
+                        _mr(
+                            module_id=module.id,
+                            status=ExecutionStatus.ERROR,
+                            error=f"[{module.id}] Assert has no main-port incoming edges",
+                        )
+                    )
+                    return _fail(manifest.blueprint_id, run_id, module_results)
+                # Branch-port aware (see `_incoming_main`): look the frame up where
+                # the producer PUT it — a Junction branch writes
+                # `<from_id>.<branch_id>` — exactly as Funnel does. NOT
+                # `_effective_frame_key`, which resolves through a Handoff to the
+                # original Blueprint id and would miss a READ-side handoff's frame.
+                upstream_id = _frame_key(main_edges[0].from_id, main_edges[0].port)
+                val = frame_store.get(upstream_id)
                 if _is_gate_closed(val):
                     frame_store[module.id] = _GATE_CLOSED
                     module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
-                    gate_closed_upstream = True
-                    break
+                    continue
                 if val is None:
                     module_results.append(
                         _mr(
                             module_id=module.id,
                             status=ExecutionStatus.ERROR,
-                            error=f"[{module.id}] upstream {store_key!r} produced no relation.",
+                            error=f"[{module.id}] upstream {upstream_id!r} produced no relation.",
                         )
                     )
                     return _fail(manifest.blueprint_id, run_id, module_results)
-                upstream[src_key] = val
-            if gate_closed_upstream:
-                continue
 
-            # ── Incremental watermark injection ────────────────────────
-            # `materialize`/`watermark_column` are declared module fields
-            # (2.40), not `config:` keys — see
-            # `aqueduct.parser.schema.ModuleSchema.materialize`. Mirrors
-            # `executor/spark/executor.py`'s Channel branch exactly.
-            _incremental = module.materialize == "incremental"
-            _channel_module = module
-            _watermark_col = ""
-            _depot_key = ""
-            if _incremental:
-                _watermark_col = module.watermark_column or ""
-                _depot_key = f"{manifest.blueprint_id}:{module.id}:_watermark"
-                # Depot is the sole watermark store (same as Spark).
-                _watermark_val = (
-                    depot.get(_depot_key, "") if depot else ""
-                ) or "1900-01-01 00:00:00"
-                _query = module.config.get("query", "")
-                _patched_query = _query.replace("${ctx._watermark}", f"'{_watermark_val}'")
-                if _patched_query != _query:
-                    _channel_module = dataclasses.replace(
+                has_spillway_edge = any(
+                    e.from_id == module.id and e.port == "spillway" for e in manifest.edges
+                )
+
+                try:
+                    passing_rel, quarantine_rel = execute_assert(
                         module,
-                        config={**module.config, "query": _patched_query},
+                        val,
+                        con,
+                        run_id,
+                        manifest.blueprint_id,
+                        base_dir=manifest.base_dir,
                     )
-                # Warn if downstream Egress uses mode=overwrite (compiler
-                # also warns statically; this is the runtime echo, same as
-                # Spark's).
-                _downstream_ids = {e.to_id for e in manifest.edges if e.from_id == module.id}
-                for _ds_m in manifest.modules:
-                    if (
-                        _ds_m.id in _downstream_ids
-                        and _ds_m.type == ModuleType.Egress
-                        and _ds_m.config.get("mode") == "overwrite"
-                    ):
-                        logger.warning(
-                            "[runtime_incremental_overwrite] [%s] "
-                            "materialize=incremental → downstream Egress "
-                            "%r uses mode=overwrite; incremental rows will "
-                            "replace prior data.",
-                            module.id,
-                            _ds_m.id,
+                except AssertError as exc:
+                    module_results.append(
+                        _mr(
+                            module_id=module.id,
+                            status=ExecutionStatus.ERROR,
+                            error=str(exc),
+                            error_type=exc.error_type,
+                            exception=exc,
                         )
-
-            mod_policy = _module_retry_policy(module, manifest.retry_policy)
-            _t0 = time.monotonic()
-            try:
-                rel = _with_retry(
-                    lambda: execute_channel(_channel_module, upstream, con), mod_policy, module.id
-                )
-            except ChannelError as exc:
-                gate_closed, fail_result = _on_retry_exhausted(
-                    exc, mod_policy, module, manifest.blueprint_id, run_id, module_results
-                )
-                if gate_closed:
-                    frame_store[module.id] = _GATE_CLOSED
-                    continue
-                return fail_result
-            # ``records_read`` = rows on this Channel's main input (summed
-            # across inputs for a multi-input op such as a join). Spark still
-            # writes duration only here, because it has no free Observation to
-            # read at this point; DuckDB can afford the COUNT(*) (`_rel_rows`).
-            # ``bytes_read`` has no cheap DuckDB source for a mid-pipeline
-            # relation and stays NULL.
-            _write_module_metrics(
-                store_dir,
-                observability_store,
-                run_id,
-                module.id,
-                {
-                    **_null_metrics(),
-                    "records_read": _sum_rel_rows(upstream.values()),
-                    "duration_ms": int((time.monotonic() - _t0) * 1000),
-                },
-            )
-
-            spillway_condition: str | None = module.config.get("spillway_condition")
-            has_spillway_edge = any(
-                e.from_id == module.id and e.port == "spillway" for e in manifest.edges
-            )
-            if spillway_condition and has_spillway_edge:
-                frame_store[module.id] = rel.filter(f"NOT ({spillway_condition})")
-                # Stamp the same error columns Spark's Channel spillway
-                # branch does (executor/spark/executor.py's
-                # SpillwayCondition path) so a typed spillway edge
-                # (edge.error_types) filtering on _aq_error_type finds the
-                # column on either engine instead of hitting a DuckDB
-                # Binder error against a relation that never had it.
-                frame_store[f"{module.id}.spillway"] = rel.filter(spillway_condition).project(
-                    f"*, {_sql_literal(module.id)} AS {_AQ_ERROR_MODULE}, "
-                    f"{_sql_literal('spillway_condition matched')} AS {_AQ_ERROR_MSG}, "
-                    f"{_sql_literal('SpillwayCondition')} AS {_AQ_ERROR_TYPE}, "
-                    f"current_timestamp AS {_AQ_ERROR_TS}"
-                )
-            elif spillway_condition and not has_spillway_edge:
-                frame_store[module.id] = rel
-            elif has_spillway_edge and not spillway_condition:
-                frame_store[module.id] = rel
-                frame_store[f"{module.id}.spillway"] = rel.filter("1=0")
-            else:
-                frame_store[module.id] = rel
-
-            # ── Incremental watermark — defer update to post-Egress ────
-            # The actual MAX computation happens after the Egress write,
-            # reading from the materialized output instead of re-executing
-            # the DAG (same as Spark).
-            if _incremental and _watermark_col:
-                for _eg_id in _find_downstream_egress_ids(module.id, manifest):
-                    _pending_watermarks[_eg_id] = (module.id, _watermark_col, _depot_key)
-
-            _write_checkpoint(
-                con, module, checkpoint_dir, manifest, data={"data": frame_store[module.id]}
-            )
-            module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
-
-        # ── Junction ─────────────────────────────────────────────────────
-        elif module.type == ModuleType.Junction:
-            main_edges = _incoming_main(module.id, manifest.edges)
-            if not main_edges:
-                module_results.append(
-                    _mr(
-                        module_id=module.id,
-                        status=ExecutionStatus.ERROR,
-                        error=f"[{module.id}] Junction has no main-port incoming edges",
                     )
-                )
-                return _fail(manifest.blueprint_id, run_id, module_results)
-            # Branch-port aware (see `_incoming_main`): look the frame up where
-            # the producer PUT it — a Junction branch writes
-            # `<from_id>.<branch_id>` — exactly as Funnel does. NOT
-            # `_effective_frame_key`, which resolves through a Handoff to the
-            # original Blueprint id and would miss a READ-side handoff's frame.
-            upstream_id = _frame_key(main_edges[0].from_id, main_edges[0].port)
-            val = frame_store.get(upstream_id)
-            if _is_gate_closed(val):
-                for branch in module.config.get("branches", []):
-                    frame_store[f"{module.id}.{branch.get('id', '')}"] = _GATE_CLOSED
-                module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
-                continue
-            if val is None:
-                module_results.append(
-                    _mr(
-                        module_id=module.id,
-                        status=ExecutionStatus.ERROR,
-                        error=f"[{module.id}] upstream {upstream_id!r} produced no relation.",
+                    return _fail(
+                        manifest.blueprint_id,
+                        run_id,
+                        module_results,
+                        trigger_agent=exc.trigger_agent,
                     )
-                )
-                return _fail(manifest.blueprint_id, run_id, module_results)
-
-            mod_policy = _module_retry_policy(module, manifest.retry_policy)
-            _t0 = time.monotonic()
-            try:
-                branch_rels = _with_retry(
-                    lambda: execute_junction(module, val), mod_policy, module.id
-                )
-            except JunctionError as exc:
-                gate_closed, fail_result = _on_retry_exhausted(
-                    exc, mod_policy, module, manifest.blueprint_id, run_id, module_results
-                )
-                if gate_closed:
-                    for branch in module.config.get("branches", []):
-                        frame_store[f"{module.id}.{branch.get('id', '')}"] = _GATE_CLOSED
-                    continue
-                return fail_result
-            # ``records_read`` = rows on the Junction's main input, i.e. the
-            # relation it fanned out (`_rel_rows`). ``bytes_read`` has no cheap
-            # DuckDB source mid-pipeline and stays NULL.
-            _write_module_metrics(
-                store_dir,
-                observability_store,
-                run_id,
-                module.id,
-                {
-                    **_null_metrics(),
-                    "records_read": _rel_rows(val),
-                    "duration_ms": int((time.monotonic() - _t0) * 1000),
-                },
-            )
-            for branch_id, branch_rel in branch_rels.items():
-                frame_store[f"{module.id}.{branch_id}"] = branch_rel
-            _write_checkpoint(con, module, checkpoint_dir, manifest, data=branch_rels)
-            module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
-
-        # ── Funnel ───────────────────────────────────────────────────────
-        elif module.type == ModuleType.Funnel:
-            data_edges = _incoming_data(module.id, manifest.edges)
-            if not data_edges:
-                module_results.append(
-                    _mr(
-                        module_id=module.id,
-                        status=ExecutionStatus.ERROR,
-                        error=f"[{module.id}] Funnel has no incoming data edges",
+                except (
+                    Exception
+                ) as exc:  # noqa: BLE001 — assert dispatch must fail cleanly, not leak a raw traceback
+                    module_results.append(
+                        _mr(
+                            module_id=module.id,
+                            status=ExecutionStatus.ERROR,
+                            error=str(exc),
+                            exception=exc,
+                        )
                     )
-                )
-                return _fail(manifest.blueprint_id, run_id, module_results)
+                    return _fail(manifest.blueprint_id, run_id, module_results)
 
-            funnel_upstream: dict[str, Any] = {}
-            skipped = False
-            for edge in data_edges:
-                store_key = _frame_key(edge.from_id, edge.port)
-                val = frame_store.get(store_key)
+                frame_store[module.id] = passing_rel
+                if quarantine_rel is not None and has_spillway_edge:
+                    frame_store[f"{module.id}.spillway"] = quarantine_rel
+                elif quarantine_rel is not None:
+                    logger.warning(
+                        "[runtime_assert_quarantine_no_spillway] [%s] Assert "
+                        "quarantine rows produced but no spillway edge; discarded.",
+                        module.id,
+                    )
+                elif has_spillway_edge:
+                    # A quarantine-eligible rule (e.g. `custom`) reported no rows
+                    # to quarantine this run — still supply an empty relation so
+                    # a wired spillway Egress doesn't see "upstream produced no
+                    # relation" (same rule as the Channel spillway_condition
+                    # mismatch case above).
+                    frame_store[f"{module.id}.spillway"] = val.filter("1=0")
+                # No _write_checkpoint call here — mirrors Spark's Assert branch,
+                # which does not checkpoint either (and the resume-from-checkpoint
+                # branch above never special-cases ModuleType.Assert).
+                module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
+
+            # ── Regulator (pass-through gate; identical logic to Spark's) ──────
+            elif module.type == ModuleType.Regulator:
+                main_edges = _incoming_main(module.id, manifest.edges)
+                if not main_edges:
+                    module_results.append(
+                        _mr(
+                            module_id=module.id,
+                            status=ExecutionStatus.ERROR,
+                            error=f"[{module.id}] Regulator has no main-port incoming edges",
+                        )
+                    )
+                    return _fail(manifest.blueprint_id, run_id, module_results)
+                # Branch-port aware (see `_incoming_main`): look the frame up where
+                # the producer PUT it — a Junction branch writes
+                # `<from_id>.<branch_id>` — exactly as Funnel does. NOT
+                # `_effective_frame_key`, which resolves through a Handoff to the
+                # original Blueprint id and would miss a READ-side handoff's frame.
+                upstream_id = _frame_key(main_edges[0].from_id, main_edges[0].port)
+                val = frame_store.get(upstream_id)
                 if _is_gate_closed(val):
-                    skipped = True
-                    break
+                    frame_store[module.id] = _GATE_CLOSED
+                    module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
+                    continue
                 if val is None:
                     module_results.append(
                         _mr(
                             module_id=module.id,
                             status=ExecutionStatus.ERROR,
-                            error=f"[{module.id}] upstream {store_key!r} produced no relation.",
+                            error=f"[{module.id}] upstream {upstream_id!r} produced no relation.",
                         )
                     )
                     return _fail(manifest.blueprint_id, run_id, module_results)
-                if edge.port == "spillway" and edge.error_types:
-                    val = val.filter(
-                        f"{_AQ_ERROR_TYPE} IN ("
-                        + ",".join(f"'{t}'" for t in edge.error_types)
-                        + ")"
-                    )
-                funnel_upstream[_effective_frame_key(edge, modules_by_id)] = val
-            if skipped:
-                frame_store[module.id] = _GATE_CLOSED
-                module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
-                continue
 
-            mod_policy = _module_retry_policy(module, manifest.retry_policy)
-            _t0 = time.monotonic()
-            try:
-                rel = _with_retry(
-                    lambda: execute_funnel(module, funnel_upstream, con), mod_policy, module.id
-                )
-            except FunnelError as exc:
-                gate_closed, fail_result = _on_retry_exhausted(
-                    exc, mod_policy, module, manifest.blueprint_id, run_id, module_results
-                )
-                if gate_closed:
+                timeout_sec = float(module.config.get("timeout_seconds", 0))
+                poll_interval = max(0.5, float(module.config.get("poll_seconds", 30.0)))
+                elapsed = 0.0
+                gate_open = surveyor.evaluate_regulator(module.id) if surveyor else True
+                if not gate_open and timeout_sec > 0 and surveyor:
+                    while not gate_open and elapsed < timeout_sec:
+                        time.sleep(poll_interval)
+                        elapsed += poll_interval
+                        gate_open = surveyor.evaluate_regulator(module.id)
+
+                if gate_open:
+                    frame_store[module.id] = val
+                    module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
+                else:
+                    on_block = module.config.get("on_block", "skip")
+                    if on_block == "abort":
+                        module_results.append(
+                            _mr(
+                                module_id=module.id,
+                                status=ExecutionStatus.ERROR,
+                                error=f"[{module.id}] Regulator gate closed; on_block=abort",
+                            )
+                        )
+                        return _fail(manifest.blueprint_id, run_id, module_results)
+                    if on_block == "trigger_agent":
+                        module_results.append(
+                            _mr(
+                                module_id=module.id,
+                                status=ExecutionStatus.ERROR,
+                                error=f"[{module.id}] Regulator gate closed; on_block=trigger_agent",
+                            )
+                        )
+                        return _fail(
+                            manifest.blueprint_id, run_id, module_results, trigger_agent=True
+                        )
                     frame_store[module.id] = _GATE_CLOSED
-                    continue
-                return fail_result
-            frame_store[module.id] = rel
-            # ``records_read`` = rows across every input this Funnel merged.
-            # ``bytes_read`` has no cheap DuckDB source mid-pipeline: NULL.
-            _write_module_metrics(
-                store_dir,
-                observability_store,
-                run_id,
-                module.id,
-                {
-                    **_null_metrics(),
-                    "records_read": _sum_rel_rows(funnel_upstream.values()),
-                    "duration_ms": int((time.monotonic() - _t0) * 1000),
-                },
-            )
-            _write_checkpoint(con, module, checkpoint_dir, manifest, data={"data": rel})
-            module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
+                    module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
 
-        # ── Assert (Pass D — quality gates, quarantine via spillway port) ──
-        elif module.type == ModuleType.Assert:
-            main_edges = _incoming_main(module.id, manifest.edges)
-            if not main_edges:
-                module_results.append(
-                    _mr(
-                        module_id=module.id,
-                        status=ExecutionStatus.ERROR,
-                        error=f"[{module.id}] Assert has no main-port incoming edges",
-                    )
-                )
-                return _fail(manifest.blueprint_id, run_id, module_results)
-            # Branch-port aware (see `_incoming_main`): look the frame up where
-            # the producer PUT it — a Junction branch writes
-            # `<from_id>.<branch_id>` — exactly as Funnel does. NOT
-            # `_effective_frame_key`, which resolves through a Handoff to the
-            # original Blueprint id and would miss a READ-side handoff's frame.
-            upstream_id = _frame_key(main_edges[0].from_id, main_edges[0].port)
-            val = frame_store.get(upstream_id)
-            if _is_gate_closed(val):
-                frame_store[module.id] = _GATE_CLOSED
-                module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
-                continue
-            if val is None:
-                module_results.append(
-                    _mr(
-                        module_id=module.id,
-                        status=ExecutionStatus.ERROR,
-                        error=f"[{module.id}] upstream {upstream_id!r} produced no relation.",
-                    )
-                )
-                return _fail(manifest.blueprint_id, run_id, module_results)
-
-            has_spillway_edge = any(
-                e.from_id == module.id and e.port == "spillway" for e in manifest.edges
-            )
-
-            try:
-                passing_rel, quarantine_rel = execute_assert(
-                    module,
-                    val,
-                    con,
-                    run_id,
-                    manifest.blueprint_id,
-                    base_dir=manifest.base_dir,
-                )
-            except AssertError as exc:
-                module_results.append(
-                    _mr(
-                        module_id=module.id,
-                        status=ExecutionStatus.ERROR,
-                        error=str(exc),
-                        error_type=exc.error_type,
-                        exception=exc,
-                    )
-                )
-                return _fail(
-                    manifest.blueprint_id, run_id, module_results, trigger_agent=exc.trigger_agent
-                )
-            except (
-                Exception
-            ) as exc:  # noqa: BLE001 — assert dispatch must fail cleanly, not leak a raw traceback
-                module_results.append(
-                    _mr(
-                        module_id=module.id,
-                        status=ExecutionStatus.ERROR,
-                        error=str(exc),
-                        exception=exc,
-                    )
-                )
-                return _fail(manifest.blueprint_id, run_id, module_results)
-
-            frame_store[module.id] = passing_rel
-            if quarantine_rel is not None and has_spillway_edge:
-                frame_store[f"{module.id}.spillway"] = quarantine_rel
-            elif quarantine_rel is not None:
-                logger.warning(
-                    "[runtime_assert_quarantine_no_spillway] [%s] Assert "
-                    "quarantine rows produced but no spillway edge; discarded.",
-                    module.id,
-                )
-            elif has_spillway_edge:
-                # A quarantine-eligible rule (e.g. `custom`) reported no rows
-                # to quarantine this run — still supply an empty relation so
-                # a wired spillway Egress doesn't see "upstream produced no
-                # relation" (same rule as the Channel spillway_condition
-                # mismatch case above).
-                frame_store[f"{module.id}.spillway"] = val.filter("1=0")
-            # No _write_checkpoint call here — mirrors Spark's Assert branch,
-            # which does not checkpoint either (and the resume-from-checkpoint
-            # branch above never special-cases ModuleType.Assert).
-            module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
-
-        # ── Regulator (pass-through gate; identical logic to Spark's) ──────
-        elif module.type == ModuleType.Regulator:
-            main_edges = _incoming_main(module.id, manifest.edges)
-            if not main_edges:
-                module_results.append(
-                    _mr(
-                        module_id=module.id,
-                        status=ExecutionStatus.ERROR,
-                        error=f"[{module.id}] Regulator has no main-port incoming edges",
-                    )
-                )
-                return _fail(manifest.blueprint_id, run_id, module_results)
-            # Branch-port aware (see `_incoming_main`): look the frame up where
-            # the producer PUT it — a Junction branch writes
-            # `<from_id>.<branch_id>` — exactly as Funnel does. NOT
-            # `_effective_frame_key`, which resolves through a Handoff to the
-            # original Blueprint id and would miss a READ-side handoff's frame.
-            upstream_id = _frame_key(main_edges[0].from_id, main_edges[0].port)
-            val = frame_store.get(upstream_id)
-            if _is_gate_closed(val):
-                frame_store[module.id] = _GATE_CLOSED
-                module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
-                continue
-            if val is None:
-                module_results.append(
-                    _mr(
-                        module_id=module.id,
-                        status=ExecutionStatus.ERROR,
-                        error=f"[{module.id}] upstream {upstream_id!r} produced no relation.",
-                    )
-                )
-                return _fail(manifest.blueprint_id, run_id, module_results)
-
-            timeout_sec = float(module.config.get("timeout_seconds", 0))
-            poll_interval = max(0.5, float(module.config.get("poll_seconds", 30.0)))
-            elapsed = 0.0
-            gate_open = surveyor.evaluate_regulator(module.id) if surveyor else True
-            if not gate_open and timeout_sec > 0 and surveyor:
-                while not gate_open and elapsed < timeout_sec:
-                    time.sleep(poll_interval)
-                    elapsed += poll_interval
-                    gate_open = surveyor.evaluate_regulator(module.id)
-
-            if gate_open:
-                frame_store[module.id] = val
-                module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
-            else:
-                on_block = module.config.get("on_block", "skip")
-                if on_block == "abort":
+            # ── Egress ───────────────────────────────────────────────────────
+            elif module.type == ModuleType.Egress:
+                data_edges = _incoming_data(module.id, manifest.edges)
+                if not data_edges:
                     module_results.append(
                         _mr(
                             module_id=module.id,
                             status=ExecutionStatus.ERROR,
-                            error=f"[{module.id}] Regulator gate closed; on_block=abort",
+                            error=f"[{module.id}] no main-port edge arriving at this Egress module",
                         )
                     )
                     return _fail(manifest.blueprint_id, run_id, module_results)
-                if on_block == "trigger_agent":
-                    module_results.append(
-                        _mr(
-                            module_id=module.id,
-                            status=ExecutionStatus.ERROR,
-                            error=f"[{module.id}] Regulator gate closed; on_block=trigger_agent",
-                        )
-                    )
-                    return _fail(manifest.blueprint_id, run_id, module_results, trigger_agent=True)
-                frame_store[module.id] = _GATE_CLOSED
-                module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
-
-        # ── Egress ───────────────────────────────────────────────────────
-        elif module.type == ModuleType.Egress:
-            data_edges = _incoming_data(module.id, manifest.edges)
-            if not data_edges:
-                module_results.append(
-                    _mr(
-                        module_id=module.id,
-                        status=ExecutionStatus.ERROR,
-                        error=f"[{module.id}] no main-port edge arriving at this Egress module",
-                    )
-                )
-                return _fail(manifest.blueprint_id, run_id, module_results)
-            edge = data_edges[0]
-            key = _frame_key(edge.from_id, edge.port)
-            val = frame_store.get(key)
-            if _is_gate_closed(val):
-                module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
-                continue
-            if val is None:
-                module_results.append(
-                    _mr(
-                        module_id=module.id,
-                        status=ExecutionStatus.ERROR,
-                        error=f"[{module.id}] upstream {edge.from_id!r} produced no relation.",
-                    )
-                )
-                return _fail(manifest.blueprint_id, run_id, module_results)
-            if edge.port == "spillway" and edge.error_types:
-                val = val.filter(
-                    f"{_AQ_ERROR_TYPE} IN (" + ",".join(f"'{t}'" for t in edge.error_types) + ")"
-                )
-
-            mod_policy = _module_retry_policy(module, manifest.retry_policy)
-            _t0 = time.monotonic()
-            try:
-                _records_written = _with_retry(
-                    lambda: write_egress(val, module, con, depot=depot, base_dir=manifest.base_dir),
-                    mod_policy,
-                    module.id,
-                )
-            except EgressError as exc:
-                gate_closed, fail_result = _on_retry_exhausted(
-                    exc, mod_policy, module, manifest.blueprint_id, run_id, module_results
-                )
-                if gate_closed:
-                    continue
-                return fail_result
-            # `records_written` comes straight off the write statement's own
-            # result (see `write_egress`'s docstring) — zero extra scans,
-            # and a real 0 for an empty relation (Phase 85 D3), not NULL.
-            # `bytes_written` is local-filesystem-only (`table:`/`depot:`
-            # writes and remote paths stay NULL — see `_path_bytes`).
-            _write_module_metrics(
-                store_dir,
-                observability_store,
-                run_id,
-                module.id,
-                {
-                    **_null_metrics(),
-                    "records_written": _records_written,
-                    "bytes_written": _path_bytes(module.config.get("path")),
-                    "duration_ms": int((time.monotonic() - _t0) * 1000),
-                },
-            )
-            _write_checkpoint(con, module, checkpoint_dir, manifest)
-
-            # ── Watermark update (Depot-only) — mirrors Spark's ────────────
-            if module.id in _pending_watermarks:
-                _ch_id, _wm_col, _wm_depot_key = _pending_watermarks.pop(module.id)
-                _eg_path = module.config.get("path", "")
-                _eg_fmt = module.config.get("format", "parquet")
-                if _eg_path and _eg_fmt not in ("depot",):
-                    _new_wm = _compute_watermark_from_output(con, _eg_path, _eg_fmt, _wm_col)
-                    if _new_wm is None:
-                        logger.warning(
-                            "[runtime_watermark_compute_failed] [%s] Could "
-                            "not compute watermark from output path %r; "
-                            "watermark not advanced this run.",
-                            module.id,
-                            _eg_path,
-                        )
-                    elif depot is None:
-                        logger.warning(
-                            "[runtime_watermark_no_depot] [%s] Incremental "
-                            "Channel %r advanced watermark to %s=%s but no "
-                            "depot is configured — it cannot be persisted, "
-                            "so the next run re-scans all source data. "
-                            "Configure stores.depots.",
-                            module.id,
-                            _ch_id,
-                            _wm_col,
-                            _new_wm,
-                        )
-                    else:
-                        depot.put(_wm_depot_key, _new_wm)
-                        logger.debug(
-                            "[%s] Watermark persisted to depot: %s=%s",
-                            module.id,
-                            _wm_col,
-                            _new_wm,
-                        )
-
-            module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
-
-        # ── Handoff (Phase 81 step 3 — cross-engine boundary) ───────────────
-        # Same shape as Spark's Handoff branch (executor/spark/executor.py):
-        # a main-port incoming edge present in THIS sub-manifest means this
-        # island produced the data (WRITE side); its absence means this
-        # island only consumes it via the outgoing edge to `to_module`
-        # (READ side). Engine-native parquet on both sides — DuckDB's own
-        # `COPY ... TO ... (FORMAT PARQUET)` / `read_parquet`, no fsspec.
-        # Spill directories are treated as a single-file-per-boundary
-        # directory (`<spill_uri>/part-0.parquet`), the same convention
-        # DuckDB's own checkpoint writer already uses — this and Spark's
-        # multi-part `df.write.parquet(dir)` are cross-readable because both
-        # sides glob/scan every `*.parquet` file under the directory.
-        elif module.type == ModuleType.Handoff:
-            # `_incoming_data` (any non-signal port), NOT `_incoming_main` —
-            # see the matching fix + comment in `executor/spark/executor.py`'s
-            # Handoff branch: a Junction branch edge crossing the boundary
-            # directly preserves its branch-id port onto the handoff's
-            # incoming edge, not `"main"`, and `_incoming_main` silently
-            # misdispatched that WRITE side as a READ side.
-            main_edges = _incoming_data(module.id, manifest.edges)
-            spill_uri = (handoff_spill_uris or {}).get(module.id)
-            if not spill_uri:
-                module_results.append(
-                    _mr(
-                        module_id=module.id,
-                        status=ExecutionStatus.ERROR,
-                        error=f"[{module.id}] no spill URI resolved for this handoff module",
-                    )
-                )
-                return _fail(manifest.blueprint_id, run_id, module_results)
-
-            _t0 = time.monotonic()
-            if main_edges:
-                # WRITE side.
-                edge = main_edges[0]
+                edge = data_edges[0]
                 key = _frame_key(edge.from_id, edge.port)
                 val = frame_store.get(key)
                 if _is_gate_closed(val):
@@ -1432,123 +1319,257 @@ def execute(
                         )
                     )
                     return _fail(manifest.blueprint_id, run_id, module_results)
-
-                if not is_remote_uri(spill_uri):
-                    Path(spill_uri).mkdir(parents=True, exist_ok=True)
-                part_path = f"{spill_uri.rstrip('/')}/part-0.parquet"
-                input_name = f"__handoff_write_{module.id.replace('-', '_')}__"
-                con.register(input_name, val)
-                try:
-                    con.sql(f"COPY {input_name} TO '{_escape(part_path)}' (FORMAT PARQUET)")
-                except Exception as exc:
-                    module_results.append(
-                        _mr(
-                            module_id=module.id,
-                            status=ExecutionStatus.ERROR,
-                            error=f"[{module.id}] handoff spill write to {spill_uri!r} failed: {exc}",
-                            exception=exc,
-                        )
+                if edge.port == "spillway" and edge.error_types:
+                    val = val.filter(
+                        f"{_AQ_ERROR_TYPE} IN ("
+                        + ",".join(f"'{t}'" for t in edge.error_types)
+                        + ")"
                     )
-                    return _fail(manifest.blueprint_id, run_id, module_results)
-                finally:
-                    con.unregister(input_name)
+
+                mod_policy = _module_retry_policy(module, manifest.retry_policy)
+                _t0 = time.monotonic()
+                try:
+                    _records_written = _with_retry(
+                        lambda: write_egress(
+                            val, module, con, depot=depot, base_dir=manifest.base_dir
+                        ),
+                        mod_policy,
+                        module.id,
+                    )
+                except EgressError as exc:
+                    gate_closed, fail_result = _on_retry_exhausted(
+                        exc, mod_policy, module, manifest.blueprint_id, run_id, module_results
+                    )
+                    if gate_closed:
+                        continue
+                    return fail_result
+                # `records_written` comes straight off the write statement's own
+                # result (see `write_egress`'s docstring) — zero extra scans,
+                # and a real 0 for an empty relation (Phase 85 D3), not NULL.
+                # `bytes_written` is local-filesystem-only (`table:`/`depot:`
+                # writes and remote paths stay NULL — see `_path_bytes`).
                 _write_module_metrics(
                     store_dir,
                     observability_store,
                     run_id,
                     module.id,
                     {
-                        "bytes_written": dir_size_bytes(spill_uri),
+                        **_null_metrics(),
+                        "records_written": _records_written,
+                        "bytes_written": _path_bytes(module.config.get("path")),
                         "duration_ms": int((time.monotonic() - _t0) * 1000),
                     },
                 )
+                _write_checkpoint(con, module, checkpoint_dir, manifest)
+
+                # ── Watermark update (Depot-only) — mirrors Spark's ────────────
+                if module.id in _pending_watermarks:
+                    _ch_id, _wm_col, _wm_depot_key = _pending_watermarks.pop(module.id)
+                    _eg_path = module.config.get("path", "")
+                    _eg_fmt = module.config.get("format", "parquet")
+                    if _eg_path and _eg_fmt not in ("depot",):
+                        _new_wm = _compute_watermark_from_output(con, _eg_path, _eg_fmt, _wm_col)
+                        if _new_wm is None:
+                            logger.warning(
+                                "[runtime_watermark_compute_failed] [%s] Could "
+                                "not compute watermark from output path %r; "
+                                "watermark not advanced this run.",
+                                module.id,
+                                _eg_path,
+                            )
+                        elif depot is None:
+                            logger.warning(
+                                "[runtime_watermark_no_depot] [%s] Incremental "
+                                "Channel %r advanced watermark to %s=%s but no "
+                                "depot is configured — it cannot be persisted, "
+                                "so the next run re-scans all source data. "
+                                "Configure stores.depots.",
+                                module.id,
+                                _ch_id,
+                                _wm_col,
+                                _new_wm,
+                            )
+                        else:
+                            depot.put(_wm_depot_key, _new_wm)
+                            logger.debug(
+                                "[%s] Watermark persisted to depot: %s=%s",
+                                module.id,
+                                _wm_col,
+                                _new_wm,
+                            )
+
                 module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
-            else:
-                # READ side.
-                glob_path = f"{spill_uri.rstrip('/')}/*.parquet"
-                try:
-                    frame_store[module.id] = con.read_parquet(glob_path)
-                except Exception as exc:
+
+            # ── Handoff (Phase 81 step 3 — cross-engine boundary) ───────────────
+            # Same shape as Spark's Handoff branch (executor/spark/executor.py):
+            # a main-port incoming edge present in THIS sub-manifest means this
+            # island produced the data (WRITE side); its absence means this
+            # island only consumes it via the outgoing edge to `to_module`
+            # (READ side). Engine-native parquet on both sides — DuckDB's own
+            # `COPY ... TO ... (FORMAT PARQUET)` / `read_parquet`, no fsspec.
+            # Spill directories are treated as a single-file-per-boundary
+            # directory (`<spill_uri>/part-0.parquet`), the same convention
+            # DuckDB's own checkpoint writer already uses — this and Spark's
+            # multi-part `df.write.parquet(dir)` are cross-readable because both
+            # sides glob/scan every `*.parquet` file under the directory.
+            elif module.type == ModuleType.Handoff:
+                # `_incoming_data` (any non-signal port), NOT `_incoming_main` —
+                # see the matching fix + comment in `executor/spark/executor.py`'s
+                # Handoff branch: a Junction branch edge crossing the boundary
+                # directly preserves its branch-id port onto the handoff's
+                # incoming edge, not `"main"`, and `_incoming_main` silently
+                # misdispatched that WRITE side as a READ side.
+                main_edges = _incoming_data(module.id, manifest.edges)
+                spill_uri = (handoff_spill_uris or {}).get(module.id)
+                if not spill_uri:
                     module_results.append(
                         _mr(
                             module_id=module.id,
                             status=ExecutionStatus.ERROR,
-                            error=f"[{module.id}] handoff spill read from {spill_uri!r} failed: {exc}",
-                            exception=exc,
+                            error=f"[{module.id}] no spill URI resolved for this handoff module",
                         )
                     )
                     return _fail(manifest.blueprint_id, run_id, module_results)
+
+                _t0 = time.monotonic()
+                if main_edges:
+                    # WRITE side.
+                    edge = main_edges[0]
+                    key = _frame_key(edge.from_id, edge.port)
+                    val = frame_store.get(key)
+                    if _is_gate_closed(val):
+                        module_results.append(
+                            _mr(module_id=module.id, status=ExecutionStatus.SKIPPED)
+                        )
+                        continue
+                    if val is None:
+                        module_results.append(
+                            _mr(
+                                module_id=module.id,
+                                status=ExecutionStatus.ERROR,
+                                error=f"[{module.id}] upstream {edge.from_id!r} produced no relation.",
+                            )
+                        )
+                        return _fail(manifest.blueprint_id, run_id, module_results)
+
+                    if not is_remote_uri(spill_uri):
+                        Path(spill_uri).mkdir(parents=True, exist_ok=True)
+                    part_path = f"{spill_uri.rstrip('/')}/part-0.parquet"
+                    input_name = f"__handoff_write_{module.id.replace('-', '_')}__"
+                    con.register(input_name, val)
+                    try:
+                        con.sql(f"COPY {input_name} TO '{_escape(part_path)}' (FORMAT PARQUET)")
+                    except Exception as exc:
+                        module_results.append(
+                            _mr(
+                                module_id=module.id,
+                                status=ExecutionStatus.ERROR,
+                                error=f"[{module.id}] handoff spill write to {spill_uri!r} failed: {exc}",
+                                exception=exc,
+                            )
+                        )
+                        return _fail(manifest.blueprint_id, run_id, module_results)
+                    finally:
+                        con.unregister(input_name)
+                    _write_module_metrics(
+                        store_dir,
+                        observability_store,
+                        run_id,
+                        module.id,
+                        {
+                            "bytes_written": dir_size_bytes(spill_uri),
+                            "duration_ms": int((time.monotonic() - _t0) * 1000),
+                        },
+                    )
+                    module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
+                else:
+                    # READ side.
+                    glob_path = f"{spill_uri.rstrip('/')}/*.parquet"
+                    try:
+                        frame_store[module.id] = con.read_parquet(glob_path)
+                    except Exception as exc:
+                        module_results.append(
+                            _mr(
+                                module_id=module.id,
+                                status=ExecutionStatus.ERROR,
+                                error=f"[{module.id}] handoff spill read from {spill_uri!r} failed: {exc}",
+                                exception=exc,
+                            )
+                        )
+                        return _fail(manifest.blueprint_id, run_id, module_results)
+                    _write_module_metrics(
+                        store_dir,
+                        observability_store,
+                        run_id,
+                        module.id,
+                        {
+                            "bytes_read": dir_size_bytes(spill_uri),
+                            "duration_ms": int((time.monotonic() - _t0) * 1000),
+                        },
+                    )
+                    module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
+
+            # ── Probe (Pass F — signal capture for Regulator gates) ─────────────
+            # Same shape as Spark's Probe branch: a Probe has no main-port edge
+            # (it binds via attach_to, positioned right after its target by
+            # _build_execution_order above), so it reads frame_store directly
+            # instead of going through _incoming_main.
+            elif module.type == ModuleType.Probe:
+                _t0 = time.monotonic()
+                source_id = module.attach_to
+                source_val = frame_store.get(source_id) if source_id else None
+                _probe_notes: tuple[str, ...] = ()
+
+                if source_val is None or _is_gate_closed(source_val):
+                    logger.debug(
+                        "Probe %r: attach_to=%r not available; skipping.",
+                        module.id,
+                        source_id,
+                    )
+                elif store_dir is not None:
+                    try:
+                        _probe_notes = (
+                            execute_probe(
+                                module,
+                                source_val,
+                                con,
+                                run_id,
+                                store_dir,
+                                block_full_actions=block_full_actions,
+                                observability_store=observability_store,
+                                sampling=sampling,
+                                base_dir=manifest.base_dir,
+                                target_module=modules_by_id.get(source_id) if source_id else None,
+                            )
+                            or ()
+                        )
+                    except Exception as exc:
+                        logger.warning("[runtime_probe_error] Probe %r failed: %s", module.id, exc)
+                # A Probe used to write no `module_metrics` row at all on this
+                # engine, so `aqueduct report` showed a gap where Spark shows a
+                # row (Spark's Probes get one incidentally, from the SparkListener
+                # stage metrics its probe actions trigger). Write one explicitly:
+                # `records_read` is the row count of the relation the Probe
+                # observed, and `bytes_read` has no cheap DuckDB source for a
+                # mid-pipeline relation, so it stays NULL. `module_metrics` has no
+                # status column — a Probe's outcome is carried by its ModuleResult
+                # and by the probe_signals rows `execute_probe` writes.
                 _write_module_metrics(
                     store_dir,
                     observability_store,
                     run_id,
                     module.id,
                     {
-                        "bytes_read": dir_size_bytes(spill_uri),
+                        **_null_metrics(),
+                        "records_read": _rel_rows(source_val),
                         "duration_ms": int((time.monotonic() - _t0) * 1000),
                     },
                 )
-                module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
-
-        # ── Probe (Pass F — signal capture for Regulator gates) ─────────────
-        # Same shape as Spark's Probe branch: a Probe has no main-port edge
-        # (it binds via attach_to, positioned right after its target by
-        # _build_execution_order above), so it reads frame_store directly
-        # instead of going through _incoming_main.
-        elif module.type == ModuleType.Probe:
-            _t0 = time.monotonic()
-            source_id = module.attach_to
-            source_val = frame_store.get(source_id) if source_id else None
-            _probe_notes: tuple[str, ...] = ()
-
-            if source_val is None or _is_gate_closed(source_val):
-                logger.debug(
-                    "Probe %r: attach_to=%r not available; skipping.",
-                    module.id,
-                    source_id,
+                module_results.append(
+                    _mr(module_id=module.id, status=ExecutionStatus.SUCCESS, notes=_probe_notes)
                 )
-            elif store_dir is not None:
-                try:
-                    _probe_notes = (
-                        execute_probe(
-                            module,
-                            source_val,
-                            con,
-                            run_id,
-                            store_dir,
-                            block_full_actions=block_full_actions,
-                            observability_store=observability_store,
-                            sampling=sampling,
-                            base_dir=manifest.base_dir,
-                            target_module=modules_by_id.get(source_id) if source_id else None,
-                        )
-                        or ()
-                    )
-                except Exception as exc:
-                    logger.warning("[runtime_probe_error] Probe %r failed: %s", module.id, exc)
-            # A Probe used to write no `module_metrics` row at all on this
-            # engine, so `aqueduct report` showed a gap where Spark shows a
-            # row (Spark's Probes get one incidentally, from the SparkListener
-            # stage metrics its probe actions trigger). Write one explicitly:
-            # `records_read` is the row count of the relation the Probe
-            # observed, and `bytes_read` has no cheap DuckDB source for a
-            # mid-pipeline relation, so it stays NULL. `module_metrics` has no
-            # status column — a Probe's outcome is carried by its ModuleResult
-            # and by the probe_signals rows `execute_probe` writes.
-            _write_module_metrics(
-                store_dir,
-                observability_store,
-                run_id,
-                module.id,
-                {
-                    **_null_metrics(),
-                    "records_read": _rel_rows(source_val),
-                    "duration_ms": int((time.monotonic() - _t0) * 1000),
-                },
-            )
-            module_results.append(
-                _mr(module_id=module.id, status=ExecutionStatus.SUCCESS, notes=_probe_notes)
-            )
+    finally:
+        drop_tracked_temp_tables(con)
 
     return ExecutionResult(
         blueprint_id=manifest.blueprint_id,

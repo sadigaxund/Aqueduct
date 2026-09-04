@@ -1093,6 +1093,48 @@ def test_module_type_funnel_driven_through_execute(duckdb_con, tmp_path):
     assert sorted(r[0] for r in duckdb_con.read_parquet(out_path).fetchall()) == [1, 2]
 
 
+def test_execute_drops_channel_and_funnel_temp_tables(duckdb_con, tmp_path):
+    """Channel `op: sql` and Funnel both materialize into uniquely-named
+    ``CREATE TEMP TABLE``s (``__aq_ch_*`` / ``__aq_fn_*`` — see the
+    docstrings in ``duckdb_/channel.py::_run_sql`` and
+    ``duckdb_/funnel.py``'s union/coalesce/zip path for why materializing is
+    required). Those tables used to never be dropped, so a long multi-module
+    run accumulated one per Channel/Funnel execution on the connection for
+    the run's whole lifetime. A single ``execute()`` run through a
+    Channel(sql) -> Funnel(union_all) -> Egress pipeline must leave no
+    ``__aq_ch_``/``__aq_fn_`` temp table behind on the connection once it
+    returns.
+    """
+    src_a = _write_parquet(duckdb_con, tmp_path, "a", "SELECT 1 AS x")
+    src_b = _write_parquet(duckdb_con, tmp_path, "b", "SELECT 2 AS x")
+    out_path = str(tmp_path / "out.parquet")
+    modules = (
+        _module("ing_a", "Ingress", {"format": "parquet", "path": src_a}),
+        _module("ing_b", "Ingress", {"format": "parquet", "path": src_b}),
+        _module("ch", "Channel", {"op": "sql", "query": "SELECT x + 10 AS x FROM ing_a"}),
+        _module("fn", "Funnel", {"mode": "union_all", "inputs": ["ch", "ing_b"]}),
+        _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}),
+    )
+    edges = (
+        Edge(from_id="ing_a", to_id="ch", port="main"),
+        Edge(from_id="ch", to_id="fn", port="main"),
+        Edge(from_id="ing_b", to_id="fn", port="main"),
+        Edge(from_id="fn", to_id="eg", port="main"),
+    )
+    manifest = Manifest(
+        blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={}
+    )
+    result = execute(manifest, duckdb_con, run_id="r_temp_cleanup")
+    assert result.status == ExecutionStatus.SUCCESS
+    assert sorted(r[0] for r in duckdb_con.read_parquet(out_path).fetchall()) == [2, 11]
+
+    rows = duckdb_con.execute(
+        "SELECT table_name FROM information_schema.tables " "WHERE table_type = 'LOCAL TEMPORARY'"
+    ).fetchall()
+    leftover = [name for (name,) in rows if name.startswith(("__aq_ch_", "__aq_fn_"))]
+    assert leftover == []
+
+
 def test_module_type_regulator_driven_through_execute_gate_open(duckdb_con, tmp_path):
     """No surveyor supplied -> gate defaults open, Regulator passes data through."""
     src_path = _write_parquet(duckdb_con, tmp_path, "src", "SELECT 1 AS a")

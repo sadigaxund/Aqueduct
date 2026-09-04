@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     import duckdb
 
 from aqueduct.errors import AqueductError
+from aqueduct.executor.duckdb_._temp_tables import track_temp_table
 from aqueduct.models import Module
 
 VALID_MODES: frozenset[str] = frozenset({"union_all", "union", "coalesce", "zip"})
@@ -123,6 +124,7 @@ def execute_funnel(
             raise
         except Exception as exc:
             raise FunnelError(f"[{module.id}] {mode} failed: {exc}") from exc
+        track_temp_table(con, tmp_name)
         return con.table(tmp_name)
     finally:
         for name in registered:
