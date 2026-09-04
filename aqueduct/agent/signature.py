@@ -63,8 +63,14 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 _WS_RE = re.compile(r"\s+")
 
 
-def _normalize_message(text: str) -> str:
-    """Strip volatile bits so the same failure shape hashes identically."""
+def _normalize_message_full(text: str) -> str:
+    """Strip volatile bits so the same failure shape hashes identically.
+
+    Returns the FULL normalized message, untruncated. Volatile content
+    (ANSI codes, quoted/backticked identifiers, filesystem paths, digits,
+    whitespace runs) is already collapsed here, so what survives past any
+    length is structural text that distinguishes one failure from another.
+    """
     if not text:
         return ""
     s = _ANSI_RE.sub("", text)
@@ -73,7 +79,12 @@ def _normalize_message(text: str) -> str:
     s = _BACKTICK_RE.sub("`X`", s)
     s = _PATH_RE.sub("/PATH", s)
     s = _DIGIT_RE.sub("N", s)
-    s = _WS_RE.sub(" ", s).strip().lower()
+    return _WS_RE.sub(" ", s).strip().lower()
+
+
+def _normalize_message(text: str) -> str:
+    """Display form of the normalized message: capped at ``_MAX_MESSAGE_CHARS``."""
+    s = _normalize_message_full(text)
     if len(s) > _MAX_MESSAGE_CHARS:
         s = s[:_MAX_MESSAGE_CHARS]
     return s
@@ -129,9 +140,15 @@ def make_signature(error_class: str, where: str, message: str, *, engine: str) -
     """
     ec = (error_class or "unknown").strip() or "unknown"
     w = (where or "<root>").strip() or "<root>"
-    msg = _normalize_message(message)
+    full = _normalize_message_full(message)
+    msg = full[:_MAX_MESSAGE_CHARS] if len(full) > _MAX_MESSAGE_CHARS else full
     eng = (engine or "unknown").strip() or "unknown"
-    payload = json.dumps([ec, w, msg, eng], sort_keys=True, ensure_ascii=False)
+    # Hash the FULL normalized message, not the display prefix. Every budget
+    # axis in aqueduct/agent/budget.py keys on `hash`, so two distinct
+    # failures sharing a 240-char prefix would count as one repeat and trip
+    # `stuck_signature`/`progress_stalled` while healing was still making
+    # progress. `normalized_message` stays capped for display and storage.
+    payload = json.dumps([ec, w, full, eng], sort_keys=True, ensure_ascii=False)
     digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
     return ErrorSignature(error_class=ec, where=w, normalized_message=msg, hash=digest, engine=eng)
 

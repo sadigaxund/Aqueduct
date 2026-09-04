@@ -129,12 +129,44 @@ class TestMakeSignature:
         s = make_signature("e", "w", long_msg, engine="spark")
         assert len(s.normalized_message) <= 240
 
-    def test_truncated_message_stable_hash(self):
-        """Two messages that differ ONLY in trailing noise beyond 240 chars → same hash."""
+    def test_long_messages_differing_past_the_cap_hash_apart(self):
+        """Distinct failures sharing a 240-char prefix must NOT collide.
+
+        The display form is capped, but the hash covers the full normalized
+        message. Every budget axis in ``aqueduct/agent/budget.py`` keys on
+        ``hash``, so collapsing two different failures into one would trip
+        ``stuck_signature``/``progress_stalled`` while healing was still
+        working through genuinely different errors.
+        """
         base = "error " * 40  # > 240 chars
-        s1 = make_signature("e", "w", base + "noise1", engine="spark")
-        s2 = make_signature("e", "w", base + "noise2", engine="spark")
+        s1 = make_signature("e", "w", base + "column alpha is missing", engine="spark")
+        s2 = make_signature("e", "w", base + "column beta is missing", engine="spark")
+        assert s1.normalized_message == s2.normalized_message  # display prefix identical
+        assert len(s1.normalized_message) == 240
+        assert s1.hash != s2.hash
+
+    def test_volatile_tail_still_collapses(self):
+        """Normalization, not truncation, is what absorbs volatile noise.
+
+        Paths, digits and quoted identifiers past the cap are collapsed by
+        ``_normalize_message_full`` before hashing, so a rerun of the same
+        failure with different line numbers still hashes identically.
+        """
+        base = "error " * 40  # > 240 chars
+        s1 = make_signature("e", "w", base + "at /srv/app/job.py line 12", engine="spark")
+        s2 = make_signature("e", "w", base + "at /opt/other/job.py line 987", engine="spark")
         assert s1.hash == s2.hash
+
+    def test_stuck_axis_does_not_trip_on_distinct_long_failures(self):
+        """End-to-end: the budget stuck window sees two failures, not one."""
+        from aqueduct.agent.budget import BudgetConfig, BudgetTracker
+
+        base = "error " * 40
+        tracker = BudgetTracker(BudgetConfig(same_error_consecutive=2))
+        for tail in ("column alpha is missing", "column beta is missing"):
+            tracker.begin_attempt()
+            tracker.record(make_signature("e", "w", base + tail, engine="spark"))
+        assert not tracker._same_error_consecutive_tripped()
 
     def test_frozen_dataclass_mutation_raises(self):
         from dataclasses import FrozenInstanceError
