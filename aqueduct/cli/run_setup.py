@@ -31,6 +31,23 @@ if _t:
     from aqueduct.executor.probe_sampling import ProbeSampling as _PS
 
 
+def resolve_blueprint_store_dir(resolved_store_dir, obs_routing_base: str, blueprint_id: str):
+    """The Blueprint's own store directory, created if missing.
+
+    `--store-dir` (already resolved into `resolved_store_dir`) bypasses
+    routing and is returned unchanged. Otherwise the default routing applies:
+    `<obs_routing_base>/<blueprint_id>/`. Shared by `_setup_surveyor` and by
+    `cli/run.py`'s run-lock acquisition, which needs the same directory
+    BEFORE the Surveyor exists, so the derivation lives in one place.
+    """
+    from pathlib import Path as _P
+
+    if resolved_store_dir is None:
+        resolved_store_dir = _P(obs_routing_base) / blueprint_id
+        resolved_store_dir.mkdir(parents=True, exist_ok=True)
+    return resolved_store_dir
+
+
 def require_sandbox_for_chained_healing(max_patches: int, sandbox_mode: str) -> None:
     """Refuse to chain multi-patch healing with sandbox validation disabled.
 
@@ -499,9 +516,9 @@ def _setup_surveyor(
         _w.simplefilter("always")
 
         # ── Resolve per-pipeline store dir (needs blueprint_id from manifest) ──
-        if resolved_store_dir is None:
-            resolved_store_dir = _P(_obs_routing_base) / manifest.blueprint_id
-            resolved_store_dir.mkdir(parents=True, exist_ok=True)
+        resolved_store_dir = resolve_blueprint_store_dir(
+            resolved_store_dir, _obs_routing_base, manifest.blueprint_id
+        )
 
         # ── Cluster-mode store path warning ───────────────────────────────────────
         if (

@@ -118,6 +118,7 @@ aqueduct completion fish > ~/.config/fish/completions/aqueduct.fish
 | `--store-dir <path>` | from `aqueduct.yml` (else `.aqueduct/`) | Override store directory for this run |
 | `--webhook <url>` | from `aqueduct.yml` | Override failure webhook |
 | `--allow-multi-patch` | off | Permit `max_patches > 1` for this run (overrides `danger.allow_multi_patch=false`). |
+| `--wait-for-lock` | off | Queue behind a concurrent run of the same Blueprint instead of refusing it. Every run holds an advisory lock on its `blueprint_id` for the whole run, so two invocations cannot interleave writes to the same observability store and depot. Without this flag a second run exits `CONFIG_ERROR` naming the holder's pid and the lock path. On a DuckDB observability store the lock is an `flock` on `<store_dir>/run.lock`; on Postgres it is a `pg_advisory_lock`, which also coordinates runs on different hosts. |
 | `--config <path>` | `./aqueduct.yml` walked upward | Path to `aqueduct.yml` |
 | `-e KEY=VAL` / `--env KEY=VAL` | n/a | Inline env override (highest precedence). Repeatable. |
 | `--env-file <path>` | anchored `<dir>/.env` | Explicit fallback `.env` (used only when no anchored project `.env` exists) |

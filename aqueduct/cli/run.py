@@ -271,6 +271,13 @@ def _print_gate_ladder(g2, g3, g4, *, verbosity: int, gate1_ok: bool = True) -> 
     "Values coerce to bool/int/float/null else string; use PATH:=JSON for "
     "structured values. Highest precedence (beats blueprint + aqueduct.yml).",
 )
+@click.option(
+    "--wait-for-lock",
+    is_flag=True,
+    default=False,
+    help="Queue behind a concurrent run of the same Blueprint instead of "
+    "refusing. Without it, a second run exits immediately naming the holder.",
+)
 def run(
     blueprint: str,
     profile: str | None,
@@ -292,8 +299,10 @@ def run(
     sample: int = 1000,
     set_items: tuple[str, ...] = (),
     force_resume: bool = False,
+    wait_for_lock: bool = False,
 ) -> None:
     """Compile and execute a Blueprint on a SparkSession."""
+    import contextlib
     import os
     import uuid
     from pathlib import Path
@@ -350,6 +359,10 @@ def run(
 
     _original_cwd = os.getcwd()
     os.chdir(_project_root)
+    # Everything entered here is released in the outer `finally`, on every
+    # exit path: normal return, exception, or `sys.exit` (SystemExit is a
+    # BaseException, which `finally` still honours).
+    _run_stack = contextlib.ExitStack()
     try:
         _lcr = _load_engine_config(
             blueprint_abs=blueprint_abs,
@@ -643,6 +656,36 @@ def run(
                     err=True,
                 )
             sys.exit(exit_codes.SUCCESS)
+
+        # ── Per-blueprint run lock ────────────────────────────────────────────
+        # Two concurrent runs of one Blueprint share an observability store
+        # and a depot. DuckDB serialises their statements so neither crashes,
+        # but they still interleave logically (two run_records rows growing
+        # at once, two heal loops writing the same depot keys). Take the lock
+        # BEFORE the Surveyor exists, since Surveyor setup is itself the
+        # first writer, and hold it for the rest of the run: `_run_stack`
+        # closes in the outer `finally` below, so an exception or a
+        # `sys.exit` releases it too.
+        from aqueduct.cli.run_setup import resolve_blueprint_store_dir as _resolve_bp_dir
+        from aqueduct.stores.run_lock import RunLockedError as _RunLockedError
+        from aqueduct.stores.run_lock import blueprint_run_lock as _blueprint_run_lock
+
+        _lock_dir = _resolve_bp_dir(resolved_store_dir, _obs_routing_base, manifest.blueprint_id)
+        resolved_store_dir = _lock_dir
+        try:
+            _run_stack.enter_context(
+                _blueprint_run_lock(
+                    _lock_dir,
+                    manifest.blueprint_id,
+                    obs_store=bundle.observability if bundle is not None else None,
+                    wait=wait_for_lock,
+                )
+            )
+        except _RunLockedError as exc:
+            from aqueduct.cli.render.style import error as _style_error
+
+            _style_error(str(exc))
+            sys.exit(exit_codes.CONFIG_ERROR)
 
         _ssr = _setup_surveyor(
             resolved_store_dir=resolved_store_dir,
@@ -2717,4 +2760,5 @@ def run(
         ):
             _style_success("run complete", err=False)
     finally:
+        _run_stack.close()
         os.chdir(_original_cwd)
