@@ -1699,3 +1699,83 @@ def test_egress_table_ignored_when_register_as_table_also_set(duckdb_con, caplog
     assert duckdb_con.table("t6").fetchall() == [(1,)]
     with pytest.raises(Exception):
         duckdb_con.table("unused_name")
+
+
+# ── Junction branch port → Channel (the 2.2.2 include-list bug) ────────────
+# `_incoming_main` used to be an include-list (`e.port == "main"`), so every
+# module type except Egress/Handoff rejected a Junction branch-port edge with
+# "has no main-port incoming edges" — even though docs/specs.md's port table
+# has always said a `<branch_id>` port is consumed by "Any downstream module".
+# It is now an exclude-list (any data edge that is not `signal`/`spillway`);
+# see `aqueduct/executor/edge_ports.py`.
+
+
+def test_junction_branch_feeds_channel_fan_shape(duckdb_con, tmp_path):
+    """Ingress -> Junction (2 branches) -> a Channel each -> an Egress each."""
+    src_path = _write_parquet(
+        duckdb_con, tmp_path, "src", "SELECT * FROM (VALUES (1),(2),(3),(4)) t(a)"
+    )
+    out_hi = str(tmp_path / "hi.parquet")
+    out_lo = str(tmp_path / "lo.parquet")
+    modules = (
+        _module("ing", "Ingress", {"format": "parquet", "path": src_path}),
+        _module(
+            "j",
+            "Junction",
+            {
+                "mode": "conditional",
+                "branches": [
+                    {"id": "hi", "condition": "a > 2"},
+                    {"id": "lo", "condition": "_else_"},
+                ],
+            },
+        ),
+        # Each Channel reads its branch by the branch's frame key
+        # (`<junction_id>.<branch_id>`), which is what the SQL text names.
+        _module("ch_hi", "Channel", {"op": "sql", "query": 'SELECT a * 10 AS a FROM "j.hi"'}),
+        _module("ch_lo", "Channel", {"op": "sql", "query": 'SELECT a * 100 AS a FROM "j.lo"'}),
+        _module("eg_hi", "Egress", {"format": "parquet", "path": out_hi, "mode": "overwrite"}),
+        _module("eg_lo", "Egress", {"format": "parquet", "path": out_lo, "mode": "overwrite"}),
+    )
+    edges = (
+        Edge(from_id="ing", to_id="j", port="main"),
+        Edge(from_id="j", to_id="ch_hi", port="hi"),
+        Edge(from_id="j", to_id="ch_lo", port="lo"),
+        Edge(from_id="ch_hi", to_id="eg_hi", port="main"),
+        Edge(from_id="ch_lo", to_id="eg_lo", port="main"),
+    )
+    manifest = Manifest(
+        blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={}
+    )
+    result = execute(manifest, duckdb_con, run_id="r_junction_fan")
+
+    assert result.status == ExecutionStatus.SUCCESS, [
+        (r.module_id, r.status, r.error) for r in result.module_results
+    ]
+    assert sorted(r[0] for r in duckdb_con.read_parquet(out_hi).fetchall()) == [30, 40]
+    assert sorted(r[0] for r in duckdb_con.read_parquet(out_lo).fetchall()) == [100, 200]
+
+
+def test_junction_branch_into_channel_is_not_a_missing_main_port(duckdb_con, tmp_path):
+    """Regression: the Channel must not report "no main-port incoming edges"."""
+    src_path = _write_parquet(duckdb_con, tmp_path, "src", "SELECT 1 AS a")
+    out_path = str(tmp_path / "out.parquet")
+    modules = (
+        _module("ing", "Ingress", {"format": "parquet", "path": src_path}),
+        _module("j", "Junction", {"mode": "broadcast", "branches": [{"id": "only"}]}),
+        _module("ch", "Channel", {"op": "sql", "query": 'SELECT a FROM "j.only"'}),
+        _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}),
+    )
+    edges = (
+        Edge(from_id="ing", to_id="j", port="main"),
+        Edge(from_id="j", to_id="ch", port="only"),
+        Edge(from_id="ch", to_id="eg", port="main"),
+    )
+    manifest = Manifest(
+        blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={}
+    )
+    result = execute(manifest, duckdb_con, run_id="r_junction_branch_channel")
+
+    errors = [r.error for r in result.module_results if r.error]
+    assert not any("has no main-port incoming edges" in (e or "") for e in errors), errors
+    assert result.status == ExecutionStatus.SUCCESS, errors

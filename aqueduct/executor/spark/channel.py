@@ -91,6 +91,12 @@ def _build_join_query(module_id: str, cfg: dict) -> str:
     return f"SELECT {hint}* FROM {left} {join_type.upper()} JOIN {right}{on_clause}"
 
 
+def _is_single_part_name(name: str) -> bool:
+    """Spark temp views accept only single-part identifiers, so a dotted
+    Junction branch frame key (`<junction_id>.<branch_id>`) is not one."""
+    return "." not in name
+
+
 def _run_sql(
     module_id: str,
     query: str,
@@ -98,7 +104,16 @@ def _run_sql(
     spark: SparkSession,
 ) -> DataFrame:
     registered: list[str] = []
+    # A Junction branch's frame key is `<junction_id>.<branch_id>`, and Spark
+    # rejects a dotted temp view name outright
+    # (TEMP_VIEW_NAME_TOO_MANY_NAME_PARTS). Such an upstream is reachable
+    # through the `__input__` alias below when it is the Channel's ONLY input;
+    # with several inputs there is no name to write in the SQL, so fail loudly
+    # naming the key rather than letting Spark raise a raw AnalysisException.
+    unnameable = [uid for uid in upstream_dfs if not _is_single_part_name(uid)]
     for upstream_id, df in upstream_dfs.items():
+        if upstream_id in unnameable:
+            continue
         spark.catalog.dropTempView(upstream_id)
         df.createTempView(upstream_id)
         registered.append(upstream_id)
@@ -107,6 +122,16 @@ def _run_sql(
         spark.catalog.dropTempView(_SINGLE_INPUT_ALIAS)
         next(iter(upstream_dfs.values())).createTempView(_SINGLE_INPUT_ALIAS)
         registered.append(_SINGLE_INPUT_ALIAS)
+    elif unnameable:
+        for view_name in registered:
+            spark.catalog.dropTempView(view_name)
+        raise ChannelError(
+            f"[{module_id}] Channel has {len(upstream_dfs)} inputs, and "
+            f"{unnameable!r} arrive on a Junction branch port whose frame key "
+            "cannot be a Spark temp view name (Spark accepts only single-part "
+            "names). Route the branch through its own single-input Channel "
+            f"(which can read it as {_SINGLE_INPUT_ALIAS}) before joining."
+        )
 
     try:
         return spark.sql(query)

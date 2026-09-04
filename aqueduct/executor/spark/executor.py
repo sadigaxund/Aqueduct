@@ -70,6 +70,12 @@ if TYPE_CHECKING:
 from datetime import UTC
 
 from aqueduct.errors import ExecuteError
+from aqueduct.executor.edge_ports import (
+    SIGNAL_PORTS,
+    incoming_data,
+    incoming_main,
+    is_data_edge,
+)
 from aqueduct.executor.models import (
     ExecutionResult,
     ExecutionStatus,
@@ -466,7 +472,8 @@ _SUPPORTED_TYPES: frozenset[str] = frozenset({m for m in ModuleType if m != Modu
 
 # Ports that carry control signals only, not DataFrames.
 # Spillway IS a data edge (routes error rows); only "signal" is control-only.
-_SIGNAL_PORTS: frozenset[str] = frozenset({"signal"})
+# Defined once, engine-neutrally, in `aqueduct/executor/edge_ports.py`.
+_SIGNAL_PORTS = SIGNAL_PORTS
 
 # Sentinel placed in frame_store when a Regulator closes its gate with on_block=skip.
 # Downstream modules that encounter it skip themselves and propagate the sentinel.
@@ -482,8 +489,7 @@ _GATE_CLOSED: object = object()
 # ── DAG helpers ───────────────────────────────────────────────────────────────
 
 
-def _is_data_edge(edge: Edge) -> bool:
-    return edge.port not in _SIGNAL_PORTS
+_is_data_edge = is_data_edge
 
 
 def _frame_key(from_id: str, port: str) -> str:
@@ -684,12 +690,14 @@ def _find_connected_components(
     return list(components.values())
 
 
-def _incoming_data(module_id: str, edges: tuple[Edge, ...]) -> list[Edge]:
-    return [e for e in edges if e.to_id == module_id and _is_data_edge(e)]
+_incoming_data = incoming_data
 
-
-def _incoming_main(module_id: str, edges: tuple[Edge, ...]) -> list[Edge]:
-    return [e for e in edges if e.to_id == module_id and e.port == "main"]
+# Any incoming data edge that is NOT a signal or spillway edge — so a Junction
+# `<branch_id>` port feeds a Channel/Assert/Regulator/Arcade like any other
+# main input. See `aqueduct/executor/edge_ports.py` for why this is an
+# exclude-list, and note that each call site below must resolve the VALUE
+# through `_effective_frame_key`/`_frame_key`, never `edge.from_id` alone.
+_incoming_main = incoming_main
 
 
 def _reachable_forward(start_id: str, edges: tuple[Edge, ...]) -> set[str]:
@@ -1100,7 +1108,15 @@ def execute(
 
                 upstream_dfs: dict[str, Any] = {}
                 for edge in main_edges:
-                    val = frame_store.get(edge.from_id)
+                    # Two DIFFERENT keys, deliberately: `store_key` is where the
+                    # producer actually PUT the frame — a Junction branch writes
+                    # `<from_id>.<branch_id>`, and a synthetic Handoff writes
+                    # under its OWN id — while the `upstream_dfs` key is what the
+                    # Channel's SQL NAMES, which resolves through a Handoff back
+                    # to the original Blueprint id.
+                    store_key = _frame_key(edge.from_id, edge.port)
+                    src_key = _effective_frame_key(edge, modules_by_id)
+                    val = frame_store.get(store_key)
                     if _is_gate_closed(val):
                         frame_store[module.id] = _GATE_CLOSED
                         local_results.append(
@@ -1108,13 +1124,13 @@ def execute(
                         )
                         break
                     if val is None:
-                        err = f"[{module.id}] upstream {edge.from_id!r} produced no DataFrame."
+                        err = f"[{module.id}] upstream {store_key!r} produced no DataFrame."
                         local_results.append(
                             _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=err)
                         )
                         _signal_fail()
                         return
-                    upstream_dfs[_effective_frame_key(edge, modules_by_id)] = val
+                    upstream_dfs[src_key] = val
                 else:
                     mod_policy = _module_retry_policy(module, manifest.retry_policy)
                     _t0 = time.monotonic()
@@ -1241,7 +1257,13 @@ def execute(
                     _signal_fail()
                     return
 
-                upstream_id = main_edges[0].from_id
+                # Branch-port aware (see `_incoming_main`): look the frame up
+                # where the producer PUT it — a Junction branch writes
+                # `<from_id>.<branch_id>` — exactly as Funnel does. NOT
+                # `_effective_frame_key`, which resolves through a Handoff to
+                # the original Blueprint id and would miss a READ-side
+                # handoff's frame.
+                upstream_id = _frame_key(main_edges[0].from_id, main_edges[0].port)
                 val = frame_store.get(upstream_id)
                 if _is_gate_closed(val):
                     branches = module.config.get("branches", [])
@@ -1368,7 +1390,13 @@ def execute(
                     _signal_fail()
                     return
 
-                upstream_id = main_edges[0].from_id
+                # Branch-port aware (see `_incoming_main`): look the frame up
+                # where the producer PUT it — a Junction branch writes
+                # `<from_id>.<branch_id>` — exactly as Funnel does. NOT
+                # `_effective_frame_key`, which resolves through a Handoff to
+                # the original Blueprint id and would miss a READ-side
+                # handoff's frame.
+                upstream_id = _frame_key(main_edges[0].from_id, main_edges[0].port)
                 val = frame_store.get(upstream_id)
                 if _is_gate_closed(val):
                     frame_store[module.id] = _GATE_CLOSED
@@ -1454,7 +1482,13 @@ def execute(
                     _signal_fail()
                     return
 
-                upstream_id = main_edges[0].from_id
+                # Branch-port aware (see `_incoming_main`): look the frame up
+                # where the producer PUT it — a Junction branch writes
+                # `<from_id>.<branch_id>` — exactly as Funnel does. NOT
+                # `_effective_frame_key`, which resolves through a Handoff to
+                # the original Blueprint id and would miss a READ-side
+                # handoff's frame.
+                upstream_id = _frame_key(main_edges[0].from_id, main_edges[0].port)
                 val = frame_store.get(upstream_id)
                 if _is_gate_closed(val):
                     frame_store[module.id] = _GATE_CLOSED

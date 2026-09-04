@@ -2346,3 +2346,130 @@ def test_checkpoint_root_resume_missing_raises(spark: SparkSession, tmp_path):
             checkpoint_root=checkpoint_root,
             resume_run_id="does-not-exist",
         )
+
+
+# ── Junction branch port → Channel (the 2.2.2 include-list bug) ──────────────
+# `_incoming_main` used to be an include-list (`e.port == "main"`), so every
+# module type except Egress/Handoff rejected a Junction branch-port edge with
+# "has no main-port incoming edges" — even though docs/specs.md's port table
+# has always said a `<branch_id>` port is consumed by "Any downstream module".
+# It is now an exclude-list (any data edge that is not `signal`/`spillway`);
+# see `aqueduct/executor/edge_ports.py`. Mirrors the DuckDB fan-shape test in
+# `tests/test_executor_duckdb/test_executor.py`.
+
+
+def test_junction_branch_feeds_channel_fan_shape(spark: SparkSession, tmp_path):
+    """Ingress → Junction (2 branches) → a Channel each → an Egress each."""
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(4).selectExpr("id + 1 as a").write.parquet(in_path)
+
+    out_hi = str(tmp_path / "hi.parquet")
+    out_lo = str(tmp_path / "lo.parquet")
+
+    manifest = Manifest(
+        blueprint_id="test.junc_branch_channel",
+        modules=(
+            Module(
+                id="ing", type="Ingress", label="In", config={"format": "parquet", "path": in_path}
+            ),
+            Module(
+                id="j",
+                type="Junction",
+                label="J",
+                config={
+                    "mode": "conditional",
+                    "branches": [
+                        {"id": "hi", "condition": "a > 2"},
+                        {"id": "lo", "condition": "_else_"},
+                    ],
+                },
+            ),
+            # Single-upstream Channels: the branch DataFrame is reachable
+            # through the `__input__` alias, so the SQL never has to spell the
+            # dotted `<junction_id>.<branch_id>` frame key as a temp view.
+            Module(
+                id="ch_hi",
+                type="Channel",
+                label="ChHi",
+                config={"op": "sql", "query": "SELECT a * 10 AS a FROM __input__"},
+            ),
+            Module(
+                id="ch_lo",
+                type="Channel",
+                label="ChLo",
+                config={"op": "sql", "query": "SELECT a * 100 AS a FROM __input__"},
+            ),
+            Module(
+                id="eg_hi",
+                type="Egress",
+                label="EgHi",
+                config={"format": "parquet", "path": out_hi},
+            ),
+            Module(
+                id="eg_lo",
+                type="Egress",
+                label="EgLo",
+                config={"format": "parquet", "path": out_lo},
+            ),
+        ),
+        edges=(
+            Edge(from_id="ing", to_id="j", port="main"),
+            Edge(from_id="j", to_id="ch_hi", port="hi"),
+            Edge(from_id="j", to_id="ch_lo", port="lo"),
+            Edge(from_id="ch_hi", to_id="eg_hi", port="main"),
+            Edge(from_id="ch_lo", to_id="eg_lo", port="main"),
+        ),
+        context={},
+        engine_config={},
+    )
+
+    result = execute(manifest, spark)
+    assert result.status == "success", [
+        (r.module_id, r.status, r.error) for r in result.module_results
+    ]
+
+    assert sorted(r.a for r in spark.read.parquet(out_hi).collect()) == [30, 40]
+    assert sorted(r.a for r in spark.read.parquet(out_lo).collect()) == [100, 200]
+
+
+def test_junction_branch_into_channel_is_not_a_missing_main_port(spark: SparkSession, tmp_path):
+    """Regression: the Channel must not report "no main-port incoming edges"."""
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(1).selectExpr("id as a").write.parquet(in_path)
+    out_path = str(tmp_path / "out.parquet")
+
+    manifest = Manifest(
+        blueprint_id="test.junc_branch_channel_regression",
+        modules=(
+            Module(
+                id="ing", type="Ingress", label="In", config={"format": "parquet", "path": in_path}
+            ),
+            Module(
+                id="j",
+                type="Junction",
+                label="J",
+                config={"mode": "broadcast", "branches": [{"id": "only"}]},
+            ),
+            Module(
+                id="ch",
+                type="Channel",
+                label="Ch",
+                config={"op": "sql", "query": "SELECT a FROM __input__"},
+            ),
+            Module(
+                id="eg", type="Egress", label="Eg", config={"format": "parquet", "path": out_path}
+            ),
+        ),
+        edges=(
+            Edge(from_id="ing", to_id="j", port="main"),
+            Edge(from_id="j", to_id="ch", port="only"),
+            Edge(from_id="ch", to_id="eg", port="main"),
+        ),
+        context={},
+        engine_config={},
+    )
+
+    result = execute(manifest, spark)
+    errors = [r.error for r in result.module_results if r.error]
+    assert not any("has no main-port incoming edges" in (e or "") for e in errors), errors
+    assert result.status == "success", errors
