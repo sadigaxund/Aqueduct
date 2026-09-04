@@ -16,9 +16,6 @@ never wraps or truncates).
 
 from __future__ import annotations
 
-from datetime import datetime
-
-import duckdb
 import pytest
 from click.testing import CliRunner
 
@@ -29,61 +26,6 @@ pytestmark = pytest.mark.unit
 
 def _invoke(args):
     return CliRunner().invoke(cli, args)
-
-
-# ---------------------------------------------------------------------------
-# stores.py — narrative-empty-result and success confirmation land on stdout
-# ---------------------------------------------------------------------------
-
-
-def test_stores_migrate_empty_result_on_stdout(tmp_path):
-    config = tmp_path / "aq.yml"
-    config.write_text("aqueduct_config: '1.0'")
-    empty_db = tmp_path / "empty.db"
-    conn = duckdb.connect(str(empty_db))
-    conn.execute("CREATE TABLE depot_kv (key VARCHAR, value BLOB, updated_at TIMESTAMP)")
-    conn.close()
-
-    result = _invoke(
-        [
-            "stores",
-            "migrate",
-            "--from-duckdb",
-            str(empty_db),
-            "--store",
-            "depot",
-            "--config",
-            str(config),
-        ]
-    )
-    assert result.exit_code == 0, result.output
-    assert "0 rows" in result.stdout
-    assert "\x1b[" not in result.stdout
-
-
-def test_stores_migrate_success_message_on_stdout(tmp_path):
-    config = tmp_path / "aq.yml"
-    config.write_text("aqueduct_config: '1.0'")
-    pop_db = tmp_path / "pop.db"
-    conn = duckdb.connect(str(pop_db))
-    conn.execute("CREATE TABLE depot_kv (key VARCHAR, value BLOB, updated_at TIMESTAMP)")
-    conn.execute("INSERT INTO depot_kv VALUES ('k1', '\\x00', ?)", [datetime.now()])
-    conn.close()
-
-    result = _invoke(
-        [
-            "stores",
-            "migrate",
-            "--from-duckdb",
-            str(pop_db),
-            "--store",
-            "depot",
-            "--config",
-            str(config),
-        ]
-    )
-    assert result.exit_code == 0, result.output
-    assert "migrated 1 depot key(s)" in result.stdout
 
 
 # ---------------------------------------------------------------------------

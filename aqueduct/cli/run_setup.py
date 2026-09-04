@@ -209,11 +209,6 @@ def _load_engine_config(
     probe_sampling = ProbeSampling(
         max_sample_rows=probes_cfg.max_sample_rows,
         default_sample_fraction=probes_cfg.default_sample_fraction,
-        # Phase 85 W9 follow-up — without this the sample_rows retention cap
-        # silently falls back to ProbeSampling's own default (20) regardless
-        # of what the user set in aqueduct.yml's observability.retention
-        # block.
-        sample_rows_keep_last_n=cfg.observability.retention.sample_rows_keep_last_n,
     )
 
     return _LoadConfigResult(
@@ -785,12 +780,6 @@ def _setup_surveyor(
             if cfg.lineage.openlineage_url
             else None
         ),
-        # Phase 85 W9 follow-up — without this, the throttled auto-prune
-        # wired into Surveyor.record() silently falls back to
-        # ObservabilityRetentionConfig()'s own defaults, ignoring whatever
-        # the user configured in aqueduct.yml's observability.retention:
-        # block. A silent no-op AGENTS.md forbids.
-        retention=cfg.observability.retention,
     )
     surveyor.start(run_id)
     _obs_store = surveyor.observability

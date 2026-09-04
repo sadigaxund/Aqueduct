@@ -298,11 +298,6 @@ by any lookup filter.
 
 User overrides for Probe signals via `aqueduct signal <signal_id> --value`.
 
-#### `store_maintenance` (2.65)
-
-One row (`key='global'`) tracking `last_pruned_at`: the throttle marker for
-the automatic daily prune sweep. See "Retention & pruning" below.
-
 #### `module_metrics`
 
 Per-module I/O metrics (`records_read`, `bytes_read`, `records_written`,
@@ -341,7 +336,7 @@ or Hudi `run_compaction`/`run_clean`, depending on the Egress `format`.
 | `payload`     | JSON | Signal-type-specific data |
 | `captured_at` | TIMESTAMPTZ | |
 
-**`sample_rows` redaction + retention cap (2.65).** `sample_rows` is the only
+**`sample_rows` redaction + write-time cap.** `sample_rows` is the only
 built-in signal type that persists real sampled **data row content**
 (`df.limit(n).collect()`): every other signal here is aggregate/statistical
 (counts, rates, min/max/percentiles) and carries no comparable sensitivity or
@@ -349,68 +344,12 @@ size risk. Its `payload` is routed through the same `redact()`
 (`aqueduct/redaction.py`) the `failure_contexts` failure path already uses,
 so a registered `@aq.secret()` value inside a sampled row is scrubbed to
 `[REDACTED]` before the INSERT, not stored raw. It also gets a dedicated,
-count-based retention cap on top of the age-based `probe_signals_days`
-window below: only the most recent `observability.retention.
-sample_rows_keep_last_n` (default 20) rows are kept **per `probe_id`**,
-enforced at write time.
+count-based cap, enforced at write time: only the most recent 20 rows are
+kept **per `probe_id`**. This cap is fixed — not configurable via
+`aqueduct.yml`.
 
-### Retention & pruning (2.65)
-
-Every table but
-`signal_overrides` (manual `DELETE` only) grew append-only forever before
-2.65. `aqueduct.yml`'s `observability.retention:` block configures per-table
-age windows (defaults below); `aqueduct.surveyor.retention.prune_store()`
-applies them with one `DELETE ... WHERE <timestamp column> < ?` per table:
-
-| Table | Timestamp column | Default window |
-|---|---|---|
-| `run_records` | `started_at` | 90 days |
-| `failure_contexts` | `started_at` | 90 days |
-| `healing_outcomes` | `applied_at` | 180 days |
-| `heal_attempts` | `recorded_at` | 180 days |
-| `patch_simulation` | `recorded_at` | 90 days |
-| `column_lineage` | `captured_at` | 90 days |
-| `probe_signals` | `captured_at` | 90 days (all signal types; `sample_rows` also gets its own count-based cap, see above) |
-
-**Automatic, throttled, age-based only.** `maybe_prune_store()` runs at the
-end of every `Surveyor.record()` call (success or failure), but only
-actually sweeps once per calendar day per store: the throttle check is a
-single indexed `SELECT last_pruned_at FROM store_maintenance WHERE
-key='global'` (PK lookup), so the overwhelming majority of runs pay for one
-cheap read and nothing else. `prune_store()` never calls `VACUUM`/reclaims
-disk space; it only deletes rows.
-
-**`VACUUM` is never automatic.** Reclaiming the disk space `prune_store()`'s
-deletes free up is a deliberately separate, deliberately manual step:
-`aqueduct.surveyor.retention.vacuum_store(store)` issues DuckDB's `VACUUM`
-(a no-op on Postgres, whose autovacuum already reclaims space), wired only to
-the explicit `aqueduct report-prune --vacuum` CLI verb, never triggered by
-`aqueduct run`.
-
-**On-demand deep clean: `aqueduct report-prune`.** The same age windows apply:
-`report-prune` just runs them now instead of waiting for the next throttled
-`aqueduct run`, and reports what it deleted:
-
-```console
-$ aqueduct report-prune --store-dir .aqueduct
-pruned 1 store(s):
-  table             rows_deleted
-  ----------------  ------------
-  column_lineage               0
-  failure_contexts             0
-  heal_attempts                3
-  healing_outcomes             0
-  patch_simulation             0
-  probe_signals                0
-  run_records                  1
-
-$ aqueduct report-prune --store-dir .aqueduct --vacuum   # also reclaims disk space
-$ aqueduct report-prune --blueprint my.pipeline --format json
-```
-
-`--blueprint` scopes to one discovered store (default: every store under
-`--store-dir`/the configured routing root). `--vacuum` is the *only* way to
-trigger `VACUUM`: a plain `report-prune` never does.
+Every other observability table grows append-only forever; pruning it is the
+operator's responsibility (there is no built-in retention/pruning feature).
 
 ### Blob externalisation (1.1.2+)
 
@@ -889,8 +828,6 @@ read‑only role.
 | Heal a failed run          | `aqueduct heal <run_id>`                  |
 | Cascade tier vs outcome    | `aqueduct runs --cascade`                 |
 | LLM cost per blueprint per month | `aqueduct report-costs`             |
-| Deep-clean old rows        | `aqueduct report-prune`                   |
-| Deep-clean + reclaim disk space | `aqueduct report-prune --vacuum`     |
 
 **Tip:** DuckDB files are stable; point any DuckDB client at them for
 custom dashboards. The `_resolve_obs_db()` helper inside the CLI walks the

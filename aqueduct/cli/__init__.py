@@ -1528,4 +1528,4 @@ from .patch import (  # noqa: E402,F401,F811
 )
 from .project import completion_cmd, init, test_cmd  # noqa: E402,F401
 from .run import run  # noqa: E402,F401
-from .stores import stores_group, stores_info, stores_migrate  # noqa: E402,F401
+from .stores import stores_group, stores_info  # noqa: E402,F401

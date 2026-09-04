@@ -47,7 +47,6 @@ from aqueduct.surveyor.models import FailureContext
 from aqueduct.surveyor.webhook import fire_webhook
 
 if TYPE_CHECKING:
-    from aqueduct.config import ObservabilityRetentionConfig
     from aqueduct.stores import ObservabilityStore, StoreBundle
     from aqueduct.stores.object_store import BlobStore, PatchStore
 
@@ -114,7 +113,6 @@ class Surveyor:
         stores: StoreBundle | None = None,
         blob_config: tuple[str, str] | None = None,
         lineage_config: tuple[str, str] | None = None,
-        retention: ObservabilityRetentionConfig | None = None,
     ) -> None:
         """Initialise the Surveyor.
 
@@ -131,14 +129,8 @@ class Surveyor:
                 a default DuckDB layout under `store_dir`. The `stores=`
                 parameter exists for the Phase 28 case where the CLI hands
                 in a Postgres-backed bundle.
-            retention: Phase 85 B1 — resolved `ObservabilityRetentionConfig`
-                (from `aqueduct.yml`'s `observability.retention:` block).
-                `None` (the default) falls back to
-                `ObservabilityRetentionConfig()`'s own defaults — pruning
-                works out of the box even for a caller that doesn't thread
-                config through yet.
         """
-        from aqueduct.config import ObservabilityRetentionConfig, WebhookEndpointConfig
+        from aqueduct.config import WebhookEndpointConfig
 
         self._manifest = manifest
         self._store_dir = store_dir
@@ -177,7 +169,6 @@ class Surveyor:
         )
         self._started: bool = False  # DDL/migrations applied once per Surveyor.start()
         self._iteration_parents: dict[str, str] = {}  # run_id → parent_run_id (multi-patch)
-        self._retention: ObservabilityRetentionConfig = retention or ObservabilityRetentionConfig()
 
     def _blob_store(self) -> BlobStore | None:
         """Lazily build the Phase 53 BlobStore. None when no ``store_dir`` is
@@ -394,17 +385,6 @@ class Surveyor:
                     _engine,
                 ],
             )
-
-        # Phase 85 B1 — throttled auto-prune (at most once per day per
-        # store). Best-effort: a pruning failure must never fail a run.
-        # Runs regardless of success/failure status — "run end" means every
-        # `record()` call, not just the failure path.
-        try:
-            from aqueduct.surveyor.retention import maybe_prune_store
-
-            maybe_prune_store(self._observability, self._retention)
-        except Exception:
-            logger.debug("maybe_prune_store failed", exc_info=True)
 
         if result.status == ExecutionStatus.SUCCESS:
             # Phase 55 — terminal OpenLineage COMPLETE (daemon thread, best-effort).

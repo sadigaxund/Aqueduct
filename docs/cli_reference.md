@@ -213,8 +213,6 @@ aqueduct run bp.yml \
 | `aqueduct report <run_id> --profile` | Per-module resource profile for one run (duration + I/O over `module_metrics`), heaviest module first, with each module's share of run time/bytes |
 | `aqueduct report --profile --blueprint <id> [--last N]` | Cross-run resource trend per module over the last N runs (default 10): runs count, avg/max/last duration, flags a module whose latest run is >1.5× its window average as a slowdown |
 | `aqueduct report <run_id> --format html > run.html` | Self-contained single-file HTML run report (status, module results, resource profile); no server, renders offline |
-| `aqueduct report-prune [--blueprint <id>] [--store-dir <d>]` | Delete observability rows past their configured `observability.retention:` window (`aqueduct.yml`), in every discovered store or just one; prints rows deleted per table. Same DELETEs the throttled auto-prune already runs at the end of every `aqueduct run` (at most once/day/store); this is the on-demand deep clean. `--format table\|json` (default `table`) |
-| `aqueduct report-prune --vacuum` | Also reclaims the freed DuckDB disk space (`VACUUM`; a no-op on Postgres). The **only** way to trigger `VACUUM`: never automatic, never implied by a plain `report-prune` |
 | `aqueduct report-costs [--blueprint <id>] [--store-dir <d>]` | LLM token cost per blueprint per month, aggregated from `heal_attempts.tokens_in`/`tokens_out` (previously stored but unqueryable except as a flat, un-grouped detail list). `--format table\|json` (default `table`) |
 | `aqueduct lineage <blueprint>` | Column-level lineage graph |
 | `aqueduct lineage <blueprint.yml> --chain <column> [--types]` | Vertical source→output trace for one column; `--types` annotates each hop with the sqlglot-inferred SQL type and marks type changes (computed on demand from the blueprint; needs a file path, not an id) |
@@ -398,9 +396,6 @@ caps than production.
 | Command | Description |
 |---------|-------------|
 | `aqueduct stores info` | Print each store's (observability / depots) resolved backend and location label |
-| `aqueduct stores migrate --from-duckdb <file> [--store depot]` | Copy depot KV rows from a source DuckDB file into the configured target backend (Postgres/Redis). Idempotent. v1 migrates `depot` only. |
-
-The target backend is read from `aqueduct.yml` (`stores.*`), set it to `postgres`/`redis` **before** running `migrate`. See [Production Guide](production_guide.md) for promoting a DuckDB project to a server backend.
 
 ---
 

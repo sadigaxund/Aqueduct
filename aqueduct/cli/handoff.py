@@ -2,8 +2,8 @@
 
 A ``handoff`` group (not a flat ``handoff-sweep`` command): unlike ``report``
 (which could not become a click ``Group`` because it already carries an
-optional positional argument, forcing the ``report-prune``/``report-costs``
-flat-command precedent), there is no pre-existing ``handoff`` command for
+optional positional argument, forcing the ``report-costs`` flat-command
+precedent), there is no pre-existing ``handoff`` command for
 ``sweep`` to collide with, and ``patch``/``stores``/``blueprint``/
 ``dev`` already establish "a bare noun is a group" as the repo's default
 shape. ``sweep`` is the group's first verb; a future ``handoff list`` or
@@ -140,10 +140,8 @@ def handoff() -> None:
     help="--dry-run (the default) lists every orphaned spill directory and "
     "deletes nothing. --execute performs the deletion. This deletes "
     "materialised data with no undo, so the safe default shows what would "
-    "go before anything goes — the same reason `report-prune --vacuum` (a "
-    "cheaper, reversible-by-recompute deletion) stays opt-in-only in that "
-    "command, taken further here because a handoff spill is a full "
-    "island's output and recomputing it can be expensive.",
+    "go before anything goes — a handoff spill is a full island's output "
+    "and recomputing it can be expensive.",
 )
 @click.option(
     "--format",

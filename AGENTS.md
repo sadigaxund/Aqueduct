@@ -505,7 +505,7 @@ keep working. Command families live in submodules:
 | `observability.py` | `report`, `runs`, `lineage`, `signal` |
 | `benchmark.py` | `benchmark`, `benchmark-diff`, `benchmark-stats` |
 | `diagnostics.py` | `validate`, `lint`, `schema`, `doctor` |
-| `stores.py` | `stores` group (info, migrate) |
+| `stores.py` | `stores` group (info) |
 | `hooks.py` | No command of its own — `run_hooks()` fires a Blueprint's `hooks.on_success`/`on_failure`/`on_patch_pending`/`on_healed` lifecycle entries, invoked from `run.py`/`heal.py` at terminal state and heal milestones |
 | `output.py` | Consolidated output funnel: `emit()` (structured ``--format``), `warn()` (diagnostic warnings) |
 | `style.py` | The single user-facing output vocabulary: `error`/`success`/`warn`/`info` + `StyledLogFormatter` (see "CLI output speaks ONE vocabulary" rule) |

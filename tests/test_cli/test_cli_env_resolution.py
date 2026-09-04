@@ -1,8 +1,9 @@
 # tests/test_cli/test_cli_env_resolution.py
 import os
+
 import pytest
-from pathlib import Path
 from click.testing import CliRunner
+
 from aqueduct.cli import cli
 
 pytestmark = pytest.mark.unit
@@ -183,17 +184,25 @@ def test_stderr_notices(tmp_path, clean_env):
 
 def test_env_options_decorator_presence():
     """Verify @_env_options decorator present on config commands."""
-    from aqueduct.cli import validate, doctor, run, report, runs, lineage, signal, heal, benchmark
-
     # Patch preview is 'patch preview' subcommand
-    from aqueduct.cli import patch
+    from aqueduct.cli import (
+        benchmark,
+        doctor,
+        heal,
+        lineage,
+        patch,
+        report,
+        run,
+        runs,
+        signal,
+        validate,
+    )
 
     preview = patch.commands["preview"]
-    # Stores info/migrate
+    # Stores info
     from aqueduct.cli import stores_group
 
     s_info = stores_group.commands["info"]
-    s_migrate = stores_group.commands["migrate"]
     # test command
     from aqueduct.cli import test_cmd
 
@@ -209,7 +218,6 @@ def test_env_options_decorator_presence():
         benchmark,
         preview,
         s_info,
-        s_migrate,
         test_cmd,
     ]
 
@@ -263,7 +271,7 @@ stores:
     try:
         os.chdir(tmp_path)
         cfg = _load_config_with_env()
-        assert cfg.stores.observability.path == f"/tmp/resolved_from_env"
+        assert cfg.stores.observability.path == "/tmp/resolved_from_env"
     finally:
         os.chdir(old)
 

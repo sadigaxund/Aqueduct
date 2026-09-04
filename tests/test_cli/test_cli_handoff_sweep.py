@@ -7,7 +7,7 @@ never rerun previously kept its spill forever (see `sweep_orphan_spills`'s
 docstring — "STILL OPEN" became "CLOSED" in this phase).
 
 Seeds an observability store directly with the real DDL (no Spark, no
-executor import — same approach as ``test_report_prune_costs.py``) and lays
+executor import — same approach as ``test_report_costs.py``) and lays
 out fake spill directories by hand, since only the directory NAMES
 (``<root>/<manifest_hash>/<run_id>/<edge_id>/``) and ``run_records`` rows
 matter to the sweep — nothing here needs a real run.

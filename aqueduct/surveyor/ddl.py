@@ -216,14 +216,3 @@ _RUN_RECORDS_MIGRATIONS: tuple[str, ...] = (
     "ALTER TABLE run_records ADD COLUMN IF NOT EXISTS engine VARCHAR",
     "CREATE INDEX IF NOT EXISTS idx_run_records_engine ON run_records (engine)",
 )
-
-# Phase 85 B1 — throttled auto-prune marker. One row per store (`key='global'`),
-# `last_pruned_at` checked with a single PK-indexed SELECT so the "did we
-# already prune today" check stays cheap on the runs that no-op (see
-# `aqueduct.surveyor.retention.maybe_prune_store`).
-_STORE_MAINTENANCE_DDL = """
-CREATE TABLE IF NOT EXISTS store_maintenance (
-    key            VARCHAR PRIMARY KEY,
-    last_pruned_at TIMESTAMPTZ
-);
-"""

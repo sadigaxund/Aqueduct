@@ -69,6 +69,23 @@ def test_sample_rows_retention_cap_keeps_only_last_n(duckdb_con, tmp_path):
     assert kept_run_ids == {"r2", "r3", "r4"}, "must keep the MOST RECENT N, not the first N"
 
 
+def test_sample_rows_retention_cap_defaults_to_20(duckdb_con, tmp_path):
+    """No `observability.retention:` config knob exists any more — the cap
+    is `ProbeSampling`'s own fixed default (20), applied even when the
+    caller passes no `sampling=` argument at all."""
+    rel = duckdb_con.sql("SELECT 1 AS id")
+    mod = _probe_module([{"type": "sample_rows", "n": 1}])
+    assert ProbeSampling().sample_rows_keep_last_n == 20
+
+    for i in range(25):
+        execute_probe(mod, rel, duckdb_con, f"r{i}", tmp_path)
+
+    rows = _signal_rows(tmp_path, "probe1", "sample_rows")
+    assert len(rows) == 20, "default cap must keep exactly the last 20 sample_rows rows"
+    kept_run_ids = {r[0] for r in rows}
+    assert kept_run_ids == {f"r{i}" for i in range(5, 25)}
+
+
 def test_non_sample_rows_signals_are_not_redacted_or_capped(duckdb_con, tmp_path):
     """schema_snapshot/null_rates/etc. are aggregate/statistical — they carry
     no comparable sensitivity, so they must NOT be routed through redact()

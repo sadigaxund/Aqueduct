@@ -24,7 +24,7 @@ from aqueduct.cli.output import emit
 
 @cli.group("stores")
 def stores_group() -> None:
-    """Inspect and migrate the configured store backends (Phase 28)."""
+    """Inspect the configured store backends (Phase 28)."""
 
 
 @stores_group.command("info")
@@ -63,101 +63,3 @@ def stores_info(config_path: str | None, env_file: str | None, cli_env: tuple[st
     emit(f"  {'-' * w0}  {'-' * w1}  --------", fmt="text", redact=True)
     for store, backend, loc in rows:
         emit(f"  {store.ljust(w0)}  {backend.ljust(w1)}  {loc}", fmt="text", redact=True)
-
-
-@stores_group.command("migrate")
-@click.option(
-    "--config",
-    "config_path",
-    default=None,
-    type=click.Path(dir_okay=False),
-    help="Path to aqueduct.yml (the TARGET config — backend must already be set to postgres/redis)",
-)
-@click.option(
-    "--from-duckdb",
-    "from_path",
-    required=True,
-    type=click.Path(exists=True, dir_okay=False),
-    help="Path to the source DuckDB file (typically `.aqueduct/depot.db`)",
-)
-@click.option(
-    "--store",
-    type=click.Choice(["depot"], case_sensitive=False),
-    default="depot",
-    show_default=True,
-    help=(
-        "Which store to migrate. v1 ships depot migration only; observability/lineage "
-        "migration requires schema-aware row copying and is tracked in TODOs.md "
-        "for a follow-up phase. Document the manual route: COPY each DuckDB "
-        "table to Parquet, then `\\copy observability.<table> FROM 'file.parquet'` on PG."
-    ),
-)
-@_env_options
-def stores_migrate(
-    config_path: str | None,
-    from_path: str,
-    store: str,
-    env_file: str | None,
-    cli_env: tuple[str, ...],
-) -> None:
-    """Copy KV rows from a DuckDB file into the configured target backend.
-
-    Useful when promoting an existing DuckDB-backed project to Postgres or Redis
-    without losing depot watermarks and counters. Idempotent: re-running upserts
-    the same keys with the same values.
-    """
-    from aqueduct.cli.style import error as _error
-    from aqueduct.config import ConfigError, load_config
-    from aqueduct.stores import get_stores
-
-    if store.lower() != "depot":
-        # exit_codes.py's own USAGE_ERROR docstring names this exact case
-        # ("an unsupported `--store` value") as its canonical example.
-        _error(f"unsupported --store: {store}")
-        sys.exit(exit_codes.USAGE_ERROR)
-
-    try:
-        _resolve_and_load_env(env_file, Path(config_path) if config_path else None, cli_env=cli_env)
-        cfg = load_config(Path(config_path) if config_path else None)
-        _apply_warnings_from_cfg(cfg)
-    except ConfigError as exc:
-        _error(f"config error: {exc}")
-        sys.exit(exit_codes.CONFIG_ERROR)
-
-    bundle = get_stores(cfg)
-    target_label = f"{bundle.depot.backend}:{bundle.depot.location_label}"
-    if (
-        bundle.depot.backend == "duckdb"
-        and Path(bundle.depot.location_label) == Path(from_path).resolve()
-    ):
-        _error("source and target depot are the same DuckDB file; nothing to migrate")
-        sys.exit(exit_codes.CONFIG_ERROR)
-
-    try:
-        import duckdb as _duckdb
-    except ImportError as exc:
-        _error(f"duckdb not installed: {exc}")
-        sys.exit(exit_codes.CONFIG_ERROR)
-
-    conn = _duckdb.connect(str(Path(from_path).resolve()), read_only=True)
-    try:
-        rows = conn.execute("SELECT key, value FROM depot_kv").fetchall()
-    except Exception as exc:
-        _error(f"could not read depot_kv from {from_path}: {exc}")
-        sys.exit(exit_codes.CONFIG_ERROR)
-    finally:
-        conn.close()
-
-    from aqueduct.cli.render.funnel import echo as _funnel_echo
-    from aqueduct.cli.render.funnel import success as _funnel_success
-
-    if not rows:
-        _funnel_echo(f"  source depot has 0 rows — nothing to copy ({from_path})", err=False)
-        return
-
-    for key, value in rows:
-        bundle.depot.kv_put(str(key), str(value))
-
-    _funnel_success(
-        f"migrated {len(rows)} depot key(s)  source={from_path}  target={target_label}", err=False
-    )

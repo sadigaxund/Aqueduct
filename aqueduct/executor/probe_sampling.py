@@ -18,8 +18,8 @@ from dataclasses import dataclass
 class ProbeSampling:
     max_sample_rows: int = 100
     default_sample_fraction: float = 0.1
-    # Phase 85 A1 — per-probe retention cap for the sample_rows signal type,
+    # Phase 85 A1 — per-probe write-time cap for the sample_rows signal type,
     # the one signal that persists actual data ROW content (redacted, but
-    # still row content) rather than aggregate statistics. From
-    # `aqueduct.yml`'s `observability.retention.sample_rows_keep_last_n`.
+    # still row content) rather than aggregate statistics. Fixed at this
+    # default — not configurable via aqueduct.yml.
     sample_rows_keep_last_n: int = 20
