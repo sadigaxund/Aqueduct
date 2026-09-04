@@ -23,8 +23,11 @@ or DuckDB file locks:
       blobs/               ← Zstandard-compressed manifest_json, provenance_json,
                              stack_trace payloads (<run_id>/{manifest,prov,stack}.json.zst)
       checkpoints/         ← Parquet checkpoints written by --resume
-  depot.db                 ← project-wide cross-run KV state (@aq.depot.*),
-                             incremental-Channel watermarks
+      depot.db             ← this blueprint's cross-run KV state (@aq.depot.*),
+                             incremental-Channel watermarks. Its own file,
+                             never inside observability.db. A depot mount with
+                             an explicit `path` lives wherever you point it
+                             instead.
   benchmark.duckdb         ← appears next to the scenarios dir, not here:
                              written to <scenarios_dir>/.aqueduct/benchmark.duckdb
 ```
@@ -511,14 +514,23 @@ One row per `(scenario_id, model, prompt_version)` benchmark execution. Lives in
 
 #### `depot_kv`
 
-Cross-run KV state (`@aq.depot.*`). Keys are **per-blueprint isolated** by
-default: the engine transparently prefixes every key with `<blueprint_id>:`, so
-two blueprints sharing a physical depot never collide (you'll see rows like
-`sales:watermark`, `orders:watermark`). Configure mounts under `stores.depots`
-(a name-keyed map); set `shared: true` on a mount for deliberate cross-blueprint
-sharing (raw, unprefixed keys): read those via `@aq.depot.<name>.get(...)`. For
-parallel writers on a shared mount, use postgres/redis (concurrent), not a single
-DuckDB file.
+Cross-run KV state (`@aq.depot.*`). Every mount is **per-blueprint isolated**
+by default, and how depends on the mount's `path`.
+
+A mount with no `path` (the default `default` mount) is routed to its own file
+at `.aqueduct/observability/<blueprint_id>/depot.db`. Keys inside it are raw,
+because the file already belongs to one blueprint.
+
+A mount with an explicit `path` is one file shared by every blueprint that
+names it, so the engine transparently prefixes each key with `<blueprint_id>:`
+and two blueprints never collide (you will see rows like `sales:watermark`,
+`orders:watermark`).
+
+Configure mounts under `stores.depots` (a name-keyed map); set `shared: true`
+on a mount for deliberate cross-blueprint sharing (raw, unprefixed keys), which
+requires an explicit `path`: read those via `@aq.depot.<name>.get(...)`. For
+parallel writers on a shared mount, use postgres/redis (concurrent), not a
+single DuckDB file.
 
 ---
 

@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.80: Reference Document**
+**Version 2.81: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -107,7 +107,7 @@ Aqueduct has four processing layers and three persistent stores. Each layer has 
 | :- | :- |
 | **Observability Store** | Append-only log of all runtime signals: Probe readings, stage metrics, errors. Per-pipeline routing (1.1.0+): `.aqueduct/observability/<blueprint_id>/observability.db`. Grows unbounded; pruning it is the operator's responsibility (no built-in retention feature). |
 | **Column Lineage** | Column lineage graphs and Flow Reports live in the `column_lineage` table **inside the observability store** (no separate store). The former `stores.lineage` config option has been **removed**; a legacy block in `aqueduct.yml` raises a `ConfigError` (2.0). |
-| **Depot (KV Store)** | Persistent key-value store for pipeline state across runs: watermarks, last-run metadata. Configured under `stores.depots` (a name-keyed map of mounts; a `default` mount always exists). Keys are **per-blueprint isolated** by default, transparently prefixed with `blueprint_id`, so blueprints don't collide on a shared depot; opt a mount into cross-blueprint sharing with `shared: true` (read via `@aq.depot.<name>.get`). Incremental Channels persist their watermark to the Depot (if configured); without a Depot the watermark is lost between runs and every run re-scans all source data. The compiler emits `perf_incremental_watermark_scan` when an incremental Channel has no upstream cache/checkpoint, because computing `MAX(watermark_column)` on the output requires a second full scan. |
+| **Depot (KV Store)** | Persistent key-value store for pipeline state across runs: watermarks, last-run metadata. Configured under `stores.depots` (a name-keyed map of mounts; a `default` mount always exists). Every mount is **per-blueprint isolated** by default, by one of two mechanisms (§10.4.4): a mount with no `path` gets its own file at `.aqueduct/observability/<blueprint_id>/depot.db`, and a mount with an explicit `path` shares that file with transparent `<blueprint_id>:` key prefixing. Opt a mount into cross-blueprint sharing with `shared: true`, which requires an explicit `path` (read via `@aq.depot.<name>.get`). Incremental Channels persist their watermark to the Depot (if configured); without a Depot the watermark is lost between runs and every run re-scans all source data. The compiler emits `perf_incremental_watermark_scan` when an incremental Channel has no upstream cache/checkpoint, because computing `MAX(watermark_column)` on the output requires a second full scan. |
 | **Object Store** (1.3+) | Transport for driver-side **blobs** and the **patch lifecycle**, configured under `stores.blob`. A single backend (`local` default, or `s3` / `gcs` / `adls` via one `fsspec` handle, the `object-store` extra, folded into `[stores]`) serves two semantic stores: a **BlobStore** (zstd-externalised `manifest_json` / `stack_trace` / `provenance_json`) and a **PatchStore** (the `pending` / `applied` / `rejected` patch directories). The `local` backend is byte-identical to the historical on-disk layout, so the git-diff review workflow is unchanged; the cloud backends let a run on an ephemeral pod leave no local-FS artefacts under its cwd. |
 | **Benchmark Store** (1.3+) | Stores scenario benchmark results (`benchmark_results` table), leaderboard aggregates, and regression gate history. Configurable under `stores.benchmark` with a `local` DuckDB default or `postgres` backend in a dedicated `benchmark` schema. Separate from the observability store, rows are not tied to a real `run_id`. |
 
@@ -1723,6 +1723,25 @@ Directory layout: `<root>/<manifest_hash>/<run_id>/<edge_id>/`, one subdirectory
 **Same-run eager pruning (`prune_eagerly`, default true).** Within one polyglot run, a boundary's spill does not have to wait for the whole run to end: it is deleted as soon as every island that reads it has finished successfully, since a handoff edge has exactly one reader island and nothing later in the same run will ever touch that directory again. This bounds peak spill storage on a long same-run chain instead of holding every boundary's output until the final island finishes. It only ever removes a spill whose reader already succeeded in THIS run. A spill feeding an island that has not run yet, or one this run resumed from a PRIOR run via `--resume`, is left alone, so a run that later fails at island N still has every spill feeding island N and everything after it intact on disk, and `--resume` behaves exactly as it did before this existed. `keep_on_failure` and the end-of-run deletion described above are unaffected either way; an eagerly pruned boundary is simply already gone by the time the end-of-run cleanup runs over it. Set `prune_eagerly` to false to defer every deletion to the run's own end instead.
 
 **Keeping a spill is bounded by a release event, not by a clock.** `keep_on_failure: true` acquires disk; two deterministic actions give it back. First, a successful `--resume` deletes the spill it consumed: that spill was kept for exactly the rerun that has now read it, so its purpose is served (a FAILED resume keeps it, since it is still resumable). Second, the orphan sweep reclaims any kept-failure spill once a LATER run of the same blueprint has succeeded, which means the failure is resolved and nothing will ever resume from it again. "Succeeded" includes the `patched` run status, not only `success`: a heal that fixes the pipeline records `patched`, and that is the most common way a failure gets resolved. `finished_at` is used only to order two `run_records` rows against each other; there is no retention window, no age threshold, and no configurable number of days anywhere in this. Two consequences are stated rather than hidden. The first is closed: a blueprint that fails and is never run again used to keep its spill indefinitely with no way to reclaim it; `aqueduct handoff sweep --older-than <duration>` (e.g. `--older-than 7d`) is that explicit operator/watchdog action, additionally reclaiming a kept-failure spill whose run finished longer ago than the given age even though no later success has superseded it yet, never automatically and never without the flag. The second is decided and accepted: a failure under active investigation loses its spill if an unrelated scheduled run of the same blueprint succeeds in the meantime. Aqueduct builds no protection against that, neither an exemption for the most recent failure nor an opt-out setting. The hazard is unmeasured, and everything an operator actually debugs from survives the sweep: the `run_records` row, the `failure_contexts` row, and the stack trace are store records, not spill directories. A handoff spill is an intermediate parquet materialisation of one island's output, so losing it costs a rerun rather than a diagnosis, and guarding it would mean carrying a second retention rule here or a config key on every engine to protect a cost nobody has measured.
+
+### **10.4.4 Depot mount routing (DuckDB)**
+
+A depot mount under `stores.depots` (DuckDB backend) resolves in one of two
+ways, decided by whether `path` is set.
+
+| `path` value | Layout | Key isolation |
+| :- | :- | :- |
+| *(unset: default)* | **Per-blueprint routing**: the mount gets its own file at `.aqueduct/observability/<blueprint_id>/depot.db`, next to that blueprint's `observability.db` and never inside it | None needed: keys are raw, because the FILE is already per blueprint |
+| A file, e.g. `/mnt/aqueduct/depot.db` | One shared file for every blueprint that names it | Keys are prefixed with `<blueprint_id>:`, unless `shared: true` asks for raw keys |
+
+`--store-dir` replaces the routing base for a per-blueprint mount, the same
+way it does for the observability store (§10.4.1).
+
+`shared: true` requires an explicit `path`. A mount with no `path` lives in a
+file no other blueprint reads, so asking to share it is a contradiction:
+config load fails naming the mount. The `postgres` and `redis` backends also
+require an explicit `path`, because there the value is a DSN or URL, not a
+file this routing can derive.
 
 ## **10.5 Deployment targets**
 
