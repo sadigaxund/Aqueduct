@@ -7,6 +7,7 @@ commands register onto `cli` when imported at the bottom of __init__.
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from datetime import UTC
 from pathlib import Path
@@ -1349,17 +1350,47 @@ def _lineage_chain(
     from aqueduct.compiler.chain import compute_type_chain
     from aqueduct.compiler.compiler import CompileError
     from aqueduct.compiler.compiler import compile as compiler_compile
+    from aqueduct.config import load_config
     from aqueduct.parser.parser import ParseError, parse
 
+    _cfg = None
     try:
         _resolve_and_load_env(env_file, Path(config_path) if config_path else None, cli_env=cli_env)
+        _cfg = load_config(Path(config_path) if config_path else None)
     except Exception:
-        pass  # env is best-effort for a pure compile
+        pass  # env/config are best-effort for a pure compile
 
     try:
         bp = parse(str(arg_path))
-        manifest = compiler_compile(bp, blueprint_path=arg_path)
-    except (ParseError, CompileError) as exc:
+    except ParseError as exc:
+        _error(f"could not compile {blueprint_arg!r}: {exc}")
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    # The FOURTH preview compile path (`aqueduct compile`, `aqueduct drift`
+    # and patch-preview Gate 3 are the other three): without a depot, every
+    # `@aq.depot.get(...)` / `@aq.run.prev_id()` in this Blueprint hard-fails
+    # with a CompileError, so `lineage --chain` was unusable on exactly the
+    # Blueprints that use them. Same shape as `cli/compile_cmd.py`: build the
+    # real namespaced depots, and never let a depot problem crash a preview
+    # that would otherwise succeed.
+    depot = None
+    depots = None
+    if _cfg is not None:
+        try:
+            from aqueduct.depot.depot import preview_depots
+
+            depot, depots = preview_depots(_cfg, bp.id)
+        except Exception as exc:  # pragma: no cover — depot build must never crash preview
+            logging.getLogger(__name__).warning(
+                "aqueduct lineage --chain: could not build preview depot (%s) — "
+                "@aq.depot.*/@aq.run.prev_id will hard-fail if this Blueprint uses them",
+                exc,
+            )
+            depot, depots = None, None
+
+    try:
+        manifest = compiler_compile(bp, blueprint_path=arg_path, depot=depot, depots=depots)
+    except CompileError as exc:
         _error(f"could not compile {blueprint_arg!r}: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 

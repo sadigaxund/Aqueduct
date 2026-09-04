@@ -71,3 +71,66 @@ def test_chain_unknown_column_reports_empty(tmp_path):
     res = CliRunner().invoke(cli, ["lineage", _write_bp(tmp_path), "--chain", "ghost"])
     assert res.exit_code == 0, res.output
     assert "No SQL Channel produces column 'ghost'" in res.output
+
+
+# ── Preview depot wiring — the FOURTH preview compile path ─────────────────
+# `aqueduct compile`, `aqueduct drift` and patch-preview Gate 3 all build a
+# real namespaced depot before compiling; `lineage --chain` did not, so every
+# `@aq.depot.get(...)` / `@aq.run.prev_id()` hit the loud
+# `_depot_get_or_raise` CompileError and the command was unusable on exactly
+# the Blueprints that use them. Mirrors tests/test_cli/test_compile_cmd_depot.py.
+
+_BP_DEPOT = """aqueduct: "1.0"
+id: chain.depot.demo
+name: ChainDepot
+modules:
+  - id: load
+    type: Ingress
+    label: L
+    config: {{ format: parquet, path: "data/@aq.depot.get('watermark', '{default}')/in" }}
+  - id: clean
+    type: Channel
+    label: C
+    config:
+      op: sql
+      query: "SELECT CAST(amount AS DOUBLE) AS amount, id FROM load"
+edges:
+  - {{ from: load, to: clean }}
+"""
+
+
+def test_chain_resolves_real_depot_value_with_run_namespacing(tmp_path, monkeypatch):
+    from aqueduct.config import load_config
+    from aqueduct.depot.depot import DepotStore
+    from aqueduct.stores import get_stores
+
+    (tmp_path / "aqueduct.yml").write_text(
+        f"stores:\n  depots:\n    default:\n      backend: duckdb\n      path: {tmp_path}/depot.db\n"
+    )
+    (tmp_path / "bp.yml").write_text(_BP_DEPOT.format(default="2020-01-01"))
+
+    cfg = load_config(tmp_path / "aqueduct.yml")
+    bundle = get_stores(cfg, blueprint_id="chain.depot.demo")
+    DepotStore(backend=bundle.depot).put("watermark", "2099-12-31")
+
+    # monkeypatch.chdir so the cwd is restored — `lineage` auto-discovers
+    # aqueduct.yml by walking up from the cwd.
+    monkeypatch.chdir(tmp_path)
+    res = CliRunner().invoke(cli, ["lineage", str(tmp_path / "bp.yml"), "--chain", "amount"])
+
+    # Before the fix this exited non-zero with "could not compile ...
+    # @aq.depot.get(...)".
+    assert res.exit_code == 0, res.output
+    assert "clean.amount" in res.output
+
+
+def test_chain_with_depot_reference_and_no_config_still_compiles(tmp_path, monkeypatch):
+    """No `aqueduct.yml` still yields the implicit DuckDB `default` mount, so
+    an absent key falls back to the Blueprint's own default rather than
+    raising — the same contract `aqueduct compile` has."""
+    (tmp_path / "bp.yml").write_text(_BP_DEPOT.format(default="2020-01-01"))
+    monkeypatch.chdir(tmp_path)
+
+    res = CliRunner().invoke(cli, ["lineage", str(tmp_path / "bp.yml"), "--chain", "amount"])
+    assert res.exit_code == 0, res.output
+    assert "clean.amount" in res.output
