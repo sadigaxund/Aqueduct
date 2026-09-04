@@ -201,12 +201,19 @@ _HEALING_OUTCOMES_MIGRATIONS: tuple[str, ...] = (
 # `_BENCHMARK_RESULTS_MIGRATIONS`): idempotent `ADD COLUMN IF NOT EXISTS`,
 # supported identically by DuckDB and Postgres, run right after the CREATE on
 # every Surveyor init so a pre-2.2 store gains the column in place instead of
-# being orphaned. The index MUST run after the ADD COLUMN, not inside `_DDL`
-# above — `CREATE INDEX IF NOT EXISTS run_records(engine)` against a
-# pre-existing table that does not have the column YET (before this
-# migration runs) raises a BinderException, since `CREATE TABLE IF NOT
-# EXISTS` is a no-op there. Order in this tuple matters.
+# being orphaned.
+#
+# This tuple used to also carry `CREATE INDEX IF NOT EXISTS
+# idx_run_records_engine ON run_records (engine)` right after the ADD COLUMN
+# (order mattered — an index on a column that does not exist yet on a
+# pre-existing table raises a BinderException). Store-hygiene audit found no
+# query anywhere in the codebase filters or orders `run_records` on `engine`
+# (verified against aqueduct/stores/queries.py, aqueduct/cli/observability.py
+# and the rest of aqueduct/cli/), so the index was dropped from here. A store
+# created before this change keeps that index — `CREATE INDEX IF NOT EXISTS`
+# never runs a `DROP INDEX`, and a pre-existing orphaned index is harmless,
+# just a few unused bytes on disk and a marginally slower write; not worth a
+# migration to remove it.
 _RUN_RECORDS_MIGRATIONS: tuple[str, ...] = (
     "ALTER TABLE run_records ADD COLUMN IF NOT EXISTS engine VARCHAR",
-    "CREATE INDEX IF NOT EXISTS idx_run_records_engine ON run_records (engine)",
 )

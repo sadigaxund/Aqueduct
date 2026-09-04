@@ -49,10 +49,21 @@ CREATE TABLE IF NOT EXISTS patch_index (
     -- for auditability ("show me all duckdb heals"), not for lookup filtering.
     engine             VARCHAR
 );
-CREATE INDEX IF NOT EXISTS idx_patch_index_sig ON patch_index (signature, status);
-CREATE INDEX IF NOT EXISTS idx_patch_index_sig_created
-    ON patch_index (signature, status, created_at);
 """
+# This DDL used to also create `idx_patch_index_sig (signature, status)` and
+# `idx_patch_index_sig_created (signature, status, created_at)` — added for a
+# signature-keyed coaching lookup (CHANGELOG: "coaching-order covering
+# index... ORDER BY created_at DESC coaching lookups"). That lookup path was
+# removed by the later signature-keyed pending-reuse/retrieval cleanup (see
+# `aqueduct/surveyor/surveyor.py`'s `record_heal_attempt` docstring: "every
+# heal since Phase 92 removed the signature-keyed pending-reuse ... paths"),
+# and no function in this file (or anywhere else — checked
+# aqueduct/stores/queries.py, aqueduct/cli/) filters `patch_index` on
+# `signature` any more; every read here (`get`, `recent_applied`,
+# `list_by_status`) keys on `patch_id`, `status`, or `blueprint_id` instead.
+# Store-hygiene audit removed both indexes rather than let them sit unused.
+# A store created before this change keeps them — harmless, just unused disk
+# space and a marginally slower write; not worth a migration to drop them.
 
 # Schema-evolution rule (see aqueduct/surveyor/ddl.py's comment for the full
 # rationale): CREATE TABLE IF NOT EXISTS never adds columns to an existing

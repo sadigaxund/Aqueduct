@@ -142,6 +142,93 @@ def test_benign_addition_does_not_heal(project):
     assert "benign" in res.output
 
 
+_TWO_INGRESS_BP = """aqueduct: "1.0"
+id: drift.demo
+name: D
+modules:
+  - id: load
+    type: Ingress
+    label: L
+    config: { format: parquet, path: data/in }
+  - id: load2
+    type: Ingress
+    label: L2
+    config: { format: parquet, path: data/in2 }
+  - id: c
+    type: Channel
+    label: C
+    config: { op: sql, query: "SELECT a, b FROM load" }
+  - id: c2
+    type: Channel
+    label: C2
+    config: { op: sql, query: "SELECT a, b FROM load2" }
+edges:
+  - { from: load, to: c }
+  - { from: load2, to: c2 }
+"""
+
+
+def test_partial_checks_persist_when_a_later_module_crashes(project, monkeypatch):
+    """The batched `record_checks` flush (aqueduct/cli/drift.py) lives in the
+    per-module loop's `finally`, not after the whole `try/finally` — so a
+    module that raises past the per-module `except` (a bug in the diff step
+    itself, not a schema-read failure) must not erase the audit rows already
+    collected for modules processed earlier in the same command run.
+    Previously each module wrote its own row inline as it went, so a crash
+    mid-loop still left a partial audit trail; the batched writer must keep
+    that property.
+    """
+    tmp_path, store, schema = project
+    (tmp_path / "bp.yml").write_text(_TWO_INGRESS_BP)
+
+    # Run 1: both modules have no baseline yet → both just record baseline_set
+    # (diff_schemas is never called), so nothing to crash on here.
+    schema["schema"] = {"a": "int", "b": "string"}
+    assert _invoke(tmp_path, store).exit_code == 0
+
+    # Run 2: both modules now have a baseline, so `diff_schemas` runs for
+    # each. Make it explode on the SECOND call (module "load2", processed
+    # after "load" per the manifest's module order) — a stand-in for any
+    # bug that would previously have crashed the whole command with zero
+    # of this run's rows persisted for EITHER module.
+    # `drift()` does `from aqueduct.drift.classifier import diff_schemas`
+    # freshly on every invocation, so patching the source module's attribute
+    # (not the click Command object) is what the CLI actually picks up.
+    import aqueduct.drift.classifier as classifier_mod
+
+    calls = {"n": 0}
+    real_diff_schemas = classifier_mod.diff_schemas
+
+    def _boom(baseline, live):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("simulated diff crash")
+        return real_diff_schemas(baseline, live)
+
+    monkeypatch.setattr(classifier_mod, "diff_schemas", _boom)
+
+    res = _invoke(tmp_path, store)
+    assert res.exit_code != 0
+    assert calls["n"] == 2  # confirms the crash actually happened mid-loop
+
+    import duckdb
+
+    con = duckdb.connect(str(tmp_path / "store" / "drift.demo" / "observability.db"))
+    try:
+        rows = con.execute(
+            "SELECT module_id, status FROM drift_checks ORDER BY checked_at"
+        ).fetchall()
+    finally:
+        con.close()
+
+    # Both baseline_set rows from run 1, PLUS the "load" module's run-2 row
+    # (diffed successfully before "load2" crashed) — the crash on "load2"
+    # must not have discarded "load"'s already-collected check.
+    assert ("load", "baseline_set") in rows
+    assert ("load2", "baseline_set") in rows
+    assert sum(1 for module_id, _ in rows if module_id == "load") == 2
+
+
 def test_drift_compile_resolves_real_depot_value_with_run_namespacing(project, monkeypatch):
     """`aqueduct drift` compiles with a real depot wired in (Item 1) — a
     Blueprint using `@aq.depot.get()` in an Ingress path resolves the value a

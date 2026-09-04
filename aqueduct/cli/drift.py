@@ -186,6 +186,18 @@ def drift(
     undiffable = False
     breaking_any = False
 
+    # Batch DB access to ONE connect() per phase instead of one per module —
+    # `get_baselines` fetches every Ingress module's baseline up front, and
+    # `record_checks` (called once after the loop) flushes every module's
+    # audit row together. Previously `get_baseline`/`record_check` opened a
+    # fresh DuckDB connection per module (2N connect()/close() cycles for N
+    # Ingress modules); the live-schema reads inside the loop below are the
+    # slow part (network I/O per module engine) and must NOT happen while a
+    # write connection is held, so the write stays a single flush at the end
+    # rather than one connection wrapped around the whole loop.
+    baselines = drift_store.get_baselines(obs, manifest.blueprint_id, [m.id for m in ingress])
+    pending_checks: list[dict[str, Any]] = []
+
     try:
         for mod in ingress:
             mod_engine = mod.engine or cfg.deployment.engine
@@ -203,15 +215,16 @@ def drift(
                 _funnel_error(f"{mod.id}: could not read source schema — {exc}")
                 continue
 
-            baseline = drift_store.get_baseline(obs, manifest.blueprint_id, mod.id)
+            baseline = baselines.get(mod.id)
             if baseline is None:
-                drift_store.record_check(
-                    obs,
-                    blueprint_id=manifest.blueprint_id,
-                    module_id=mod.id,
-                    baseline_schema=None,
-                    live_schema=live,
-                    status="baseline_set",
+                pending_checks.append(
+                    {
+                        "blueprint_id": manifest.blueprint_id,
+                        "module_id": mod.id,
+                        "baseline_schema": None,
+                        "live_schema": live,
+                        "status": "baseline_set",
+                    }
                 )
                 results.append({"module": mod.id, "status": "baseline_set", "columns": len(live)})
                 # Text-format result row (--format text is the default report),
@@ -227,15 +240,16 @@ def drift(
             if result.has_breaking:
                 breaking_any = True
 
-            drift_store.record_check(
-                obs,
-                blueprint_id=manifest.blueprint_id,
-                module_id=mod.id,
-                baseline_schema=baseline,
-                live_schema=live,
-                status=result.status,
-                breaking_changes=[_change_dict(c) for c in result.breaking] or None,
-                benign_changes=[_change_dict(c) for c in result.benign] or None,
+            pending_checks.append(
+                {
+                    "blueprint_id": manifest.blueprint_id,
+                    "module_id": mod.id,
+                    "baseline_schema": baseline,
+                    "live_schema": live,
+                    "status": result.status,
+                    "breaking_changes": [_change_dict(c) for c in result.breaking] or None,
+                    "benign_changes": [_change_dict(c) for c in result.benign] or None,
+                }
             )
             results.append(
                 {
@@ -247,6 +261,17 @@ def drift(
             )
             _echo_result(mod.id, result)
     finally:
+        # Single flush for every module's audit row collected so far (see the
+        # batching comment above the loop) — one connect() regardless of how
+        # many Ingress modules were checked. In `finally` (not after the
+        # try/finally) so a run interrupted mid-loop by an exception the
+        # per-module `except` above does not catch (or a Ctrl-C) still
+        # persists whatever it had already diffed, matching the old
+        # per-module `record_check` call's behaviour of writing each row as
+        # it went — a batched flush must not turn "partial audit trail" into
+        # "no audit trail".
+        if pending_checks:
+            drift_store.record_checks(obs, pending_checks)
         for _engine, _session in _sessions.items():
             try:
                 _protocols[_engine].session_closer()(_session)
