@@ -1121,41 +1121,6 @@ class WarningsConfig(BaseModel):
     )
 
 
-class LineageConfig(BaseModel):
-    """Phase 55 — OpenLineage emission.
-
-    Top-level `lineage:` block. **Naming note:** this is the OpenLineage
-    *emission* config — unrelated to the former `stores.lineage` store, which was
-    removed (column lineage merged into the observability store). This block
-    configures *emission* of OpenLineage run events.
-
-    When `openlineage_url` is unset (default), no events are emitted — zero cost.
-
-    CORE, not engine-scoped (Q4 step 2, corrected 2026-07-31): the emitter is
-    built in `Surveyor.__init__` (`aqueduct/surveyor/surveyor.py`) gated only
-    on `openlineage_url` being set — no engine condition anywhere. Emission
-    (START/COMPLETE/FAIL) and the column-level `columnLineage` facet are both
-    derived from compile-time lineage (sqlglot) and delivered via
-    `infra/http.py`; no engine module reads either key. A DuckDB run emits
-    OpenLineage events exactly like a Spark run.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    openlineage_url: str | None = Field(
-        default=None,
-        description="OpenLineage receiver endpoint (Marquez / DataHub / Atlan). "
-        "POST target for run events. Unset → emission disabled.",
-        json_schema_extra={"engine_scoped": False},
-    )
-    openlineage_namespace: str = Field(
-        default="aqueduct",
-        description="OpenLineage namespace for jobs and datasets emitted by this run "
-        "(engine-independent — see class docstring).",
-        json_schema_extra={"engine_scoped": False},
-    )
-
-
 class SparkEngineConfig(BaseModel):
     """Engine-level Spark session configuration (`engine.spark:` block, 2.0).
 
@@ -1565,7 +1530,6 @@ class AqueductConfig(BaseModel):
     git: GitConfig = Field(default_factory=GitConfig)
     pr: PrConfig = Field(default_factory=PrConfig)
     webhooks: WebhooksConfig = Field(default_factory=WebhooksConfig)
-    lineage: LineageConfig = Field(default_factory=LineageConfig)
     agent: AgentConnectionConfig = Field(default_factory=AgentConnectionConfig)
     warnings: WarningsConfig = Field(default_factory=lambda: WarningsConfig())
     handoff: HandoffConfig = Field(default_factory=HandoffConfig)

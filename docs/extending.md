@@ -93,13 +93,11 @@ there is no default-verdict sweep anywhere in the framework.
 
 **Your checklist is NOT the whole `config.*` surface.** Of `AqueductConfig`'s
 105 `config.*` leaves, ~88 are CORE (`webhooks.*`, `secrets.*`, `stores.*`,
-`lineage.*`, most of `agent.*`/`danger.*`). They run in core code paths with
-no per-engine implementation to diverge from, so no engine (yours included)
-is ever asked for a verdict on them; they simply never appear in your
-scaffold. (`lineage.*` is core because OpenLineage emission is built in
-`Surveyor.__init__` gated only on a configured URL, with no engine
-condition: a DuckDB run emits the same events a Spark run does.) The ones
-that DO appear are the ones that genuinely dispatch through an engine:
+most of `agent.*`/`danger.*`). They run in core code paths with no
+per-engine implementation to diverge from, so no engine (yours included) is
+ever asked for a verdict on them; they simply never appear in your
+scaffold. The ones that DO appear are the ones that genuinely dispatch
+through an engine:
 `probes.*`, `metrics.use_observe`, `timezone`, `checkpoint_root`,
 `deployment.target`, `handoff.root`,
 `agent.sandbox_master_url`,

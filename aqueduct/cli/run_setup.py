@@ -775,11 +775,6 @@ def _setup_surveyor(
         patches_dir=patches_dir,
         stores=bundle,
         blob_config=(cfg.stores.blob.backend, cfg.stores.blob.path),
-        lineage_config=(
-            (cfg.lineage.openlineage_url, cfg.lineage.openlineage_namespace)
-            if cfg.lineage.openlineage_url
-            else None
-        ),
     )
     surveyor.start(run_id)
     _obs_store = surveyor.observability

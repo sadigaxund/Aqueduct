@@ -1,9 +1,9 @@
 """Shared outbound-HTTP transport primitives.
 
 One place for retry policy, backoff, and fire-and-forget delivery. The webhook
-and OpenLineage daemon-delivery paths build on `deliver_with_retry` +
-`fire_and_forget`; the LLM-provider path reuses `retry_after_seconds` /
-`backoff_delay` / the retryable-status constants for its budget-aware loop.
+daemon-delivery path builds on `deliver_with_retry` + `fire_and_forget`; the
+LLM-provider path reuses `retry_after_seconds` / `backoff_delay` / the
+retryable-status constants for its budget-aware loop.
 
 Best-effort delivery logs via ``logger.warning`` — ``_RedactingFilter`` covers the
 output, and the format is stable (``[aqueduct] <label> …``). These run in daemon
@@ -28,7 +28,7 @@ import httpx
 logger = logging.getLogger(__name__)
 
 # Transient statuses worth retrying. Two sets — they legitimately differ:
-#   DELIVERY: best-effort outbound POSTs (webhook / OpenLineage / CI callback).
+#   DELIVERY: best-effort outbound POSTs (webhook / CI callback).
 #             Gateway 5xx (500/502/504) are transient proxy hiccups worth a retry.
 #   PROVIDER: LLM endpoints. 529 = Anthropic "overloaded"; a 500/502/504 from a
 #             model endpoint is usually a real error, not a transient hop, so it

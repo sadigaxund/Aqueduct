@@ -26,16 +26,10 @@
 # checkpoint_root, deployment.target, handoff.root,
 # agent.sandbox_master_url,
 # danger.allow_full_probe_actions). CORE config leaves (config.webhooks.*,
-# config.secrets.*, config.stores.*, config.lineage.*, most of
-# config.agent.*/config.danger.*, ...) never appear here at all — no engine
-# declares a verdict for them, because they run in core code paths with no
-# per-engine implementation to diverge from. `config.lineage.*` was
-# corrected to CORE 2026-07-31: OpenLineage emission is built in
-# `Surveyor.__init__` gated only on `openlineage_url`, with no engine
-# condition — a DuckDB run emits OpenLineage events exactly like Spark, so
-# the two `ignored_with_warning` rows this file used to carry for
-# `lineage.openlineage_url`/`openlineage_namespace` were false claims and
-# are now gone. `engine.spark.*` leaves are Spark's own and never appear
+# config.secrets.*, config.stores.*, most of config.agent.*/config.danger.*,
+# ...) never appear here at all — no engine declares a verdict for them,
+# because they run in core code paths with no per-engine implementation to
+# diverge from. `engine.spark.*` leaves are Spark's own and never appear
 # here either — positionally owned by exactly one engine.
 #
 # STAGE A scope (see AGENTS.md maintenance playbook + the Phase 78 brief):

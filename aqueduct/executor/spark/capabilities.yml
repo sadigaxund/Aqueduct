@@ -19,12 +19,9 @@
 # Q4 STEP 2 (see AGENTS.md + docs/specs.md §10.9): only ENGINE-SCOPED
 # `config.*` leaves appear below (17 today — genuinely dispatch through an
 # engine, e.g. probes.*, timezone, engine.spark.*). CORE config leaves
-# (webhooks.*, secrets.*, stores.*, lineage.*, most of agent.*/danger.*,
-# ...) never appear here — no engine declares a verdict for them; they run
-# only in core code paths. `lineage.*` moved to core 2026-07-31: OpenLineage
-# emission (`Surveyor.__init__`) is gated only on `openlineage_url`, no
-# engine condition — the two `supported` rows this file used to carry for
-# it were true but for the wrong reason (nothing here is Spark-specific).
+# (webhooks.*, secrets.*, stores.*, most of agent.*/danger.*, ...) never
+# appear here — no engine declares a verdict for them; they run only in
+# core code paths.
 
 engine: spark
 

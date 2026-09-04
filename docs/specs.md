@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.76: Reference Document**
+**Version 2.77: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -958,26 +958,6 @@ expressions; the rest fall back to `output_type=UNKNOWN`.
 
 Generated post-run from Probe signals. Shows per-column, per-Module status (OK / Degraded / Error) with null rates, row estimates, schema snapshots, and thresholds. `aqueduct report --trend <column> --blueprint <id>` adds a **cross-run** view of one column's null-rate and type history, a read-side aggregate over `probe_signals` (no extra table).
 
-## **7.4 OpenLineage emission (1.2)**
-
-When `lineage.openlineage_url` is set, the Surveyor emits **OpenLineage** RunEvents to an OpenLineage-compatible backend (Marquez, DataHub, Atlan): `START` on run begin, `COMPLETE` on success, `FAIL` on terminal failure (with an `errorMessage` run facet). Delivery uses the same async daemon-thread pattern as webhooks, non-blocking, best-effort, zero hot-path cost; the blueprint result is authoritative and a dropped event is logged, never raised. Events POST to `<openlineage_url>/api/v1/lineage`.
-
-Each event maps Ingress modules → input datasets and Egress modules → output datasets. The **output datasets carry the column-level `columnLineage` facet**, built from the same compile-time lineage rows that populate `column_lineage` (`compiler.lineage.compute_lineage_rows`), so field-to-field arrows render downstream. sqlglot resolves ~90% of SparkSQL; unresolved columns fall back to `UNKNOWN`. The Aqueduct `run_id` is mapped to a deterministic UUIDv5 (`run`/`runId` correlate across START and COMPLETE/FAIL).
-
-**v1 limitations to be aware of:** (1) the `columnLineage` facet is the union of all Channel lineage rows attached to each Egress output, exact for the common single-Egress pipeline, over-broad for multi-Egress Blueprints (transitive per-output resolution is future work). (2) Input/output datasets use the configured `openlineage_namespace`, not a per-storage-system namespace (e.g. `s3://bucket`), so datasets won't auto-correlate with other tools writing the same physical table under a storage-system namespace.
-
-**Config (top-level `lineage:` block):**
-
-```yaml
-lineage:
-  openlineage_url: "http://marquez:5000"   # unset (default) → emission disabled
-  openlineage_namespace: aqueduct          # namespace for jobs + datasets
-```
-
-> **Naming note:** this top-level `lineage:` block configures OpenLineage *emission*. It is unrelated to the former `stores.lineage` store-backend option, which has been **removed** (column lineage merged into the observability store, §3.2).
-
----
-
 # **8. Self-healing & LLM agent loop**
 
 ## **8.1 Design philosophy**
@@ -1689,7 +1669,6 @@ The canonical field reference with descriptions and defaults lives in the `aqued
 | `danger` | Safety-gate overrides |
 | `secrets` | Secrets provider (env / aws / gcp / azure / custom) |
 | `webhooks` | Outbound webhook endpoints for run lifecycle events |
-| `lineage` | OpenLineage emission config (`openlineage_url`, `openlineage_namespace`) |
 | `agent` | LLM connection defaults (provider, base_url, model, api_key, cascade, timeout, budget), CI webhook URL |
 | `warnings` | Compiler/executor warning suppression rules |
 | `checkpoint_root` | Local filesystem path overriding the derived `<store_dir>/checkpoints/` location for module checkpoint/resume state (2.8) |
@@ -1982,7 +1961,7 @@ There is no default-verdict sweep. An engine states which leaves it supports, on
 
 ### Config-leaf scoping
 
-Blueprint-grammar leaves (`module.type.*`, `channel.op.*`, formats, modes, `feature.*`) are engine-invariant by construction: every registered engine declares every one, because whether an engine can run a module type or a Channel op is genuinely a question every engine has to answer. `config.*` leaves (the `aqueduct.yml` surface) are not all that shape. Of the 105 `config.*` leaves `AqueductConfig` derives, ~88 run entirely in core code paths (`webhooks.*`, `secrets.*`, `stores.*`, `lineage.*`, most of `agent.*`, most of `danger.*`, …) that never dispatch through an engine at all: asking DuckDB whether it "supports" webhook retry backoff is a category error, not a governance win, and the framework used to force an answer anyway because the closure test needed something to compare against.
+Blueprint-grammar leaves (`module.type.*`, `channel.op.*`, formats, modes, `feature.*`) are engine-invariant by construction: every registered engine declares every one, because whether an engine can run a module type or a Channel op is genuinely a question every engine has to answer. `config.*` leaves (the `aqueduct.yml` surface) are not all that shape. Of the 105 `config.*` leaves `AqueductConfig` derives, ~88 run entirely in core code paths (`webhooks.*`, `secrets.*`, `stores.*`, most of `agent.*`, most of `danger.*`, …) that never dispatch through an engine at all: asking DuckDB whether it "supports" webhook retry backoff is a category error, not a governance win, and the framework used to force an answer anyway because the closure test needed something to compare against.
 
 This is a **scoping** change, not a fourth verdict: `Support` stays `supported` / `unsupported` / `ignored_with_warning` / `undeclared`, and `verdict()` callers are unchanged in meaning. What changes is the **checklist**: which leaves an engine is asked about at all.
 
@@ -2009,8 +1988,6 @@ A field carrying **neither** key raises `CapabilityScopeError` naming the field 
 | tags a new field `True` | new `undeclared` rows | red build |
 
 The load-bearing row is the first: a leaf some engine declares non-`supported` has a live user-visible warning path (`_warn_ignored_config_keys` emits `engine_key_ignored` for any explicitly-set leaf whose verdict isn't `SUPPORTED`). Reclassifying such a leaf to core would silently delete that warning path with nothing else noticing: the only keys whose reclassification can destroy user-visible behavior are exactly the keys the invariant test forbids reclassifying.
-
-**Corrected classification, 2026-07-31: `config.lineage.*` is CORE, not engine-scoped.** OpenLineage emission is built in `Surveyor.__init__` (`aqueduct/surveyor/surveyor.py`) gated only on `openlineage_url` being set, with no engine condition anywhere; emission (START/COMPLETE/FAIL) and the column-level `columnLineage` facet are both derived from compile-time lineage (sqlglot) and delivered via `infra/http.py`; no engine module reads either key. A DuckDB run emits OpenLineage events exactly like a Spark run. Both engines' declarations previously carried a verdict for `lineage.openlineage_url`/`openlineage_namespace` (Spark `supported`, DuckDB `ignored_with_warning` with a hint claiming "the DuckDB executor does not emit OpenLineage events"): that hint was false, and both rows are now gone from both tables; the leaves left the checklist entirely.
 
 **`explicitly_set_config_leaves()` is narrowed too.** `aqueduct/config.py::load_config()` calls it to find which leaves the user actually wrote, then calls `caps.verdict(leaf_id)` for each; once a core leaf leaves the checklist there is no row for it in any engine's table, so this walker narrows to the same tag; otherwise it would ask `verdict()` about an id no engine declares.
 

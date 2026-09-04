@@ -213,9 +213,8 @@ def compute_lineage_rows(
 ) -> list[dict[str, str]]:
     """Extract column-level lineage rows from the compiled module/edge lists.
 
-    Pure (no I/O): the single source of truth for both ``write_lineage`` (which
-    persists these rows to ``column_lineage``) and the OpenLineage emitter
-    (Phase 55, which serializes them into a ``columnLineage`` facet). Each row is
+    Pure (no I/O): the single source of truth for ``write_lineage``, which
+    persists these rows to ``column_lineage``. Each row is
     ``{channel_id, output_column, source_table, source_column}``; unresolved
     columns fall back to ``UNKNOWN`` inside ``_extract_sql_lineage``.
 
