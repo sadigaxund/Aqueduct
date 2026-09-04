@@ -38,10 +38,10 @@ A pipeline fails at 3 a.m. over a column rename upstream. Somebody gets paged, s
 <br>
 
 - **Declarative, not DAG code.** Pipelines are YAML *Blueprints*. No PySpark boilerplate, no operator classes. Bring your own scheduler; Aqueduct is the control plane on top of the engine.
-- **Self-healing rather than alerting.** On failure, an LLM agent diagnoses the root cause and emits a structured patch. The patch must clear guardrail, lineage, and sandbox gates before it touches your pipeline. The agent cannot generate code or touch a shell. A failure it has solved before heals from memory, with zero LLM tokens.
+- **Self-healing rather than alerting.** On failure, an LLM agent diagnoses the root cause and emits a structured patch. The patch must clear guardrail, lineage, and sandbox gates before it touches your pipeline. The agent cannot generate code or touch a shell. A blueprint that already has a patch waiting for review short-circuits the next run instead of healing it again.
 - **Observable by construction.** Every run, heal attempt, and column-lineage edge lands in a queryable store. Nothing is added to the hot path to make that happen.
 - **Model-agnostic and local-first.** Anthropic natively, or any OpenAI-compatible endpoint: OpenRouter, DeepSeek, Groq, a local 7B on Ollama or LM Studio. Set `provider` and `base_url`, done. Point it at a model inside your perimeter and your data, schemas, and error traces never leave your servers. Multi-model cascades escalate to a bigger model only when the small one gets stuck.
-- **The harness owns correctness; the model only proposes.** The LLM does exactly one thing deterministic code cannot: turn an unstructured failure into a structured hypothesis. Everything after that is deterministic. A constrained patch grammar with 15 operations and no code generation. Validation gates. Budget caps. A signature cache. That division of labor is why a small local model holds up here when raw code-generating assistants don't.
+- **The harness owns correctness; the model only proposes.** The LLM does exactly one thing deterministic code cannot: turn an unstructured failure into a structured hypothesis. Everything after that is deterministic. A constrained patch grammar with 15 operations and no code generation. Validation gates. Budget caps. That division of labor is why a small local model holds up here when raw code-generating assistants don't.
 
 ## From failure to pull request
 
@@ -143,10 +143,10 @@ The compiler partitions the DAG into engine islands and inserts a handoff at eac
 
 When a pipeline fails, Aqueduct does not throw a stack trace at an LLM and hope. Healing is a staged, auditable pipeline. The model works inside a constrained grammar: it cannot write code, edit files, or run shell commands.
 
-A generated patch clears five gates plus a compile-check before it ever touches the Blueprint. Gate 1 is guardrails: deterministic policy checks on paths, operations, and confidence. The compile-check follows immediately, and the patched Blueprint must still parse. Then Gate 2, lineage: does the patch break a downstream column consumer. Gate 3, sandbox: replay against representative data. Gate 4, plan regression. Gate 5, resolvability: any dependency the patch declares must actually be installable. They run in that order and the first failure wins:
+A generated patch clears four gates plus a compile-check before it ever touches the Blueprint. Gate 1 is guardrails: deterministic policy checks on paths, operations, and confidence. The compile-check follows immediately, and the patched Blueprint must still parse. Then Gate 2, lineage: does the patch break a downstream column consumer. Gate 3, sandbox: replay against representative data. Gate 4, resolvability: any dependency the patch declares must actually be installable. They run in that order and the first failure wins:
 
 ```
-✓ guardrails  →  ✓ compile-check  →  ✓ lineage  →  ✓ sandbox  →  ✓ plan-regression  →  ✓ resolvability  →  patch applied
+✓ guardrails  →  ✓ compile-check  →  ✓ lineage  →  ✓ sandbox  →  ✓ resolvability  →  patch applied
 ```
 
 `aqueduct patch preview --sandbox` runs the same pyramid on demand, before you decide to apply.
@@ -165,7 +165,6 @@ Who applies a generated patch. Deterministic guardrails (allowed paths, forbidde
 |---|---|---|---|
 | `disabled` | LLM never fires | Never | Healing is intentionally off. |
 | `human` | Engineer reviews and applies (`patch apply`, or `patch pr` for review in a pull request) | Only after human accepts | Production. Default behind CI/CD. |
-| `ci` | External CI receives the patch and opens a PR; `aqueduct patch pr` does branch, push, and PR in one step | Only after merge | Production with code review. |
 | `auto` | Aqueduct applies in-memory, re-validates, writes only if the re-run succeeds | Only on a successful re-run | Trusted environments: dev, scoped pipelines. Requires an explicit `allowed_paths` allowlist; an unconfigured one refuses file-touching patches outright. |
 
 Low-confidence patches and any guardrail violation auto-escalate to human review.
@@ -296,7 +295,7 @@ Full reference in [CLI Reference](docs/cli_reference.md).
 |---|---|---|
 | **Self-healing** | LLM diagnoses failures, emits gated, Git-diffable patches with human, CI, or auto approval | [Spec §8](docs/specs.md) |
 | **Heal-as-PR** | `aqueduct patch pr` applies a patch on a heal branch and opens a PR through your normal review | [CLI Reference](docs/cli_reference.md) |
-| **Heal memory** | Failure signatures cache validated fixes; repeat failures heal with zero LLM tokens | [Spec §8.2](docs/specs.md) |
+| **Pending-patch guard** | A blueprint with an unreviewed pending patch skips the agent on the next run and exits `HEAL_PENDING`, pointing at `aqueduct patch pull <id>` | [Spec §8.2](docs/specs.md) |
 | **Engine capability gate** | Unsupported features fail at compile time with a named capability, never mid-run | [Compatibility Matrix](docs/compatibility.md) |
 | **Portable types** | One type vocabulary across engines; ambiguous spellings rejected at parse time | [Spec §9](docs/specs.md) |
 | **Heal provenance** | Blueprints record which engine healed them; cross-engine deploys warn at compile | [Spec §8.14](docs/specs.md) |
