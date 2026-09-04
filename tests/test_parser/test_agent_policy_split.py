@@ -3,9 +3,8 @@ Blueprint's `agent:` block can no longer set CONNECTION fields (`provider`,
 `base_url`, `api_key`, `model`, `provider_options`, `timeout`, `cascade`),
 which live exclusively in `aqueduct.yml`'s `agent:` block
 (`AgentConnectionConfig`). Otherwise a pipeline author could redirect the
-healing loop's `FailureContext` (pruned manifest, provenance, error text,
-and — in agentic mode — sampled data rows) to an arbitrary host on any
-failure.
+healing loop's `FailureContext` (pruned manifest, provenance, error text)
+to an arbitrary host on any failure.
 
 Both `AgentSchema` (Blueprint, `aqueduct/parser/schema.py`) and
 `AgentConnectionConfig` (engine, `aqueduct/config.py`) extend a shared
@@ -136,17 +135,13 @@ class TestPolicyFieldsStillLegalOnBlueprint:
     def test_shared_policy_fields_accepted_and_default_to_none(self):
         s = AgentSchema()
         assert s.max_reprompts is None
-        assert s.mode is None
-        assert s.max_tool_calls is None
-        assert s.supports_tools is None
         assert s.prompt_context is None
         assert s.max_heal_attempts_per_hour is None
         assert s.patch_validation is None
 
     def test_shared_policy_field_override_accepted(self):
-        s = AgentSchema(mode="agentic", max_tool_calls=3)
-        assert s.mode == "agentic"
-        assert s.max_tool_calls == 3
+        s = AgentSchema(max_reprompts=3)
+        assert s.max_reprompts == 3
 
 
 class TestEngineAgentConnectionConfigAcceptsFullSet:
@@ -177,9 +172,6 @@ class TestEngineAgentConnectionConfigAcceptsFullSet:
         # have CONCRETE (non-None) engine-wide defaults — there is nothing
         # above it to inherit from.
         cfg = AgentConnectionConfig()
-        assert cfg.mode == "oneshot"
-        assert cfg.max_tool_calls == 8
-        assert cfg.supports_tools == "auto"
         assert cfg.max_reprompts == 3
         assert cfg.patch_validation == "full_run"
 

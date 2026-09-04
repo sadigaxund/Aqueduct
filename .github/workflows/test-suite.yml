@@ -42,7 +42,6 @@ jobs:
       config:    ${{ steps.filter.outputs.config }}
       gallery:   ${{ steps.filter.outputs.gallery }}
       drift:     ${{ steps.filter.outputs.drift }}
-      tools:     ${{ steps.filter.outputs.tools }}
       capabilities: ${{ steps.filter.outputs.capabilities }}
       duckdb:    ${{ steps.filter.outputs.duckdb }}
       typehub:   ${{ steps.filter.outputs.typehub }}
@@ -110,11 +109,6 @@ jobs:
             drift:
               - 'aqueduct/drift/**'
               - 'tests/test_drift/**'
-            tools:
-              - 'aqueduct/tools/**'
-              - 'aqueduct/stores/**'
-              - 'aqueduct/doctor/**'
-              - 'tests/test_tools/**'
             capabilities:
               - 'aqueduct/executor/capabilities.py'
               - 'aqueduct/executor/capability_leaves.py'
@@ -407,35 +401,6 @@ jobs:
           pytest tests/test_config.py tests/test_parser/test_config.py tests/test_redaction.py tests/test_secrets.py tests/test_warnings.py -m "not spark" --junitxml=results.xml
           rc=$?
           python scripts/ci-summary.py results.xml --name "Config"
-          exit $rc
-
-  tools-tests:
-    needs: changes
-    if: ${{ needs.changes.outputs.tools == 'true' || github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-      # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env.
-      # A stale/missing entry still re-resolves and re-verifies every
-      # package; this only skips re-downloading wheels pip already has by
-      # exact filename/hash, so it cannot change what version gets installed.
-      # Same key as every other python-3.11 / ci-py311.txt job on purpose —
-      # they share one dependency tree, so they should share one cache entry.
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
-          restore-keys: |
-            pip-${{ runner.os }}-py3.11-
-      - run: pip install -e ".[dev,redis]"
-      - run: |
-          set +e
-          pytest tests/test_tools/ -m "not spark" --junitxml=results.xml
-          rc=$?
-          python scripts/ci-summary.py results.xml --name "Tools"
           exit $rc
 
   capabilities-tests:

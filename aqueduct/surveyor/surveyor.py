@@ -655,7 +655,6 @@ class Surveyor:
         if self._observability is None:
             return
         import datetime as _dt
-        import json as _json
         import uuid as _uuid
 
         if prompt_version is None:
@@ -663,25 +662,6 @@ class Surveyor:
 
             prompt_version = _PROMPT_VERSION
         sig = getattr(attempt_record, "signature", None)
-        # Phase 75 — per-call tool telemetry, if any (transient _aq_tool_calls
-        # attached by loop.py's _fire_turn; absent/empty in oneshot mode).
-        #
-        # Phase 85 C1 — `tool_calls_json` was found write-only and, per the
-        # observability audit, was the single largest per-row bloat risk in
-        # the schema: each logged call also carried `args_summary` and
-        # `result_preview` string previews of the actual tool call/result
-        # content. Kept for post-mortems (op name + how long it took), but
-        # trimmed to `{name, duration_ms}` only — no argument or result
-        # content reaches the store.
-        tool_calls_log = getattr(attempt_record, "_aq_tool_calls", None) or []
-        tool_calls_trimmed = [
-            {"name": call.get("name"), "duration_ms": call.get("duration_ms")}
-            for call in tool_calls_log
-            if isinstance(call, dict)
-        ]
-        tool_calls_json = (
-            _json.dumps(tool_calls_trimmed, default=str) if tool_calls_trimmed else None
-        )
         # Chain link index, stamped by the heal loop's on_attempt hook.
         # isinstance-guarded (not a bare
         # getattr) so an unconfigured mock attribute in a caller's test
@@ -696,9 +676,9 @@ class Surveyor:
                     (id, run_id, attempt_num, error_class, where_field,
                      normalized_message, tokens_in, tokens_out,
                      latency_ms, gate_that_rejected, stop_reason,
-                     prompt_version, recorded_at, tool_calls_json, chain_link, engine,
+                     prompt_version, recorded_at, chain_link, engine,
                      defer_reason)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         str(_uuid.uuid4()),
@@ -720,7 +700,6 @@ class Surveyor:
                         stop_reason,
                         prompt_version,
                         _dt.datetime.now(_dt.UTC).isoformat(),
-                        tool_calls_json,
                         chain_link,
                         # Phase 78 — prefer the signature's own engine (it was
                         # hashed with one), falling back to this Surveyor's

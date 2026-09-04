@@ -10,8 +10,8 @@ block cannot set or override any of these (AgentSchema in
 aqueduct/parser/schema.py has no such fields; extra="forbid" rejects one
 named). Per-blueprint POLICY (approval, on_pending_patches, max_patches,
 guardrails, ...) lives in the Blueprint agent: block; a shared subset of
-policy fields (max_reprompts, mode, max_tool_calls, supports_tools,
-prompt_context, max_heal_attempts_per_hour, patch_validation) is
+policy fields (max_reprompts, prompt_context,
+max_heal_attempts_per_hour, patch_validation) is
 ALSO settable here as the engine-wide default, and the Blueprint's own
 value, when set, wins — see aqueduct.cli.resolve_agent_connection. See
 AgentConnectionConfig's docstring below for the full rationale.
@@ -688,14 +688,12 @@ class AgentConnectionConfig(AgentPolicySchema):
     (``AgentSchema``, ``aqueduct/parser/schema.py``) cannot set or override
     any of them — see that class's docstring for why (a Blueprint that could
     choose its own LLM endpoint could redirect the healing loop's
-    ``FailureContext``, which carries pruned manifest/provenance/error text
-    and, in agentic mode, sampled data rows, to an arbitrary host on any
-    failure).
+    ``FailureContext``, which carries pruned manifest/provenance/error
+    text, to an arbitrary host on any failure).
 
     Extends ``AgentPolicySchema`` for the POLICY fields it shares by name
-    with the Blueprint (``max_reprompts``, ``mode``, ``max_tool_calls``,
-    ``supports_tools``, ``prompt_context``, ``max_heal_attempts_per_hour``,
-    ``patch_validation``) — each
+    with the Blueprint (``max_reprompts``, ``prompt_context``,
+    ``max_heal_attempts_per_hour``, ``patch_validation``) — each
     overridden below with this level's concrete engine-wide default (the
     base class's default is ``None``, meaning "inherit", which has no
     meaning at the level that IS the thing being inherited from). A
@@ -821,43 +819,6 @@ class AgentConnectionConfig(AgentPolicySchema):
             "Phase 46 — retry on transient provider errors (429/503/529) with "
             "exponential backoff, capped by the heal budget deadline."
         ),
-    )
-    mode: Literal["oneshot", "agentic"] = Field(
-        default="oneshot",
-        description=(
-            "Phase 75 — 'oneshot' (default) is today's single-turn prompt→"
-            "PatchSpec loop, unchanged. 'agentic' lets the model call "
-            "read-only diagnostic tools (list_runs, run_detail, lineage, "
-            "patch_list/show, probe_signals, "
-            "read_blueprint, get_source_schema, sample_rows) before "
-            "answering with a PatchSpec — see docs/specs.md §8.11. "
-            "Per-blueprint override: agent.mode."
-        ),
-        json_schema_extra={"engine_scoped": False},
-    )
-    max_tool_calls: int = Field(
-        default=8,
-        ge=1,
-        description=(
-            "Hard cap on tool calls per heal attempt in agentic mode. "
-            "Exceeding it forces the model to answer with a PatchSpec on a "
-            "final no-tools turn. Per-blueprint override: agent.max_tool_calls."
-        ),
-        json_schema_extra={"engine_scoped": False},
-    )
-    supports_tools: Literal["auto", True, False] = Field(
-        default="auto",
-        description=(
-            "Tool-use capability for the LLM endpoint. 'auto' (default) "
-            "resolves True without probing for provider: anthropic (known "
-            "tool-capable); for provider: openai_compat it is determined on "
-            "the first agentic-mode call (a rejected/ignored tools request "
-            "degrades to the oneshot path for the rest of the heal session, "
-            "emitting one [agent_tools_unsupported] warning). Set true/false "
-            "to skip the probe. Per-blueprint / per-cascade-tier override: "
-            "agent.supports_tools / cascade tier supports_tools."
-        ),
-        json_schema_extra={"engine_scoped": False},
     )
 
 

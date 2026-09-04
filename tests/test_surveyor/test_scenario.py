@@ -12,7 +12,6 @@ pytestmark = pytest.mark.unit
 from aqueduct.agent.budget import StopReason
 from aqueduct.errors import ScenarioError
 from aqueduct.surveyor.scenario import (
-    AqScenario,
     ScenarioResult,
     _check_assertions,
     format_benchmark_table,
@@ -485,81 +484,6 @@ assertions:
         assert result.violated_guardrails == ["replace_module_config"]
 
 
-# ── Phase 75 — agentic mode benchmark plumbing ──────────────────────────────
-
-
-class TestRunScenarioAgenticMode:
-    """Minimal benchmark plumbing (design item 6): agent.mode: agentic must be
-    threadable through run_scenario/run_benchmark for a live A/B, with a
-    ToolBox built from the scenario's own compiled Manifest. No live LLM
-    call — generate_agent_patch is mocked."""
-
-    def test_agentic_mode_builds_toolbox_and_completes(self, tmp_path):
-        sc = _write_scenario(tmp_path)
-        scenario = load_scenario(sc)
-
-        from aqueduct.patch.grammar import PatchSpec
-
-        patch_obj = PatchSpec(
-            patch_id="fix-agentic",
-            rationale="test",
-            root_cause="rc",
-            operations=[
-                {"op": "set_module_config_key", "module_id": "src", "key": "path", "value": "y.csv"}
-            ],
-        )
-        mock_result = MagicMock()
-        mock_result.patch = patch_obj
-        mock_result.attempts = 1
-        mock_result.reprompt_errors = []
-
-        captured_kwargs = {}
-
-        def _fake_generate_agent_patch(*args, **kwargs):
-            captured_kwargs.update(kwargs)
-            return mock_result
-
-        with patch("aqueduct.agent.generate_agent_patch", side_effect=_fake_generate_agent_patch):
-            result = run_scenario(
-                scenario,
-                model="claude-3",
-                patches_dir=tmp_path / "patches",
-                mode="agentic",
-                max_tool_calls=5,
-            )
-
-        assert isinstance(result, ScenarioResult)
-        assert captured_kwargs["mode"] == "agentic"
-        assert captured_kwargs["max_tool_calls"] == 5
-        # A ToolBox must have been built (not None) for an agentic-mode run.
-        from aqueduct.agent.toolbox import ToolBox
-
-        assert isinstance(captured_kwargs["toolbox"], ToolBox)
-        # Scenarios never start Spark — session-bound tools must degrade.
-        assert captured_kwargs["toolbox"].spark_session is None
-
-    def test_oneshot_mode_default_builds_no_toolbox(self, tmp_path):
-        sc = _write_scenario(tmp_path)
-        scenario = load_scenario(sc)
-
-        mock_result = MagicMock()
-        mock_result.patch = None
-        mock_result.attempts = 1
-        mock_result.reprompt_errors = []
-
-        captured_kwargs = {}
-
-        def _fake_generate_agent_patch(*args, **kwargs):
-            captured_kwargs.update(kwargs)
-            return mock_result
-
-        with patch("aqueduct.agent.generate_agent_patch", side_effect=_fake_generate_agent_patch):
-            run_scenario(scenario, model="claude-3", patches_dir=tmp_path / "patches")
-
-        assert captured_kwargs["mode"] == "oneshot"
-        assert captured_kwargs["toolbox"] is None
-
-
 # ── format_benchmark_table ────────────────────────────────────────────────────
 
 
@@ -864,8 +788,8 @@ class TestTryApplyPatch:
         assert patched_dict is None
 
     def test_parse_compile_failure_returns_none_patched_dict(self, tmp_path):
-        from aqueduct.surveyor.scenario import _try_apply_patch
         from aqueduct.patch.grammar import PatchSpec
+        from aqueduct.surveyor.scenario import _try_apply_patch
 
         bp_path = self._create_bp(tmp_path)
         # Apply a patch that breaks the blueprint (invalid type for format fails parsing)
@@ -933,6 +857,7 @@ class TestNormalizeSql:
     def test_fallback_is_lowercase_and_collapsed(self):
         """When sqlglot.parse_one raises, result equals ' '.join(text.lower().split())."""
         from unittest.mock import patch as mock_patch
+
         from aqueduct.surveyor.scenario import _normalize_sql
 
         text = "NOT SQL  multiple   spaces"
@@ -1355,7 +1280,7 @@ class TestGalleryScenarios:
 
 class TestPhase34BenchmarkParity:
     def test_run_scenario_budget_none_synthesizes_from_max_reprompts(self, tmp_path):
-        from aqueduct.surveyor.scenario import run_scenario, load_scenario
+        from aqueduct.surveyor.scenario import load_scenario, run_scenario
 
         sc_path = _write_scenario(tmp_path)
         scenario = load_scenario(sc_path)
@@ -1374,7 +1299,7 @@ class TestPhase34BenchmarkParity:
 
     def test_run_scenario_installs_apply_callback(self, tmp_path):
         """If blueprint_path resolves, run_scenario installs an apply_callback on the loop."""
-        from aqueduct.surveyor.scenario import run_scenario, load_scenario
+        from aqueduct.surveyor.scenario import load_scenario, run_scenario
 
         sc_path = _write_scenario(tmp_path)
         scenario = load_scenario(sc_path)
@@ -1391,7 +1316,7 @@ class TestPhase34BenchmarkParity:
             assert callable(kwargs["apply_callback"])
 
     def test_scenario_result_stop_reason_populated(self, tmp_path):
-        from aqueduct.surveyor.scenario import run_scenario, load_scenario
+        from aqueduct.surveyor.scenario import load_scenario, run_scenario
 
         sc_path = _write_scenario(tmp_path)
         scenario = load_scenario(sc_path)
@@ -1408,8 +1333,8 @@ class TestPhase34BenchmarkParity:
             assert res.tokens_out_total == 20
 
     def test_run_benchmark_forwards_budget(self, tmp_path):
-        from aqueduct.surveyor.scenario import run_benchmark
         from aqueduct.agent.budget import BudgetConfig
+        from aqueduct.surveyor.scenario import run_benchmark
 
         sc_path = _write_scenario(tmp_path)
         b = BudgetConfig(max_reprompts=9, max_seconds=300)
@@ -1439,7 +1364,7 @@ def _fake_agent_result(stop_reason=StopReason.SOLVED, escalated=False, tin=0, to
 
 class TestPhase34ScenarioResultMirror:
     def test_scenario_result_escalated_mirrors_agent_result(self, tmp_path):
-        from aqueduct.surveyor.scenario import run_scenario, load_scenario
+        from aqueduct.surveyor.scenario import load_scenario, run_scenario
 
         sc_path = _write_scenario(tmp_path)
         scenario = load_scenario(sc_path)
@@ -1450,7 +1375,7 @@ class TestPhase34ScenarioResultMirror:
                 assert res.escalated is esc
 
     def test_scenario_result_token_totals_mirror_agent_result(self, tmp_path):
-        from aqueduct.surveyor.scenario import run_scenario, load_scenario
+        from aqueduct.surveyor.scenario import load_scenario, run_scenario
 
         sc_path = _write_scenario(tmp_path)
         scenario = load_scenario(sc_path)
@@ -1485,7 +1410,7 @@ def _scenario_with_structured(structured_block: str) -> str:
 
 class TestPhase35StructuredPropagation:
     def test_structured_block_populates_failure_context(self, tmp_path):
-        from aqueduct.surveyor.scenario import load_scenario, _build_failure_ctx
+        from aqueduct.surveyor.scenario import _build_failure_ctx, load_scenario
 
         body = _scenario_with_structured(
             "  structured:\n"
@@ -1505,7 +1430,7 @@ class TestPhase35StructuredPropagation:
         assert ctx.root_exception == {"type": "Z", "message": "msg"}
 
     def test_no_structured_block_defaults_empty(self, tmp_path):
-        from aqueduct.surveyor.scenario import load_scenario, _build_failure_ctx
+        from aqueduct.surveyor.scenario import _build_failure_ctx, load_scenario
 
         sc_path = _write_scenario(tmp_path, _scenario_with_structured(""))
         scenario = load_scenario(sc_path)
@@ -1517,7 +1442,7 @@ class TestPhase35StructuredPropagation:
         assert ctx.object_name is None
 
     def test_suggested_columns_str_normalised_to_tuple(self, tmp_path):
-        from aqueduct.surveyor.scenario import load_scenario, _build_failure_ctx
+        from aqueduct.surveyor.scenario import _build_failure_ctx, load_scenario
 
         body = _scenario_with_structured("  structured:\n" '    suggested_columns: "single"\n')
         sc_path = _write_scenario(tmp_path, body)
@@ -1526,7 +1451,7 @@ class TestPhase35StructuredPropagation:
         assert ctx.suggested_columns == ("single",)
 
     def test_structured_value_not_dict_coerced_to_empty(self, tmp_path):
-        from aqueduct.surveyor.scenario import load_scenario, _build_failure_ctx
+        from aqueduct.surveyor.scenario import _build_failure_ctx, load_scenario
 
         body = _scenario_with_structured('  structured: "not a dict"\n')
         sc_path = _write_scenario(tmp_path, body)

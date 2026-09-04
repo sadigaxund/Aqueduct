@@ -339,9 +339,6 @@ class TranscriptWriter:
         if gate is None or gate == "validate":
             parts.append(f"patch #{rec.attempt_num}")
         parts.append(verdict)
-        n_tools = getattr(rec, "tool_calls", 0) or 0
-        if n_tools:
-            parts.append(f"{n_tools} tool call{'s' if n_tools != 1 else ''}")
         cost = _cost_str(rec.tokens_in, rec.tokens_out, model)
         if cost:
             parts.append(cost)
@@ -458,15 +455,6 @@ class TranscriptWriter:
                 self._emit(f"{rail}   ┆ {line}")
             if len(shown) > _MAX_RAW_LINES:
                 self._emit(f"{rail}   ┆ … ({len(shown) - _MAX_RAW_LINES} more line(s))")
-
-        # Phase 75 — one line per tool call this attempt: name, args summary,
-        # duration, truncated (already-redacted) result preview.
-        for call in getattr(rec, "_aq_tool_calls", None) or ():
-            name = call.get("name", "?")
-            args = call.get("args_summary", "")
-            dur = call.get("duration_ms", 0)
-            preview = call.get("result_preview", "")
-            self._emit_wrapped(sub, f"tool: {name}({args}) · {dur}ms → {preview}", hang=2)
 
         if gate not in (None, "validate", "provider") and detail:
             self._emit_wrapped(sub, f"{_gate_label(gate)}: {detail}", hang=2)

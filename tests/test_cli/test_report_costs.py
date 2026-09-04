@@ -43,13 +43,13 @@ def _run_record(c, run_id, blueprint_id, days_ago):
     )
 
 
-def _heal_attempt(c, run_id, days_ago, tokens_in=0, tokens_out=0, tool_calls=None):
+def _heal_attempt(c, run_id, days_ago, tokens_in=0, tokens_out=0):
     ts = _iso(days_ago)
     c.execute(
         "INSERT INTO heal_attempts (id, run_id, attempt_num, error_class, where_field, "
         "normalized_message, tokens_in, tokens_out, latency_ms, gate_that_rejected, "
-        "stop_reason, prompt_version, recorded_at, tool_calls_json, chain_link, engine) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "stop_reason, prompt_version, recorded_at, chain_link, engine) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         [
             str(uuid.uuid4()),
             run_id,
@@ -64,7 +64,6 @@ def _heal_attempt(c, run_id, days_ago, tokens_in=0, tokens_out=0, tool_calls=Non
             "solved",
             "v1",
             ts,
-            json.dumps(tool_calls) if tool_calls else None,
             None,
             "duckdb",
         ],

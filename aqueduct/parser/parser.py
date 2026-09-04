@@ -129,7 +129,6 @@ def _build_cascade(raw: list | None, ctx_map: dict | None = None) -> tuple | Non
                 max_seconds=float(t.max_seconds) if t.max_seconds is not None else None,
                 deep_loop=t.deep_loop,
                 allow_defer=t.allow_defer,
-                supports_tools=t.supports_tools,
             )
         )
     return tuple(tiers)
@@ -497,9 +496,6 @@ def parse_dict(
             max_heal_attempts_per_hour=validated.agent.max_heal_attempts_per_hour,
             patch_validation=validated.agent.patch_validation,
             sandbox_mode=validated.agent.sandbox_mode,
-            mode=validated.agent.mode,
-            max_tool_calls=validated.agent.max_tool_calls,
-            supports_tools=validated.agent.supports_tools,
         )
     except (ValueError, ParseError) as exc:
         raise ParseError(f"agent config resolution failed: {exc}") from exc

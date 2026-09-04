@@ -9,9 +9,8 @@ install, including a base install with no engine extras.
 **Why a frozen dataclass, not ``typing.Protocol``/ABC.** The rest of the
 codebase's "pluggable contract" precedents are frozen dataclasses carried
 through a registry — ``aqueduct/executor/capabilities.py``'s
-``EngineCapabilities``/``CAPABILITY_REGISTRY`` and ``aqueduct/tools/registry.py``'s
-``Tool``/``REGISTRY`` — not ``typing.Protocol`` structural typing or an ABC
-hierarchy. An ``ExecutorProtocol`` is data (a bundle of callables + a string),
+``EngineCapabilities``/``CAPABILITY_REGISTRY`` — not ``typing.Protocol``
+structural typing or an ABC hierarchy. An ``ExecutorProtocol`` is data (a bundle of callables + a string),
 not behavior to subclass, so the same shape is used here: a value an engine
 constructs once at import time and hands to ``register_protocol()``.
 
@@ -96,14 +95,9 @@ TypeRenderer = Callable[["HubType | NativeType"], str]
 
 # (Ingress Module, engine session handle) -> {column: engine-native type string}.
 # Metadata-only — must fire zero engine actions (a lazy reader's schema/columns
-# property, never a materializing read). Backs the healing agent's
-# `get_source_schema` diagnostic tool (`aqueduct/agent/toolbox.py`).
+# property, never a materializing read). Used by `aqueduct drift` to compare
+# the live source schema against the Blueprint's declared one.
 SchemaReader = Callable[[Any, Any], "dict[str, str]"]
-
-# (Ingress Module, engine session handle, row count, base_dir) -> list of row
-# dicts. Must be bounded by the row count (a pushed-down LIMIT), never a full
-# scan. Backs the healing agent's `sample_rows` diagnostic tool.
-RowSampler = Callable[..., "list[dict[str, Any]]"]
 
 
 @dataclass(frozen=True)
@@ -321,20 +315,19 @@ class ExecutorProtocol:
     ``_aq_stability`` class attribute below is a programmatically-checkable
     marker for the same fact — see ``tests/test_capabilities/test_executor_protocol.py``.
 
-    **Seven fields default to ``None``.** ``make_session``, ``close_session``,
-    ``cleanup_reused_session``, ``read_source_schema``, ``sample_source_rows``,
-    and ``render_type`` all degrade conservatively when left unset: each one
-    either raises a named ``EnginePluginError`` at the point of use
-    (``make_session``), returns a structured "unavailable" signal instead of
-    crashing or borrowing another engine's implementation
-    (``read_source_schema``/``sample_source_rows``), no-ops silently by design
-    (``close_session``/``cleanup_reused_session``), or narrows what a
-    Blueprint may compile against (``render_type``). ``execute_kwargs`` is the
-    seventh field and reads the OPPOSITE way: ``None`` there means "accept
-    everything a caller could reasonably pass," the most permissive setting,
-    not the most restrictive one. See that attribute's own entry below for
-    why the polarity is inverted; treat it as a separate case, not a member
-    of the degrade-conservatively group.
+    **Six fields default to ``None``.** ``make_session``, ``close_session``,
+    ``cleanup_reused_session``, ``read_source_schema``, and ``render_type``
+    all degrade conservatively when left unset: each one either raises a
+    named ``EnginePluginError`` at the point of use (``make_session``),
+    returns a structured "unavailable" signal instead of crashing or
+    borrowing another engine's implementation (``read_source_schema``),
+    no-ops silently by design (``close_session``/``cleanup_reused_session``),
+    or narrows what a Blueprint may compile against (``render_type``).
+    ``execute_kwargs`` is the sixth field and reads the OPPOSITE way: ``None``
+    there means "accept everything a caller could reasonably pass," the most
+    permissive setting, not the most restrictive one. See that attribute's
+    own entry below for why the polarity is inverted; treat it as a separate
+    case, not a member of the degrade-conservatively group.
 
     Attributes:
         engine: Engine name (matches the ``aqueduct.engines`` entry-point
@@ -380,7 +373,7 @@ class ExecutorProtocol:
             hub type (see ``aqueduct/typehub.py``) to this engine's own
             native type-system spelling (Spark DDL, DuckDB SQL type, ...).
             OPTIONAL (default ``None``), same optionality class as
-            ``read_source_schema``/``sample_source_rows`` above, NOT the
+            ``read_source_schema`` above, NOT the
             execute/extract_error/prompt_rules required class — forcing every
             third-party engine to ship a complete type mapper mid-MVP, before
             the hub vocabulary itself has stabilized past two reference
@@ -414,19 +407,9 @@ class ExecutorProtocol:
             engine's live-schema reader for an Ingress module's source,
             metadata-only (zero engine actions). OPTIONAL (default ``None``):
             an engine with no reader (or one used only for the compile-time
-            capability gate) still registers; the healing agent's
-            ``get_source_schema`` tool (``aqueduct/agent/toolbox.py``) degrades
-            to the same structured "unavailable" response it already returns
-            when there is no live session, rather than crashing or falling
-            back to another engine's reader. This closes the coupling where
-            the ToolBox used to import Spark's reader unconditionally
-            regardless of the run's actual engine.
-        sample_source_rows: ``(module, session, n, base_dir) -> [{col: val}, ...]``
-            — the engine's bounded row-sampler for an Ingress module's source
-            (a pushed-down ``LIMIT``, never a full scan). OPTIONAL (default
-            ``None``), same degrade-to-"unavailable" contract as
-            ``read_source_schema``; backs the healing agent's ``sample_rows``
-            tool.
+            capability gate) still registers; ``aqueduct drift`` degrades to
+            a structured "unavailable" response rather than crashing or
+            falling back to another engine's reader.
 
     A registration failure raises ``EnginePluginError`` (an ``AqueductError``),
     never a bare builtin: an engine-plugin author hitting one of these guards
@@ -450,11 +433,10 @@ class ExecutorProtocol:
     # Session-reuse cleanup hook — optional, see the attribute doc above and
     # ``session_cleanup()`` below (Phase 89 item 1).
     cleanup_reused_session: SessionCleaner | None = None
-    # Healing-agent diagnostic readers — optional at registration, same
-    # rationale as make_session/close_session: a compile-only engine or one
-    # without a live-read story still registers. See attribute docs above.
+    # Live-schema reader (backs `aqueduct drift`) — optional at registration,
+    # same rationale as make_session/close_session: a compile-only engine or
+    # one without a live-read story still registers. See attribute docs above.
     read_source_schema: SchemaReader | None = None
-    sample_source_rows: RowSampler | None = None
     # Hub type -> engine-native spelling — optional, see the attribute doc
     # above and ``render_native_type()`` below (Phase 80 work package 3).
     render_type: TypeRenderer | None = None
@@ -759,7 +741,6 @@ __all__ = [
     "ExecutorProtocol",
     "OPTIONAL_EXECUTE_KWARGS",
     "PromptRules",
-    "RowSampler",
     "SchemaReader",
     "SessionSpec",
     "SessionFactory",

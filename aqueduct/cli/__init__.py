@@ -164,13 +164,13 @@ def resolve_agent_connection(engine_agent, blueprint_agent=None):
     Blueprint cannot set or override them (`AgentSchema` in
     `aqueduct/parser/schema.py` has no such fields; a Blueprint author who
     could redirect these would redirect the healing loop's FailureContext —
-    pruned manifest, provenance, error text, and, in agentic mode, sampled
-    data rows — to an arbitrary host on any failure). This function used to
+    pruned manifest, provenance, error text — to an arbitrary host on any
+    failure). This function used to
     accept a blueprint override for these; that path was removed as a
     security fix (2.59) — see AgentSchema's docstring / CHANGELOG.
 
-    POLICY fields (max_reprompts, mode, max_tool_calls, supports_tools) use
-    the blueprint value when set, falling back to the engine default.
+    POLICY fields (max_reprompts) use the blueprint value when set, falling
+    back to the engine default.
     Returns a simple object with resolved values
     that can be destructured at the call site.
 
@@ -190,9 +190,6 @@ def resolve_agent_connection(engine_agent, blueprint_agent=None):
             "max_reprompts",
             "engine_prompt_context",
             "blueprint_prompt_context",
-            "mode",
-            "max_tool_calls",
-            "supports_tools",
         )
 
     bp = blueprint_agent
@@ -212,16 +209,6 @@ def resolve_agent_connection(engine_agent, blueprint_agent=None):
     r.max_reprompts = (bp.max_reprompts or eng.max_reprompts) if bp else eng.max_reprompts
     r.engine_prompt_context = eng.prompt_context
     r.blueprint_prompt_context = bp.prompt_context if bp else None
-    # Phase 75 — same `is not None` inheritance shape as patch_validation:
-    # these are tri-state (None must mean "inherit"), so `or` merge is wrong
-    # (a blueprint explicitly setting supports_tools: false is falsy but valid).
-    r.mode = bp.mode if bp and bp.mode is not None else eng.mode
-    r.max_tool_calls = (
-        bp.max_tool_calls if bp and bp.max_tool_calls is not None else eng.max_tool_calls
-    )
-    r.supports_tools = (
-        bp.supports_tools if bp and bp.supports_tools is not None else eng.supports_tools
-    )
     return r
 
 

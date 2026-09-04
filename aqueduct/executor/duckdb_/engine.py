@@ -200,30 +200,13 @@ def _read_source_schema(module: Any, session: Any) -> dict[str, str]:
     """``ExecutorProtocol.read_source_schema`` for DuckDB.
 
     Delegates to ``aqueduct.executor.duckdb_.schema_reader.read_source_schema``
-    — this is the seam that lets the healing agent's ``get_source_schema``
-    tool (``aqueduct/agent/toolbox.py``) read a DuckDB run's source schema
-    without going through Spark. Lazy import kept for consistency with the
-    sibling wrappers in this module.
+    — this is the seam that lets ``aqueduct drift`` read a DuckDB run's
+    source schema without going through Spark. Lazy import kept for
+    consistency with the sibling wrappers in this module.
     """
     from aqueduct.executor.duckdb_.schema_reader import read_source_schema
 
     return read_source_schema(module, session)
-
-
-def _sample_source_rows(
-    module: Any,
-    session: Any,
-    n: int = 10,
-    base_dir: str | None = None,
-) -> list[dict[str, Any]]:
-    """``ExecutorProtocol.sample_source_rows`` for DuckDB.
-
-    Delegates to ``aqueduct.executor.duckdb_.schema_reader.sample_source_rows``
-    — bounded via a pushed-down ``LIMIT``, never a full scan.
-    """
-    from aqueduct.executor.duckdb_.schema_reader import sample_source_rows
-
-    return sample_source_rows(module, session, n=n, base_dir=base_dir)
 
 
 def _cleanup_reused_session(session: Any, manifest: Manifest) -> None:
@@ -276,7 +259,6 @@ DUCKDB = ExecutorProtocol(
     close_session=_close_session,
     cleanup_reused_session=_cleanup_reused_session,
     read_source_schema=_read_source_schema,
-    sample_source_rows=_sample_source_rows,
     render_type=render_duckdb_type,
     execute_kwargs=_DUCKDB_EXECUTE_KWARGS,
 )

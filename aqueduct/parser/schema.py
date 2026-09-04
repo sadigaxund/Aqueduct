@@ -131,10 +131,6 @@ class CascadeTierSchema(BaseModel):
     max_seconds: int | None = Field(default=None, ge=1)
     deep_loop: bool | None = None
     allow_defer: bool | None = None
-    # Phase 75 — per-tier tool-use capability override. None inherits the
-    # top-level `agent.supports_tools` (default "auto"). "auto" resolves True
-    # for `anthropic` without probing; `openai_compat` probes on first call.
-    supports_tools: Literal["auto", True, False] | None = None
 
 
 class AgentPolicySchema(BaseModel):
@@ -168,9 +164,6 @@ class AgentPolicySchema(BaseModel):
     prompt_context: str | None = None
     max_heal_attempts_per_hour: int | None = Field(default=None, ge=1)
     patch_validation: Literal["full_run", "sandbox"] | None = None
-    mode: Literal["oneshot", "agentic"] | None = None
-    max_tool_calls: int | None = Field(default=None, ge=1)
-    supports_tools: Literal["auto", True, False] | None = None
 
 
 class AgentSchema(AgentPolicySchema):
@@ -189,7 +182,7 @@ class AgentSchema(AgentPolicySchema):
     identical reason (see their docstrings) — a Blueprint does not get to
     decide deployment/connection concerns. Here the stakes are sharper: the
     healing loop ships ``FailureContext`` (pruned manifest, provenance,
-    error text, and — in agentic mode — sampled data rows) to whatever
+    error text) to whatever
     endpoint is configured, so a Blueprint that could choose its own
     ``base_url`` could redirect production data to an arbitrary host on any
     failure. ``extra="forbid"`` (inherited from ``AgentPolicySchema``) makes

@@ -394,47 +394,6 @@ class TestRecordHealAttempt:
             # DB error during persistence is swallowed — returns None, never raises
             assert s.record_heal_attempt(run_id="run1", attempt_record=rec) is None
 
-    def test_record_heal_attempt_tool_calls_json_strips_args_and_result_payloads(self, tmp_path):
-        """Phase 85 C1 — tool_calls_json keeps op name + duration only; the
-        `args_summary`/`result_preview` string previews (real, if truncated,
-        argument/result content — the observability audit's single largest
-        per-row bloat risk) must never reach the store."""
-        import json as _json
-
-        from aqueduct.agent.budget import AttemptRecord
-        from aqueduct.compiler.models import Manifest
-        from aqueduct.surveyor.surveyor import Surveyor
-
-        s = Surveyor(
-            Manifest(
-                blueprint_id="bp1", name="name", context={}, modules=(), edges=(), engine_config={}
-            ),
-            tmp_path,
-            engine="spark",
-        )
-        s.start("run1")
-
-        rec = AttemptRecord(attempt_num=1, signature=None)
-        rec._aq_tool_calls = [
-            {
-                "name": "read_source_sample",
-                "args_summary": "path=/data/customers_pii.csv",
-                "duration_ms": 42,
-                "result_preview": "alice@example.com, 555-1234, ...",
-            }
-        ]
-        s.record_heal_attempt(run_id="run1", attempt_record=rec)
-
-        with s._observability.connect() as cur:
-            row = cur.execute("SELECT tool_calls_json FROM heal_attempts").fetchone()
-
-        calls = _json.loads(row[0])
-        assert calls == [{"name": "read_source_sample", "duration_ms": 42}]
-        assert "args_summary" not in row[0]
-        assert "result_preview" not in row[0]
-        assert "customers_pii" not in row[0]
-        assert "alice@example.com" not in row[0]
-
     def test_record_heal_attempt_defer_reason_round_trips(self, tmp_path):
         """Phase 88 Domain 6 — the keyword-only `defer_reason` param round-trips
         through the INSERT into the new `heal_attempts.defer_reason` column."""

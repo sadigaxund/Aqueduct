@@ -89,9 +89,6 @@ class CascadeTierConfig:
     max_seconds: float | None = None
     deep_loop: bool | None = None
     allow_defer: bool | None = None
-    # Phase 75 — per-tier tool-use capability override. None inherits the
-    # top-level agent.supports_tools ("auto" default).
-    supports_tools: bool | str | None = None
 
 
 @dataclass(frozen=True)
@@ -142,15 +139,6 @@ class AgentConfig:
     # (full dataset, requires danger.allow_full_preflight), "off" (skip,
     # requires danger.allow_skip_sandbox).
     sandbox_mode: str = "sample"
-    # Phase 75 — agentic heal mode. None = inherit engine default
-    # (agent.mode in aqueduct.yml, "oneshot" if also unset).
-    mode: str | None = None
-    # Hard cap on tool calls per heal attempt in agentic mode. None = inherit
-    # engine default (agent.max_tool_calls in aqueduct.yml, 8 if also unset).
-    max_tool_calls: int | None = None
-    # Tool-use capability override — True/False/"auto". None = inherit engine
-    # default (agent.supports_tools in aqueduct.yml, "auto" if also unset).
-    supports_tools: bool | str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize agent policy fields for the manifest snapshot the LLM sees.
@@ -167,7 +155,6 @@ class AgentConfig:
             "deep_loop": self.deep_loop,
             "confidence_threshold": self.confidence_threshold,
             "patch_validation": self.patch_validation,
-            "mode": self.mode,
             "max_heal_attempts_per_hour": self.max_heal_attempts_per_hour,
             "guardrails": {
                 "forbidden_ops": list(self.guardrails.forbidden_ops),

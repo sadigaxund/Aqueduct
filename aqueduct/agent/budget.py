@@ -152,11 +152,6 @@ class AttemptRecord:
     model_cascade_position: int | None = (
         None  # Phase 44: tier index (0-based) in multi-model cascade
     )
-    # Phase 75 — tool calls made by the model during THIS attempt's agentic
-    # tool conversation (0 in oneshot mode, or when the endpoint degraded to
-    # oneshot mid-heal). Persisted alongside the attempt so the diagnosis
-    # path (which tools were consulted before the patch) is auditable.
-    tool_calls: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -168,7 +163,6 @@ class AttemptRecord:
             "gate_that_rejected": self.gate_that_rejected,
             "escalated": self.escalated,
             "model_cascade_position": self.model_cascade_position,
-            "tool_calls": self.tool_calls,
         }
 
 
@@ -225,7 +219,6 @@ class BudgetTracker:
         gate_that_rejected: str | None = None,
         escalated: bool = False,
         model_cascade_position: int | None = None,
-        tool_calls: int = 0,
     ) -> AttemptRecord:
         rec = AttemptRecord(
             attempt_num=self._current_attempt,
@@ -236,7 +229,6 @@ class BudgetTracker:
             gate_that_rejected=gate_that_rejected,
             escalated=escalated,
             model_cascade_position=model_cascade_position,
-            tool_calls=tool_calls,
         )
         self.attempts.append(rec)
         self.tokens_in_total += tokens_in

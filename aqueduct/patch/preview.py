@@ -378,8 +378,8 @@ def run_sandbox_gate(
     ``spark_session``, if given, is used as-is regardless of engine (the
     caller already built it — e.g. the live session a heal loop is running
     against); named ``spark_session`` for backward compatibility with
-    existing callers/tests predating multi-engine support, same precedent as
-    ``aqueduct.agent.toolbox.ToolBox.spark_session``. When omitted, this gate
+    existing callers/tests predating multi-engine support. When omitted,
+    this gate
     builds and owns its own sandbox session via the target engine's
     ``ExecutorProtocol.session_factory()`` and tears it down afterwards
     through ``session_closer()``.

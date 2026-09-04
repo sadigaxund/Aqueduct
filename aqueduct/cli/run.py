@@ -681,9 +681,6 @@ def run(
         resolved_agent_engine_prompt_context = _ssr.resolved_agent_engine_prompt_context
         resolved_agent_blueprint_prompt_context = _ssr.resolved_agent_blueprint_prompt_context
         resolved_agent_cascade = _ssr.resolved_agent_cascade
-        resolved_agent_mode = _ssr.resolved_agent_mode
-        resolved_agent_max_tool_calls = _ssr.resolved_agent_max_tool_calls
-        resolved_agent_supports_tools = _ssr.resolved_agent_supports_tools
         resolved_sandbox_master_url = _ssr.resolved_sandbox_master_url
         surveyor = _ssr.surveyor
         _obs_store = _ssr._obs_store
@@ -1764,27 +1761,6 @@ def run(
                     announce_unavailable=_announce_polyglot_sandbox_unavailable,
                 )
 
-            # Phase 75 — agentic mode: build a per-heal ToolBox when this
-            # blueprint (or the engine default) opted in. `session` is the
-            # live SparkSession from this `run` invocation, so
-            # get_source_schema/sample_rows work for real here (unlike
-            # `aqueduct heal`'s from-store reconstruction, which has none).
-            _toolbox = None
-            if resolved_agent_mode == "agentic":
-                from aqueduct.agent.toolbox import ToolBox
-
-                _toolbox = ToolBox(
-                    manifest=manifest,
-                    failure_ctx=failure_ctx,
-                    obs_store=_obs_store,
-                    patch_store=_patch_store,
-                    base_dir=manifest.base_dir,
-                    spark_session=_session_holder.session,
-                    engine=(failure_ctx.engine or engine),
-                    config_path=config_path,
-                    store_dir=store_dir,
-                )
-
             # ── Chained (progressive) multi-patch healing state ──────────────────
             # Phase 92 — chaining is now the ONLY heal-loop behavior for the
             # single-model (non-cascade) path below; there is no more opt-in
@@ -1834,10 +1810,6 @@ def run(
                     retry_max_retries=cfg.agent.retry.max_retries,
                     retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
                     obs_store=_obs_store,
-                    toolbox=_toolbox,
-                    mode=resolved_agent_mode,
-                    max_tool_calls=resolved_agent_max_tool_calls,
-                    supports_tools=resolved_agent_supports_tools,
                 )
             else:
                 # ── Chained (progressive) multi-patch healing — the ONLY ────
@@ -1890,21 +1862,6 @@ def run(
                         getattr(cfg.agent, "budget", None),
                         max_reprompts=resolved_agent_max_reprompts,
                     )
-                    _link_toolbox = None
-                    if resolved_agent_mode == "agentic":
-                        from aqueduct.agent.toolbox import ToolBox
-
-                        _link_toolbox = ToolBox(
-                            manifest=manifest,
-                            failure_ctx=current_failure,
-                            obs_store=_obs_store,
-                            patch_store=_patch_store,
-                            base_dir=manifest.base_dir,
-                            spark_session=_session_holder.session,
-                            engine=(current_failure.engine or engine),
-                            config_path=config_path,
-                            store_dir=store_dir,
-                        )
                     _link_validate_cb = None
                     if _any_deep_loop:
                         from functools import partial
@@ -1964,10 +1921,6 @@ def run(
                             retry_max_retries=cfg.agent.retry.max_retries,
                             retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
                             obs_store=_obs_store,
-                            toolbox=_link_toolbox,
-                            mode=resolved_agent_mode,
-                            max_tool_calls=resolved_agent_max_tool_calls,
-                            supports_tools=resolved_agent_supports_tools,
                         ),
                     )
                     # Every diagnosis call spends one unit of max_patches —

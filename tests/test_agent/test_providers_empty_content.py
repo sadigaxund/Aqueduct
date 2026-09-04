@@ -23,7 +23,6 @@ Scope note: none of this parses a patch OUT of ``reasoning_content`` — the
 reasoning channel is not the answer channel. It only makes the raised error
 state which of the three situations was actually observed.
 
-``httpx.Client`` mocking follows ``test_providers_tools.py``.
 """
 
 from __future__ import annotations
@@ -161,34 +160,6 @@ class TestTerminatingConditionIsReported:
         assert "truncat" not in msg.lower()
         assert "reasoning_content" not in msg
         assert "finish_reason='stop'" in msg
-
-    @patch("httpx.Client")
-    def test_tool_loop_final_turn_gets_the_same_guard(self, mock_client_cls):
-        """The tool-use loop's final turn is an ordinary completion and carried
-        an identical `is None` check — one shared explanation, not two copies
-        that drift."""
-        from aqueduct.agent.providers import ToolCallState
-
-        class _ToolBox:
-            def declarations(self):
-                return [
-                    {"name": "read_blueprint", "description": "x", "params_schema": {}},
-                ]
-
-            def call(self, name, args):  # pragma: no cover — never reached
-                return {}
-
-        with pytest.raises(AqueductError) as exc_info:
-            _call(
-                mock_client_cls,
-                _choice("", finish_reason="length"),
-                max_tokens=4096,
-                tools=[{"name": "read_blueprint", "description": "x", "params_schema": {}}],
-                toolbox=_ToolBox(),
-                tool_state=ToolCallState(),
-            )
-        assert "truncat" in str(exc_info.value).lower()
-        assert "4096" in str(exc_info.value)
 
     @patch("httpx.Client")
     def test_truncation_wins_over_reasoning_when_both_present(self, mock_client_cls):

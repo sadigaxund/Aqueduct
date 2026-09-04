@@ -115,8 +115,8 @@ def _run_and_attempt(c, run_id, blueprint_id, tokens_in, tokens_out, days_ago=0)
     c.execute(
         "INSERT INTO heal_attempts (id, run_id, attempt_num, error_class, where_field, "
         "normalized_message, tokens_in, tokens_out, latency_ms, gate_that_rejected, "
-        "stop_reason, prompt_version, recorded_at, tool_calls_json, chain_link, engine) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "stop_reason, prompt_version, recorded_at, chain_link, engine) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         [
             str(uuid.uuid4()),
             run_id,
@@ -131,7 +131,6 @@ def _run_and_attempt(c, run_id, blueprint_id, tokens_in, tokens_out, days_ago=0)
             "solved",
             "v1",
             ts,
-            None,
             None,
             "duckdb",
         ],

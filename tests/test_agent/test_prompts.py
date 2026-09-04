@@ -66,7 +66,10 @@ def test_prompt_version_bumped_for_schema_hint_rule():
     # Phase 92 cleanup bumped 1.13 -> 1.14: the signature-keyed heal cache
     # (and the coaching-examples section it fed) is gone — every heal now
     # falls back to the chronological "do NOT repeat" section.
-    assert PROMPT_VERSION == "1.14"
+    # Phase 92 cleanup bumped 1.14 -> 1.15: the tool-calling heal mode is
+    # removed — the "Tools available" addendum never renders, and the
+    # "Untrusted data" block no longer mentions tool_result content.
+    assert PROMPT_VERSION == "1.15"
 
 
 def test_schema_hint_rule_never_leaks_defer_op_token(tmp_path: Path):

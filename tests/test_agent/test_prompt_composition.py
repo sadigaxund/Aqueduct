@@ -67,17 +67,13 @@ def test_spark_pack_matches_pre_split_text():
 
 
 @pytest.mark.parametrize("allow_defer", [False, True])
-@pytest.mark.parametrize("tools_enabled", [False, True])
-def test_composed_spark_prompt_is_the_pre_split_prompt(
-    tmp_path: Path, allow_defer: bool, tools_enabled: bool
-):
+def test_composed_spark_prompt_is_the_pre_split_prompt(tmp_path: Path, allow_defer: bool):
     """The composed prompt reproduces the pre-split text exactly: engine
     content lands in its original three positions, nothing is reordered,
     duplicated, or dropped."""
     prompt = _build_system_prompt(
         tmp_path,
         allow_defer=allow_defer,
-        tools_enabled=tools_enabled,
         coaching=False,
         obs_store=None,
         engine="spark",
@@ -204,9 +200,8 @@ def _strip_patch_schema(prompt: str) -> str:
 
 
 @pytest.mark.parametrize("allow_defer", [False, True])
-@pytest.mark.parametrize("tools_enabled", [False, True])
 def test_composed_prompt_for_non_spark_engine_has_zero_engine_bleed(
-    tmp_path: Path, monkeypatch, allow_defer: bool, tools_enabled: bool
+    tmp_path: Path, monkeypatch, allow_defer: bool
 ):
     """THE guard. A heal on a non-Spark engine must not be told anything about
     Spark — not in the persona, not in the rules, and not in the defer section
@@ -220,7 +215,6 @@ def test_composed_prompt_for_non_spark_engine_has_zero_engine_bleed(
     prompt = _build_system_prompt(
         tmp_path,
         allow_defer=allow_defer,
-        tools_enabled=tools_enabled,
         coaching=False,
         obs_store=None,
         engine="fake-engine",
@@ -230,11 +224,11 @@ def test_composed_prompt_for_non_spark_engine_has_zero_engine_bleed(
     for token in _ENGINE_TOKENS:
         assert token.lower() not in prose.lower(), (
             f"engine token {token!r} leaked into the composed prompt for a NON-Spark "
-            f"engine (allow_defer={allow_defer}, tools_enabled={tools_enabled}). It "
-            "belongs in the engine's PromptRules pack "
-            "(aqueduct/executor/spark/prompt_rules.py), not in the agent's scaffold. "
-            "Note the scaffold is not just _SYSTEM_PROMPT_TEMPLATE — parts of the "
-            "prompt (defer_rules) are assembled at runtime in _build_system_prompt."
+            f"engine (allow_defer={allow_defer}). It belongs in the engine's "
+            "PromptRules pack (aqueduct/executor/spark/prompt_rules.py), not in the "
+            "agent's scaffold. Note the scaffold is not just _SYSTEM_PROMPT_TEMPLATE "
+            "— parts of the prompt (defer_rules) are assembled at runtime in "
+            "_build_system_prompt."
         )
 
 

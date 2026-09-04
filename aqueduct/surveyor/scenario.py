@@ -503,9 +503,7 @@ def _build_failure_ctx(
 
     Returns the Blueprint alongside the FailureContext so callers can extract
     ``agent.guardrails`` (Phase 33 Part B Scope C step 2 — scenario guardrail
-    enforcement) without re-parsing the blueprint a second time. The compiled
-    Manifest (Phase 75) lets ``run_scenario`` build a ToolBox for
-    ``agent.mode: agentic`` scenario runs without a third parse/compile pass.
+    enforcement) without re-parsing the blueprint a second time.
     """
     from datetime import datetime
 
@@ -1500,9 +1498,6 @@ def run_scenario(
     max_reprompts: int = 3,
     engine_prompt_context: str | None = None,
     budget: Any = None,  # BudgetConfig | None — Phase 34
-    mode: str = "oneshot",
-    max_tool_calls: int = 8,
-    supports_tools: bool | str = "auto",
 ) -> ScenarioResult:
     """Run one scenario against the LLM and validate the response.
 
@@ -1517,12 +1512,6 @@ def run_scenario(
     violation, parse/compile failure on the patched blueprint) feed back
     into the same reprompt loop — closing the leaderboard-cheating path
     where benchmark would silently pass on a patch production would reject.
-
-    Phase 75 (minimal agentic plumbing): ``mode="agentic"`` builds a ToolBox
-    from the compiled Manifest so a live A/B (oneshot vs agentic) is
-    possible via ``aqueduct benchmark``. No Spark session is ever started
-    for a scenario run — session-bound tools (``get_source_schema``,
-    ``sample_rows``) report "unavailable", same as `aqueduct heal`.
     """
     from aqueduct.agent import PROMPT_VERSION, generate_agent_patch
 
@@ -1530,7 +1519,7 @@ def run_scenario(
 
     # Build failure context
     try:
-        failure_ctx, bp, scenario_manifest = _build_failure_ctx(scenario)
+        failure_ctx, bp, _ = _build_failure_ctx(scenario)
     except Exception as exc:
         return ScenarioResult(
             scenario_id=scenario.id,
@@ -1575,17 +1564,6 @@ def run_scenario(
             )
             return False, err_class, outcome.error or "(no message)", None
 
-    _toolbox: Any = None
-    if mode == "agentic":
-        from aqueduct.agent.toolbox import ToolBox
-
-        _toolbox = ToolBox(
-            manifest=scenario_manifest,
-            failure_ctx=failure_ctx,
-            spark_session=None,  # scenarios never start Spark
-            engine=failure_ctx.engine,
-        )
-
     # Call LLM through the unified Phase 34 loop.
     agent_result = generate_agent_patch(
         failure_ctx,
@@ -1603,10 +1581,6 @@ def run_scenario(
         deep_loop=False,  # scenarios don't use deep_loop
         model_cascade_position=None,  # scenarios don't use cascade
         apply_callback=apply_cb,
-        toolbox=_toolbox,
-        mode=mode,
-        max_tool_calls=max_tool_calls,
-        supports_tools=supports_tools,
     )
     patch = agent_result.patch
 
@@ -1790,9 +1764,6 @@ def run_benchmark(
     engine_prompt_context: str | None = None,
     workers: int = 1,
     budget: Any = None,  # BudgetConfig | None — Phase 34 parity
-    mode: str = "oneshot",
-    max_tool_calls: int = 8,
-    supports_tools: bool | str = "auto",
     domains: Sequence[str] = (),
 ) -> dict[str, dict[str, ScenarioResult]]:
     """Run all scenarios in scenarios_dir against each model.
@@ -1802,9 +1773,6 @@ def run_benchmark(
 
     Args:
         workers: Max concurrent LLM calls. Default 1 (serial). Set >1 to parallelize.
-        mode: Phase 75 — ``"oneshot"`` (default) or ``"agentic"``. Plumbed
-            straight through to every ``run_scenario`` call so a live A/B
-            (oneshot vs agentic, same scenarios/models) is possible.
         domains: Restrict the suite to scenarios declaring at least one of
             these ``domains:`` members (``SCENARIO_DOMAINS``). Empty = no
             filtering. See ``select_scenarios``.
@@ -1884,9 +1852,6 @@ def run_benchmark(
             max_reprompts=max_reprompts,
             engine_prompt_context=engine_prompt_context,
             budget=budget,
-            mode=mode,
-            max_tool_calls=max_tool_calls,
-            supports_tools=supports_tools,
         )
 
         if serial:

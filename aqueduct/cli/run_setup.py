@@ -19,7 +19,6 @@ change that contract, only relocates the class definition.
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass as _dc_frozen
 from typing import TYPE_CHECKING as _t
 
@@ -405,7 +404,7 @@ class _SessionHolder:
         would double-close nothing;
       - every session consumer inside the ``run`` command itself
         (``_execute_target``, the terminal ``on_success``/``on_failure``
-        hooks, the agentic ``ToolBox``) — reading a bare local ``session``
+        hooks) — reading a bare local ``session``
         variable would work for these (ordinary late-binding closure
         semantics inside the SAME function), but mixing "read the holder"
         and "read the local var" is the kind of inconsistency this class
@@ -450,9 +449,6 @@ class _SurveyorSetupResult:
     resolved_agent_engine_prompt_context: str | None
     resolved_agent_blueprint_prompt_context: str | None
     resolved_agent_cascade: object | None
-    resolved_agent_mode: str | None
-    resolved_agent_max_tool_calls: int | None
-    resolved_agent_supports_tools: object | None
     resolved_sandbox_master_url: str | None
     surveyor: object
     _obs_store: object
@@ -714,11 +710,6 @@ def _setup_surveyor(
     resolved_agent_engine_prompt_context = _rac.engine_prompt_context
     resolved_agent_blueprint_prompt_context = _rac.blueprint_prompt_context
     resolved_agent_cascade = _rac.cascade
-    # Phase 75 — agentic mode + tool-use capability, same engine←blueprint
-    # inheritance shape as every other resolved_agent_* field above.
-    resolved_agent_mode = _rac.mode
-    resolved_agent_max_tool_calls = _rac.max_tool_calls
-    resolved_agent_supports_tools = _rac.supports_tools
     resolved_sandbox_master_url = cfg.agent.sandbox_master_url
 
     # ── Self-healing reachability pre-check (upfront) ────────────────────────────
@@ -814,9 +805,9 @@ def _setup_surveyor(
     # necessarily any island's actual engine) would be wasted work at best
     # and a stray, never-closed-until-atexit session at worst.
     # `_session_holder.session` stays None for the rest of this run — every
-    # downstream consumer (hooks' in-process fallback, the agentic ToolBox's
-    # `spark_session`) already treats a missing session as "no live session
-    # to reuse", the same fallback a single-engine run never exercises.
+    # downstream consumer (the hooks' in-process fallback) already treats a
+    # missing session as "no live session to reuse", the same fallback a
+    # single-engine run never exercises.
     _session_holder = _SessionHolder(None)
     if len(manifest.islands) <= 1:
         from aqueduct.executor.protocol import SessionSpec, get_protocol
@@ -870,9 +861,6 @@ def _setup_surveyor(
         resolved_agent_engine_prompt_context=resolved_agent_engine_prompt_context,
         resolved_agent_blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
         resolved_agent_cascade=resolved_agent_cascade,
-        resolved_agent_mode=resolved_agent_mode,
-        resolved_agent_max_tool_calls=resolved_agent_max_tool_calls,
-        resolved_agent_supports_tools=resolved_agent_supports_tools,
         resolved_sandbox_master_url=resolved_sandbox_master_url,
         surveyor=surveyor,
         _obs_store=_obs_store,

@@ -92,14 +92,11 @@ leaves:
   agent.field.max_heal_attempts_per_hour: supported
   agent.field.max_patches: supported
   agent.field.max_reprompts: supported
-  agent.field.max_tool_calls: supported
-  agent.field.mode: supported
   agent.field.on_heal_failure: supported
   agent.field.on_pending_patches: supported
   agent.field.patch_validation: supported
   agent.field.prompt_context: supported
   agent.field.sandbox_mode: supported
-  agent.field.supports_tools: supported
   agent_guardrails.field.allowed_paths: supported
   agent_guardrails.field.deny_patterns: supported
   agent_guardrails.field.forbidden_ops: supported
@@ -963,7 +960,7 @@ leaves:
     support: supported
     hint: "aqueduct.executor.duckdb_.schema_reader.read_source_schema implements the ExecutorProtocol read_source_schema seam aqueduct drift needs (metadata-only; no query execution). Not yet wired into aqueduct/cli/drift.py, which still hardcodes the Spark reader regardless of manifest engine; the capability itself is real and tested."
     tests:
-      - tests/test_agent/test_toolbox_engine_routing.py::TestDuckDBRoutesThroughDuckDB::test_get_source_schema_reads_via_duckdb_not_spark
+      - tests/test_drift/test_drift_engine_routing.py::test_duckdb_module_reads_via_duckdb_schema_reader_not_spark
   tooling.doctor.table_exists:
     support: supported
     hint: "aqueduct doctor's check now branches for a duckdb-resolved module: it opens a READ-ONLY connection to engine.duckdb.database_path and queries information_schema.tables (matches both base tables and views, unlike duckdb_tables() which misses views) for the module's 1/2/3-part table: name, using the same catalog-defaulting rule as the DuckDB executor's own table: resolution (unqualified -> current catalog+schema; two-part -> schema.table in the current catalog; three-part -> catalog.schema.table, which must already be ATTACHed — this check never ATTACHes anything itself). It is SKIPPED entirely when database_path is unset (the default :memory:), because that run's catalog only exists inside its own session — a fresh doctor connection would have an empty catalog and falsely report every table missing. A database_path file that does not exist yet is reported as table-not-found (fail), not a crash."

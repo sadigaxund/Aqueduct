@@ -36,7 +36,6 @@ from aqueduct.agent.parse import (
 from aqueduct.agent.prompts import _build_user_prompt
 from aqueduct.agent.providers import (
     _ESCALATION_TEMPERATURE,
-    ToolCallState,
     _call_agent,
     _format_llm_error_hint,
     _ProviderConfig,
@@ -78,10 +77,10 @@ logger = logging.getLogger(__name__)
 #       static template (leaked the op name when allow_defer=False strips it
 #       from the schema — Phase 41 invariant: the model can't produce an op
 #       it doesn't know exists).
-# 1.7 — 2026-07-11: agentic mode (agent.mode: agentic) — the system prompt
-#       gains a "Tools available" addendum on any turn where tool-use is
-#       offered (`prompts._TOOLS_SECTION`). Oneshot-mode heals (the default)
-#       never render it — their prompt is byte-identical to 1.6.
+# 1.7 — 2026-07-11: the since-removed tool-calling heal mode — the system
+#       prompt gained a "Tools available" addendum on any turn where
+#       tool-use was offered. Default heals never rendered it, so their
+#       prompt stayed byte-identical to 1.6.
 # 1.8 — Phase 78: DuckDB engine's PromptRules pack gains a DuckDB-worded
 #       PREDICTED_SCHEMA_DRIFT rule bullet, changing DuckDB's composed
 #       healing system prompt. Spark's composed prompt is byte-identical to
@@ -122,7 +121,12 @@ logger = logging.getLogger(__name__)
 #        never renders now — every heal falls back to the chronological
 #        "Previous patch attempts (do NOT repeat these)" section, changing
 #        the composed prompt whenever coaching examples used to match.
-PROMPT_VERSION = "1.14"
+# 1.15 — Phase 92 cleanup: the tool-calling heal mode is removed. The
+#        "Tools available" addendum never renders now — every heal is the
+#        single prompt to PatchSpec turn. The "Untrusted data" instruction
+#        block no longer mentions tool_result content (there is no longer a
+#        tool channel to name). Changes the composed prompt for every engine.
+PROMPT_VERSION = "1.15"
 
 
 @dataclass
@@ -192,13 +196,6 @@ class AgentRunConfig:
     retry_max_retries: int = 2
     retry_backoff_seconds: float = 2.0
     obs_store: ObservabilityStore | None = None
-    # Phase 75 — agentic mode. `toolbox` is None ⇒ byte-identical oneshot
-    # behaviour regardless of `mode` (a caller that resolved mode="agentic"
-    # but couldn't build a ToolBox — e.g. no manifest — degrades safely).
-    toolbox: Any = None
-    mode: str = "oneshot"
-    max_tool_calls: int = 8
-    supports_tools: bool | str = "auto"
 
 
 # ── Timestamp helpers ────────────────────────────────────────────────────
@@ -508,10 +505,6 @@ def generate_agent_patch(
     retry_backoff_seconds: float = 2.0,
     obs_store: ObservabilityStore | None = None,
     agent_cfg: AgentRunConfig | None = None,
-    toolbox: Any = None,
-    mode: str = "oneshot",
-    max_tool_calls: int = 8,
-    supports_tools: bool | str = "auto",
 ) -> AgentPatchResult:
     """Call the LLM and return an AgentPatchResult with patch + attempt metadata.
 
@@ -559,10 +552,6 @@ def generate_agent_patch(
         retry_max_retries = agent_cfg.retry_max_retries
         retry_backoff_seconds = agent_cfg.retry_backoff_seconds
         obs_store = agent_cfg.obs_store
-        toolbox = agent_cfg.toolbox
-        mode = agent_cfg.mode
-        max_tool_calls = agent_cfg.max_tool_calls
-        supports_tools = agent_cfg.supports_tools
 
     if agent_cfg is None:
         if failure_ctx is None:
@@ -582,18 +571,6 @@ def generate_agent_patch(
         budget = BudgetConfig(max_reprompts=max(1, max_reprompts))
     tracker = BudgetTracker(budget)
 
-    # Phase 75 — agentic mode only takes effect when BOTH mode="agentic" AND
-    # a ToolBox was actually built by the caller. A caller that resolved
-    # mode="agentic" but has no manifest to build one (e.g. a legacy call
-    # site) degrades to oneshot instead of raising.
-    _agentic = mode == "agentic" and toolbox is not None
-    _effective_toolbox = toolbox if _agentic else None
-    # Persists across every attempt in THIS heal call — tool-use capability
-    # (openai_compat's supports_tools: auto probe) doesn't change between
-    # reprompt turns, but `tool_calls_used` is reset per attempt below (the
-    # cap is per-attempt, not per-heal — design item 2).
-    _tool_state = ToolCallState() if _agentic else None
-
     cfg = _ProviderConfig(
         model=model,
         max_tokens=max_tokens,
@@ -612,9 +589,6 @@ def generate_agent_patch(
         retry_max_retries=retry_max_retries,
         retry_backoff_seconds=retry_backoff_seconds,
         obs_store=obs_store,
-        toolbox=_effective_toolbox,
-        max_tool_calls=max(1, max_tool_calls),
-        supports_tools=supports_tools,
     )
 
     messages: list[dict[str, Any]] = [
@@ -636,25 +610,13 @@ def generate_agent_patch(
 
     def _fire_turn(rec) -> None:
         rec._aq_raw = _turn_raw["v"]
-        # Phase 75 — per-call tool telemetry for THIS attempt only (verbose
-        # transcript rendering); empty in oneshot mode / no tool calls made.
-        rec._aq_tool_calls = list(_tool_state.tool_call_log) if _tool_state else []
         _fire_on_attempt(on_attempt=on_attempt, rec=rec)
 
     def _record(*args, **kwargs):
-        """``tracker.record`` wrapper that auto-attaches this attempt's tool-call
-        count (Phase 75) — every one of the ~10 call sites below stays unchanged
-        otherwise. 0 when not in agentic mode."""
-        kwargs.setdefault("tool_calls", _tool_state.tool_calls_used if _tool_state else 0)
         return tracker.record(*args, **kwargs)
 
     while True:
         _turn_raw["v"] = None
-        # The per-attempt tool-call cap (design item 2) resets every attempt —
-        # capability state (_tool_state.supported) persists across attempts.
-        if _tool_state is not None:
-            _tool_state.tool_calls_used = 0
-            _tool_state.tool_call_log = []
         attempt_num = tracker.begin_attempt()
         temperature_override = _ESCALATION_TEMPERATURE if escalate_next else None
         logger.info("── Heal attempt %d/%d ──", attempt_num, budget.max_reprompts)
@@ -689,7 +651,6 @@ def generate_agent_patch(
                 temperature_override=temperature_override,
                 deadline=deadline,
                 on_token=on_token,
-                tool_state=_tool_state,
             )
         except Exception as exc:
             latency_ms = int((time.monotonic() - t_start) * 1000)

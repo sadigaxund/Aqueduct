@@ -117,36 +117,11 @@ def _read_source_schema(module: Any, session: Any) -> dict[str, str]:
 
     Thin pass-through to ``aqueduct.executor.spark.ingress.read_source_schema``
     — a refactor (naming the existing reader as the engine's contribution
-    through this seam), not new behavior. Previously the healing agent's
-    ToolBox (``aqueduct/agent/toolbox.py``) imported this function by name
-    directly, so a heal on a non-Spark engine still read source schemas
-    through Spark; routing it through the protocol closes that coupling.
+    through this seam), not new behavior.
     """
     from aqueduct.executor.spark.ingress import read_source_schema
 
     return read_source_schema(module, session)
-
-
-def _sample_source_rows(
-    module: Any,
-    session: Any,
-    n: int = 10,
-    base_dir: str | None = None,
-) -> list[dict[str, Any]]:
-    """``ExecutorProtocol.sample_source_rows`` for Spark — lazy ``pyspark`` import.
-
-    Same bounded-sample contract the ToolBox's ``sample_rows`` tool used to
-    implement inline against ``read_ingress`` directly (``limit(n).collect()``
-    — a LIMIT push-down, never a full scan, so this is exempt from the
-    ``block_full_actions`` gate the same way ``executor/spark/probe.py``'s
-    ``sample_rows`` signal is). Moved here so the ToolBox no longer imports
-    ``aqueduct.executor.spark.ingress`` by name.
-    """
-    from aqueduct.executor.spark.ingress import read_ingress
-
-    df = read_ingress(module, session, base_dir=base_dir)
-    rows = df.limit(int(n)).collect()
-    return [row.asDict(recursive=True) for row in rows]
 
 
 def _cleanup_reused_session(session: Any, manifest: Manifest) -> None:
@@ -198,7 +173,6 @@ SPARK = ExecutorProtocol(
     close_session=_close_session,
     cleanup_reused_session=_cleanup_reused_session,
     read_source_schema=_read_source_schema,
-    sample_source_rows=_sample_source_rows,
     render_type=render_spark_type,
     # execute_kwargs=None (the default) — Spark's real execute() has a
     # parameter for every OPTIONAL_EXECUTE_KWARGS name

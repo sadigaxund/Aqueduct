@@ -1,8 +1,11 @@
 """Tests for the Parser layer: Tier 0 context resolution."""
 
 from __future__ import annotations
+
 from pathlib import Path
+
 import pytest
+
 from aqueduct.parser.parser import ParseError, parse
 
 pytestmark = pytest.mark.unit
@@ -116,8 +119,8 @@ class TestContextResolution:
 
     def test_sub_ctx_unknown_non_reserved_still_raises(self):
         """Non-reserved unknown ${ctx.foo} still raises (carve-out is exact-set)."""
-        from aqueduct.parser.resolver import _sub_ctx
         from aqueduct.errors import ParseError
+        from aqueduct.parser.resolver import _sub_ctx
 
         with pytest.raises(ParseError, match=r"Undefined context reference: \$\{ctx\.foo\}"):
             _sub_ctx("${ctx.foo}", {})
@@ -215,8 +218,9 @@ class TestContextResolution:
 
     def test_audit_02_context_resolution(self, monkeypatch):
         """Verify recursive context resolution and profile overrides."""
-        from aqueduct.compiler.compiler import compile as aq_compile
         import datetime
+
+        from aqueduct.compiler.compiler import compile as aq_compile
 
         monkeypatch.setenv("MY_VAR", "env_value")
         blueprint_path = FIXTURES / "audit" / "02-context-resolution" / "blueprint.yml"
@@ -308,4 +312,3 @@ class TestContextResolution:
         bp = parse(good)
         assert bp.agent.prompt_context is None
         assert bp.agent.max_reprompts is None
-        assert bp.agent.mode is None

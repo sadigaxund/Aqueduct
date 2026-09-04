@@ -34,14 +34,11 @@ leaves:
   agent.field.max_heal_attempts_per_hour: supported
   agent.field.max_patches: supported
   agent.field.max_reprompts: supported
-  agent.field.max_tool_calls: supported
-  agent.field.mode: supported
   agent.field.on_heal_failure: supported
   agent.field.on_pending_patches: supported
   agent.field.patch_validation: supported
   agent.field.prompt_context: supported
   agent.field.sandbox_mode: supported
-  agent.field.supports_tools: supported
   agent_guardrails.field.allowed_paths: supported
   agent_guardrails.field.deny_patterns: supported
   agent_guardrails.field.forbidden_ops: supported
@@ -722,7 +719,7 @@ leaves:
     support: supported
     hint: "aqueduct drift reads a live source schema via the ExecutorProtocol read_source_schema seam, backed by aqueduct.executor.spark.ingress.read_source_schema."
     tests:
-      - tests/test_agent/test_toolbox_engine_routing.py::TestSparkPathUnchanged::test_get_source_schema_still_routes_through_spark_for_spark_engine
+      - tests/test_drift/test_drift_command.py::test_first_run_sets_baseline
   tooling.doctor.table_exists:
     support: supported
     hint: "aqueduct doctor's Ingress/Egress table-existence check builds a SparkSession and calls spark.catalog.tableExists(table_val) for any module with a table: config key."
