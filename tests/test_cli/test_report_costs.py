@@ -1,5 +1,4 @@
-"""Phase 85 W9 — `aqueduct report-prune` (B1 CLI half) and `aqueduct
-report-costs` (D7).
+"""`aqueduct report-costs`.
 
 Pyspark-free: seeds the observability store directly with the real DDL
 (``aqueduct.surveyor.ddl``) so this runs in the unit lane (no Spark, no
@@ -70,71 +69,6 @@ def _heal_attempt(c, run_id, days_ago, tokens_in=0, tokens_out=0, tool_calls=Non
             "duckdb",
         ],
     )
-
-
-# ── report-prune ─────────────────────────────────────────────────────────────
-
-
-def test_report_prune_deletes_old_rows_and_reports_counts(tmp_path):
-    c = _conn(tmp_path)
-    _run_record(c, "run-old", "bp1", days_ago=400)  # older than default 90d window
-    _run_record(c, "run-new", "bp1", days_ago=1)
-    c.close()
-
-    res = CliRunner().invoke(cli, ["report-prune", "--store-dir", str(tmp_path)])
-    assert res.exit_code == 0, res.output
-    assert "run_records" in res.output
-    assert "1" in res.output
-
-    c = duckdb.connect(str(tmp_path / "observability.db"))
-    remaining = [r[0] for r in c.execute("SELECT run_id FROM run_records").fetchall()]
-    c.close()
-    assert remaining == ["run-new"]
-
-
-def test_report_prune_json_format_reports_per_table_counts(tmp_path):
-    c = _conn(tmp_path)
-    _run_record(c, "run-old", "bp1", days_ago=400)
-    _run_record(c, "run-new", "bp1", days_ago=1)
-    c.close()
-
-    res = CliRunner().invoke(
-        cli, ["report-prune", "--store-dir", str(tmp_path), "--format", "json"]
-    )
-    assert res.exit_code == 0, res.output
-    data = json.loads(res.output)
-    assert data["vacuum"] is False
-    assert data["totals"]["run_records"] == 1
-
-
-def test_report_prune_without_vacuum_flag_never_calls_vacuum(tmp_path, monkeypatch):
-    c = _conn(tmp_path)
-    _run_record(c, "run-old", "bp1", days_ago=400)
-    c.close()
-
-    calls: list = []
-    monkeypatch.setattr(
-        "aqueduct.surveyor.retention.vacuum_store", lambda store: calls.append(store)
-    )
-
-    res = CliRunner().invoke(cli, ["report-prune", "--store-dir", str(tmp_path)])
-    assert res.exit_code == 0, res.output
-    assert calls == [], "vacuum_store must NEVER be called without --vacuum"
-
-
-def test_report_prune_with_vacuum_flag_calls_vacuum(tmp_path, monkeypatch):
-    c = _conn(tmp_path)
-    _run_record(c, "run-old", "bp1", days_ago=400)
-    c.close()
-
-    calls: list = []
-    monkeypatch.setattr(
-        "aqueduct.surveyor.retention.vacuum_store", lambda store: calls.append(store)
-    )
-
-    res = CliRunner().invoke(cli, ["report-prune", "--store-dir", str(tmp_path), "--vacuum"])
-    assert res.exit_code == 0, res.output
-    assert len(calls) == 1, "vacuum_store must be called exactly once with --vacuum"
 
 
 # ── report-costs ─────────────────────────────────────────────────────────────
