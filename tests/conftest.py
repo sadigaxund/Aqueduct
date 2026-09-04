@@ -634,3 +634,41 @@ def sample_data(spark: SparkSession, tmp_path_factory):
     customers.write.parquet(str(data_dir / "customers.parquet"))
 
     return data_dir
+
+
+# ── gallery snippet compile helper ───────────────────────────────────────────
+# Snippets that use `@aq.depot.get` / `@aq.run.prev_id` need a depot mount at
+# compile time (the compiler raises a loud CompileError when a Blueprint reads
+# a depot with none configured — deliberate, see
+# `aqueduct.compiler.runtime._depot_get_or_raise`). The CLI builds those mounts
+# from the project's aqueduct.yml via `preview_depots`; the gallery guards
+# (tests/test_gallery.py, tests/test_capabilities/test_gate_noop.py) compile
+# the same Blueprints directly, so they must mirror that step from the
+# snippet's OWN aqueduct.yml. Fixture (not a plain import) so both call sites
+# stay independently runnable without importing each other.
+
+
+@pytest.fixture
+def snippet_preview_depots():
+    """Return ``build(blueprint_path, blueprint_id) -> (depot, depots)``.
+
+    Mirrors `aqueduct compile`'s wiring, including its fall-back-to-None
+    behaviour: a snippet whose aqueduct.yml is missing/unloadable compiles
+    depot-less exactly as the CLI would.
+    """
+
+    def build(bp_path, blueprint_id):
+        from pathlib import Path
+
+        cfg_path = Path(bp_path).parent / "aqueduct.yml"
+        if not cfg_path.is_file():
+            return None, None
+        try:
+            from aqueduct.config import load_config
+            from aqueduct.depot.depot import preview_depots
+
+            return preview_depots(load_config(cfg_path), blueprint_id)
+        except Exception:  # pragma: no cover — a depot build must never fail the guard
+            return None, None
+
+    return build

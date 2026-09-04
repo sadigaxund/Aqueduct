@@ -57,16 +57,23 @@ def _id(p: Path) -> str:
 
 @pytest.mark.integration
 @pytest.mark.parametrize("bp_path", _SNIPPETS, ids=[_id(p) for p in _SNIPPETS])
-def test_snippet_parses_and_compiles(bp_path, monkeypatch):
+def test_snippet_parses_and_compiles(bp_path, monkeypatch, snippet_preview_depots):
     _set_placeholder_env(bp_path, monkeypatch)
+    blueprint = parse(bp_path)
+    # Snippets reading `@aq.depot.get` / `@aq.run.prev_id` need the same depot
+    # mounts `aqueduct compile` builds from the project aqueduct.yml — without
+    # them the compiler raises its (deliberate) depot-less CompileError.
+    depot, depots = snippet_preview_depots(bp_path, blueprint.id)
     # deployment_env/target default to None in compile() itself (the real
     # value normally comes from the caller's loaded aqueduct.yml, which this
     # generic compile-only guard never loads) — match config.py's own
     # DeploymentConfig defaults so blueprints using @aq.deployment.* don't
     # spuriously fail here.
     manifest = compile_bp(
-        parse(bp_path),
+        blueprint,
         blueprint_path=bp_path,
+        depot=depot,
+        depots=depots,
         deployment_env="local",
         deployment_target="local",
     )

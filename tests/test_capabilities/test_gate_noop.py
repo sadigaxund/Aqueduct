@@ -32,11 +32,18 @@ def _set_placeholder_env(path: Path, monkeypatch) -> None:
 
 
 @pytest.mark.parametrize("bp_path", _SNIPPETS, ids=[p.parent.name for p in _SNIPPETS])
-def test_capability_gate_is_noop_for_snippet(bp_path, monkeypatch):
+def test_capability_gate_is_noop_for_snippet(bp_path, monkeypatch, snippet_preview_depots):
     _set_placeholder_env(bp_path, monkeypatch)
+    blueprint = parse(bp_path)
+    # Same depot wiring `aqueduct compile` does — see the fixture in
+    # tests/conftest.py; snippets using @aq.depot.* would otherwise hit the
+    # compiler's deliberate depot-less CompileError before the gate runs.
+    depot, depots = snippet_preview_depots(bp_path, blueprint.id)
     manifest = compile_bp(
-        parse(bp_path),
+        blueprint,
         blueprint_path=bp_path,
+        depot=depot,
+        depots=depots,
         deployment_env="local",
         deployment_target="local",
         engine="spark",
