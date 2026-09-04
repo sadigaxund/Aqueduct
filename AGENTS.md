@@ -351,11 +351,11 @@ their original modules.
 | `grammar.py` | `PatchSpec` Pydantic v2 model, 14 operation types, discriminated union |
 | `operations.py` | Per-op implementations against Blueprint dict, ruamel YAML round-trip |
 | `apply.py` | Apply orchestrator: load → deep-copy → apply ops → re-parse → archive |
-| `index.py` | `patch_index` relational table (Phase 53): the truth for the object-store patch lifecycle — status + signature metadata for backend-blind heal-cache lookups (pending/replay/coaching/history) without scanning `patches/` |
+| `index.py` | `patch_index` relational table (Phase 53): the truth for the object-store patch lifecycle — status + signature metadata for backend-blind `aqueduct patch list`/`pull`, the pending-patch guard, and history lookups without scanning `patches/` |
 | `preview.py` | Lineage gate (Gate 2) + sandbox gate (Gate 3): diff column impact, sandbox replay |
 | `ci.py` | Heal-as-PR / patch-import kit backing `patch pr`, `patch commit` and `patch import` — `on_patch_pending` webhook payload schema (`CI_WEBHOOK_REQUIRED_KEYS`) + payload validation, plus the branch-naming and commit-message helpers. Serverless: a user-owned CI workflow receives the webhook and calls `aqueduct patch import` |
 | `revert.py` | The undo path for an applied heal patch (`aqueduct patch revert`): plans, VERIFIES and applies the restoration of the engine-config keys one `healed_by` record's `engine_config_delta` captured, then stamps that record `reverted_at:` rather than deleting it. Refuses (`RevertError`, a direct `AqueductError` — never a `PatchError`, which means a different thing) every case where the result would not reproduce a state the Blueprint actually had: a patch carrying any non-`set_engine_config` op, a key a later non-reverted patch overwrote, a value edited since, an ambiguous/absent/already-reverted record, or a plan whose re-resolved effective config does not land exactly on the recorded prior values. Adds NO patch op — the grammar stays closed; a restore-to-value goes through the real `SetEngineConfigOp` dispatch and a restore-to-absent is a key deletion no op expresses, which is itself the reason a revert is a Blueprint rewrite rather than a patch |
-| `provenance.py` | Phase 79 — classifies each `patch.grammar` op as `dialect_neutral` or `engine_shaped` ONCE, in core, so every consumer (heal-cache replay, cross-engine recompile) can tell whether a patch generated while healing one engine's run may carry that engine's SQL dialect/cast syntax/format options and could be wrong if reused against a different engine |
+| `provenance.py` | Phase 79 — classifies each `patch.grammar` op as `dialect_neutral` or `engine_shaped` ONCE, in core, so every consumer (cross-engine recompile) can tell whether a patch generated while healing one engine's run may carry that engine's SQL dialect/cast syntax/format options and could be wrong if reused against a different engine |
 | `__init__.py` | Module description only |
 
 ### `aqueduct/stores/` — Pluggable store backends
@@ -473,8 +473,7 @@ The CLI command lives in `aqueduct/cli/drift.py`.
 | `providers.py` | `_call_agent`, `_call_anthropic`, `_call_openai_compat`, `_ProviderConfig` | HTTP dispatch to Anthropic / OpenAI-compatible endpoints |
 | `parse.py` | `_parse_patch_spec`, `_detect_structural_error`, `_format_reprompt_error`, `_format_reprompt_for_next_turn` | Response parsing, structural error detection, reprompt formatting |
 | `budget.py` | `BudgetConfig`, `BudgetTracker`, `AttemptRecord`, `DEFAULT_BUDGET` | Multi-axis budget tracking for the reprompt loop (`pause_clock()` excludes gate time) |
-| `signature.py` | `ErrorSignature`, `from_*` helpers, `from_failure_context` | Error signature engine (stable dedup hash for budget + heal cache + coaching) |
-| `memory.py` | `find_pending`, `find_replay_candidate`, `find_coaching_examples` | Signature memory — zero-token heal-cache lookups (pending reuse, exact replay, coaching retrieval). Phase 53: backed by the `patch_index` SQL table (`patch/index.py`), not a `patches/` dir scan; takes an `obs_store` (+ `patch_store` for replay bodies) |
+| `signature.py` | `ErrorSignature`, `from_*` helpers, `from_failure_context` | Error signature engine (stable dedup hash for the budget loop's stuck-signature / progress-stalled axes; also stamped onto `healing_outcomes`/`patch_index` rows for observability) |
 | `transcript.py` | `TranscriptWriter` (write, header, summary) | Turn-by-turn healing conversation display — terse one-liner per attempt or full verbose block with patch details, tokens/cost, tier labels. Engine-agnostic (no pyspark, no click); returns strings so ``cli/output.py`` handles colour/redaction. Shared by ``run``, ``heal``, and benchmark via the ``on_attempt`` hook. |
 | `progressive.py` | `require_sandbox_for_progressive`, `merge_patch_specs`, `run_progressive_chain` | Opt-in `agent.progressive` chained multi-patch healing — merges each accepted candidate into the manifest before re-diagnosing, so a second independent bug isn't re-diagnosed against the ORIGINAL unpatched manifest on every attempt the way the plain `max_patches > 1` loop does |
 | `toolbox.py` | `ToolBox` | Per-heal ToolBox for agentic-mode healing (Phase 75) — bridges the read-only diagnostics registry (`aqueduct/tools/registry.py`) and the agent's own declarations into one provider-neutral declaration/dispatch pair `loop.py`'s agentic-mode conversation drives, all calls routed through `tools.call_tool()`'s redaction chokepoint |
@@ -485,7 +484,7 @@ The CLI command lives in `aqueduct/cli/drift.py`.
 - New recovery pattern → add to `_parse_patch_spec()` in `parse.py`
 - New budget axis → add to `BudgetConfig` / `BudgetTracker` in `budget.py`
 - New patch lifecycle event → add to `loop.py`, re-export from `__init__.py`
-- New heal-cache lookup → add the SQL to `patch/index.py`, surface it via `memory.py` (an `obs_store` query — no LLM calls)
+- New `patch_index` lookup → add the SQL to `patch/index.py` (an `obs_store` query — no LLM calls)
 
 ### `aqueduct/cli/` — Command-line interface (package, split from the old `cli.py`)
 

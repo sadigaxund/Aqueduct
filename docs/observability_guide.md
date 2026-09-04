@@ -155,10 +155,14 @@ Columns added to `heal_attempts` after a release are migrated in place. Surveyor
 only (a parseable PatchSpec returned): it does NOT mean the heal fixed
 the pipeline. Join `healing_outcomes.run_success_after_patch` for that.
 
-Two values are added outside the loop vocabulary: `cached` and
-`replayed` mark synthetic zero-token rows (`attempt_num=0`,
-`tokens_in=tokens_out=0`) written when the heal cache resolved the failure
-without calling the LLM at all.
+**Removed (Phase 92).** `cached` and `replayed` used to mark synthetic
+zero-token rows (`attempt_num=0`, `tokens_in=tokens_out=0`) written when the
+signature-keyed heal cache resolved a failure without calling the LLM.
+That cache is gone — `aqueduct run` short-circuits on an existing pending
+patch before this table is ever written to for that iteration, so no
+`heal_attempts` row is recorded at all for a short-circuited run. A
+pre-2.3.0 database can still carry historical `cached`/`replayed` rows;
+treat them as archival.
 
 #### `healing_outcomes`
 
@@ -178,7 +182,7 @@ without calling the LLM at all.
 | `prompt_version`          | VARCHAR | From `aqueduct.agent.PROMPT_VERSION` |
 | `failure_signature`       | VARCHAR | exact signature hash of the pipeline failure this heal addressed (16-char sha1 of error class + module + normalized message) |
 | `failure_signature_coarse`| VARCHAR | coarse signature hash (error class + module, no message), enables per-signature-family analytics (which families are solved by which cascade tier) without joining `patch_index` |
-| `resolution`              | VARCHAR | `llm` (fresh agent patch), `cached` (pending-patch reuse, zero tokens), `replayed` (archived patch re-validated through gates, zero tokens). NULL on legacy rows, treat as `llm` (`COALESCE(resolution,'llm')`) |
+| `resolution`              | VARCHAR | `llm` (fresh agent patch) — the only value written since Phase 92 removed the signature-keyed heal cache. A pre-2.3.0 database may still carry historical `cached` (pending-patch reuse) / `replayed` (archived patch re-validated through gates) rows; NULL on legacy rows, treat as `llm` (`COALESCE(resolution,'llm')`) |
 | `model_cascade_position`  | INTEGER | 0-based cascade tier index of the producing model. NULL outside cascade or when no LLM ran. `model` records the producing tier's model (previously the top-level `agent.model` even under cascade) |
 | `engine`                  | VARCHAR | Execution engine this heal targeted (`spark` \| `duckdb`) |
 
@@ -281,14 +285,14 @@ The relational truth for the object-store patch lifecycle. One row
 per `patch_id`; `status` moves `pending` → `applied` | `rejected`. The patch
 *body* lives in the object store at `object_key`; this row carries enough
 metadata (`signature`, `signature_coarse`, `error_class`, `where_field`,
-`normalized_message`, `rationale`, `ops`) for the heal cache to resolve
-pending-reuse, coaching retrieval, and prompt history **without reading a body**
-, only zero-token replay fetches the body. Backend-blind: the same SQL serves
-local-disk, s3, gcs, and adls patch stores, replacing the former `os.scandir`
-over the `patches/` directory. `engine` (VARCHAR) records the execution engine
-this patch was healed against (`spark` \| `duckdb`); the signature already
-scopes lookups by engine (it is folded into the hash), so this column is for
-auditability, not for lookup filtering.
+`normalized_message`, `rationale`, `ops`) for `aqueduct patch list`/`pull`,
+the `aqueduct run` pending-patch guard (a `pending` row on the current
+`blueprint_id` short-circuits before any LLM call), and prompt history
+**without reading a body**. Backend-blind: the same SQL serves local-disk,
+s3, gcs, and adls patch stores, replacing the former `os.scandir` over the
+`patches/` directory. `engine` (VARCHAR) records the execution engine this
+patch was healed against (`spark` \| `duckdb`) — auditability only, not used
+by any lookup filter.
 
 #### `signal_overrides`
 

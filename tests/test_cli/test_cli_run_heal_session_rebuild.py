@@ -254,13 +254,9 @@ def _invoke(tmp_path, max_patches: int):
     cfg_file.write_text(_CFG, encoding="utf-8")
 
     runner = CliRunner()
-    with (
-        patch("aqueduct.agent.memory.find_pending", return_value=None),
-        patch("aqueduct.agent.memory.find_replay_candidate", return_value=None),
-    ):
-        result = runner.invoke(
-            cli, ["run", str(bp_file), "--config", str(cfg_file), "--store-dir", str(tmp_path)]
-        )
+    result = runner.invoke(
+        cli, ["run", str(bp_file), "--config", str(cfg_file), "--store-dir", str(tmp_path)]
+    )
     return result
 
 
@@ -514,13 +510,9 @@ edges:
     mock_generate_patch.return_value = _spark_config_patch("p1", 99)
 
     runner = CliRunner()
-    with (
-        patch("aqueduct.agent.memory.find_pending", return_value=None),
-        patch("aqueduct.agent.memory.find_replay_candidate", return_value=None),
-    ):
-        result = runner.invoke(
-            cli, ["run", str(bp_file), "--config", str(cfg_file), "--store-dir", str(tmp_path)]
-        )
+    result = runner.invoke(
+        cli, ["run", str(bp_file), "--config", str(cfg_file), "--store-dir", str(tmp_path)]
+    )
 
     _assert_no_unexpected_crash(result)
     assert mock_run_polyglot.called, "expected the polyglot orchestrator to be invoked"

@@ -116,7 +116,13 @@ logger = logging.getLogger(__name__)
 #        tool_result — as data, never instructions. The user-prompt error
 #        message and root-cause/stack-trace section are now wrapped in those
 #        markers. Changes the composed prompt for every engine.
-PROMPT_VERSION = "1.13"
+# 1.14 — Phase 92 cleanup: the signature-keyed pending-patch reuse, exact
+#        replay, and coaching-example retrieval are removed. The
+#        "## Past validated fixes for similar failures" coaching section
+#        never renders now — every heal falls back to the chronological
+#        "Previous patch attempts (do NOT repeat these)" section, changing
+#        the composed prompt whenever coaching examples used to match.
+PROMPT_VERSION = "1.14"
 
 
 @dataclass
@@ -258,8 +264,9 @@ def _record_patch_index(
 ) -> None:
     """Upsert the ``patch_index`` row for a staged/archived patch.
 
-    Best-effort and never raises — index gaps degrade the heal cache to a fresh
-    LLM call, never a crash. No-op when no observability store is available."""
+    Best-effort and never raises — an index gap just means `aqueduct patch
+    list`/`pull` and the pending-patch guard can't see this row, never a
+    crash. No-op when no observability store is available."""
     if obs_store is None:
         return
     try:
@@ -309,15 +316,14 @@ def stage_patch_for_human(
     Args:
         on_patch_pending_webhook: When set, fires the on_patch_pending webhook
             with patch metadata. Errors are logged and never block staging.
-        source: Provenance of the patch — ``"llm"`` for a fresh agent patch,
-            ``"replay"`` when the heal cache re-staged a previously validated
-            patch with zero LLM tokens.
+        source: Provenance of the patch — ``"llm"`` for a fresh agent patch
+            (the only value written today).
         webhook_event: Envelope event name fired alongside
             ``on_patch_pending_webhook`` — ``"on_patch_pending"`` by default.
         patch_store: Object store for the body. None → a local store rooted at
             *patches_dir* (historical on-disk layout).
         obs_store: Observability store for the ``patch_index`` upsert. None skips
-            indexing (the heal cache then can't reuse this pending patch).
+            indexing (the pending-patch guard then can't see this row).
         on_defer_webhook: Endpoint for a DEFER-carrying patch (``cfg.webhooks
             .on_defer``, Domain 6). When ``patch_spec`` contains a
             ``defer_to_human`` op AND this is set, it FIRES INSTEAD OF

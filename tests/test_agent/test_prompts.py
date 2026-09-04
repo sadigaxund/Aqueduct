@@ -63,7 +63,10 @@ def test_prompt_version_bumped_for_schema_hint_rule():
     # gains an "Untrusted data" instruction block plus untrusted-data
     # sentinel markers wrapped around the user prompt's error message and
     # root-cause/stack-trace section.
-    assert PROMPT_VERSION == "1.13"
+    # Phase 92 cleanup bumped 1.13 -> 1.14: the signature-keyed heal cache
+    # (and the coaching-examples section it fed) is gone — every heal now
+    # falls back to the chronological "do NOT repeat" section.
+    assert PROMPT_VERSION == "1.14"
 
 
 def test_schema_hint_rule_never_leaks_defer_op_token(tmp_path: Path):

@@ -68,9 +68,10 @@ CREATE TABLE IF NOT EXISTS healing_outcomes (
     run_success_after_patch BOOLEAN,
     applied_at   VARCHAR,
     prompt_version VARCHAR,
-    -- Phase 45 signature memory: exact failure-signature hash + how the heal
-    -- was resolved ('llm' fresh agent patch, 'cached' pending-patch reuse,
-    -- 'replayed' zero-token replay of an archived successful patch).
+    -- Phase 45: exact failure-signature hash + how the heal was resolved.
+    -- 'llm' is the only value written since Phase 92 removed the
+    -- signature-keyed pending-reuse/replay paths (a pre-2.3.0 database may
+    -- still carry historical 'cached'/'replayed' rows).
     failure_signature VARCHAR,
     resolution   VARCHAR,
     failure_signature_coarse VARCHAR,

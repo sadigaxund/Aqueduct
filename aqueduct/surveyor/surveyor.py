@@ -193,7 +193,7 @@ class Surveyor:
 
     @property
     def observability(self) -> ObservabilityStore | None:
-        """The active observability store (backs the patch_index + heal cache)."""
+        """The active observability store (backs the patch_index table)."""
         return self._observability
 
     def patch_store(self) -> PatchStore:
@@ -245,8 +245,9 @@ class Surveyor:
             for _migration in _RUN_RECORDS_MIGRATIONS:
                 cur.execute(_migration)
             # Phase 53 — patch index (relational truth for the object-store patch
-            # lifecycle). Created here so the heal cache can query it instead of
-            # scanning the patches/ directory.
+            # lifecycle). Created here so `aqueduct patch list`/`pull` and the
+            # pending-patch guard can query it instead of scanning the
+            # patches/ directory.
             from aqueduct.patch.index import ensure_schema as _ensure_patch_index
 
             _ensure_patch_index(cur)
@@ -624,9 +625,10 @@ class Surveyor:
         not in the multi-patch loop.
 
         Phase 45: ``failure_signature`` is the exact signature hash of the
-        pipeline failure this heal addressed; ``resolution`` says how it was
-        resolved — ``"llm"`` fresh agent patch, ``"cached"`` pending-patch
-        reuse, ``"replayed"`` zero-token replay of an archived patch.
+        pipeline failure this heal addressed; ``resolution`` is ``"llm"`` for
+        every heal since Phase 92 removed the signature-keyed pending-reuse
+        and replay paths (a pre-2.3.0 store may still carry historical
+        ``"cached"``/``"replayed"`` rows).
 
         Phase 78: ``engine`` is stamped from this Surveyor's own required
         constructor arg — the caller never needs to pass it separately, since
@@ -675,9 +677,9 @@ class Surveyor:
     def successful_patch_ids(self) -> set[str]:
         """patch_ids with at least one ``run_success_after_patch = true`` row.
 
-        Feeds the Phase 45 replay cache: only patches that demonstrably fixed
-        a run are eligible for zero-token replay. Best-effort — store errors
-        return an empty set (replay silently disabled, heal proceeds via LLM).
+        Historically fed the Phase 45 replay cache (removed in Phase 92);
+        kept as a general-purpose query over confirmed-successful patches.
+        Best-effort — store errors return an empty set.
         """
         if self._observability is None:
             return set()

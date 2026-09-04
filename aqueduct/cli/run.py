@@ -24,7 +24,6 @@ from aqueduct.cli.run_setup import (
     _do_compile,
     _load_engine_config,
     _setup_surveyor,
-    _zero_token_attempt,
 )
 from aqueduct.executor.models import concise_error
 from aqueduct.models import ModuleType
@@ -107,8 +106,7 @@ def _print_gate_ladder(g2, g3, g4, *, verbosity: int, gate1_ok: bool = True) -> 
 
     ``g2``/``g3``/``g4`` are ``lineage_res``/``sandbox_res``/
     ``resolvability_res`` from ``_run_patch_gates_inline``
-    (``None`` when that gate did not run — e.g. a heal-cache replay that
-    skipped straight to sandbox). Gate 1 (policy/guardrails) already ran
+    (``None`` when that gate did not run). Gate 1 (policy/guardrails) already ran
     in-loop via ``_check_guardrails`` before a candidate ever reaches here,
     so ``gate1_ok`` is a plain bool, not a ``GateStatus``. Default: one
     compact line, collapsing to "gates 1-4 passed" when nothing failed or
@@ -153,7 +151,7 @@ def _print_gate_ladder(g2, g3, g4, *, verbosity: int, gate1_ok: bool = True) -> 
 # never called from `run()`.
 
 
-# `_zero_token_attempt`, `_LoadConfigResult`, `_load_engine_config`,
+# `_LoadConfigResult`, `_load_engine_config`,
 # `_CompileResult`, `_do_compile`,
 # `_SessionHolder`, `_SurveyorSetupResult`, `_setup_surveyor` moved to
 # `aqueduct/cli/run_setup.py` (Phase 85 Wave 5 split) — module-level
@@ -711,19 +709,16 @@ def run(
         patch_rejected_by_gate = False  # set when a validation gate rejects a patch in auto (non-interactive) mode → VALIDATION_GATE(4)
         last_apply_error: str | None = None  # fed back to LLM on next multi-patch iteration
 
-        _replay_tried: set[str] = (
-            set()
-        )  # patch_ids already replayed this run — multi-patch loop guard
         # One-shot flag for the [agent_progressive_scope] warning — the static
         # scope conditions (approval mode, cascade) never change mid-run, so
         # repeating the warning every heal iteration would be noise.
         _progressive_scope_warned = False
         # One-shot flag for the polyglot sandbox-unavailable notice — the
         # same patch/candidate can pass through the gate pyramid several
-        # times in one run (heal-cache replay validation, deep_loop's
-        # in-context validate_cb, the final multi-patch commit check); the
-        # underlying reason (this Blueprint has >1 island) never changes
-        # mid-run, so only the first occurrence needs to say so.
+        # times in one run (deep_loop's in-context validate_cb, the final
+        # multi-patch commit check); the underlying reason (this Blueprint
+        # has >1 island) never changes mid-run, so only the first
+        # occurrence needs to say so.
         _polyglot_sandbox_unavailable_warned = False
 
         def _fire_heal_hook(event: str, *, iter_run_id: str, hook_status: str, ctx) -> None:
@@ -1341,6 +1336,34 @@ def run(
                     )
             return polyglot_result, None
 
+        # ── Pending-patch short-circuit — snapshot taken ONCE ────────────
+        # A blueprint that already had an unreviewed patch sitting in
+        # patches/pending/ BEFORE this run started never gets an LLM call —
+        # re-healing it would just burn tokens on a duplicate nobody has
+        # looked at yet. Snapshotted ONCE here, before the heal loop's first
+        # iteration, rather than re-queried every iteration: the loop's own
+        # multi-patch retry path (`agent.on_heal_failure: stage`, the
+        # default) stages a rejected patch and keeps trying up to
+        # `max_patches` in THIS SAME run — a live per-iteration query would
+        # make that patch block its own very next retry. A one-time
+        # snapshot means only a patch that existed before this run started
+        # can trigger the short-circuit. `list_by_status` is the same
+        # backend-blind lookup `aqueduct patch list` uses.
+        _pending_before_run: list[dict] = []
+        if _obs_store is not None and manifest.blueprint_id:
+            try:
+                with _obs_store.connect() as _pending_cur:
+                    from aqueduct.patch.index import list_by_status as _list_pending
+
+                    _pending_before_run = _list_pending(
+                        _pending_cur,
+                        status="pending",
+                        blueprint_id=manifest.blueprint_id,
+                        limit=1,
+                    )
+            except Exception:
+                pass  # lookup failure must never block the run — falls through to a normal heal
+
         while True:
             # `iteration_run_id` is the per-iteration uuid used as `run_id`
             # for execute() and persisted on `run_records`. The user-visible
@@ -1450,223 +1473,50 @@ def run(
                     )
                     break
 
-            # ── Phase 45 signature memory — zero-token paths before the LLM ───────
-            # The failure signature hash is computed every iteration (it also
-            # stamps healing_outcomes.failure_signature for LLM resolutions).
+            # ── Failure signature ──────────────────────────────────────────────
+            # Still computed every iteration — it stamps
+            # healing_outcomes.failure_signature[_coarse] / patch_index rows
+            # below, and feeds the budget loop's stuck-signature /
+            # progress-stalled axes (aqueduct/agent/budget.py). It no longer
+            # keys any lookup — the pending-patch guard below matches on
+            # blueprint_id instead.
             from aqueduct.agent.signature import from_failure_context as _from_failure_ctx
 
             _sig_exact, _sig_coarse = _from_failure_ctx(failure_ctx)
-            _patch_source = (
-                "llm"  # → stage_patch_for_human(source=...) + healing_outcomes.resolution
-            )
-            _replay_result = None  # synthetic AgentPatchResult substituting the LLM call
-            _replay_gates_done = False  # gates already ran on the replay candidate pre-substitution
+            # Only value now that signature-keyed pending-reuse and exact
+            # replay are gone — kept as named constants (not inlined) so the
+            # many downstream stage_patch_for_human(source=…) /
+            # healing_outcomes.resolution call sites below don't each need
+            # a literal edited by hand.
+            _patch_source = "llm"
+            _resolution = "llm"
 
-            _memory_cfg = getattr(cfg.agent, "memory", None)
-            if _memory_cfg is None or _memory_cfg.replay:
-                from aqueduct.agent import memory as _heal_memory
+            # ── Pending-patch short-circuit ──────────────────────────────────
+            # Uses the ONE-TIME snapshot taken before the loop's first
+            # iteration (`_pending_before_run`, see its comment above the
+            # loop) — not a fresh per-iteration query — so a patch THIS
+            # run's own multi-patch retry loop just staged never blocks its
+            # own next retry, while a patch that was already pending before
+            # this run started still stops it before any Agent call.
+            if _pending_before_run:
+                _pending_row = _pending_before_run[0]
+                from aqueduct.cli.render.style import success as _style_success
 
-                # 1) Pending-patch reuse — same failure already has a patch
-                #    awaiting review; re-healing it would burn tokens on a
-                #    duplicate. Surface the existing patch and stop.
-                _pending_hit = _heal_memory.find_pending(_obs_store, _sig_exact.hash)
-                if _pending_hit is not None:
-                    _rel_pending = f"{_patch_store.location_label}/{_pending_hit.object_key}"
-                    click.echo(
-                        f"  ✓ heal cache: pending patch {_pending_hit.patch_id} already covers "
-                        f"this failure signature ({_sig_exact.hash}) — skipping Agent (0 tokens)\n"
-                        f"    Review: aqueduct patch pull {_pending_hit.patch_id}  "
-                        f"(body: {_rel_pending})",
-                        err=True,
-                    )
-                    patch_staged_for_review = True
-                    try:
-                        surveyor.record_heal_attempt(
-                            run_id=run_id,
-                            attempt_record=_zero_token_attempt(_sig_exact),
-                            stop_reason="cached",
-                        )
-                        surveyor.record_healing_outcome(
-                            run_id=iteration_run_id,
-                            failed_module=failure_ctx.failed_module,
-                            parent_run_id=run_id,
-                            failure_category=failure_ctx.error_class,
-                            model=None,
-                            patch_id=_pending_hit.patch_id,
-                            confidence=None,
-                            patch_applied=False,
-                            run_success_after_patch=False,
-                            failure_signature=_sig_exact.hash,
-                            failure_signature_coarse=_sig_coarse.hash,
-                            resolution="cached",
-                        )
-                    except Exception:
-                        pass  # persistence must never block the cache hit
-                    break
-
-                # 2) Exact replay — an archived patch already fixed this
-                #    signature (confirmed via healing_outcomes). Re-validate it
-                #    through the normal pipeline with zero LLM tokens; any
-                #    failure falls through to the LLM in this same iteration.
-                _candidate = _heal_memory.find_replay_candidate(
-                    _obs_store,
-                    _patch_store,
-                    _sig_exact.hash,
-                    surveyor.successful_patch_ids(),
+                _style_success(
+                    f"patch {_pending_row.get('patch_id')} is already staged for review on "
+                    "this blueprint — skipping Agent\n"
+                    f"    Review: aqueduct patch pull {_pending_row.get('patch_id')}  "
+                    "(or: aqueduct patch list)",
+                    err=True,
                 )
-                if _candidate is not None and _candidate.patch_id not in _replay_tried:
-                    _replay_tried.add(_candidate.patch_id)
-                    try:
-                        from aqueduct.patch.grammar import PATCH_META_KEY
-                        from aqueduct.patch.grammar import PatchSpec as _PatchSpec
-                        from aqueduct.patch.grammar import (
-                            RetiredPatchOpError as _RetiredPatchOpError,
-                        )
-
-                        _payload = {
-                            k: v for k, v in _candidate.payload.items() if k != PATCH_META_KEY
-                        }
-                        try:
-                            _replay_patch = _PatchSpec.model_validate(_payload)
-                        except _RetiredPatchOpError as _retired_exc:
-                            # The archived body names an op the grammar no
-                            # longer accepts (e.g. a pre-rename
-                            # set_spark_config) — a typed, distinguishable
-                            # failure, not a generic parse error. The cache
-                            # entry is unusable; fall through to the Agent
-                            # exactly like any other unreplayable candidate,
-                            # never silently as if the cache had simply
-                            # missed.
-                            _replay_patch = None
-                            click.echo(
-                                f"  ⚠ heal cache: archived patch {_candidate.patch_id} uses a "
-                                f"retired op and cannot be replayed ({_retired_exc}) — falling "
-                                f"through to Agent",
-                                err=True,
-                            )
-                    except Exception as _re_exc:
-                        _replay_patch = None
-                        click.echo(
-                            f"  ⚠ heal cache: archived patch {_candidate.patch_id} no longer "
-                            f"parses ({_re_exc}) — falling through to Agent",
-                            err=True,
-                        )
-                    if _replay_patch is not None and _heal_memory.contains_set_engine_config(
-                        _replay_patch.operations
-                    ):
-                        # Engine/session config is environment-specific (right
-                        # for the cluster it was healed on, not necessarily
-                        # for this one) — never zero-token replayed, even
-                        # though the stored patch itself parses fine and
-                        # stays in the index as audit history. Announced the
-                        # same way an unparseable/retired-op candidate is,
-                        # so the discard reads as "found but refused", never
-                        # as an ordinary cache miss.
-                        #
-                        # This is now a defense-in-depth backstop, not the
-                        # primary gate: `patch.index.find_replay` already
-                        # skips config-op rows using the index's own `ops`
-                        # metadata, falling back to an older matching
-                        # candidate instead of returning one (see its
-                        # docstring). This check only fires if the freshly
-                        # parsed BODY disagrees with the index metadata that
-                        # got it here — e.g. a `patch_index.ops` row that
-                        # drifted from the object store body it points at —
-                        # so it is deliberately kept rather than deleted.
-                        click.echo(
-                            f"  ⚠ heal cache: archived patch {_candidate.patch_id} sets engine "
-                            f"config (set_engine_config) — engine/session config is "
-                            f"environment-specific and is never replayed from cache; falling "
-                            f"through to Agent",
-                            err=True,
-                        )
-                        _replay_patch = None
-                    if _replay_patch is not None:
-                        _replay_ok = True
-                        if effective_mode == "auto":
-                            # Run the gate pyramid on the candidate NOW so a stale
-                            # patch costs one sandbox pass, not a production write.
-                            _rg2, _rg3, _rg4, _rg3_passed = _aqcli._run_patch_gates_inline(
-                                patch=_replay_patch,
-                                blueprint_path=Path(blueprint),
-                                bundle=bundle,
-                                surveyor=surveyor,
-                                failed_module=failure_ctx.failed_module,
-                                iteration_run_id=iteration_run_id,
-                                blueprint_id=manifest.blueprint_id,
-                                # The failing island's engine — matters only
-                                # if a patch happens to reduce a polyglot
-                                # Manifest to a single island (the gate then
-                                # stops skipping and actually builds a
-                                # session); a no-op otherwise.
-                                engine=(failure_ctx.engine or engine),
-                                cfg=cfg,
-                                sandbox_mode=(
-                                    manifest.agent.sandbox_mode if manifest.agent else "sample"
-                                ),
-                                sandbox_master_url=resolved_sandbox_master_url,
-                                warnings_suppress=cfg.warnings.suppress,
-                                timezone=cfg.timezone,
-                                depot_reads_at_failure=_cr.depot_reads,
-                            )
-                            _announce_polyglot_sandbox_unavailable(_rg3)
-                            if _rg3 is not None and not _rg3_passed:
-                                from aqueduct.patch.gate_status import (
-                                    resolvability_gate_permits_auto_apply as _rg_permits,
-                                )
-
-                                _replay_ok = False
-                                _rg_fail_gate, _rg_fail_res = (
-                                    ("resolvability", _rg4)
-                                    if not _rg_permits(_rg4)
-                                    else ("sandbox", _rg3)
-                                )
-                                click.echo(
-                                    f"  ⚠ heal cache: replay candidate {_candidate.patch_id} failed "
-                                    f"{_rg_fail_gate} gate ({_rg_fail_res.detail}) — falling "
-                                    f"through to Agent",
-                                    err=True,
-                                )
-                            else:
-                                _replay_gates_done = True
-                                _print_gate_ladder(_rg2, _rg3, _rg4, verbosity=verbosity)
-                        if _replay_ok:
-                            from aqueduct.agent import AgentPatchResult as _AgentPatchResult
-
-                            _replay_result = _AgentPatchResult(
-                                patch=_replay_patch,
-                                attempts=0,
-                                stop_reason="replayed",
-                            )
-                            _patch_source = "replay"
-                            click.echo(
-                                f"  ✓ heal cache: replaying archived patch {_candidate.patch_id} "
-                                f"(signature {_sig_exact.hash}, 0 tokens)",
-                                err=True,
-                            )
-                            try:
-                                _replay_defer_op = next(
-                                    (
-                                        op
-                                        for op in _replay_patch.operations
-                                        if op.op == "defer_to_human"
-                                    ),
-                                    None,
-                                )
-                                surveyor.record_heal_attempt(
-                                    run_id=run_id,
-                                    attempt_record=_zero_token_attempt(_sig_exact),
-                                    stop_reason="replayed",
-                                    defer_reason=(
-                                        getattr(_replay_defer_op, "defer_reason", None)
-                                        if _replay_defer_op is not None
-                                        else None
-                                    ),
-                                )
-                            except Exception:
-                                pass  # recording the zero-token replay is best-effort; never block for audit logging
-
-            _resolution = "replayed" if _patch_source == "replay" else "llm"
+                # No heal_attempts row: no LLM attempt happened, and none of
+                # the vocabulary's stop_reason values ("solved", "budget",
+                # "api_error", ...) describe a short-circuit before any
+                # attempt runs. The failure itself is already recorded — the
+                # unconditional `surveyor.record(...)` call earlier this
+                # iteration wrote it before this guard ever ran.
+                patch_staged_for_review = True
+                break
 
             # ── Generate patch ────────────────────────────────────────────────────
             from aqueduct.agent import AgentRunConfig, generate_agent_patch, stage_patch_for_human
@@ -1688,53 +1538,47 @@ def run(
                 streamed=_use_stream,
             )
 
-            # A zero-token replay (heal-cache hit) re-applies an archived patch
-            # with NO agent call — its announcement already printed above, so skip
-            # the agent-self-healing header / ceremony / streaming scaffolding and
-            # go straight to applying it. Only a real LLM heal gets the tree.
-            _is_replay = _resolution == "replayed"
-            if not _is_replay:
-                # Phase 85 Wave 2 — one ◆ header line replaces the old
-                # "⚠ … failed → agent self-healing" line PLUS the separate
-                # "│  ◆ …" ceremony line (SCREENS 2-5). ORANGE/yellow per
-                # the owner ruling; `tier N/M · model` for a cascade names
-                # the STARTING tier (known at heal start regardless of
-                # outcome — `_open_tier_if_new` in transcript.py only
-                # prints a `├─` node on a LATER escalation, since this line
-                # already announced tier 1).
-                if resolved_agent_cascade:
-                    _n_tiers = len(resolved_agent_cascade)
-                    _tier0_model = resolved_agent_cascade[0].model
-                    _agent_info = f"cascade · tier 1/{_n_tiers} · {_tier0_model}"
-                else:
-                    _agent_info = (
-                        f"{resolved_agent_model} · {resolved_agent_provider} "
-                        f"· ≤{resolved_agent_max_reprompts} reprompts"
-                    )
-                _header_text = f"◆ self-healing {failure_ctx.failed_module} · {_agent_info}"
-                if max_patches > 1:
-                    _header_text += f" (patch {_attempt_display})"
-                click.echo(click.style(_header_text, fg="yellow"), err=True)
-                _transcript.header(
-                    patch_count + 1 if max_patches > 1 else 1,
-                    resolved_agent_max_reprompts,
-                    resolve=_resolution,
+            # Phase 85 Wave 2 — one ◆ header line replaces the old
+            # "⚠ … failed → agent self-healing" line PLUS the separate
+            # "│  ◆ …" ceremony line (SCREENS 2-5). ORANGE/yellow per
+            # the owner ruling; `tier N/M · model` for a cascade names
+            # the STARTING tier (known at heal start regardless of
+            # outcome — `_open_tier_if_new` in transcript.py only
+            # prints a `├─` node on a LATER escalation, since this line
+            # already announced tier 1).
+            if resolved_agent_cascade:
+                _n_tiers = len(resolved_agent_cascade)
+                _tier0_model = resolved_agent_cascade[0].model
+                _agent_info = f"cascade · tier 1/{_n_tiers} · {_tier0_model}"
+            else:
+                _agent_info = (
+                    f"{resolved_agent_model} · {resolved_agent_provider} "
+                    f"· ≤{resolved_agent_max_reprompts} reprompts"
                 )
-                # Immediate cue — the stream meter only appears once the FIRST
-                # token arrives, and a reasoning model can digest a big prompt for
-                # a while first, so without this the open branch looks hung.
-                # Routed through the funnel's `echo()` (wrap_line-backed), not
-                # `emit()` — `emit()` is the structured-result entry point and
-                # does not wrap; a bare f-string handed to it is exactly the
-                # heal-block-overflows-80-columns defect this fixes.
-                from aqueduct.cli.render.funnel import echo as _funnel_echo
+            _header_text = f"◆ self-healing {failure_ctx.failed_module} · {_agent_info}"
+            if max_patches > 1:
+                _header_text += f" (patch {_attempt_display})"
+            click.echo(click.style(_header_text, fg="yellow"), err=True)
+            _transcript.header(
+                patch_count + 1 if max_patches > 1 else 1,
+                resolved_agent_max_reprompts,
+                resolve=_resolution,
+            )
+            # Immediate cue — the stream meter only appears once the FIRST
+            # token arrives, and a reasoning model can digest a big prompt for
+            # a while first, so without this the open branch looks hung.
+            # Routed through the funnel's `echo()` (wrap_line-backed), not
+            # `emit()` — `emit()` is the structured-result entry point and
+            # does not wrap; a bare f-string handed to it is exactly the
+            # heal-block-overflows-80-columns defect this fixes.
+            from aqueduct.cli.render.funnel import echo as _funnel_echo
 
-                _cue_text = (
-                    "waiting for first token… (reasoning models digest the prompt before replying)"
-                    if _use_stream
-                    else "contacting agent… (first response can be slow — big prompt / local cold-start)"
-                )
-                _funnel_echo(_cue_text, gutter="│   · ", err=True, verbose=verbosity >= 1)
+            _cue_text = (
+                "waiting for first token… (reasoning models digest the prompt before replying)"
+                if _use_stream
+                else "contacting agent… (first response can be slow — big prompt / local cold-start)"
+            )
+            _funnel_echo(_cue_text, gutter="│   · ", err=True, verbose=verbosity >= 1)
 
             # Run blueprint doctor checks against the compiled Manifest (all modules resolved,
             # arcades expanded — no need to re-parse or recurse into sub-blueprints).
@@ -1810,7 +1654,7 @@ def run(
                         None,
                         model=_tier_model,
                         cascade_position=rec.model_cascade_position,
-                        cache_status=_patch_source if _patch_source != "llm" else None,
+                        cache_status=None,  # pending-reuse/replay are gone; every heal is "llm"
                     )
                 except Exception:
                     pass  # transcript is best-effort
@@ -1964,21 +1808,9 @@ def run(
             # `agent.progressive: true` but a scope condition disables it, say
             # so — a flag that silently does nothing lies to the user. The two
             # static conditions (approval mode, cascade) warn ONCE per run with
-            # a rule_id; a replay-cache hit is an info note (nothing was lost —
-            # the cached patch served this failure for zero tokens, the chain
-            # simply had no work to do).
-            if resolved_agent_progressive and not (
-                effective_mode == "auto" and not _cascade_tiers and _replay_result is None
-            ):
-                if _replay_result is not None:
-                    from aqueduct.cli.render.style import info as _prog_info
-
-                    _prog_info(
-                        "progressive chain not started — replay-cache hit served "
-                        "this failure (0 tokens); nothing to chain",
-                        err=True,
-                    )
-                elif not _progressive_scope_warned:
+            # a rule_id.
+            if resolved_agent_progressive and not (effective_mode == "auto" and not _cascade_tiers):
+                if not _progressive_scope_warned:
                     _progressive_scope_warned = True
                     from aqueduct.cli.render.funnel import warn as _output_warn
 
@@ -2001,12 +1833,7 @@ def run(
                         "to the standard heal loop.",
                         err=True,
                     )
-            if (
-                resolved_agent_progressive
-                and effective_mode == "auto"
-                and not _cascade_tiers
-                and _replay_result is None
-            ):
+            if resolved_agent_progressive and effective_mode == "auto" and not _cascade_tiers:
                 from aqueduct.agent import AgentRunConfig as _ProgAgentRunConfig
                 from aqueduct.agent import generate_agent_patch as _prog_generate_patch
                 from aqueduct.agent.progressive import run_progressive_chain
@@ -2062,9 +1889,7 @@ def run(
                             on_attempt=_prog_on_attempt,
                             on_token=_on_token if _use_stream else None,
                             apply_callback=_apply_cb,
-                            memory_coaching=(
-                                _memory_cfg.coaching if _memory_cfg is not None else True
-                            ),
+                            memory_coaching=True,
                             retry_max_retries=cfg.agent.retry.max_retries,
                             retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
                             obs_store=_obs_store,
@@ -2222,13 +2047,8 @@ def run(
                         break
                     continue  # try next outer multi-patch attempt (fresh chain from the original Blueprint)
 
-            # Phase 45: a validated replay candidate substitutes the LLM call
-            # entirely — downstream staging/validation/archival treats it like
-            # any agent patch (with source="replay" + resolution="replayed").
-            if _replay_result is not None:
-                agent_result = _replay_result
             # Phase 44: multi-model cascade takes priority over single-model loop.
-            elif _cascade_tiers:
+            if _cascade_tiers:
                 from aqueduct.agent.cascade import generate_cascade_patch
 
                 agent_result = generate_cascade_patch(
@@ -2259,7 +2079,7 @@ def run(
                     validate_callback=_validate_cb,
                     on_attempt=_on_attempt,
                     on_token=_on_token if _use_stream else None,
-                    memory_coaching=_memory_cfg.coaching if _memory_cfg is not None else True,
+                    memory_coaching=True,
                     retry_max_retries=cfg.agent.retry.max_retries,
                     retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
                     obs_store=_obs_store,
@@ -2294,7 +2114,7 @@ def run(
                         on_attempt=_on_attempt,
                         on_token=_on_token if _use_stream else None,
                         apply_callback=_apply_cb,
-                        memory_coaching=_memory_cfg.coaching if _memory_cfg is not None else True,
+                        memory_coaching=True,
                         retry_max_retries=cfg.agent.retry.max_retries,
                         retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
                         obs_store=_obs_store,
@@ -2307,10 +2127,8 @@ def run(
             patch = agent_result.patch
             # Phase 46 — record the model that actually produced this result
             # (under cascade the producing tier's model, not the top-level
-            # agent.model) and its tier index. None on replay (no LLM ran).
-            _outcome_model = agent_result.model or (
-                None if _patch_source == "replay" else resolved_agent_model
-            )
+            # agent.model) and its tier index.
+            _outcome_model = agent_result.model or resolved_agent_model
             _cascade_pos = agent_result.model_cascade_position
             # Update the last persisted row with stop_reason so downstream
             # joins can answer "which axis terminated this heal".
@@ -2340,16 +2158,13 @@ def run(
                 except Exception:
                     pass  # updating stop_reason is best-effort; never let persistence block the loop
             _summary_model = agent_result.model or agent_result.__dict__.get("model")
-            if not _is_replay:
-                # Replay prints no tree, so it gets no └─ close node — its cache
-                # announcement + the apply result line below tell the whole story.
-                _transcript.summary(
-                    agent_result.stop_reason,
-                    agent_result.attempts,
-                    agent_result.tokens_in_total,
-                    agent_result.tokens_out_total,
-                    model=_summary_model or resolved_agent_model,
-                )
+            _transcript.summary(
+                agent_result.stop_reason,
+                agent_result.attempts,
+                agent_result.tokens_in_total,
+                agent_result.tokens_out_total,
+                model=_summary_model or resolved_agent_model,
+            )
 
             if patch is None:
                 # The transcript's └ close node already states the outcome
@@ -2649,32 +2464,26 @@ def run(
 
                 # Multi-patch gate validation: sandbox + resolvability replay
                 # check before writing to the blueprint.
-                # Phase 45: gates already ran on a replay candidate at the
-                # heal-cache check — skip the redundant rerun.
-                if _replay_gates_done:
-                    _g3_passed = True
-                    _g2, _g3, _g4 = None, None, None
-                else:
-                    _g2, _g3, _g4, _g3_passed = _aqcli._run_patch_gates_inline(
-                        patch=patch,
-                        blueprint_path=Path(blueprint),
-                        bundle=bundle,
-                        surveyor=surveyor,
-                        failed_module=failure_ctx.failed_module,
-                        iteration_run_id=iteration_run_id,
-                        blueprint_id=manifest.blueprint_id,
-                        engine=(failure_ctx.engine or engine),
-                        cfg=cfg,
-                        sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
-                        sandbox_master_url=resolved_sandbox_master_url,
-                        warnings_suppress=cfg.warnings.suppress,
-                        timezone=cfg.timezone,
-                        depot_reads_at_failure=_cr.depot_reads,
-                    )
-                    _announce_polyglot_sandbox_unavailable(_g3)
-                    # F-16 — print the gate ladder as it completes (SCREEN 3/7),
-                    # instead of staying silent when everything passes.
-                    _print_gate_ladder(_g2, _g3, _g4, verbosity=verbosity)
+                _g2, _g3, _g4, _g3_passed = _aqcli._run_patch_gates_inline(
+                    patch=patch,
+                    blueprint_path=Path(blueprint),
+                    bundle=bundle,
+                    surveyor=surveyor,
+                    failed_module=failure_ctx.failed_module,
+                    iteration_run_id=iteration_run_id,
+                    blueprint_id=manifest.blueprint_id,
+                    engine=(failure_ctx.engine or engine),
+                    cfg=cfg,
+                    sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
+                    sandbox_master_url=resolved_sandbox_master_url,
+                    warnings_suppress=cfg.warnings.suppress,
+                    timezone=cfg.timezone,
+                    depot_reads_at_failure=_cr.depot_reads,
+                )
+                _announce_polyglot_sandbox_unavailable(_g3)
+                # F-16 — print the gate ladder as it completes (SCREEN 3/7),
+                # instead of staying silent when everything passes.
+                _print_gate_ladder(_g2, _g3, _g4, verbosity=verbosity)
                 if _g3 is not None and not _g3_passed:
                     click.echo(
                         f"  ✗ multi-patch: sandbox rejected patch — {_g3.detail}",

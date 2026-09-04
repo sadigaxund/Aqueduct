@@ -389,7 +389,7 @@ stores:
   blob:          { backend: s3, path: "s3://my-bucket/aqueduct" }   # needs [object-store]
 ```
 
-The `blob` object store carries the two opaque artefact families that are not relational rows, observability blobs (fat `manifest_json` / `stack_trace` / `provenance_json`) and the patch lifecycle (`pending`/`applied`/`rejected`). With `backend: s3` (or `gcs` / `adls`) they land in object storage; the patch *bodies* sit there while their status lives in the `patch_index` table, so the heal cache works without a local `patches/` directory. **Incremental Channels** persist their watermark to the Depot only (the local sidecar was removed), a Depot is now required for incremental state.
+The `blob` object store carries the two opaque artefact families that are not relational rows, observability blobs (fat `manifest_json` / `stack_trace` / `provenance_json`) and the patch lifecycle (`pending`/`applied`/`rejected`). With `backend: s3` (or `gcs` / `adls`) they land in object storage; the patch *bodies* sit there while their status lives in the `patch_index` table, so `aqueduct patch list`/`pull` and the pending-patch guard work without a local `patches/` directory. **Incremental Channels** persist their watermark to the Depot only (the local sidecar was removed), a Depot is now required for incremental state.
 
 > **Storage-integrity guardrail.** If `stores.observability.backend` is remote (postgres) but `stores.blob.backend` is left unset, Aqueduct warns at startup that externalised blobs (manifests, stack traces, provenance) will land on the driver's local disk. Set `stores.blob.backend: local` explicitly to silence the warning, you've made an informed choice about where blobs live. Unrelated configurations never trigger it.
 

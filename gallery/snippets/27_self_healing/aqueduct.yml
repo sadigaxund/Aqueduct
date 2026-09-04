@@ -22,6 +22,3 @@ agent:
   model: gpt-4o-mini
   budget:
     max_reprompts: 3
-  memory:
-    replay: true
-    coaching: true

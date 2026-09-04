@@ -168,13 +168,9 @@ danger:
     )
 
     runner = CliRunner()
-    with (
-        patch("aqueduct.agent.memory.find_pending", return_value=None),
-        patch("aqueduct.agent.memory.find_replay_candidate", return_value=None),
-    ):
-        result = runner.invoke(
-            cli, ["run", str(bp_file), "--config", str(cfg_file), "--store-dir", str(tmp_path)]
-        )
+    result = runner.invoke(
+        cli, ["run", str(bp_file), "--config", str(cfg_file), "--store-dir", str(tmp_path)]
+    )
 
     print("OUTPUT:", result.output)
     print("EXCEPTION:", result.exception)
@@ -251,11 +247,7 @@ def test_cli_heal_wires_apply_callback(mock_open, mock_generate_patch, tmp_path)
     )
 
     runner = CliRunner()
-    with (
-        patch("aqueduct.agent.memory.find_pending", return_value=None),
-        patch("aqueduct.agent.memory.find_replay_candidate", return_value=None),
-    ):
-        result = runner.invoke(cli, ["heal", "run-123", "--store-dir", str(tmp_path)])
+    result = runner.invoke(cli, ["heal", "run-123", "--store-dir", str(tmp_path)])
 
     assert mock_generate_patch.called
     agent_cfg = mock_generate_patch.call_args[1]["agent_cfg"]

@@ -165,14 +165,10 @@ def test_progressive_with_approval_human_warns(
     mock_generate_patch.return_value = _no_patch_result()
 
     runner = CliRunner()
-    with (
-        patch("aqueduct.agent.memory.find_pending", return_value=None),
-        patch("aqueduct.agent.memory.find_replay_candidate", return_value=None),
-    ):
-        result = runner.invoke(
-            cli,
-            ["run", str(bp), "--config", str(cfg), "--store-dir", str(tmp_path)],
-        )
+    result = runner.invoke(
+        cli,
+        ["run", str(bp), "--config", str(cfg), "--store-dir", str(tmp_path)],
+    )
 
     assert "[agent_progressive_scope]" in result.output
     assert "requires agent.approval: auto" in result.output
@@ -206,14 +202,10 @@ def test_progressive_with_cascade_warns(
     mock_generate_cascade.return_value = _no_patch_result()
 
     runner = CliRunner()
-    with (
-        patch("aqueduct.agent.memory.find_pending", return_value=None),
-        patch("aqueduct.agent.memory.find_replay_candidate", return_value=None),
-    ):
-        result = runner.invoke(
-            cli,
-            ["run", str(bp), "--config", str(cfg), "--store-dir", str(tmp_path)],
-        )
+    result = runner.invoke(
+        cli,
+        ["run", str(bp), "--config", str(cfg), "--store-dir", str(tmp_path)],
+    )
 
     assert "[agent_progressive_scope]" in result.output
     assert "cascade" in result.output
@@ -239,14 +231,10 @@ def test_progressive_supported_combo_does_not_warn(
     mock_generate_patch.return_value = _no_patch_result()
 
     runner = CliRunner()
-    with (
-        patch("aqueduct.agent.memory.find_pending", return_value=None),
-        patch("aqueduct.agent.memory.find_replay_candidate", return_value=None),
-    ):
-        result = runner.invoke(
-            cli,
-            ["run", str(bp), "--config", str(cfg), "--store-dir", str(tmp_path)],
-        )
+    result = runner.invoke(
+        cli,
+        ["run", str(bp), "--config", str(cfg), "--store-dir", str(tmp_path)],
+    )
 
     assert "[agent_progressive_scope]" not in result.output
     assert "progressive self-healing" in result.output

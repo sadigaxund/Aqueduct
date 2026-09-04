@@ -22,8 +22,12 @@ rejections (guardrail violation, lineage gate, explain regression, sandbox).
 ``from_text(text, error_class="reprompt", where=None)`` — last-resort plain
 text input (e.g. friendly reprompt strings).
 ``from_failure_context(ctx)`` — pipeline ``FailureContext`` → (exact, coarse)
-signature pair for the Phase 45 heal cache (exact keys replay/pending-reuse
-within a blueprint; coarse drops the module id for cross-blueprint coaching).
+signature pair. Stamped onto ``healing_outcomes.failure_signature`` /
+``failure_signature_coarse`` and ``patch_index.signature`` /
+``signature_coarse`` for observability and (via ``heal_attempts``) the
+budget axes above; not used to key any lookup (the ``aqueduct run``
+pending-patch short-circuit matches on ``blueprint_id`` instead — see
+``aqueduct/patch/index.py::list_by_status``).
 """
 
 from __future__ import annotations
@@ -179,12 +183,14 @@ def from_apply_error(
 def from_failure_context(ctx: Any) -> tuple[ErrorSignature, ErrorSignature]:
     """Pipeline ``FailureContext`` → ``(exact, coarse)`` signature pair.
 
-    *exact* — ``(error_class, failed_module, normalized_message)``; keys the
-    blueprint-local heal cache (pending-patch reuse + exact replay, where
-    patch ops reference module ids so the module must match).
+    *exact* — ``(error_class, failed_module, normalized_message)``; the
+    per-failure identity stamped onto ``healing_outcomes``/``patch_index``
+    rows and used by the budget axes (``same_signature_overall`` /
+    ``progress_stalled`` in ``aqueduct/agent/budget.py``).
 
-    *coarse* — same with ``where`` pinned to ``<any>``; keys cross-blueprint
-    coaching where module ids differ but the failure shape is the same.
+    *coarse* — same with ``where`` pinned to ``<any>``; recorded alongside
+    *exact* for the same rows, module id dropped so the failure shape is
+    comparable across modules/blueprints.
 
     Error-class priority: Spark condition (``error_class``) → user-defined
     Assert label (``error_type``) → innermost throwable type

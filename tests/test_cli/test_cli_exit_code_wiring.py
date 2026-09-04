@@ -136,7 +136,7 @@ def test_run_human_mode_stages_patch_exits_3(mock_gen, mock_get_exec, mock_surve
     mock_surveyor = MagicMock()
     mock_surveyor.record.return_value = _make_failure_context(exec_res.run_id)
     mock_surveyor_cls.return_value = mock_surveyor
-    # Prevent MagicMock from poisoning find_pending/find_replay_candidate
+    # Prevent MagicMock from poisoning the pending-patch guard (obs_store=None short-circuits it)
     mock_surveyor.observability = None
     mock_surveyor.patch_store.return_value = None
 

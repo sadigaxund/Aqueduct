@@ -658,55 +658,6 @@ def _build_user_prompt(
     )
 
 
-_COACHING_TIER_LABELS = {
-    1: "same failure",
-    2: "same failure shape, different module",
-    3: "same error class",
-    4: "recent fix",
-}
-
-
-def _build_coaching_section(failure_ctx: Any, obs_store: Any) -> str:
-    """Phase 45 — signature-matched (failure → validated fix) few-shot section.
-
-    Nearest-signature retrieval over applied patches, served from the
-    ``patch_index`` table (Phase 53). Empty string when nothing matches
-    (caller falls back to the legacy section).
-    """
-    from aqueduct.agent.memory import find_coaching_examples
-    from aqueduct.agent.signature import from_failure_context
-
-    try:
-        sig_exact, sig_coarse = from_failure_context(failure_ctx)
-        examples = find_coaching_examples(
-            obs_store,
-            sig_exact.hash,
-            sig_coarse.hash,
-            sig_exact.error_class,
-            blueprint_id=getattr(failure_ctx, "blueprint_id", ""),
-        )
-    except Exception:
-        logger.debug("Coaching retrieval failed — section omitted", exc_info=True)
-        return ""
-    if not examples:
-        return ""
-    lines = [
-        "\n## Past validated fixes for similar failures",
-        "These patches fixed failures like this one before and passed validation.",
-        "Reuse the successful approach where it applies — but module ids and paths",
-        "must match the CURRENT blueprint; never copy them blindly.",
-    ]
-    for ex in examples:
-        failure_half = f"{ex.error_class} @ {ex.where}"
-        if ex.normalized_message:
-            failure_half += f": {ex.normalized_message}"
-        lines.append(
-            f"- [{_COACHING_TIER_LABELS.get(ex.tier, 'recent fix')}] {failure_half}\n"
-            f"  → fix {ex.patch_id} (ops: {', '.join(ex.ops) or '?'}): {ex.rationale or '(no rationale recorded)'}"
-        )
-    return "\n".join(lines)
-
-
 def _render_engine_config_policy(engine: str) -> str:
     """Render ``engine``'s COMPLETE ``set_engine_config`` policy for the prompt.
 
@@ -946,28 +897,25 @@ def _build_system_prompt(
             "Do NOT mix `defer_to_human` with other operations. If you defer, defer completely."
         )
 
-    # Phase 45: signature-matched coaching replaces the chronological last-3
-    # history when a FailureContext is available. Falls back to the legacy
-    # "do NOT repeat" section when coaching is off, no failure_ctx was
-    # threaded (debug/`aqueduct heal --show-prompt` paths), or nothing matches.
+    # Chronological "do NOT repeat" section over the last few applied
+    # patches. `coaching`/`failure_ctx` are accepted for call-site
+    # compatibility but no longer select an alternate section — the
+    # signature-matched coaching few-shot section (Phase 45) was removed in
+    # Phase 92 along with the rest of the signature-keyed pending-reuse and
+    # replay machinery it was served from.
     prev_section = ""
-    if coaching and failure_ctx is not None:
-        prev_section = _build_coaching_section(failure_ctx, obs_store)
-        if prev_section and last_apply_error:
-            prev_section += f"\n\n**Last patch apply error (the previous fix failed for this reason — do not repeat it):**\n{last_apply_error}"
-    if not prev_section:
-        prev = _load_previous_patches(obs_store)
-        if prev:
-            lines = ["\n## Previous patch attempts (do NOT repeat these)"]
-            for p in prev:
-                lines.append(f"- {p['patch_id']}: {p['description']} (ops: {', '.join(p['ops'])})")
-            if last_apply_error:
-                lines.append(
-                    f"\n**Last patch apply error (the previous fix failed for this reason — do not repeat it):**\n{last_apply_error}"
-                )
-            prev_section = "\n".join(lines)
-        elif last_apply_error:
-            prev_section = f"\n## Last patch apply error\n{last_apply_error}"
+    prev = _load_previous_patches(obs_store)
+    if prev:
+        lines = ["\n## Previous patch attempts (do NOT repeat these)"]
+        for p in prev:
+            lines.append(f"- {p['patch_id']}: {p['description']} (ops: {', '.join(p['ops'])})")
+        if last_apply_error:
+            lines.append(
+                f"\n**Last patch apply error (the previous fix failed for this reason — do not repeat it):**\n{last_apply_error}"
+            )
+        prev_section = "\n".join(lines)
+    elif last_apply_error:
+        prev_section = f"\n## Last patch apply error\n{last_apply_error}"
 
     # Merge engine-level and blueprint-level prompt_context
     ctx_parts = [c for c in [engine_prompt_context, blueprint_prompt_context] if c and c.strip()]

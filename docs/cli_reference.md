@@ -204,7 +204,7 @@ aqueduct run bp.yml \
 |---------|-------------|
 | `aqueduct runs` | List recent runs |
 | `aqueduct runs --failed` | Show only failed runs |
-| `aqueduct runs --heal-coverage` | Zero-token heal coverage (heals resolved by the signature memory cache vs the LLM) |
+| `aqueduct runs --heal-coverage` | `healing_outcomes.resolution` breakdown — `llm` is the only value written since Phase 92 removed the signature-keyed heal cache; a pre-2.3.0 store may still carry historical `cached`/`replayed` rows |
 | `aqueduct runs --cascade` | Model-cascade-tier vs outcome (`healing_outcomes.model_cascade_position`, 0-based: 0 = first model tried): which tier produced which resolution/success |
 | `aqueduct runs --format text\|json` | `text\|json` only: the global `table\|json\|csv` does not apply to `runs` |
 | `aqueduct report <run_id>` | Detailed flow report for a run |
@@ -442,7 +442,7 @@ The build stays red while any row is `undeclared`: it is a sentinel ("nobody has
 | `0` | SUCCESS | Command completed successfully |
 | `1` | CONFIG_ERROR | Configuration or schema error |
 | `2` | DATA_OR_RUNTIME | Runtime / Spark / data error |
-| `3` | HEAL_PENDING | Patch staged for human review |
+| `3` | HEAL_PENDING | A patch is staged for human review — either this run staged one, or one already existed for the blueprint and the run short-circuited before calling the Agent |
 | `4` | VALIDATION_GATE | Patch rejected by validation |
 | `64` | USAGE_ERROR | Invalid command usage |
 

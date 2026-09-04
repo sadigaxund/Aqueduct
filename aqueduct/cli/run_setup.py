@@ -20,33 +20,12 @@ change that contract, only relocates the class definition.
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass as _dc_frozen
+from typing import TYPE_CHECKING as _t
 
 import click
 
 from aqueduct import exit_codes
-
-
-def _zero_token_attempt(sig_exact):
-    """Return a synthetic ``SimpleNamespace`` attempt record for a zero‑token resolution.
-
-    Used by the pending‑cache‑hit and exact‑replay paths so a single factory
-    produces the record rather than two duplicated inline constructors.
-    """
-    from types import SimpleNamespace
-
-    return SimpleNamespace(
-        attempt_num=0,
-        signature=sig_exact,
-        tokens_in=0,
-        tokens_out=0,
-        latency_ms=0,
-        gate_that_rejected=None,
-        escalated=False,
-    )
-
-
-from dataclasses import dataclass as _dc_frozen  # noqa: E402  (intentional mid-file import)
-from typing import TYPE_CHECKING as _t  # noqa: E402  (intentional mid-file import)
 
 if _t:
     from aqueduct.config import AqueductConfig, WebhookEndpointConfig
@@ -667,7 +646,7 @@ def _setup_surveyor(
 
     # The blueprint's compile warnings are now shown once (grouped). The run
     # re-parses/re-compiles the SAME blueprint several times after this point —
-    # heal re-runs, zero-token replay, sandbox gates — each of which would
+    # heal re-runs, sandbox gates — each of which would
     # otherwise re-emit those identical warnings through the raw `AQ-WARN [...]`
     # fallback formatter (they escape the initial catch_warnings block). Suppress
     # AqueductWarning for the rest of this run so they never leak mid-execution.

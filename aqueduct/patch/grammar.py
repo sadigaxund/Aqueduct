@@ -325,9 +325,7 @@ class SetEngineConfigOp(BaseModel, extra="forbid"):
     ships this as a commented-out recommendation) — that guardrail and the
     allowlist are independent, both-must-pass checks, not alternatives.
     It is still ``engine_shaped`` in the heal-provenance classification
-    (an engine/session config value is not portable across engines), and a
-    patch containing this op is never replayed from the heal cache for the
-    same reason (see ``aqueduct/agent/memory.py``).
+    (an engine/session config value is not portable across engines).
     """
 
     op: Literal["set_engine_config"]

@@ -747,8 +747,9 @@ def _set_index_status(
     """Best-effort ``patch_index`` status update (Phase 53). Never raises.
 
     ``object_key`` MUST be passed when the body moves to a new lifecycle prefix
-    (pending → applied/rejected) so the heal cache's ``find_replay`` fetches the
-    body from its new key, not the stale pending one."""
+    (pending → applied/rejected) so later readers (``aqueduct patch pull``,
+    the pending-patch guard in ``aqueduct run``) fetch the body from its new
+    key, not the stale pending one."""
     if obs_store is None:
         return
     try:
@@ -941,8 +942,9 @@ def apply_patch_file(
     except Exception as exc:
         logger.warning("could not archive patch to %s: %s", archive_path, exc)
 
-    # Phase 53 — mark applied in the index (+ new object_key) so the heal cache
-    # replays it from applied/ and stops surfacing it as still-pending.
+    # Phase 53 — mark applied in the index (+ new object_key) so
+    # `aqueduct patch list`/`pull` and the pending-patch guard stop
+    # surfacing it as still-pending.
     _set_index_status(obs_store, patch_spec.patch_id, PatchStore.APPLIED, object_key=applied_key)
 
     return ApplyResult(

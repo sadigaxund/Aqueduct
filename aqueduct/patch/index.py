@@ -2,15 +2,14 @@
 
 The patch *bodies* live in the object store (``PatchStore``); their *status and
 metadata* live here, in a relational table inside the observability store. This
-split is what makes the heal cache backend-blind: lookups are O(1) SQL queries
-instead of an ``os.scandir`` over the local ``patches/`` directory, so they work
-identically whether bodies sit on local disk, s3, gcs, or adls.
+split makes the index backend-blind: lookups are O(1) SQL queries instead of an
+``os.scandir`` over the local ``patches/`` directory, so they work identically
+whether bodies sit on local disk, s3, gcs, or adls.
 
 One row per ``patch_id``. Status moves ``pending`` → ``applied`` | ``rejected``.
 The row carries enough metadata (signature, error class, rationale, op names) to
-serve pending-reuse, coaching retrieval, and prompt history **without reading a
-body**; only zero-token *replay* fetches the body (via ``object_key``) because
-it needs the full operation list.
+serve ``aqueduct patch list``/``pull`` and prompt history **without reading a
+body**.
 
 All SQL uses ``?`` placeholders — the `RelationalCursor` rewrites them to ``%s``
 for Postgres. ``ON CONFLICT (patch_id)`` upsert is supported by both DuckDB and
@@ -68,9 +67,8 @@ def _now() -> str:
 
 
 # Single source of truth for the op-name string that marks a patch as
-# environment-specific (see ``find_replay`` and
-# ``aqueduct.agent.memory.contains_set_engine_config``, which imports this
-# constant rather than hand-writing the literal a second time).
+# environment-specific (an engine/session config value is not portable
+# across engines — see ``aqueduct.patch.grammar.SetEngineConfigOp``).
 SET_ENGINE_CONFIG_OP = "set_engine_config"
 
 
@@ -216,103 +214,6 @@ def get(cur: RelationalCursor, patch_id: str) -> dict | None:
     cur.execute(f"SELECT {_SELECT} FROM patch_index WHERE patch_id = ? LIMIT 1", [patch_id])
     r = cur.fetchone()
     return _row_to_dict(_SELECT_COLS, r) if r else None
-
-
-def find_pending(cur: RelationalCursor, signature: str) -> dict | None:
-    """Newest pending patch whose exact signature matches, or None."""
-    if not signature:
-        return None
-    cur.execute(
-        f"SELECT {_SELECT} FROM patch_index "
-        "WHERE signature = ? AND status = 'pending' "
-        "ORDER BY created_at DESC LIMIT 1",
-        [signature],
-    )
-    r = cur.fetchone()
-    return _row_to_dict(_SELECT_COLS, r) if r else None
-
-
-def find_replay(cur: RelationalCursor, signature: str, successful_ids: set[str]) -> dict | None:
-    """Newest applied, confirmed-successful patch matching the signature that
-    is NOT a ``set_engine_config`` patch, or None.
-
-    ``successful_ids`` comes from ``healing_outcomes.run_success_after_patch``
-    — an applied patch with no success record is never replayed.
-
-    Config-op patches (``SET_ENGINE_CONFIG_OP`` in ``ops``) are skipped, not
-    just rejected: engine/session config is environment-specific and is
-    never zero-token replayed (see
-    ``aqueduct.agent.memory.contains_set_engine_config``), but that must not
-    give up on the cache entirely when an OLDER matching candidate is a
-    plain, environment-independent fix. The row's ``ops`` column already
-    carries the op-name list, so this is decided from index metadata alone
-    — no body fetch needed. Only when every applied+successful row for this
-    signature is a config-op does this return None."""
-    if not signature or not successful_ids:
-        return None
-    cur.execute(
-        f"SELECT {_SELECT} FROM patch_index "
-        "WHERE signature = ? AND status = 'applied' "
-        "ORDER BY created_at DESC",
-        [signature],
-    )
-    for r in cur.fetchall():
-        d = _row_to_dict(_SELECT_COLS, r)
-        if SET_ENGINE_CONFIG_OP in (d.get("ops") or []):
-            continue
-        if d["patch_id"] in successful_ids:
-            return d
-    return None
-
-
-def find_coaching(
-    cur: RelationalCursor,
-    exact_hash: str,
-    coarse_hash: str,
-    error_class: str,
-    blueprint_id: str = "",
-    limit: int = 3,
-) -> list[dict]:
-    """Tiered nearest-signature (failure → fix) pairs from applied patches.
-
-    Tier 1 exact sig, 2 coarse sig, 3 same error_class, 4 chronological fill;
-    deduped by patch_id, newest first within tier, capped at *limit*. Pure
-    metadata — no body reads."""
-    wheres = ["status = 'applied'"]
-    params: list = []
-    if blueprint_id:
-        wheres.append("blueprint_id = ?")
-        params.append(blueprint_id)
-    params.append(100)  # safety cap — LIMIT feeds the tiered classifier in Python
-    cur.execute(
-        f"SELECT {_SELECT} FROM patch_index WHERE {' AND '.join(wheres)} "
-        "ORDER BY created_at DESC LIMIT ?",
-        params,
-    )
-    rows = [_row_to_dict(_SELECT_COLS, r) for r in cur.fetchall()]
-    tiers: dict[int, list[dict]] = {1: [], 2: [], 3: [], 4: []}
-    for d in rows:
-        if exact_hash and d.get("signature") == exact_hash:
-            tier = 1
-        elif coarse_hash and d.get("signature_coarse") == coarse_hash:
-            tier = 2
-        elif error_class and d.get("error_class") == error_class:
-            tier = 3
-        else:
-            tier = 4
-        d["_tier"] = tier
-        tiers[tier].append(d)
-    picked: list[dict] = []
-    seen: set[str] = set()
-    for tier in (1, 2, 3, 4):
-        for d in tiers[tier]:
-            if d["patch_id"] in seen:
-                continue
-            seen.add(d["patch_id"])
-            picked.append(d)
-            if len(picked) >= limit:
-                return picked
-    return picked
 
 
 def recent_applied(cur: RelationalCursor, limit: int = 5) -> list[dict]:

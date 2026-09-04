@@ -107,13 +107,9 @@ def test_defer_only_patch_in_auto_mode_skips_gates(
     )
 
     runner = CliRunner()
-    with (
-        patch("aqueduct.agent.memory.find_pending", return_value=None),
-        patch("aqueduct.agent.memory.find_replay_candidate", return_value=None),
-    ):
-        result = runner.invoke(
-            cli, ["run", str(bp_file), "--config", str(cfg_file), "--store-dir", str(tmp_path)]
-        )
+    result = runner.invoke(
+        cli, ["run", str(bp_file), "--config", str(cfg_file), "--store-dir", str(tmp_path)]
+    )
 
     print("OUTPUT:", result.output)
     print("EXCEPTION:", result.exception)

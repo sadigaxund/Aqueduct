@@ -1,6 +1,3 @@
-import json
-import uuid
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -86,7 +83,7 @@ def test_auto_mode_invalid_patch_stops_loop(
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
 
-    # Prevent the MagicMock Surveyor from poisoning find_pending/find_replay_candidate
+    # Prevent the MagicMock Surveyor from poisoning the pending-patch guard (obs_store=None short-circuits it)
     mock_surveyor_cls.return_value.observability = None
     mock_surveyor_cls.return_value.patch_store.return_value = None
 
@@ -137,7 +134,7 @@ def test_auto_mode_fails_then_continues(
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
 
-    # Prevent the MagicMock Surveyor from poisoning find_pending/find_replay_candidate
+    # Prevent the MagicMock Surveyor from poisoning the pending-patch guard (obs_store=None short-circuits it)
     mock_surveyor_cls.return_value.observability = None
     mock_surveyor_cls.return_value.patch_store.return_value = None
 
@@ -231,7 +228,7 @@ def test_auto_mode_succeeds_stops_loop(
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
 
-    # Prevent the MagicMock Surveyor from poisoning find_pending/find_replay_candidate
+    # Prevent the MagicMock Surveyor from poisoning the pending-patch guard (obs_store=None short-circuits it)
     mock_surveyor_cls.return_value.observability = None
     mock_surveyor_cls.return_value.patch_store.return_value = None
 
@@ -283,7 +280,7 @@ def test_trigger_agent_escalation(
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
 
-    # Prevent the MagicMock Surveyor from poisoning find_pending/find_replay_candidate
+    # Prevent the MagicMock Surveyor from poisoning the pending-patch guard (obs_store=None short-circuits it)
     mock_surveyor_cls.return_value.observability = None
     mock_surveyor_cls.return_value.patch_store.return_value = None
 

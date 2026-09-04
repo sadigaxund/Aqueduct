@@ -18,12 +18,13 @@ Covers:
 - Integration DAG runs (happy path and self-healing defer/resume flow)
 """
 
-import sys
-from types import ModuleType
-from unittest.mock import MagicMock, patch
 import json
+import sys
 from datetime import timedelta
 from pathlib import Path
+from types import ModuleType
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 pytestmark = pytest.mark.unit
@@ -31,8 +32,8 @@ pytestmark = pytest.mark.unit
 # Check if real airflow is available
 try:
     import airflow
-    from airflow.models import BaseOperator
     from airflow.exceptions import AirflowException
+    from airflow.models import BaseOperator
     from airflow.sensors.base import BaseSensorOperator
     from airflow.triggers.base import BaseTrigger, TriggerEvent
 
@@ -372,6 +373,7 @@ def test_trigger_check_once_logs_on_cli_failure_and_bad_json(caplog):
     used to leave zero trace — a stuck deferred task with no diagnostic
     anywhere. Both must now log a WARNING naming the run_id."""
     import logging as _logging
+
     from aqueduct.integrations.airflow.trigger import AqueductPatchTrigger
 
     t = AqueductPatchTrigger(run_id="run-123", blueprint="bp.yml")
@@ -391,6 +393,7 @@ def test_trigger_check_once_logs_on_cli_failure_and_bad_json(caplog):
 
 def test_trigger_run_approved_sync():
     import asyncio
+
     from aqueduct.integrations.airflow.trigger import AqueductPatchTrigger
 
     t = AqueductPatchTrigger(
@@ -494,15 +497,16 @@ def test_pyproject_airflow_extras():
 
 
 def test_specs_exit_codes():
-    from pathlib import Path
     import re
+    from pathlib import Path
+
     from aqueduct import exit_codes
 
     # The exit-code table lives in cli_reference.md per the documentation
     # map (specs.md owns engine semantics; cli_reference.md owns the CLI
     # surface, exit codes included).
     cli_ref_path = Path(__file__).resolve().parents[1] / "docs" / "cli_reference.md"
-    with open(cli_ref_path, "r", encoding="utf-8") as f:
+    with open(cli_ref_path, encoding="utf-8") as f:
         content = f.read()
 
     # cli_reference renders `0` | SUCCESS (number backticked, name plain) —
@@ -540,8 +544,9 @@ def test_dagbag_import():
     if not AIRFLOW_INSTALLED:
         pytest.skip("Airflow is not installed, skipping DagBag import test")
 
-    from airflow.models import DagBag
     import tempfile
+
+    from airflow.models import DagBag
 
     with tempfile.TemporaryDirectory() as tmpdir:
         dag_file = Path(tmpdir) / "test_dag.py"
@@ -588,7 +593,6 @@ def test_airflow_integration_happy_path(tmp_path):
     if not AIRFLOW_INSTALLED:
         pytest.skip("Airflow is not installed, skipping integration tests")
 
-    from airflow import DAG
     from aqueduct.integrations.airflow import AqueductOperator
 
     # We need input data
@@ -803,13 +807,15 @@ def test_airflow_integration_defect_healing(tmp_path):
 def test_airflow_trigger_end_to_end_flow(mock_gen, mock_get_exec, mock_surveyor_cls, tmp_path):
     """End-to-end: operator deferral -> trigger polling -> patch apply -> operator resume."""
     import subprocess
+
     from click.testing import CliRunner
+
     from aqueduct.cli import cli
+    from aqueduct.executor.models import ExecutionResult, ModuleResult
     from aqueduct.integrations.airflow.operator import AqueductOperator
     from aqueduct.integrations.airflow.trigger import AqueductPatchTrigger
-    from aqueduct.surveyor.models import FailureContext
-    from aqueduct.executor.models import ExecutionResult, ModuleResult
     from aqueduct.patch.grammar import PatchSpec
+    from aqueduct.surveyor.models import FailureContext
 
     def _make_failure_context(run_id: str) -> FailureContext:
         return FailureContext(
@@ -903,7 +909,7 @@ stores:
         None,
     ]
     mock_surveyor_cls.return_value = mock_surveyor
-    # Prevent MagicMock from poisoning find_pending/find_replay_candidate
+    # Prevent MagicMock from poisoning the pending-patch guard (obs_store=None short-circuits it)
     mock_surveyor.observability = None
     mock_surveyor.patch_store.return_value = None
 

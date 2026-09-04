@@ -51,45 +51,34 @@ class TestAgentConnectionConfig:
         assert config.agent.max_reprompts == 5
 
 
-class TestAgentMemoryConfig:
-    def test_defaults_replay_coaching_true(self):
-        from aqueduct.config import AgentMemoryConfig
+class TestAgentMemoryConfigRemoved:
+    """Phase 92: the signature-keyed heal cache (and its `agent.memory:`
+    config block) is gone. `AgentMemoryConfig` no longer exists, and setting
+    `agent.memory` now fails schema validation instead of being silently
+    accepted."""
 
-        cfg = AgentMemoryConfig()
-        assert cfg.replay is True
-        assert cfg.coaching is True
+    def test_agent_memory_config_class_is_gone(self):
+        import aqueduct.config as config_mod
 
-    def test_frozen_pydantic(self):
-        from aqueduct.config import AgentMemoryConfig
+        assert not hasattr(config_mod, "AgentMemoryConfig")
 
-        cfg = AgentMemoryConfig()
-        with pytest.raises(Exception):
-            cfg.replay = False
+    def test_agent_connection_config_has_no_memory_field(self):
+        cfg = AgentConnectionConfig()
+        assert not hasattr(cfg, "memory")
 
-    def test_extra_forbid_raises(self):
+    def test_setting_agent_memory_fails_validation(self, tmp_path):
         from pydantic import ValidationError
 
-        from aqueduct.config import AgentMemoryConfig
-
         with pytest.raises(ValidationError):
-            AgentMemoryConfig(**{"replay": True, "unknown_key": 1})
+            AgentConnectionConfig(**{"memory": {"replay": True}})
 
-    def test_replay_false_round_trips(self, tmp_path):
-        import yaml
+    def test_load_config_with_agent_memory_block_fails(self, tmp_path):
+        cfg_path = tmp_path / "aqueduct.yml"
+        cfg_data = {"agent": {"memory": {"replay": True, "coaching": True}}}
+        cfg_path.write_text(yaml.dump(cfg_data))
 
-        from aqueduct.config import AgentMemoryConfig
-
-        data = yaml.safe_load("memory:\n  replay: false\n  coaching: true\n")
-        cfg = AgentMemoryConfig(**data["memory"])
-        assert cfg.replay is False
-        assert cfg.coaching is True
-
-    def test_memory_in_agent_connection_config(self):
-        from aqueduct.config import AgentConnectionConfig
-
-        cfg = AgentConnectionConfig()
-        assert cfg.memory.replay is True
-        assert cfg.memory.coaching is True
+        with pytest.raises(Exception):
+            load_config(cfg_path)
 
 
 class TestBlobLeakGuardrail:

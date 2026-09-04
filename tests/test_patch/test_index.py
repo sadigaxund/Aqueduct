@@ -2,7 +2,8 @@
 
 Pure relational logic exercised against a real DuckDB observability store (no
 Spark, no network) — the ``unit`` layer. patch_index is the backend-blind truth
-the heal cache queries instead of scanning ``patches/``.
+`aqueduct patch list`/`pull` and the `aqueduct run` pending-patch guard query
+instead of scanning ``patches/``.
 """
 
 from __future__ import annotations
@@ -39,21 +40,15 @@ def _row(patch_id, status, **kw):
     )
 
 
-def test_upsert_and_find_pending(store):
+def test_upsert_writes_row(store):
     with store.connect() as cur:
         ix.upsert(cur, _row("p1", "pending"))
     with store.connect() as cur:
-        hit = ix.find_pending(cur, "sigA")
-    assert hit is not None
-    assert hit["patch_id"] == "p1"
-    assert hit["object_key"] == "pending/p1.json"
-    assert hit["ops"] == ["set_module_config_key"]  # JSON column round-trips to list
-
-
-def test_find_pending_none_for_unknown_or_empty_signature(store):
-    with store.connect() as cur:
-        assert ix.find_pending(cur, "nope") is None
-        assert ix.find_pending(cur, "") is None
+        row = ix.get(cur, "p1")
+    assert row is not None
+    assert row["patch_id"] == "p1"
+    assert row["object_key"] == "pending/p1.json"
+    assert row["ops"] == ["set_module_config_key"]  # JSON column round-trips to list
 
 
 def test_set_status_moves_out_of_pending(store):
@@ -61,8 +56,8 @@ def test_set_status_moves_out_of_pending(store):
         ix.upsert(cur, _row("p1", "pending"))
         ix.set_status(cur, "p1", "applied")
     with store.connect() as cur:
-        assert ix.find_pending(cur, "sigA") is None
         assert ix.get(cur, "p1")["status"] == "applied"
+        assert ix.list_by_status(cur, status="pending") == []
 
 
 def _row_bp(patch_id, status, blueprint_id, **kw):
@@ -94,67 +89,6 @@ def test_upsert_is_idempotent_on_patch_id(store):
         row = ix.get(cur, "p1")
     assert row["status"] == "applied"
     assert row["rationale"] == "v2"
-
-
-def test_find_replay_only_confirmed_successful(store):
-    with store.connect() as cur:
-        ix.upsert(cur, _row("p1", "applied"))
-    with store.connect() as cur:
-        assert ix.find_replay(cur, "sigA", set()) is None  # no success set
-        assert ix.find_replay(cur, "sigA", {"other"}) is None  # id not successful
-        hit = ix.find_replay(cur, "sigA", {"p1"})
-    assert hit["patch_id"] == "p1"
-
-
-def test_find_replay_skips_a_newer_config_op_candidate_for_an_older_sql_one(store):
-    """F-3: the newest matching row being a `set_engine_config` patch must not
-    make find_replay give up on the whole cache — it should fall back to an
-    older, non-config candidate that also matches."""
-    with store.connect() as cur:
-        ix.upsert(cur, _row("older_sql", "applied", ops=["set_sql"]))
-        ix.upsert(cur, _row("newer_config", "applied", ops=["set_engine_config"]))
-    with store.connect() as cur:
-        hit = ix.find_replay(cur, "sigA", {"older_sql", "newer_config"})
-    assert hit is not None
-    assert hit["patch_id"] == "older_sql"
-
-
-def test_find_replay_none_when_every_candidate_is_a_config_op(store):
-    with store.connect() as cur:
-        ix.upsert(cur, _row("p1", "applied", ops=["set_engine_config"]))
-    with store.connect() as cur:
-        assert ix.find_replay(cur, "sigA", {"p1"}) is None
-
-
-def test_find_coaching_tiers_and_dedupe(store):
-    with store.connect() as cur:
-        ix.upsert(cur, _row("exact", "applied", signature="sigA"))
-        ix.upsert(cur, _row("coarse", "applied", signature="other", signature_coarse="coarseA"))
-        ix.upsert(
-            cur,
-            _row(
-                "klass",
-                "applied",
-                signature="z",
-                signature_coarse="z",
-                error_class="AnalysisException",
-            ),
-        )
-    with store.connect() as cur:
-        out = ix.find_coaching(cur, "sigA", "coarseA", "AnalysisException", limit=3)
-    by_id = {d["patch_id"]: d["_tier"] for d in out}
-    assert by_id["exact"] == 1
-    assert by_id["coarse"] == 2
-    assert by_id["klass"] == 3
-    # deduped: each patch_id appears once
-    assert len(out) == len({d["patch_id"] for d in out})
-
-
-def test_find_coaching_only_applied(store):
-    with store.connect() as cur:
-        ix.upsert(cur, _row("pend", "pending"))
-    with store.connect() as cur:
-        assert ix.find_coaching(cur, "sigA", "coarseA", "AnalysisException") == []
 
 
 def test_recent_applied_newest_first_and_limit(store):

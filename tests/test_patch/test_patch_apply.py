@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -443,7 +442,7 @@ def _valid_bp(tmp_path):
 
 def test_apply_moves_body_in_store_and_updates_index_object_key(tmp_path):
     """apply with a PatchStore: pending body → applied/, index status+object_key
-    follow so the heal cache's find_replay fetches the body at its new key."""
+    follow so a later reader (`aqueduct patch pull`) fetches the body at its new key."""
     from aqueduct.patch import index as ix
     from aqueduct.patch.apply import apply_patch_file
 
@@ -481,10 +480,8 @@ def test_apply_moves_body_in_store_and_updates_index_object_key(tmp_path):
     assert ps.list_keys("applied") == ["applied/0001_fix-in.json"]
     with obs.connect() as cur:
         row = ix.get(cur, "fix-in")
-        replay = ix.find_replay(cur, "sigA", {"fix-in"})
     assert row["status"] == "applied"
     assert row["object_key"] == "applied/0001_fix-in.json"  # object_key followed the move
-    assert replay["object_key"] == "applied/0001_fix-in.json"  # cache fetches the new key
 
 
 def test_reject_moves_body_in_store_and_updates_index(minimal_bp_path, tmp_path):
@@ -511,6 +508,6 @@ def test_reject_moves_body_in_store_and_updates_index(minimal_bp_path, tmp_path)
     assert json.loads(ps.get_text("rejected/0002_fix-y.json"))["rejection_reason"] == "too risky"
     with obs.connect() as cur:
         row = ix.get(cur, "fix-y")
-        assert ix.find_pending(cur, "sigY") is None  # no longer surfaced as pending
+        assert ix.list_by_status(cur, status="pending") == []  # no longer surfaced as pending
     assert row["status"] == "rejected"
     assert row["object_key"] == "rejected/0002_fix-y.json"
