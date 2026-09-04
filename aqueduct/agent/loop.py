@@ -312,8 +312,8 @@ def stage_patch_for_human(
         source: Provenance of the patch — ``"llm"`` for a fresh agent patch,
             ``"replay"`` when the heal cache re-staged a previously validated
             patch with zero LLM tokens.
-        webhook_event: Envelope event name — ``"on_ci_patch"`` when the caller
-            passes the ci endpoint config instead of the pending one.
+        webhook_event: Envelope event name fired alongside
+            ``on_patch_pending_webhook`` — ``"on_patch_pending"`` by default.
         patch_store: Object store for the body. None → a local store rooted at
             *patches_dir* (historical on-disk layout).
         obs_store: Observability store for the ``patch_index`` upsert. None skips

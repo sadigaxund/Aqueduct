@@ -509,7 +509,7 @@ class TestWebhooksOnDefer:
         """`on_defer: WebhookEndpointConfig | None` is a nested-BaseModel field
         — the walker recurses INTO `WebhookEndpointConfig`'s own tagged
         fields rather than requiring a tag on `on_defer` itself (same as its
-        four siblings on_failure/on_success/on_patch_pending/on_ci_patch).
+        three siblings on_failure/on_success/on_patch_pending).
         This must not raise CapabilityScopeError."""
         from aqueduct.executor.config_leaves import all_config_leaves
 

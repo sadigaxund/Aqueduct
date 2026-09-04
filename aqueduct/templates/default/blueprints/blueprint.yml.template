@@ -141,10 +141,10 @@ engine:
 #
 # on_success / on_failure run sequentially AFTER the pipeline's terminal
 # state. on_patch_pending / on_healed fire MID-RUN at heal milestones —
-# on_patch_pending when a heal stages a patch for human/CI review,
+# on_patch_pending when a heal stages a patch for human review,
 # on_healed right after a heal's re-run succeeds (patch applied AND the
 # pipeline is green again) — mirroring the engine-level `webhooks:`
-# on_patch_pending/on_ci_patch vocabulary one level up, at the Blueprint.
+# on_patch_pending vocabulary one level up, at the Blueprint.
 # on_healed always fires before the outer run's terminal on_success hooks.
 # Hook outcomes never change the run's exit code (a failing hook warns and
 # skips the event's remaining hooks). Exactly one action per entry:
@@ -233,7 +233,6 @@ agent:
   #   auto       — Auto-apply: patch applied in-memory → re-runs → written to disk only on success.
   #                `max_patches: 1` (default) = single-shot. `max_patches: N` (N > 1) = multi-patch
   #                reprompt loop; requires danger.allow_multi_patch: true in aqueduct.yml.
-  #   ci         — Patch staged + POSTed to ci_webhook_url for external PR creation
   #
   approval: "human"
 

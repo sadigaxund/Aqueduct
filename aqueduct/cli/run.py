@@ -729,7 +729,7 @@ def run(
         def _fire_heal_hook(event: str, *, iter_run_id: str, hook_status: str, ctx) -> None:
             """Fire `hooks.on_patch_pending` / `hooks.on_healed` — mid-run
             heal-milestone hooks, mirroring the engine-level `webhooks:`
-            `on_patch_pending`/`on_ci_patch` vocabulary at the Blueprint.
+            `on_patch_pending` vocabulary at the Blueprint.
             Best-effort, never blocks the heal loop; never changes the exit
             code (same contract as the terminal on_success/on_failure hooks).
             """
@@ -2571,77 +2571,6 @@ def run(
                 )
                 break
 
-            elif effective_mode == "ci":
-                _ci_url = resolved_agent_base_url or cfg.agent.ci_webhook_url
-                if _ci_url:
-                    # Best-effort, async, redacted, with one transient retry — same
-                    # transport as the configured webhooks. (Previously this was a
-                    # synchronous bare httpx.post with no redaction: it blocked the
-                    # heal loop on a slow CI endpoint and could leak a resolved
-                    # secret embedded in the patch config.)
-                    from aqueduct.infra.http import deliver_with_retry, fire_and_forget
-                    from aqueduct.redaction import redact as _redact
-
-                    _ci_body = _redact(
-                        {
-                            "patch": patch.model_dump(),
-                            "run_id": iteration_run_id,
-                            "blueprint_id": manifest.blueprint_id,
-                            "failed_module": failure_ctx.failed_module,
-                        }
-                    )
-                    fire_and_forget(
-                        lambda url=_ci_url, body=_ci_body: deliver_with_retry(
-                            "POST",
-                            url,
-                            json=body,
-                            headers={"Content-Type": "application/json"},
-                            timeout=10,
-                            label="ci-webhook",
-                        ),
-                        name="ci-webhook",
-                    )
-                stage_patch_for_human(
-                    patch,
-                    patches_dir,
-                    failure_ctx,
-                    on_patch_pending_webhook=cfg.webhooks.on_ci_patch,
-                    source=_patch_source,
-                    webhook_event="on_ci_patch",
-                    patch_store=_patch_store,
-                    obs_store=_obs_store,
-                    on_defer_webhook=cfg.webhooks.on_defer,
-                )
-                _fire_heal_hook(
-                    "on_patch_pending",
-                    iter_run_id=iteration_run_id,
-                    hook_status="pending",
-                    ctx=failure_ctx,
-                )
-                patch_staged_for_review = True
-                click.echo(
-                    f"  ▸ CI patch staged → "
-                    f"{_patch_store.location_label if _patch_store is not None else patches_dir}/pending/  "
-                    f"(id={patch.patch_id})",
-                    err=True,
-                )
-                surveyor.record_healing_outcome(
-                    run_id=iteration_run_id,
-                    failed_module=failure_ctx.failed_module,
-                    parent_run_id=run_id,
-                    failure_category=patch.category,
-                    model=_outcome_model,
-                    patch_id=patch.patch_id,
-                    confidence=patch.confidence,
-                    patch_applied=False,
-                    run_success_after_patch=False,
-                    failure_signature=_sig_exact.hash,
-                    failure_signature_coarse=_sig_coarse.hash,
-                    resolution=_resolution,
-                    model_cascade_position=_cascade_pos,
-                )
-                break
-
             elif effective_mode == "auto":
                 # A4 — a defer-only patch makes zero Blueprint changes (Domain
                 # 6): running the sandbox/gate/apply pyramid on it is an
@@ -2660,7 +2589,7 @@ def run(
                 # `patch.operations` two layers removed from validation), not
                 # because it currently changes behavior.
                 # A defer-only patch instead routes straight to the same
-                # pending/defer staging path the "ci"/"human" branches use:
+                # pending/defer staging path the "human" branch uses:
                 # NO sandbox, NO gate run, NO apply.
                 has_defer = any(op.op == "defer_to_human" for op in patch.operations)
                 _defer_only = has_defer and all(

@@ -74,16 +74,15 @@ with DAG(
 ## Split-task pattern (optional)
 
 If you want patch approval to gate downstream tasks instead of resuming the
-same task, use `AqueductPatchSensor` between a `ci`-mode `AqueductOperator`
-and a rerun task:
+same task, use `AqueductPatchSensor` between an `AqueductOperator` (with the
+Blueprint's `agent.approval: human`) and a rerun task:
 
 ```python
 from aqueduct.integrations.airflow import AqueductOperator, AqueductPatchSensor
 
 run = AqueductOperator(
     task_id="run",
-    blueprint="etl.yml",
-    extra_args=["--mode", "ci"],  # exits cleanly on HEAL_PENDING
+    blueprint="etl.yml",  # agent.approval: human — exits HEAL_PENDING when a patch is staged
 )
 wait = AqueductPatchSensor(
     task_id="wait_for_patch",

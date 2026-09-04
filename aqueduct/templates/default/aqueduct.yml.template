@@ -505,13 +505,10 @@ secrets:
 # one automatic retry on 429/5xx or network error); failures are logged and
 # do not affect run outcome.
 #
-# Five hooks:
+# Four hooks:
 #   on_failure       — fires when a run ends with status="error"
 #   on_success       — fires when a run ends with status="success"
 #   on_patch_pending — fires when a patch is staged to patches/pending/
-#   on_ci_patch      — fires for approval: ci; receives the patch JSON
-#                      for external PR creation (full-config alternative to
-#                      agent.ci_webhook_url)
 #   on_defer         — fires when a patch defers to a human (defer_to_human
 #                      op) instead of proposing a fix. When unset, defers
 #                      fall back to firing on_patch_pending, so nobody loses
@@ -547,7 +544,7 @@ secrets:
 #   ${blueprint_name}   Blueprint display name
 #   ${module_count}    Number of modules executed
 #
-# on_patch_pending / on_ci_patch / on_defer template variables (the agent's
+# on_patch_pending / on_defer template variables (the agent's
 # structured diagnosis, no extra LLM calls):
 #   ${run_id} ${blueprint_id} ${failed_module}
 #   ${patch_id}        Staged patch identifier
@@ -577,7 +574,7 @@ secrets:
 #   {"event": "<hook name>", "timestamp": "<ISO-8601 UTC>",
 #    "run_id": "...", "blueprint_id": "...", "data": {<event-specific payload>}}
 # data carries the full FailureContext (on_failure), the success summary
-# (on_success), or patch metadata + diagnosis (on_patch_pending / on_ci_patch).
+# (on_success), or patch metadata + diagnosis (on_patch_pending).
 
 webhooks:
   on_failure: null
@@ -823,12 +820,6 @@ agent:
   # Default null = unlimited. Per-blueprint override available via the
   # Blueprint agent: block (Blueprint value wins).
   # max_heal_attempts_per_hour: 10
-
-  # ── CI patch hand-off (approval: ci) ──────────────────────────────────
-  # POST target for external CI to receive the staged patch JSON and open a
-  # PR. Only used when approval: ci. See also webhooks.on_ci_patch for
-  # the full-config (method/headers/payload) variant.
-  # ci_webhook_url: "https://ci.example.com/hooks/aqueduct-patch"
 
   # ── Sandbox Spark master ───────────────────────────────────────────────────
   # Spark master URL for sandbox replay (patch preview). Default null uses

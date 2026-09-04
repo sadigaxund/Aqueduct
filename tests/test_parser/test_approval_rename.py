@@ -53,11 +53,16 @@ def _parse_capture_stderr(raw: dict[str, Any]) -> tuple[Any, str]:
 
 
 class TestApprovalCanonicalKey:
-    @pytest.mark.parametrize("value", ["auto", "human", "disabled", "ci"])
+    @pytest.mark.parametrize("value", ["auto", "human", "disabled"])
     def test_approval_value_parses_no_warning(self, value):
         bp, stderr = _parse_capture_stderr(_make_raw(agent={"approval": value}))
         assert bp.agent.approval_mode == value
         assert "[deprecated]" not in stderr
+
+    def test_approval_ci_rejected(self):
+        """`ci` was removed as an approval mode — the schema now rejects it."""
+        with pytest.raises(ParseError):
+            parse_dict(_make_raw(agent={"approval": "ci"}), base_dir=BASE_DIR)
 
 
 class TestApprovalModeKeyRemoved:

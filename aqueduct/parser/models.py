@@ -107,7 +107,7 @@ class AgentConfig:
     ``aqueduct/config.py``), resolved by ``aqueduct.cli.resolve_agent_connection``.
     """
 
-    approval_mode: str = "disabled"  # YAML key `approval`: "disabled" | "human" | "auto" | "ci"
+    approval_mode: str = "disabled"  # YAML key `approval`: "disabled" | "human" | "auto"
     on_pending_patches: str = "warn"  # "ignore" | "warn" | "block"
     # `max_patches` (default 1). Multi-patch loop opt-in: set > 1 AND
     # `danger.allow_multi_patch: true`.

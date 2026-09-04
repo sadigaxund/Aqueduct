@@ -516,8 +516,6 @@ pipeline fails → webhook fires (alert to Slack/PagerDuty)
 → CI/CD validates → human approves → merge → redeploy
 ```
 
-**`approval: ci`:** When set, instead of writing to `patches/pending/`, Aqueduct stages the patch and fires a POST to `agent.ci_webhook_url`. The receiving CI system creates the branch and PR. Aqueduct does not couple to any git provider and ships no versioned GitHub Action, you wire a short workflow you own.
-
 **CI webhook payload schema.** The `on_patch_pending` POST body carries:
 
 | Key | Type | Notes |
@@ -537,7 +535,7 @@ aqueduct patch import received-patch.json --blueprint pipeline.yml
 # → applies the patch, then `git commit` with a structured ---aqueduct--- trailer
 ```
 
-`patch import` is the **one CI command**: it is `patch apply` + `patch commit` in a single atomic step (use `--no-commit` to stage only). A copy-paste example workflow wiring `import` + `gh pr create` lives at [`docs/templates/ci-heal-workflow.yml`](templates/ci-heal-workflow.yml), a snippet you own, not a maintained Action.
+`patch import` is the **one CI command**: it is `patch apply` + `patch commit` in a single atomic step (use `--no-commit` to stage only). Wire it into a short workflow you own (receive the webhook, obtain the patch body, call `aqueduct patch import`, then `gh pr create`); Aqueduct does not couple to any git provider and ships no versioned GitHub Action.
 
 **`aqueduct patch pr` (2.2.0).** Instead of wiring the webhook and template workflow above, `aqueduct patch pr <patch_ref> --blueprint <bp>` does the same branch + apply + commit + push + `gh pr create` sequence in one command, run locally or from any CI runner with `gh` installed and authenticated. It works on any staged patch regardless of `approval` mode, so a `human`-mode reviewer can use it too, in place of a local `patch apply`. Configure `git:`/`pr:` in `aqueduct.yml` (base branch, title template, draft state, and an optional `git.expected_root` pin for a monorepo layout); `aqueduct doctor` checks `gh` presence and auth. See [CLI Reference](cli_reference.md#5-patch-management).
 
@@ -652,7 +650,7 @@ Before promoting a Blueprint to production:
 - [ ] All I/O paths use `${ctx.*}` refs resolved from environment variables (no hardcoded local paths)
 - [ ] `aqueduct doctor pipeline.yml` passes with `deployment.env: cluster` or `cloud`
 - [ ] `agent.guardrails.allowed_paths` set to cloud URI patterns
-- [ ] `agent.approval: human` or `ci` (not `auto`)
+- [ ] `agent.approval: human` (not `auto`)
 - [ ] No `danger.*: true` in production `aqueduct.yml`
 - [ ] API keys injected via environment (`@aq.secret()` reads `os.environ`)
 - [ ] Store directories point to persistent paths (PVC in K8s, edge node in YARN)

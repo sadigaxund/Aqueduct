@@ -155,37 +155,6 @@ def test_run_human_mode_stages_patch_exits_3(mock_gen, mock_get_exec, mock_surve
 
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 @patch("aqueduct.executor.get_executor")
-@patch("aqueduct.agent.generate_agent_patch")
-def test_run_ci_mode_stages_patch_exits_3(mock_gen, mock_get_exec, mock_surveyor_cls, tmp_path):
-    """approval: ci — runtime failure → patch staged → exit 3 (HEAL_PENDING)."""
-    bp, cfg = _write_project(tmp_path, "ci")
-
-    exec_res = _failed_exec_result()
-    mock_executor = MagicMock()
-    mock_executor.return_value = exec_res
-    mock_get_exec.return_value = mock_executor
-
-    mock_surveyor = MagicMock()
-    mock_surveyor.record.return_value = _make_failure_context(exec_res.run_id)
-    mock_surveyor_cls.return_value = mock_surveyor
-    mock_surveyor.observability = None
-    mock_surveyor.patch_store.return_value = None
-
-    mock_gen.return_value = MagicMock(patch=_make_patch("p-ci-001"))
-
-    runner = CliRunner()
-    with patch("aqueduct.cli._agent_usable", return_value=True):
-        result = runner.invoke(cli, ["run", str(bp), "--config", str(cfg)])
-
-    assert (
-        result.exit_code == 3
-    ), f"Expected HEAL_PENDING (3), got {result.exit_code}\n{result.output}"
-    pending = list((tmp_path / "patches" / "pending").glob("*.json"))
-    assert len(pending) >= 1, "Expected a patch under patches/pending/"
-
-
-@patch("aqueduct.surveyor.surveyor.Surveyor")
-@patch("aqueduct.executor.get_executor")
 def test_run_disabled_mode_no_patch_exits_2(mock_get_exec, mock_surveyor_cls, tmp_path):
     """approval: disabled — runtime failure → no staging → exit 2 (DATA_OR_RUNTIME)."""
     bp, cfg = _write_project(tmp_path, "disabled")

@@ -886,11 +886,6 @@ class AgentConnectionConfig(AgentPolicySchema):
         description="Extra context appended to the LLM system prompt for all blueprints. Use for cluster constraints, naming conventions, schema hints.",
         json_schema_extra={"engine_scoped": False},
     )
-    ci_webhook_url: str | None = Field(
-        default=None,
-        description="Webhook URL for approval: ci. POST target for external CI to create PR.",
-        json_schema_extra={"engine_scoped": False},
-    )
     max_heal_attempts_per_hour: int | None = Field(
         default=None,
         ge=1,
@@ -1187,10 +1182,6 @@ class WebhooksConfig(BaseModel):
         default=None,
         description="Endpoint to POST when a patch is staged to patches/pending/.",
     )
-    on_ci_patch: WebhookEndpointConfig | None = Field(
-        default=None,
-        description="Endpoint for approval: ci — receives patch JSON for external PR creation.",
-    )
     on_defer: WebhookEndpointConfig | None = Field(
         default=None,
         description=(
@@ -1201,9 +1192,7 @@ class WebhooksConfig(BaseModel):
         ),
     )
 
-    @field_validator(
-        "on_failure", "on_success", "on_patch_pending", "on_ci_patch", "on_defer", mode="before"
-    )
+    @field_validator("on_failure", "on_success", "on_patch_pending", "on_defer", mode="before")
     @classmethod
     def coerce_string_url(cls, v: Any) -> Any:
         """Allow on_failure/on_success: 'https://...' as shorthand for {url: 'https://...'}."""

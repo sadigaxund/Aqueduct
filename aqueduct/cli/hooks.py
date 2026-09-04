@@ -3,10 +3,10 @@
 
 `on_success` / `on_failure` fire after a run reaches its terminal state.
 `on_patch_pending` / `on_healed` fire mid-run at heal milestones — the
-former when a heal stages a patch for human/CI review, the latter right
+former when a heal stages a patch for human review, the latter right
 after a heal's re-run succeeds (patch applied AND the pipeline is green
 again) — mirroring the engine-level `webhooks:` vocabulary
-(`on_patch_pending`/`on_ci_patch`) one level up, at the Blueprint.
+(`on_patch_pending`) one level up, at the Blueprint.
 
 Entry types (parser guarantees exactly one per entry):
   blueprint: <path>   Chain another Blueprint. By default a fresh

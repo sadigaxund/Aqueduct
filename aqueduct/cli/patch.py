@@ -1141,11 +1141,10 @@ def patch_import(
 
     PATCH_REF is a local patch JSON file (a bare PatchSpec or a CI webhook
     envelope), or a bare ``patch_id`` fetched from the configured store.
-    `approval_mode: ci` reference flow: a cluster run heals, stages the patch,
-    and fires the on_patch_pending webhook; a CI runner obtains the patch body
-    and calls this to apply + commit it on a fresh checkout, then opens a PR
-    (see docs/templates/ci-heal-workflow.yml). Equivalent to
-    `patch apply` + `patch commit` in one atomic step.
+    Reference flow: a cluster run heals, stages the patch, and fires the
+    on_patch_pending webhook; a CI runner obtains the patch body and calls
+    this to apply + commit it on a fresh checkout, then opens a PR.
+    Equivalent to `patch apply` + `patch commit` in one atomic step.
     """
     import subprocess
     import tempfile
@@ -2164,9 +2163,9 @@ def patch_pr(
     store, or a local patch JSON file — the same PATCH_REF grammar `patch
     import` accepts. Approval-mode-agnostic: works on any staged/pending
     patch regardless of the Blueprint's `approval` mode — a `human`-mode
-    reviewer can use this instead of a local `patch apply`, and a `ci`-mode
-    CI runner can use this instead of (or alongside) the webhook +
-    `docs/templates/ci-heal-workflow.yml` flow.
+    reviewer can use this instead of a local `patch apply`, and a CI runner
+    can use this instead of (or alongside) the on_patch_pending webhook +
+    `patch import` flow.
 
     Flow: repo-root pre-flight guard, then `git switch -c
     aqueduct/heal/<patch_id>`, apply + commit through the identical path

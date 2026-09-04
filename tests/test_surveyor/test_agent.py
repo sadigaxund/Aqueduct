@@ -414,13 +414,13 @@ class TestStageForHuman:
         assert _kwargs["template_vars"]["root_cause"] == ""
         assert _kwargs["template_vars"]["rationale"] == "fix it"
 
-    def test_stage_patch_webhook_sets_ci_event(self, tmp_path):
-        """CI staging fires event='on_ci_patch'."""
+    def test_stage_patch_webhook_honors_custom_event_name(self, tmp_path):
+        """A caller-supplied `webhook_event` overrides the default event name."""
         from aqueduct.config import WebhookEndpointConfig
 
         with patch("aqueduct.surveyor.webhook.fire_webhook") as mock_fw:
             wh = WebhookEndpointConfig(url="http://ci.test")
-            spec = _patch_spec(patch_id="ci-1")
+            spec = _patch_spec(patch_id="custom-1")
             ctx = _failure_ctx()
 
             stage_patch_for_human(
@@ -429,11 +429,11 @@ class TestStageForHuman:
                 ctx,
                 on_patch_pending_webhook=wh,
                 source="replay",
-                webhook_event="on_ci_patch",
+                webhook_event="on_custom_patch",
             )
 
         mock_fw.assert_called_once()
-        assert mock_fw.call_args[1]["event"] == "on_ci_patch"
+        assert mock_fw.call_args[1]["event"] == "on_custom_patch"
         assert mock_fw.call_args[1]["full_payload"]["source"] == "replay"
 
     def test_stage_patch_webhook_defer_carries_diagnosis(self, tmp_path):

@@ -1,12 +1,13 @@
-"""Phase 54 — CI kit. The thin, serverless core for ``approval_mode: ci``.
+"""Phase 54 — heal-as-PR / patch-import kit, shared by ``aqueduct patch pr``,
+``aqueduct patch commit`` and ``aqueduct patch import``.
 
 The engine never runs a long-lived receiver and ships no versioned GitHub
 Action. The flow is: a run heals on a cluster, stages the patch, and fires the
 ``on_patch_pending`` webhook (see ``surveyor/webhook.py``); a CI runner receives
 that payload, obtains the patch body (artifact, or ``aqueduct patch pull``), and
-calls ``aqueduct patch import`` to apply + commit it on a checkout. The user owns
-a ~10-line workflow (see ``docs/templates/ci-heal-workflow.yml``); Aqueduct owns
-only the pure helpers below.
+calls ``aqueduct patch import`` to apply + commit it on a checkout, or
+``aqueduct patch pr`` to open a PR directly. Aqueduct owns only the pure
+helpers below — the user's CI workflow wires them together.
 """
 
 from __future__ import annotations
@@ -19,8 +20,7 @@ from aqueduct.patch.grammar import PATCH_META_KEY
 #
 # Aqueduct-owned branch name convention for `aqueduct patch pr`. A constant,
 # not a config knob (ratified: no registry, no per-project pattern override) —
-# `docs/templates/ci-heal-workflow.yml` references it instead of hardcoding
-# its own copy.
+# the user's CI workflow references it instead of hardcoding its own copy.
 HEAL_BRANCH_PREFIX = "aqueduct/heal"
 
 
@@ -30,8 +30,8 @@ def heal_branch_name(patch_id: str) -> str:
 
 
 # ── CI webhook payload schema ────────────────────────────────────────────────
-# Keys the ``on_patch_pending`` webhook always carries (approval_mode: ci). The
-# webhook also includes diagnostic extras (root_cause, rationale, category,
+# Keys the ``on_patch_pending`` webhook always carries. The webhook also
+# includes diagnostic extras (root_cause, rationale, category,
 # suggestions, patch_path) that workflows MAY use but are not required to wire.
 CI_WEBHOOK_REQUIRED_KEYS: tuple[str, ...] = (
     "patch_id",

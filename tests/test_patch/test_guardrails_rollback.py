@@ -419,9 +419,9 @@ class TestAutoModeDenyByDefault:
         spec = _patch({"op": "remove_module", "module_id": "x"})
         assert _check_guardrails(spec, bp, cfg=_CFG).status == "not_applicable"
 
-    @pytest.mark.parametrize("approval", ["human", "ci", "disabled", None])
+    @pytest.mark.parametrize("approval", ["human", "disabled", None])
     def test_non_auto_modes_keep_empty_allowlist_unrestricted(self, approval):
-        # A human reviews the patch in human/ci mode (and disabled never
+        # A human reviews the patch in human mode (and disabled never
         # auto-applies), so the pre-2.2.0 empty-means-unrestricted behavior
         # is preserved for every mode except auto.
         bp = _bp_with_guardrails(approval=approval)

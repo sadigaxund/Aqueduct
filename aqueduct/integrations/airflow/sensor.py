@@ -2,9 +2,10 @@
 
 The ``AqueductOperator`` already defers internally when it sees
 ``HEAL_PENDING``, so most DAGs do not need an explicit sensor. This class
-exists for the split-task pattern where the operator runs in ``ci`` mode and
-exits cleanly with ``HEAL_PENDING``, and a downstream sensor waits for
-approval before triggering a rerun task.
+exists for the split-task pattern where the operator's Blueprint runs with
+``agent.approval: human`` and exits cleanly with ``HEAL_PENDING`` when a
+patch is staged, and a downstream sensor waits for approval before
+triggering a rerun task.
 """
 
 from __future__ import annotations

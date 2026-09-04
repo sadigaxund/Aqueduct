@@ -441,7 +441,7 @@ def _check_path_against_allowlist(
                 "zero human review, so an unconfigured allowlist would let a "
                 "file-touching patch op write to any path. Configure "
                 "agent.guardrails.allowed_paths with an explicit fnmatch allowlist, "
-                "or switch agent.approval to human or ci so a human reviews the "
+                "or switch agent.approval to human so a human reviews the "
                 "patch before it applies."
             )
         return

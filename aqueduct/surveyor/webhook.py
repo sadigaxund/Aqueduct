@@ -72,7 +72,7 @@ def fire_webhook(
                        patch events (Phase 46): patch_id, root_cause, rationale,
                        confidence, category.
         event:         Event name (``on_failure`` / ``on_success`` /
-                       ``on_patch_pending`` / ``on_ci_patch``). Phase 46: when set
+                       ``on_patch_pending``). Phase 46: when set
                        and ``config.payload`` is None, the default body is the
                        standardized envelope ``{event, timestamp, run_id,
                        blueprint_id, data}`` with the event-specific payload under

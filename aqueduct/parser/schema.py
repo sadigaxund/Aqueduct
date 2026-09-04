@@ -214,7 +214,7 @@ class AgentSchema(AgentPolicySchema):
 
     # `approval` is the YAML key; the Python attribute name stays `approval_mode`
     # (internal — keyed in via the alias).
-    approval_mode: Literal["disabled", "human", "auto", "ci"] = Field(
+    approval_mode: Literal["disabled", "human", "auto"] = Field(
         default="disabled",
         validation_alias=AliasChoices("approval"),
     )

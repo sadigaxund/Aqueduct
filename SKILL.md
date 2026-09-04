@@ -93,8 +93,8 @@ expanded compilation unit.
 
 **`hooks:` (2.5)** — four events. `on_success`/`on_failure` run sequentially
 after the run's terminal state; `on_patch_pending`/`on_healed` fire MID-RUN
-at heal milestones (mirrors the engine-level `webhooks:` `on_patch_pending`/
-`on_ci_patch` vocabulary). `on_healed` always fires before the outer run's
+at heal milestones (mirrors the engine-level `webhooks:` `on_patch_pending`
+vocabulary). `on_healed` always fires before the outer run's
 terminal `on_success` hooks. NEVER changes the exit code (a failing hook
 warns + skips the event's remaining hooks). Exactly one of
 `blueprint:`/`webhook:`/`command:` per entry. `command:` interpolates only
@@ -430,7 +430,7 @@ macros:
 ## Self-healing agent (per-Blueprint POLICY — connection lives in aqueduct.yml only)
 ```yaml
 agent:
-  approval: auto              # disabled|human|auto|ci  (controls if/how patches apply)
+  approval: auto              # disabled|human|auto  (controls if/how patches apply)
   on_pending_patches: warn    # ignore|warn|block
   max_patches: 1              # >1 = multi-patch loop (also needs danger.allow_multi_patch / --allow-multi-patch)
   prompt_context: "Amounts are cents; never cast to INT."   # author hints to the healer
@@ -446,7 +446,7 @@ agent:
                                 # folds into an accumulating patch instead of being discarded; requires sandbox_mode != off
   max_chain: 3                 # hard cap on links in a progressive chain (independent of max_reprompts)
 ```
-`approval` values: `disabled` (never heal) · `human` (stage patch for review) · `auto` (apply validated patch; with `max_patches > 1` enables the multi-patch loop) · `ci` (stage + webhook). `mode`/`max_tool_calls`/`supports_tools`/`progressive`/`max_chain`/`prompt_context` (above) override the `aqueduct.yml`-level default when set; unset inherits it. **CONNECTION fields — `provider`, `base_url`, `model`, `api_key`, `provider_options`, `timeout`, `cascade` — are NOT legal in a Blueprint's `agent:` block.** `extra="forbid"` rejects one by name if you write it here; they configure ONLY in `aqueduct.yml` (next section) — a Blueprint cannot choose its own LLM endpoint, since the healing loop ships `FailureContext` (pruned manifest, provenance, error text, and, in agentic mode, sampled data rows) to whatever endpoint is configured, and letting a pipeline author redirect that is a data-exfiltration hole, not a convenience. `progressive: true` (`agent.approval: auto`, non-cascade path) chains multi-patch healing across DIFFERENT-module failures instead of re-diagnosing the same first bug every attempt — see `docs/specs.md` §8.13; `max_patches` semantics are unchanged.
+`approval` values: `disabled` (never heal) · `human` (stage patch for review) · `auto` (apply validated patch; with `max_patches > 1` enables the multi-patch loop). `mode`/`max_tool_calls`/`supports_tools`/`progressive`/`max_chain`/`prompt_context` (above) override the `aqueduct.yml`-level default when set; unset inherits it. **CONNECTION fields — `provider`, `base_url`, `model`, `api_key`, `provider_options`, `timeout`, `cascade` — are NOT legal in a Blueprint's `agent:` block.** `extra="forbid"` rejects one by name if you write it here; they configure ONLY in `aqueduct.yml` (next section) — a Blueprint cannot choose its own LLM endpoint, since the healing loop ships `FailureContext` (pruned manifest, provenance, error text, and, in agentic mode, sampled data rows) to whatever endpoint is configured, and letting a pipeline author redirect that is a data-exfiltration hole, not a convenience. `progressive: true` (`agent.approval: auto`, non-cascade path) chains multi-patch healing across DIFFERENT-module failures instead of re-diagnosing the same first bug every attempt — see `docs/specs.md` §8.13; `max_patches` semantics are unchanged.
 
 ## Engine config (`aqueduct.yml`) — NOT the Blueprint
 Separate file. Configures deployment target, Spark, stores, secrets, webhooks, and the agent's connection settings. Author it only when asked; Blueprints reference its results. Key blocks: `deployment` (engine/target/env), `engine` (per-engine settings namespaced by name — `engine.spark.master_url`, `engine.spark.conf`, `engine.duckdb`), `stores` (observability/depots/blob/benchmark + backend), `agent` (`provider`/`base_url`/`model`/`api_key`/`provider_options`/`timeout`/`cascade` — CONNECTION, engine-only; plus the same policy defaults the Blueprint can override), `danger` (allow_multi_patch, allow_full_probe_actions), `handoff` (`root` — cross-engine spill location, any engine-reachable URI, default `.aqueduct/handoff`; `keep_on_failure` — keep a boundary's spill after a failed run so a rerun skips recomputing it, default true), `timezone` (top-level, e.g. `"UTC"` — applied to EVERY engine's session at creation; only worth setting once a Blueprint spans more than one engine — an explicit `engine.spark.conf.spark.sql.session.timeZone` override still wins for Spark, with a warning naming the divergence). `agent.cascade` is engine-only — a Blueprint cannot declare or override a cascade (no `model: [list]` shorthand either; both were removed as Blueprint features — write an explicit list of tiers here). See `aqueduct/templates/default/aqueduct.yml.template`.
