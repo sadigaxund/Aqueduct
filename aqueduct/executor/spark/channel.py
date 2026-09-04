@@ -33,6 +33,7 @@ Manifest reaches the Executor; all config values are used verbatim.
 from __future__ import annotations
 
 import logging
+import threading
 from typing import TYPE_CHECKING
 
 from pyspark.sql import SparkSession
@@ -49,6 +50,22 @@ from aqueduct.models import Module
 logger = logging.getLogger(__name__)
 
 _SINGLE_INPUT_ALIAS = "__input__"
+
+# `__input__` is ONE name in the SparkSession's temp-view catalog, shared by
+# every single-input SQL Channel in the Manifest. Under `--parallel`
+# (`executor.py`'s ThreadPoolExecutor over independent components, all on the
+# SAME SparkSession) two Channels in two components register it concurrently:
+# thread A drops and creates `__input__` over frame A, thread B drops and
+# creates it over frame B, then thread A's `spark.sql(query)` analyzes against
+# B's frame. Silent wrong data, not an error. Serializing the
+# register/analyze/drop window closes it. The cost is small and bounded:
+# `spark.sql()` only parses and analyzes (the plan is resolved eagerly, which
+# is exactly why the `finally` below can drop the views), so no data movement
+# happens under the lock. The alias stays `__input__` in user SQL.
+#
+# The per-upstream-module-id views need no such guard: independent components
+# share no modules, so their module ids never collide across threads.
+_SQL_VIEW_LOCK = threading.Lock()
 
 _VALID_JOIN_TYPES = frozenset({"inner", "left", "right", "full", "semi", "anti", "cross"})
 
@@ -103,6 +120,17 @@ def _run_sql(
     upstream_dfs: dict[str, DataFrame],
     spark: SparkSession,
 ) -> DataFrame:
+    with _SQL_VIEW_LOCK:
+        return _run_sql_locked(module_id, query, upstream_dfs, spark)
+
+
+def _run_sql_locked(
+    module_id: str,
+    query: str,
+    upstream_dfs: dict[str, DataFrame],
+    spark: SparkSession,
+) -> DataFrame:
+    """Body of ``_run_sql``, always called holding ``_SQL_VIEW_LOCK``."""
     registered: list[str] = []
     # A Junction branch's frame key is `<junction_id>.<branch_id>`, and Spark
     # rejects a dotted temp view name outright
