@@ -394,11 +394,12 @@ caps than production.
 
 ---
 
-## 6. Store management
+## 6. Store and config inspection
 
 | Command | Description |
 |---------|-------------|
 | `aqueduct stores info` | Print each store's (observability / depots) resolved backend and location label |
+| `aqueduct config explain [--config <file>] [--blueprint <file>] [-s PATH=VALUE] [--source <src>] [--format table\|json]` | Print every resolved config value with the source it came from: `override` (`-s/--set`), `blueprint` (that Blueprint's own `agent:` block), `env` (an `aqueduct.yml` value written as `${VAR}`, with the variable named), `file` (a literal in `aqueduct.yml`), or `default` (the schema default). Read-only: it never writes anything back. `--blueprint` adds the Blueprint's `agent:` rows, which win for that Blueprint's runs. `--source` shows one source only. |
 
 ---
 

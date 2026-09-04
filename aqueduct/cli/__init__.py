@@ -1481,6 +1481,7 @@ if __name__ == "__main__":
 # ── extracted command families (registered + re-exported) ──────────────────────
 from .benchmark import benchmark, benchmark_diff_cmd, benchmark_stats_cmd  # noqa: E402,F401
 from .compile_cmd import compile  # noqa: E402,F401
+from .config_cmd import config_explain, config_group  # noqa: E402,F401
 from .dev import (  # noqa: E402,F401
     capabilities_check,
     capabilities_docs,
