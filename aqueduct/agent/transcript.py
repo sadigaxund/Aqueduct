@@ -48,16 +48,6 @@ def _cost_str(tokens_in: int, tokens_out: int, model: str | None = None) -> str:
     return f"tokens: {ti:,} in → {to:,} out"
 
 
-def _cache_label(cache_status: str | None) -> str:
-    if cache_status == "replay":
-        return "replayed (zero-token)"
-    if cache_status == "pending":
-        return "pending (zero-token)"
-    if cache_status == "coaching":
-        return "coached (zero-token)"
-    return ""
-
-
 def _gate_label(gate: str | None) -> str:
     if gate is None:
         return "accepted"
@@ -107,7 +97,7 @@ def _tier_label(cascade_position: int | None, model: str | None) -> str:
 _GATE_NUMBERS: tuple[tuple[str, int, str], ...] = (
     ("lineage gate", 2, "lineage"),
     ("sandbox gate", 3, "sandbox"),
-    ("explain gate", 4, "explain"),
+    ("resolvability gate", 4, "resolvability"),
 )
 
 
@@ -260,7 +250,6 @@ class TranscriptWriter:
         *,
         model: str | None = None,
         cascade_position: int | None = None,
-        cache_status: str | None = None,
         reprompt_reason: str | None = None,
     ) -> None:
         """Render one attempt as 1-2 lines (terse) or a full block (verbose).
@@ -270,7 +259,6 @@ class TranscriptWriter:
             patch_spec: The parsed ``PatchSpec`` (None on parse/API failure).
             model: Model name that produced this attempt (cascade tier's model).
             cascade_position: 0-based tier index (None outside cascade).
-            cache_status: ``"replay"`` / ``"pending"`` / ``"coaching"`` or None.
             reprompt_reason: Reason fed back to the model on rejection.
         """
         if cascade_position is None:
@@ -285,24 +273,18 @@ class TranscriptWriter:
                 patch_spec,
                 model=model,
                 cascade_position=cascade_position,
-                cache_status=cache_status,
                 reprompt_reason=reprompt_reason,
             )
         else:
-            self._write_terse(
-                rec, model=model, cascade_position=cascade_position, cache_status=cache_status
-            )
+            self._write_terse(rec, model=model, cascade_position=cascade_position)
 
-    def _verdict(self, rec: Any, cache_status: str | None) -> tuple[str, str | None]:
+    def _verdict(self, rec: Any) -> tuple[str, str | None]:
         """One-glyph outcome + short reason for a single turn.
 
         Returns ``(verdict, extra_detail)`` — ``extra_detail`` is a fuller
         explanation the caller may print on its own indented line (kept
         separate from the compact verdict so the default one-liner stays
         one line even when the detail is long)."""
-        cache = _cache_label(cache_status)
-        if cache:
-            return f"✓ {cache}", None
         gate = rec.gate_that_rejected
         if gate is None:
             return (
@@ -332,9 +314,8 @@ class TranscriptWriter:
         *,
         model: str | None = None,
         cascade_position: int | None = None,
-        cache_status: str | None = None,
     ) -> None:
-        verdict, detail = self._verdict(rec, cache_status)
+        verdict, detail = self._verdict(rec)
         gate = rec.gate_that_rejected
         if gate == "provider":
             # A provider-gate rejection means the model was never reached —
@@ -380,14 +361,13 @@ class TranscriptWriter:
         *,
         model: str | None = None,
         cascade_position: int | None = None,
-        cache_status: str | None = None,
         reprompt_reason: str | None = None,
     ) -> None:
         rail = self._RAIL
         sub = f"{rail}   "  # verbose sub-fields — rationale, ladder, tool, reprompt
 
         gate = rec.gate_that_rejected
-        verdict, detail = self._verdict(rec, cache_status)
+        verdict, detail = self._verdict(rec)
 
         if gate == "provider":
             # See the identical note in `_write_terse` — no repeated
@@ -422,11 +402,9 @@ class TranscriptWriter:
         head += f"  {verdict}"
         self._emit(head)
 
-        cache = _cache_label(cache_status)
-        if not cache:
-            cost = _cost_str(rec.tokens_in, rec.tokens_out, model)
-            if cost:
-                self._emit(f"{sub}{cost}")
+        cost = _cost_str(rec.tokens_in, rec.tokens_out, model)
+        if cost:
+            self._emit(f"{sub}{cost}")
 
         if patch_spec is not None:
             if patch_spec.rationale:

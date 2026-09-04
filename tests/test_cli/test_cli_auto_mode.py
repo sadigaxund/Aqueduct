@@ -103,7 +103,7 @@ def test_auto_mode_invalid_patch_stops_loop(
     mock_gen_patch.return_value = _mock_agent_result(invalid_patch)
 
     with (
-        patch("aqueduct.cli._run_patch_gates_inline", return_value=(None, None, None, None, False)),
+        patch("aqueduct.cli._run_patch_gates_inline", return_value=(None, None, None, False)),
         patch("aqueduct.cli._apply_patch_in_memory", return_value=None),
     ):
         result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-multi-patch"])
@@ -191,7 +191,7 @@ def test_auto_mode_fails_then_continues(
     with (
         patch(
             "aqueduct.cli._run_patch_gates_inline",
-            return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock(), True),
+            return_value=(MagicMock(), MagicMock(), MagicMock(), True),
         ),
         patch("aqueduct.cli._apply_patch_in_memory", return_value=MagicMock()),
         patch("aqueduct.cli._stage_failed_patch") as mock_stage,
@@ -249,7 +249,7 @@ def test_auto_mode_succeeds_stops_loop(
     with (
         patch(
             "aqueduct.cli._run_patch_gates_inline",
-            return_value=(MagicMock(), MagicMock(), MagicMock(), MagicMock(), True),
+            return_value=(MagicMock(), MagicMock(), MagicMock(), True),
         ),
         patch("aqueduct.cli._apply_patch_in_memory", return_value=MagicMock()),
         patch("aqueduct.cli._write_patch_to_blueprint") as mock_write,

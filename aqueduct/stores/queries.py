@@ -747,7 +747,13 @@ def failure_categories(cfg: Any, store_dir: str | None = None) -> dict[str, int]
 
 
 def heal_coverage(cfg: Any, store_dir: str | None = None) -> dict[str, int]:
-    """Zero-token (cached/replayed) vs LLM heal resolution counts across fleet."""
+    """Heal resolution counts across the fleet, keyed by ``resolution``.
+
+    ``llm`` is the only value written since the signature-keyed heal cache
+    was removed; a store written by an older version may still carry
+    historical ``cached``/``replayed`` rows, so the counts are returned as
+    found rather than collapsed into a ratio.
+    """
     agg: dict[str, int] = {}
     for h in discover_stores(cfg, store_dir=store_dir):
         try:

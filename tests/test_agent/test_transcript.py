@@ -72,14 +72,6 @@ class TestTranscriptWriterTerse:
         output = "\n".join(lines)
         assert "├─ tier 2 · deepseek-v3" in output
 
-    def test_terse_cache_hit(self):
-        lines: list[str] = []
-        tw = TranscriptWriter(verbose=False, write=lines.append)
-        rec = _rec(attempt_num=1, gate_that_rejected=None)
-        tw.write(rec, None, cache_status="replay")
-        output = " ".join(lines)
-        assert "replayed (zero-token)" in output
-
     def test_terse_escalated(self):
         lines: list[str] = []
         tw = TranscriptWriter(verbose=False, write=lines.append)

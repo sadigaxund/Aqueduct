@@ -830,8 +830,9 @@ def _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt) -> None:
     "--heal-coverage",
     is_flag=True,
     default=False,
-    help="Summarize healing_outcomes by resolution (llm / cached / "
-    "replayed) and report zero-token heal coverage instead of listing runs.",
+    help="Summarize healing_outcomes by resolution instead of listing runs. "
+    "`llm` is the only value written; a pre-2.3.0 store may still carry "
+    "historical `cached`/`replayed` rows.",
 )
 @click.option(
     "--cascade",
@@ -952,10 +953,14 @@ def runs(
         stores = [DuckDBObservabilityStore(c) for c in candidates]
 
     if heal_coverage:
-        # Phase 45 — playbook coverage: how many heals were resolved with
-        # zero LLM tokens (resolution 'cached' or 'replayed'). One distinct
-        # heal = one (parent_run_id-or-run_id, patch_id) outcome row group;
-        # raw row counts are good enough at this granularity.
+        # Breakdown of healing_outcomes by resolution. `llm` is the only
+        # value written since the signature-keyed heal cache was removed;
+        # older stores may still carry historical 'cached'/'replayed' rows,
+        # which is why the breakdown is rendered rather than assumed. One
+        # distinct heal = one (parent_run_id-or-run_id, patch_id) outcome row
+        # group; raw row counts are good enough at this granularity. No
+        # coverage ratio is derived: there is no live zero-token path left
+        # for it to measure.
         _by_resolution: dict[str, int] = {}
         for _s in stores:
             try:
@@ -974,15 +979,11 @@ def runs(
             for _res, _n in _rows:
                 _by_resolution[_res] = _by_resolution.get(_res, 0) + int(_n)
         _total = sum(_by_resolution.values())
-        _zero_token = _by_resolution.get("cached", 0) + _by_resolution.get("replayed", 0)
-        _coverage = (_zero_token / _total) if _total else 0.0
         if out_format.lower() == "json":
             emit(
                 {
                     "total_heals": _total,
                     "by_resolution": _by_resolution,
-                    "zero_token_heals": _zero_token,
-                    "zero_token_coverage": round(_coverage, 4),
                 },
                 fmt="json",
             )
@@ -996,10 +997,6 @@ def runs(
             _funnel_echo(f"  heals recorded: {_total}", err=False)
             for _res in sorted(_by_resolution):
                 _funnel_echo(f"    {_res:<10} {_by_resolution[_res]}", err=False)
-            _funnel_echo(
-                f"  zero-token coverage: {_coverage:.1%}  ({_zero_token}/{_total} heals needed no LLM call)",
-                err=False,
-            )
         return
 
     where_parts = []

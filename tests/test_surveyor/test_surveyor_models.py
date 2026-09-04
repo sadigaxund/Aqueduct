@@ -195,7 +195,7 @@ def test_failure_context_phase35_to_dict():
     assert d["object_name"] == "c"
 
 
-# ── Phase 45 — healing_outcomes DDL + record + successful_patch_ids ───────────
+# ── healing_outcomes DDL + record ─────────────────────────────────────────────
 
 
 def test_healing_outcomes_ddl_has_phase45_columns():
@@ -285,56 +285,6 @@ def test_record_healing_outcome_defaults_resolution_llm(tmp_path):
     ).fetchone()
     conn.close()
     assert row[0] == "llm"
-
-
-def test_successful_patch_ids_returns_matching_patches(tmp_path):
-    """successful_patch_ids returns patch_ids with run_success_after_patch=true."""
-    from aqueduct.compiler.models import Manifest
-    from aqueduct.surveyor.surveyor import Surveyor
-
-    manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), engine_config={})
-    store_dir = tmp_path / "obs3"
-    store_dir.mkdir()
-    surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
-    surveyor.start("run-sp-1")
-
-    surveyor.record_healing_outcome(
-        run_id="run-sp-1",
-        failed_module="m1",
-        failure_category="test",
-        model="claude",
-        patch_id="success-1",
-        confidence=0.9,
-        patch_applied=True,
-        run_success_after_patch=True,
-    )
-    surveyor.record_healing_outcome(
-        run_id="run-sp-2",
-        failed_module="m1",
-        failure_category="test",
-        model="claude",
-        patch_id="failed-1",
-        confidence=0.9,
-        patch_applied=True,
-        run_success_after_patch=False,
-    )
-    surveyor.stop()
-
-    ids = surveyor.successful_patch_ids()
-    assert "success-1" in ids
-    assert "failed-1" not in ids
-
-
-def test_successful_patch_ids_empty_on_store_error(tmp_path):
-    """successful_patch_ids returns empty set when store is down."""
-    from aqueduct.compiler.models import Manifest
-    from aqueduct.surveyor.surveyor import Surveyor
-
-    manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), engine_config={})
-    surveyor = Surveyor(manifest, store_dir=tmp_path / "missing", engine="spark")
-    # start() never called → _observability is None
-    ids = surveyor.successful_patch_ids()
-    assert ids == set()
 
 
 # ── Phase 46 — model_cascade_position ──────────────────────────────────────────

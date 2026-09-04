@@ -1654,7 +1654,6 @@ def run(
                         None,
                         model=_tier_model,
                         cascade_position=rec.model_cascade_position,
-                        cache_status=None,  # pending-reuse/replay are gone; every heal is "llm"
                     )
                 except Exception:
                     pass  # transcript is best-effort

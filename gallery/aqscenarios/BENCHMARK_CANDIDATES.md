@@ -66,6 +66,6 @@ Grading idea: tag each scenario `tier: baseline | hard | silent` and report heal
   may need a scenario-schema extension.
 - Hard-tier 2 and 10 are infra-class: patches target `engine.spark.conf`/session, which the current
   patch grammar may not fully address — that's the point (they also motivate the
-  spark-config-ops grammar extension; see TODOs Phase 70+ notes).
+  spark-config-ops grammar extension).
 - Each scenario should ship with a `red_herring:` field documenting the WRONG fix a naive model
   proposes — grading can then distinguish "healed" from "healed correctly".

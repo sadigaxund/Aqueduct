@@ -204,7 +204,7 @@ aqueduct run bp.yml \
 |---------|-------------|
 | `aqueduct runs` | List recent runs |
 | `aqueduct runs --failed` | Show only failed runs |
-| `aqueduct runs --heal-coverage` | `healing_outcomes.resolution` breakdown — `llm` is the only value written since Phase 92 removed the signature-keyed heal cache; a pre-2.3.0 store may still carry historical `cached`/`replayed` rows |
+| `aqueduct runs --heal-coverage` | `healing_outcomes.resolution` breakdown — `llm` is the only value written since the signature-keyed heal cache was removed; a pre-2.3.0 store may still carry historical `cached`/`replayed` rows |
 | `aqueduct runs --cascade` | Model-cascade-tier vs outcome (`healing_outcomes.model_cascade_position`, 0-based: 0 = first model tried): which tier produced which resolution/success |
 | `aqueduct runs --format text\|json` | `text\|json` only: the global `table\|json\|csv` does not apply to `runs` |
 | `aqueduct report <run_id>` | Detailed flow report for a run |

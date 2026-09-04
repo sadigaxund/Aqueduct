@@ -277,7 +277,7 @@ stores:
 #                                 # soon as this run's own readers are done
 
 
-# ── Polyglot session keep-alive (Phase 89) ──────────────────────────────────
+# ── Polyglot session keep-alive ─────────────────────────────────────────────
 #
 # A polyglot Blueprint executes each island against its own engine session.
 # By default the SAME engine recurring later in the run (e.g. spark ->

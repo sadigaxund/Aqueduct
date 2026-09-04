@@ -674,28 +674,6 @@ class Surveyor:
                 ],
             )
 
-    def successful_patch_ids(self) -> set[str]:
-        """patch_ids with at least one ``run_success_after_patch = true`` row.
-
-        Historically fed the Phase 45 replay cache (removed in Phase 92);
-        kept as a general-purpose query over confirmed-successful patches.
-        Best-effort — store errors return an empty set.
-        """
-        if self._observability is None:
-            return set()
-        try:
-            with self._observability.connect() as cur:
-                rows = cur.execute(
-                    """
-                    SELECT DISTINCT patch_id FROM healing_outcomes
-                     WHERE run_success_after_patch AND patch_id IS NOT NULL
-                    """
-                ).fetchall()
-            return {r[0] for r in rows if r and r[0]}
-        except Exception:
-            logger.debug("successful_patch_ids query failed", exc_info=True)
-            return set()
-
     def record_heal_attempt(
         self,
         *,

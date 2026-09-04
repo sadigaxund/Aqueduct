@@ -155,7 +155,7 @@ Columns added to `heal_attempts` after a release are migrated in place. Surveyor
 only (a parseable PatchSpec returned): it does NOT mean the heal fixed
 the pipeline. Join `healing_outcomes.run_success_after_patch` for that.
 
-**Removed (Phase 92).** `cached` and `replayed` used to mark synthetic
+**Removed.** `cached` and `replayed` used to mark synthetic
 zero-token rows (`attempt_num=0`, `tokens_in=tokens_out=0`) written when the
 signature-keyed heal cache resolved a failure without calling the LLM.
 That cache is gone — `aqueduct run` short-circuits on an existing pending
@@ -182,7 +182,7 @@ treat them as archival.
 | `prompt_version`          | VARCHAR | From `aqueduct.agent.PROMPT_VERSION` |
 | `failure_signature`       | VARCHAR | exact signature hash of the pipeline failure this heal addressed (16-char sha1 of error class + module + normalized message) |
 | `failure_signature_coarse`| VARCHAR | coarse signature hash (error class + module, no message), enables per-signature-family analytics (which families are solved by which cascade tier) without joining `patch_index` |
-| `resolution`              | VARCHAR | `llm` (fresh agent patch) — the only value written since Phase 92 removed the signature-keyed heal cache. A pre-2.3.0 database may still carry historical `cached` (pending-patch reuse) / `replayed` (archived patch re-validated through gates) rows; NULL on legacy rows, treat as `llm` (`COALESCE(resolution,'llm')`) |
+| `resolution`              | VARCHAR | `llm` (fresh agent patch) — the only value written since the signature-keyed heal cache was removed. A pre-2.3.0 database may still carry historical `cached` (pending-patch reuse) / `replayed` (archived patch re-validated through gates) rows; NULL on legacy rows, treat as `llm` (`COALESCE(resolution,'llm')`) |
 | `model_cascade_position`  | INTEGER | 0-based cascade tier index of the producing model. NULL outside cascade or when no LLM ran. `model` records the producing tier's model (previously the top-level `agent.model` even under cascade) |
 | `engine`                  | VARCHAR | Execution engine this heal targeted (`spark` \| `duckdb`) |
 
@@ -861,7 +861,7 @@ columns or aggregation tables:
 | `fleet_summary` | `list[BlueprintSummary]` | Per‑blueprint roll‑up (last run status, success rate, heal count) across all discovered blueprints |
 | `runs_over_time` | `list[DayCount]` | Daily run counts over a configurable window (`days` default 30) |
 | `failure_categories` | `dict[str, int]` | Count of failures grouped by `error_class` |
-| `heal_coverage` | `dict[str, int]` | Heals resolved by the signature memory cache (`memory`) vs the LLM (`agent`), per blueprint |
+| `heal_coverage` | `dict[str, int]` | Heal counts grouped by `healing_outcomes.resolution`. `llm` is the only value written now; older stores may still carry historical `cached`/`replayed` rows |
 | `gate_rejection_rates` | `dict[str, int]` | Count of `patch_simulation` rows with `status = 'fail'`, per `gate` (`engine_config`/`lineage`/`sandbox`/`resolvability`). `warn`, `not_applicable` and `unavailable` are not rejections: see the function's docstring for why. Note `unavailable` is not a rejection but *is* blocking for the `sandbox` gate, so a rising `unavailable` count means heals are stalling for humans without any patch being judged wrong; count it separately rather than reading it as health. A rising `resolvability` `warn` count (not counted here, see above) similarly means heals are stalling on missing packages rather than bad patches. Falls back to `heal_attempts.gate_that_rejected` counts when `patch_simulation` is unavailable |
 
 DuckDB: the functions iterate discovered per‑pipeline files. Postgres: a single
