@@ -290,6 +290,15 @@ def benchmark(
                     # `StopReason` is a `StrEnum` — emitted as a bare string,
                     # never an enum repr. None stays None: no invented axis.
                     "stop_reason": (str(r.stop_reason) if r.stop_reason is not None else None),
+                    # Token totals for the pair. `ScenarioResult` has carried
+                    # these since the benchmark store's schema did
+                    # (`benchmark_store.py` persists both columns), but this
+                    # hand-built dict dropped them, so the JSON output could
+                    # not answer "what did this model cost" without opening
+                    # the DuckDB store separately. Same omission shape as
+                    # `stop_reason` above.
+                    "tokens_in_total": r.tokens_in_total,
+                    "tokens_out_total": r.tokens_out_total,
                     "reprompt_errors": r.reprompt_errors,
                     "root_cause_match": r.root_cause_match,
                     "category_match": r.category_match,

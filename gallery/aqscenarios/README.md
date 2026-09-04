@@ -190,22 +190,24 @@ aqueduct benchmark gallery/aqscenarios/ --model claude-opus-4-7 --model llama3
 ### Testing with Local Models (Ollama / Custom)
 
 **Ad-hoc (no config file)** — override the connection on the command line.
-`benchmark` takes the connection triad as flags (precedence: flag >
-`aqueduct.yml` `agent` > built-in default):
+`benchmark` has one flag for the model (`--model`); everything else in the
+`agent` block is set with the generic `-s/--set` override, which takes a
+dotted path into `aqueduct.yml` (precedence: `-s` > `aqueduct.yml` `agent` >
+built-in default):
 
 ```bash
 aqueduct benchmark gallery/aqscenarios/ \
-  --provider openai_compat \
+  -s agent.provider=openai_compat \
   --model smallthinker:3b \
-  --base-url http://<OLLAMA_ADDRESS>:11434/v1 \
-  --timeout 600
+  -s agent.base_url=http://<OLLAMA_ADDRESS>:11434/v1 \
+  -s agent.timeout=600
 ```
 
 `openai_compat` needs no API key. `--model` is repeatable for a
-multi-model comparison. Raise `--timeout` (default 120s) for large or
+multi-model comparison. Raise `agent.timeout` (default 120s) for large or
 cold local models — a 7B+ model loading into VRAM on its first call
 routinely exceeds 120s; pre-warming it (`ollama run <model>` once) also
-avoids the cold-start hit. `--timeout 0` = no limit (unbounded read; the
+avoids the cold-start hit. `-s agent.timeout=0` = no limit (unbounded read; the
 connect phase still fails fast if the host is unreachable). Unbounded is
 never the default — one stuck model would hang the whole suite.
 
@@ -220,10 +222,11 @@ agent:
 ```
 
 Provider tuning (`provider_options` — temperature, ollama opts, …) and
-`guardrails` are **config-only**; there are no flags for them. `-e
-KEY=VAL` is a generic env primitive — it only affects agent config if
-`aqueduct.yml` explicitly references `${KEY}`. It is **not** a shortcut
-for setting the provider/model/base-url; use the flags above.
+`guardrails` are **config-only**; `-s` reaches them by dotted path, but
+there is no dedicated flag. `-e KEY=VAL` is a generic env primitive — it
+only affects agent config if `aqueduct.yml` explicitly references
+`${KEY}`. It is **not** a shortcut for setting the provider, model, or
+base URL; use `--model` and `-s agent.*` as shown above.
 
 ### Overnight: every scenario × every local model
 
@@ -236,9 +239,9 @@ curl -s http://localhost:11434/api/tags | jq -r '.models[].name'
 # 2. Kick off in a detached tmux session
 tmux new -ds bench bash -c '
   aqueduct benchmark gallery/aqscenarios/ \
-    --provider openai_compat \
-    --base-url http://localhost:11434/v1 \
-    --timeout 600 \
+    -s agent.provider=openai_compat \
+    -s agent.base_url=http://localhost:11434/v1 \
+    -s agent.timeout=600 \
     --workers 1 \
     --format json \
     --model qwen2.5-coder:7b \
@@ -257,7 +260,7 @@ tmux new -ds bench bash -c '
 
 **Flag choices:**
 - `--workers 1` keeps it serial — Ollama swaps weights per model, parallel calls would thrash VRAM.
-- `--timeout 600` tolerates cold-start weight loads on the first call to each model.
+- `-s agent.timeout=600` tolerates cold-start weight loads on the first call to each model.
 - `--format json` makes the log machine-parseable.
 - Persistence is on by default — disable with `--no-persist` if you only want the table.
 
@@ -286,7 +289,7 @@ aqueduct benchmark-diff --model qwen2.5-coder:7b --model llama3.1:70b \
   --store-path gallery/aqscenarios/.aqueduct/benchmark.duckdb
 ```
 
-**Rough runtime:** scenarios × models × ~30s avg per call, plus a 30s–2min cold-start swap per model. 6 scenarios × 10 models ≈ 1–3 hours with mostly 7–14B models; 70B models push it toward 6–10 hours. Lower `--timeout` if you want wedged calls to abort faster.
+**Rough runtime:** scenarios × models × ~30s avg per call, plus a 30s–2min cold-start swap per model. 6 scenarios × 10 models ≈ 1–3 hours with mostly 7–14B models; 70B models push it toward 6–10 hours. Lower `agent.timeout` if you want wedged calls to abort faster.
 
 ### Example Comparison Output
 
