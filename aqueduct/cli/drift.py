@@ -1,9 +1,8 @@
-"""`aqueduct drift` — proactive schema-drift detection.
+"""`aqueduct drift` — schema-drift detection (report-only).
 
-Standalone, schedulable command; `aqueduct run` is untouched. Where `run`'s
-self-heal is the **reactive arm** (fix after a failure), `drift` is the
-**proactive arm**: schedule it ahead of the batch, and an upstream schema change
-is caught and healed *before* the pipeline ever fails.
+Standalone, schedulable command; `aqueduct run` is untouched. Drift detection
+is an early warning you can schedule ahead of the batch — the run itself
+still heals reactively, after it actually fails.
 
 Flow per Ingress:
   1. Read the live source schema metadata-only (zero actions), through each
@@ -11,13 +10,13 @@ Flow per Ingress:
      Ingress modules are read via DuckDB, its Spark-resolved ones via Spark;
      never a single hardcoded engine for the whole run.
   2. Diff against the self-owned baseline (last-seen schema in `drift_checks`).
-     No baseline yet → store it, report `baseline_set`, no heal.
-  3. Classify: dropped/type-changed = breaking; added = benign.
-  4. On a breaking change, build an in-memory synthetic FailureContext and run
-     the normal agent + apply-gate, staging a patch (or firing the ci webhook).
+     No baseline yet → store it, report `baseline_set`.
+  3. Classify: dropped/type-changed = breaking; added = benign. Both are
+     recorded and printed; neither triggers a heal.
 
-Exit codes: 0 = no drift / baseline established; HEAL_PENDING = a patch was
-staged; DATA_OR_RUNTIME = a source could not be read/diffed.
+Exit codes: 0 = no drift / baseline established / only benign drift;
+DATA_OR_RUNTIME = a breaking change was found, or a source could not be
+read/diffed.
 """
 
 from __future__ import annotations
@@ -43,7 +42,6 @@ from aqueduct.models import ModuleType
 @click.argument("blueprint", type=click.Path(exists=True, dir_okay=False))
 @click.option("--config", "config_path", default=None, help="Path to aqueduct.yml")
 @click.option("--store-dir", default=None, help="Observability store directory")
-@click.option("--patches-dir", default="patches", show_default=True, help="Patch lifecycle root")
 @click.option(
     "--module",
     "only_module",
@@ -62,20 +60,17 @@ def drift(
     blueprint: str,
     config_path: str | None,
     store_dir: str | None,
-    patches_dir: str,
     only_module: str | None,
     fmt: str,
     env_file: str | None,
     cli_env: tuple[str, ...],
 ) -> None:
-    """Detect upstream schema drift and pre-emptively heal it.
+    """Detect upstream schema drift and report it.
 
     \b
     aqueduct drift blueprints/orders.yml      # check every Ingress
     aqueduct drift blueprints/orders.yml --module raw_orders
     """
-    import json as _json
-
     from aqueduct.cli.render.funnel import echo as _funnel_echo
     from aqueduct.cli.render.funnel import error as _funnel_error
     from aqueduct.cli.style import error as _error
@@ -151,8 +146,6 @@ def drift(
     obs = open_obs_write(cfg, manifest.blueprint_id, store_dir)
     drift_store.ensure_schema(obs)
 
-    manifest_json = _json.dumps(manifest.to_dict(), ensure_ascii=False)
-
     # ── Per-module engine session (metadata-only reads — no actions) ───────────
     # Route through EACH module's own resolved engine (`mod.engine`, set by
     # `resolve_module_engines` at compile time), not a hardcoded "spark" —
@@ -191,7 +184,7 @@ def drift(
 
     results: list[dict[str, Any]] = []
     undiffable = False
-    staged_any = False
+    breaking_any = False
 
     try:
         for mod in ingress:
@@ -230,24 +223,9 @@ def drift(
                 continue
 
             result = diff_schemas(baseline, live)
-            patch_id = None
 
             if result.has_breaking:
-                try:
-                    _src_yaml = Path(blueprint).read_text(encoding="utf-8")
-                except Exception:
-                    _src_yaml = None
-                patch_id = _heal_drift(
-                    cfg,
-                    manifest.blueprint_id,
-                    mod.id,
-                    result,
-                    manifest_json,
-                    Path(patches_dir),
-                    blueprint_source_yaml=_src_yaml,
-                )
-                if patch_id:
-                    staged_any = True
+                breaking_any = True
 
             drift_store.record_check(
                 obs,
@@ -258,7 +236,6 @@ def drift(
                 status=result.status,
                 breaking_changes=[_change_dict(c) for c in result.breaking] or None,
                 benign_changes=[_change_dict(c) for c in result.benign] or None,
-                patch_id=patch_id,
             )
             results.append(
                 {
@@ -266,10 +243,9 @@ def drift(
                     "status": result.status,
                     "breaking": [c.describe() for c in result.breaking],
                     "benign": [c.describe() for c in result.benign],
-                    "patch_id": patch_id,
                 }
             )
-            _echo_result(mod.id, result, patch_id)
+            _echo_result(mod.id, result)
     finally:
         for _engine, _session in _sessions.items():
             try:
@@ -280,10 +256,8 @@ def drift(
     if fmt == "json":
         emit({"blueprint_id": manifest.blueprint_id, "checks": results}, fmt="json")
 
-    if undiffable:
+    if undiffable or breaking_any:
         sys.exit(exit_codes.DATA_OR_RUNTIME)
-    if staged_any:
-        sys.exit(exit_codes.HEAL_PENDING)
     sys.exit(exit_codes.SUCCESS)
 
 
@@ -296,7 +270,7 @@ def _change_dict(c: Any) -> dict[str, Any]:
     }
 
 
-def _echo_result(module_id: str, result: Any, patch_id: str | None) -> None:
+def _echo_result(module_id: str, result: Any) -> None:
     # Text-format result rows (--format text is the default report) — stdout,
     # routed through the funnel so a long `c.describe()` wraps on a TTY and
     # stays one full record when piped.
@@ -309,71 +283,5 @@ def _echo_result(module_id: str, result: Any, patch_id: str | None) -> None:
         _funnel_echo(f"⚠ {module_id}: breaking drift", err=False)
         for c in result.breaking:
             _funnel_echo(f"    · {c.describe()}", err=False)
-        if patch_id:
-            _funnel_echo(f"  → patch staged: {patch_id}", err=False)
-        else:
-            _funnel_echo("  → no patch (agent disabled or failed to produce one)", err=False)
     for c in result.benign:
-        _funnel_echo(f"  ◦ {module_id}: benign — {c.describe()} (no heal)", err=False)
-
-
-def _heal_drift(
-    cfg: Any,
-    blueprint_id: str,
-    module_id: str,
-    result: Any,
-    manifest_json: str,
-    patches_path: Path,
-    blueprint_source_yaml: str | None = None,
-) -> str | None:
-    """Run the agent on a synthetic drift FailureContext; stage a patch. Returns patch_id."""
-    from aqueduct.agent import (
-        AgentRunConfig,
-        generate_agent_patch,
-        resolve_budget,
-        stage_patch_for_human,
-    )
-    from aqueduct.drift.context import build_synthetic_failure_context
-
-    eng = cfg.agent
-    if eng.model is None:
-        from aqueduct.cli.render.funnel import echo as _funnel_echo
-
-        _funnel_echo(f"  (agent disabled — set agent.model to auto-heal {module_id!r})", err=True)
-        return None
-
-    failure_ctx = build_synthetic_failure_context(
-        blueprint_id,
-        module_id,
-        result,
-        manifest_json,
-        engine=cfg.deployment.engine,
-        blueprint_source_yaml=blueprint_source_yaml,
-    )
-    budget = resolve_budget(getattr(eng, "budget", None), max_reprompts=eng.max_reprompts)
-
-    agent_result = generate_agent_patch(
-        agent_cfg=AgentRunConfig(
-            failure_ctx=failure_ctx,
-            model=eng.model,
-            patches_dir=patches_path,
-            provider=eng.provider or "anthropic",
-            base_url=eng.base_url,
-            api_key=eng.api_key,
-            provider_options=eng.provider_options,
-            timeout=eng.timeout,
-            max_reprompts=eng.max_reprompts,
-            engine_prompt_context=eng.prompt_context,
-            budget=budget,
-            allow_defer=False,
-        ),
-    )
-    if agent_result.patch is None:
-        return None
-    # Stage to the configured patch store (local OR s3/gcs/adls per stores.blob),
-    # not a hardcoded local dir — so a remote backend actually receives the body.
-    from aqueduct.stores.object_store import make_patch_store
-
-    _patch_store = make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, patches_path)
-    stage_patch_for_human(agent_result.patch, patches_path, failure_ctx, patch_store=_patch_store)
-    return agent_result.patch.patch_id
+        _funnel_echo(f"  ◦ {module_id}: benign — {c.describe()}", err=False)

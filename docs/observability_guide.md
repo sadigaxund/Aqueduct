@@ -430,7 +430,9 @@ Audit log for `aqueduct drift`: one row per Ingress per drift run. Created
 lazily by the `drift` command (not at every `run`). The **baseline is
 self-owned**: the most recent row's `live_schema` for an `(blueprint_id,
 module_id)` is the baseline the next check diffs against, so drift needs **no
-`schema_snapshot` Probe** to function.
+`schema_snapshot` Probe** to function. `drift` is **report-only**: it detects
+and records drift but never heals it — a breaking change is left for the next
+real `run` to hit and self-heal reactively.
 
 | Column             | Type    | Notes |
 |--------------------|---------|-------|
@@ -443,19 +445,15 @@ module_id)` is the baseline the next check diffs against, so drift needs **no
 | `status`           | VARCHAR | `baseline_set` \| `no_drift` \| `drift_benign` \| `drift_breaking` |
 | `breaking_changes` | JSON    | List of `{column, kind, baseline_type, live_type}` for dropped/type-changed |
 | `benign_changes`   | JSON    | List of added columns |
-| `patch_id`         | VARCHAR | Staged patch id when a breaking drift was healed |
+| `patch_id`         | VARCHAR | Unused; always NULL. Column kept for schema stability, no longer written |
 
-**Diagnostic: which sources drifted and got a patch?**
+**Diagnostic: which sources have breaking drift?**
 ```sql
-SELECT module_id, checked_at, status, patch_id
+SELECT module_id, checked_at, status
 FROM drift_checks
 WHERE blueprint_id = 'my.pipeline' AND status = 'drift_breaking'
 ORDER BY checked_at DESC;
 ```
-
-> Predicted-drift FailureContexts are driven through the agent **in memory** and
-> are **not** written to `failure_contexts`: that table stays a record of real
-> run failures, so failure analytics are never skewed by predictions.
 
 ### `<scenarios_dir>/.aqueduct/benchmark.duckdb`
 

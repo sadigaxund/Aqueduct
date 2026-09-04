@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.78: Reference Document**
+**Version 2.79: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -304,6 +304,14 @@ Every module resolves to exactly one engine, following four rules in this preced
 4. **Unset + no parents (an Ingress, typically) → `deployment.engine`** (or `--set deployment.engine`), the configured default.
 
 Precedence against config: `deployment.engine` only moves rule 4's DEFAULT. An explicit per-module pin (rule 1) always wins over it: the Blueprint expresses semantics (which engine this transform needs), the config expresses environment (which engine to default to). A Blueprint with no `engine:` field anywhere is fully portable across every registered engine; a pinned `engine:` is a declared engine dependency for that module's island, enforced by the capability gate below.
+
+> **EXPERIMENTAL: cross-engine islands and handoff.** Everything in this subsection about a
+> Blueprint spanning MORE THAN ONE engine (islands with a boundary edge, the synthetic Handoff
+> module, and the spill that carries data between them) is experimental and receives no further
+> investment. It works and is tested, but the shape may change and a new engine is NOT required
+> to support handoff to take part in Aqueduct: an engine that runs whole single-engine Blueprints
+> is a complete engine. Single-engine Blueprints, which is what almost every Blueprint is, are
+> unaffected and fully supported.
 
 **Islands** are derived, never declared: there is no user-facing island syntax. An island is a connected subgraph of modules that share one resolved engine (connectivity follows the same `main`/`spillway` data-edge basis used elsewhere for parallel-component detection, plus a Probe's mandatory bond to its `attach_to` target). A **boundary edge** is a data edge whose two endpoints resolve to different islands: the compiler splices a synthetic Handoff module in at each one (`A -> B` becomes `A -> handoff -> B`; see §10.9). Disjoint components pinned to different engines produce **zero** boundary edges: two independent single-engine flows run side by side in one Blueprint with no handoff at all.
 
@@ -900,6 +908,12 @@ This is a **compile-time preflight, not an installer**: Aqueduct never installs 
 
 See `aqueduct/dependencies.py` for the parser/comparator and §8.5 for `declare_dependency`, the healing-time counterpart that appends to this block.
 
+> **FROZEN: declare-and-check only.** `dependencies:` and its healing-time counterpart
+> `declare_dependency` are feature-complete and closed to extension. They declare what the
+> environment must already provide and check whether it does. Neither will ever install,
+> resolve, pin, or vendor a package, and no flag will be added to make them do so: installing
+> into the environment a pipeline runs in is the operator's job, not the engine's.
+
 ---
 
 # **6. Observability, Probes & Flow Report**
@@ -1184,20 +1198,20 @@ A generated patch clears four numbered gates plus a compile-check, in order, bef
 ✓ guardrails  →  ✓ compile-check  →  ✓ lineage  →  ✓ sandbox  →  ✓ resolvability  →  patch applied
 ```
 
-Gate 1 (guardrails) is deterministic policy: `agent.guardrails.forbidden_ops`, `allowed_paths`, `deny_patterns` (evaluated after `allowed_paths`, over the same resolved value; subtract-only, so it applies even when `allowed_paths` is empty), minimum confidence, enforced by `patch/apply.py::_check_guardrails`. **Under `agent.approval: auto` (2.2.0), an empty `allowed_paths` is deny-by-default rather than allow-all.** `auto` is the only mode where a patch applies with zero human review, so a file-touching op (`set_module_config_key`/`replace_module_config`/`insert_module`/`add_probe`/`add_arcade_ref` writing a `path` or `output_path`) is refused outright when no allowlist is configured, naming the offending value and pointing the operator at `agent.guardrails.allowed_paths` or a switch to `human`/`ci`. `human` and `ci` keep the historical empty-means-unrestricted behavior, since a human reviews the patch before it applies in both. For `set_engine_config` specifically, Gate 1 also enforces the target engine's core `engine_config_allowlist.yml`: deny entries first (a key/value match raises naming the deny entry's `reason`), then allow-list membership (fail closed: a key on no allow entry is refused), then type, then `enum`/`range` when the matched entry declares one; see the permission-model paragraph above and `aqueduct/executor/engine_config_allowlist.py`. The compile-check (`patch/apply.py::apply_patch_file`, re-parses the patched Blueprint) rejects any PatchSpec whose operations produce a Blueprint that no longer passes the Parser; it runs immediately after Gate 1 but is not itself numbered (AGENTS.md and the module docstrings in `preview.py`/`resolvability_gate.py` number only the four gates below). Gate 2 (lineage, `patch/preview.py::run_lineage_gate`) checks whether the patch breaks a downstream column consumer via live `sqlglot` analysis; a patch whose operations touch zero modules (e.g. `set_engine_config`, which carries only `engine`/`key`/`value`) has no lineage surface to check at all, so the gate reports `not_applicable` with a reason rather than the misleading `pass` a patch that WAS checked and found clean also reports: informational only, it never blocks the patch. Gate 3 (sandbox, `patch/preview.py::run_sandbox_gate`) replays the patched Blueprint against representative data (a per-Ingress row sample by default, no live writes), building its owned session's engine config through the SAME resolver (`aqueduct.executor.session_config.resolve_session_engine_config`) `aqueduct run` uses; so a replay against a non-Spark engine sees that engine's real `engine.<name>.*` config (DuckDB's `memory_limit`/`threads`/`database_path`/`extension_repository`/`s3_*` and any httpfs/secrets wiring) instead of a Spark-only default. For the same zero-module patches Gate 2 reports `not_applicable` for, Gate 3 still runs and still reports `pass` on a clean replay, but words the `detail` honestly rather than letting it read as a validated fix: the session built and the sample replayed successfully under the PATCHED engine config, but a small local sample cannot reproduce the cluster-scale resource failure (OOM, shuffle spill) the patch is usually trying to fix; only the full re-run proves that. `gates_passed` is unaffected; only the `detail` string (also persisted to `patch_simulation`, so any downstream reader inherits the same honest wording) changes. Gate 4 (resolvability, `patch/resolvability_gate.py::run_resolvability_gate`, 2.66) is the odd one out in the pyramid: it never touches the Blueprint or the engine, it only asks PyPI whether every `declare_dependency` op's requirement is resolvable. `not_applicable` when the patch declares nothing; otherwise `pass`/`warn`/`fail`/`unavailable` per requirement, worst-wins across multiple requirements. Its `warn` is unlike every other gate's: it is not advisory, it is a hard defer; a `warn` here always routes the patch to pending/human review, never auto-apply, because the requirement genuinely is not yet satisfied in this environment and Aqueduct will not install it. `aqueduct patch preview --sandbox` runs the same pyramid on demand, before an operator decides whether to apply.
+Gate 1 (guardrails) is deterministic policy: `agent.guardrails.forbidden_ops`, `allowed_paths`, `deny_patterns` (evaluated after `allowed_paths`, over the same resolved value; subtract-only, so it applies even when `allowed_paths` is empty), minimum confidence, enforced by `patch/apply.py::_check_guardrails`. **Under `agent.approval: auto` (2.2.0), an empty `allowed_paths` is deny-by-default rather than allow-all.** `auto` is the only mode where a patch applies with zero human review, so a file-touching op (`set_module_config_key`/`replace_module_config`/`insert_module`/`add_probe`/`add_arcade_ref` writing a `path` or `output_path`) is refused outright when no allowlist is configured, naming the offending value and pointing the operator at `agent.guardrails.allowed_paths` or a switch to `human`. `human` keeps the historical empty-means-unrestricted behavior, since a human reviews the patch before it applies. For `set_engine_config` specifically, Gate 1 also enforces the target engine's core `engine_config_allowlist.yml`: deny entries first (a key/value match raises naming the deny entry's `reason`), then allow-list membership (fail closed: a key on no allow entry is refused), then type, then `enum`/`range` when the matched entry declares one; see the permission-model paragraph above and `aqueduct/executor/engine_config_allowlist.py`. The compile-check (`patch/apply.py::apply_patch_file`, re-parses the patched Blueprint) rejects any PatchSpec whose operations produce a Blueprint that no longer passes the Parser; it runs immediately after Gate 1 but is not itself numbered (AGENTS.md and the module docstrings in `preview.py`/`resolvability_gate.py` number only the four gates below). Gate 2 (lineage, `patch/preview.py::run_lineage_gate`) checks whether the patch breaks a downstream column consumer via live `sqlglot` analysis; a patch whose operations touch zero modules (e.g. `set_engine_config`, which carries only `engine`/`key`/`value`) has no lineage surface to check at all, so the gate reports `not_applicable` with a reason rather than the misleading `pass` a patch that WAS checked and found clean also reports: informational only, it never blocks the patch. Gate 3 (sandbox, `patch/preview.py::run_sandbox_gate`) replays the patched Blueprint against representative data (a per-Ingress row sample by default, no live writes), building its owned session's engine config through the SAME resolver (`aqueduct.executor.session_config.resolve_session_engine_config`) `aqueduct run` uses; so a replay against a non-Spark engine sees that engine's real `engine.<name>.*` config (DuckDB's `memory_limit`/`threads`/`database_path`/`extension_repository`/`s3_*` and any httpfs/secrets wiring) instead of a Spark-only default. For the same zero-module patches Gate 2 reports `not_applicable` for, Gate 3 still runs and still reports `pass` on a clean replay, but words the `detail` honestly rather than letting it read as a validated fix: the session built and the sample replayed successfully under the PATCHED engine config, but a small local sample cannot reproduce the cluster-scale resource failure (OOM, shuffle spill) the patch is usually trying to fix; only the full re-run proves that. `gates_passed` is unaffected; only the `detail` string (also persisted to `patch_simulation`, so any downstream reader inherits the same honest wording) changes. Gate 4 (resolvability, `patch/resolvability_gate.py::run_resolvability_gate`, 2.66) is the odd one out in the pyramid: it never touches the Blueprint or the engine, it only asks PyPI whether every `declare_dependency` op's requirement is resolvable. `not_applicable` when the patch declares nothing; otherwise `pass`/`warn`/`fail`/`unavailable` per requirement, worst-wins across multiple requirements. Its `warn` is unlike every other gate's: it is not advisory, it is a hard defer; a `warn` here always routes the patch to pending/human review, never auto-apply, because the requirement genuinely is not yet satisfied in this environment and Aqueduct will not install it. `aqueduct patch preview --sandbox` runs the same pyramid on demand, before an operator decides whether to apply.
 
 - **No silent mutations.** Every patch is a structured diff with a rationale and a confidence score. Low confidence escalates to human review.
 - **No production data corruption.** The sandbox validates patches against representative data before they reach live writes.
 - **No runaway loops.** Budgets bound wall-clock, tokens, and stuck-signature counts. A rolling rate-limit caps healing attempts per hour per blueprint.
 - **No black-box decisions.** Every LLM turn persists with the gate that rejected it, a stable error signature, and the prompt version.
 
-## **8.8 Proactive drift detection (`aqueduct drift`)**
+## **8.8 Drift detection (`aqueduct drift`)**
 
-Self-healing has two arms. `run`'s heal is the **reactive arm**, it fixes a
-pipeline *after* it fails. `aqueduct drift` is the **proactive arm**, a
-standalone, schedulable command that catches an upstream schema change and heals
-it *before* the pipeline ever runs. Schedule it ahead of the batch (e.g. cron,
-30 min before the nightly job); `run` itself is untouched.
+`aqueduct drift` is an **early warning** you can schedule ahead of the batch
+(e.g. cron, 30 min before the nightly job) — it detects and reports upstream
+schema drift; it does not heal anything. Healing stays entirely with `run`'s
+self-heal, which fixes a pipeline *after* it actually fails; `run` itself is
+untouched by `drift`.
 
 Per Ingress, `drift`:
 
@@ -1209,20 +1223,15 @@ Per Ingress, `drift`:
    cleanly (no Probe dependency).
 3. **Classifies** each change: a *dropped* or *type-changed* column is
    **breaking** (a downstream Channel that names it will fail); an *added*
-   column is **benign** (a `SELECT named_cols` pipeline tolerates a superset) and
-   never triggers a heal.
-4. On a breaking change, builds an **in-memory synthetic FailureContext**
-   (`error_class = PREDICTED_SCHEMA_DRIFT`, the missing column as `object_name`,
-   any added columns as `suggested_columns` rename candidates) and drives it
-   through the **same agent + apply gate** as a real failure, staging a patch or
-   firing the `ci` webhook.
+   column is **benign** (a `SELECT named_cols` pipeline tolerates a superset).
+   Both are recorded in `drift_checks` and printed in the report; neither
+   triggers a heal — a breaking change is left for the next real `run` to
+   catch and self-heal reactively.
 
 Scope is **schema drift only**: value-distribution / data-quality drift is out
-of scope (a noisier, separate concern). The synthetic FailureContext is **not**
-persisted to `failure_contexts`; the audit lands in `drift_checks`, keeping
-failure analytics a record of real failures. Exit codes: `0` (no drift /
-baseline set), `HEAL_PENDING` (patch staged), `DATA_OR_RUNTIME` (source
-undiffable).
+of scope (a noisier, separate concern). Exit codes: `0` (no drift / baseline
+set / only benign drift), `DATA_OR_RUNTIME` (a breaking change was found, or a
+source could not be read/diffed).
 
 ## **8.10 Diagnostics & the Tool Registry**
 
@@ -1874,6 +1883,11 @@ Databricks migration path.
 
 ## **10.9 Engines and the capability framework**
 
+> **A new engine is not required to support cross-engine handoff.** The handoff/island
+> machinery (§4.3, §11.4) is experimental. What an engine must implement to be complete is the
+> `ExecutorProtocol` plus its own capability declaration; taking part in a polyglot Blueprint is
+> optional and unsupported territory.
+
 The Blueprint grammar (module types, Channel ops, Egress write modes, feature flags) is engine-agnostic by design. `deployment.engine` selects which engine runs a compiled Manifest. No engine is required to implement the whole grammar, and a leaf an engine does implement may still need a minimum dependency version. The capability framework makes both facts explicit and enforced, so a Blueprint that asks an engine for something it cannot do fails at compile time with a specific message instead of at runtime with an engine stack trace.
 
 ### Engines that ship today
@@ -2152,6 +2166,10 @@ Aqueduct has no built-in scheduler. `aqueduct run` is a one-shot CLI command des
 The Airflow integration (`aqueduct-core[airflow]`) provides `AqueductOperator` with a deferrable `AqueductPatchSensor`/`AqueductPatchTrigger` pair for the HEAL_PENDING approval flow. This is the recommended production scheduler.
 
 ## **11.4 When to split engines across a Blueprint**
+
+> **EXPERIMENTAL.** Splitting one Blueprint across engines is experimental and receives no
+> further investment. A new engine need not support handoff to be a first-class Aqueduct
+> engine; running whole single-engine Blueprints is the bar.
 
 A module's `engine:` field (§4.3) and the compiler-inserted Handoff module (§10.9) let one Blueprint span both engines. That capability has a cost, and the question of when to pay it deserves its own answer.
 

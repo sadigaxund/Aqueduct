@@ -1,9 +1,9 @@
 """Phase 58 — `aqueduct drift` CLI flow.
 
 Integration of the command end to end with the Spark boundary stubbed
-(`make_spark_session` + `read_source_schema`) and the agent mocked — so the
-real compile → baseline → classify → heal → exit-code path is exercised without
-a cluster or a live LLM.
+(`make_spark_session` + `read_source_schema`) — so the real
+compile → baseline → classify → exit-code path is exercised without a
+cluster. `drift` is report-only: no agent is involved.
 
 Why stub via ``monkeypatch.setitem(sys.modules, …)``: the drift CLI ends with
 ``session.stop()``. ``make_spark_session`` uses ``getOrCreate``, so a real call
@@ -113,26 +113,20 @@ def test_first_run_sets_baseline(project):
     assert "baseline established" in res.output
 
 
-def test_breaking_drift_stages_patch_and_exits_heal_pending(project, monkeypatch):
+def test_breaking_drift_reports_and_exits_data_or_runtime(project):
     tmp_path, store, schema = project
-    import aqueduct.agent as agent
 
     # Run 1 → baseline with both columns.
     schema["schema"] = {"a": "int", "b": "string"}
     assert _invoke(tmp_path, store).exit_code == 0
 
-    # Run 2 → column b dropped (breaking); mock the agent staging a patch.
+    # Run 2 → column b dropped (breaking). No agent involvement — report-only.
     schema["schema"] = {"a": "int"}
-    fake = MagicMock()
-    fake.patch = MagicMock(patch_id="pid-123")
-    monkeypatch.setattr(agent, "generate_agent_patch", lambda *a, **k: fake)
-    monkeypatch.setattr(agent, "stage_patch_for_human", lambda *a, **k: None)
 
     res = _invoke(tmp_path, store)
-    assert res.exit_code == exit_codes.HEAL_PENDING, res.output
+    assert res.exit_code == exit_codes.DATA_OR_RUNTIME, res.output
     assert "breaking drift" in res.output
     assert "column 'b' dropped" in res.output
-    assert "pid-123" in res.output
 
 
 def test_benign_addition_does_not_heal(project):

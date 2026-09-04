@@ -278,7 +278,7 @@ The sandbox gate replays a generated patch BEFORE applying it, to catch broken p
 | Command | Description |
 |---------|-------------|
 | `aqueduct heal <run_id>` | Trigger self-healing on a failed run (the **reactive arm**, fix after a failure) |
-| `aqueduct drift <blueprint>` | Detect upstream schema drift and pre-emptively heal it (the **proactive arm**, fix before a failure) |
+| `aqueduct drift <blueprint>` | Detect and report upstream schema drift (an early warning; healing stays with `run`'s reactive self-heal) |
 | `aqueduct benchmark <path>` | Evaluate scenarios against models |
 | `aqueduct benchmark-diff` | Compare benchmark results for regressions |
 | `aqueduct benchmark-stats [path]` | Aggregate the store: model leaderboard, hardest scenarios, pass-rate trend |
@@ -297,22 +297,24 @@ The sandbox gate replays a generated patch BEFORE applying it, to catch broken p
 **Key flags for `drift`:**
 
 `drift` is standalone and schedulable: run it on a cron *ahead* of the batch so
-an upstream schema change is caught and a patch staged before the pipeline runs.
-It reads each Ingress's live schema metadata-only (zero Spark actions), diffs
-against a self-owned baseline (the `drift_checks` table, no Probe required), and
-heals only **breaking** changes (dropped / type-changed columns); added columns
-are benign and never trigger a heal.
+an upstream schema change is caught early. It is **report-only** — it reads
+each Ingress's live schema metadata-only (zero Spark actions), diffs against a
+self-owned baseline (the `drift_checks` table, no Probe required), and reports
+**breaking** changes (dropped / type-changed columns) separately from
+**benign** ones (added columns). It never invokes the agent or stages a patch;
+healing stays with `run`'s reactive self-heal, which fixes the pipeline when it
+actually fails.
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--module <module_id>` | all Ingress | Limit the check to one Ingress module |
-| `--patches-dir <path>` | `patches` | Root directory for the patch lifecycle subdirs |
 | `--store-dir <path>` | from config | Observability store directory |
 | `--config <path>` | `./aqueduct.yml` walked upward | Path to `aqueduct.yml` |
 | `--format text\|json` | `text` | Output shape |
 
-Exit codes: `0` (no drift, or a baseline was established), `3` `HEAL_PENDING`
-(a patch was staged), `2` `DATA_OR_RUNTIME` (a source could not be read/diffed).
+Exit codes: `0` (no drift, or a baseline was established, or only benign
+drift), `2` `DATA_OR_RUNTIME` (a breaking change was found, or a source could
+not be read/diffed).
 
 **Key flags for `benchmark`:**
 

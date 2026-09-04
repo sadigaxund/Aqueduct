@@ -383,12 +383,11 @@ When adding a new outbound-HTTP path: reuse `infra/http.py`. Doctor probes are i
 | `depot.py` | `DepotStore` façade — delegates to whichever store backend is configured |
 | `__init__.py` | Empty |
 
-### `aqueduct/drift/` — Proactive schema-drift detection (`aqueduct drift`)
+### `aqueduct/drift/` — Report-only schema-drift detection (`aqueduct drift`)
 
 | Module | What it owns |
 |--------|--------------|
-| `classifier.py` | Pure baseline-vs-live schema diff: *dropped/type-changed* = breaking (triggers a predicted heal), *added* = benign (audit only). No pyspark |
-| `context.py` | Synthetic in-memory `FailureContext` for a predicted failure — reuses the normal agent + apply-gate machinery unchanged; NOT persisted to `failure_contexts` (that table means "a real run failed") |
+| `classifier.py` | Pure baseline-vs-live schema diff: *dropped/type-changed* = breaking (reported, nonzero exit), *added* = benign (audit only). No pyspark |
 | `store.py` | `drift_checks` audit table + self-owned baseline (latest row's `live_schema` is the next check's baseline — no Probe required) |
 
 The CLI command lives in `aqueduct/cli/drift.py`.
@@ -496,7 +495,7 @@ keep working. Command families live in submodules:
 | `__init__.py` | `cli` group + group options; all shared `_*` helpers; command registration/re-export |
 | `run.py` | `run` (+ `--sandbox`), `compile` |
 | `heal.py` | `heal` |
-| `drift.py` | `drift` — proactive schema-drift check + pre-emptive heal (the reactive arm's counterpart); domain logic lives in `aqueduct/drift/` |
+| `drift.py` | `drift` — report-only schema-drift check (an early warning; healing stays with `run`'s reactive self-heal); domain logic lives in `aqueduct/drift/` |
 | `patch.py` | `patch` group: preview/policy/apply/revert/import/reject/pull/commit/discard/list/log/rollback (`revert` = in-place undo of one patch's engine-config writes, `rollback` = git whole-file restore — see `aqueduct/patch/revert.py`) |
 | `observability.py` | `report`, `runs`, `lineage`, `signal` |
 | `benchmark.py` | `benchmark`, `benchmark-diff`, `benchmark-stats` |
