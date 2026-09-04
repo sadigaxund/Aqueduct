@@ -22,3 +22,8 @@ agent:
   model: gpt-4o-mini
   budget:
     max_reprompts: 3
+
+danger:
+  # Chaining is a multi-patch loop: max_patches > 1 stays refused until the
+  # operator opts in here (or passes --allow-multi-patch for a single run).
+  allow_multi_patch: true

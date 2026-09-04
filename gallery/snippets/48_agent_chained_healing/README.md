@@ -22,7 +22,8 @@ run to trigger the chain. `blueprint.yml` is the same
 pipeline already healed; it's the file CI's snippet lane runs via
 `aqueduct run blueprint.yml`, so the lane stays green with no LLM key.
 Both files share the identical `agent: {approval: auto, max_patches: 3,
-sandbox_mode: sample}` block.
+sandbox_mode: sample}` block, and `aqueduct.yml` sets
+`danger.allow_multi_patch: true`, which any `max_patches > 1` run needs.
 
 ## How it works
 
@@ -56,8 +57,8 @@ links, independent of each link's own `max_reprompts`/budget ceiling.
 
 **Sandbox requirement.** Each link's validation IS its advancement test:
 without per-link sandbox replay, a link has no way to check a candidate
-before folding it into the accumulated patch. `require_sandbox_for_
-` refuses to start chained healing when
+before folding it into the accumulated patch. `require_sandbox_for_chained_healing`
+(`aqueduct/cli/run_setup.py`) refuses to start chained healing when
 `agent.sandbox_mode: off`; this blueprint sets `sandbox_mode: sample`
 explicitly (the same as the default) so the requirement is visible.
 
@@ -68,9 +69,10 @@ python populate_data.py
 aqueduct run blueprint_bugged.yml
 ```
 
-The run fails at `priced` (bug #1). Because `approval: auto` and
-chained healing goes straight through both bugs
-in one heal cycle rather than stopping after the first fix stops "working".
+The run fails at `priced` (bug #1). Because `approval: auto` is set and
+`danger.allow_multi_patch: true` opens the multi-patch loop, chained
+healing goes straight through both bugs in one heal cycle rather than
+stopping after the first fix stops "working".
 
 ```bash
 python inspect_results.py
