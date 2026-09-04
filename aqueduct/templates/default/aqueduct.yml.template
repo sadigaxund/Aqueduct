@@ -156,7 +156,9 @@ engine:
 #   observability.db  — run records, failure contexts, signal overrides, probe
 #                 signals, module + maintenance metrics, healing outcomes, AND
 #                 column-level lineage (column_lineage)
-#   depot.db    — depot KV store (@aq.depot.*)
+#   depot.db    — depot KV store (@aq.depot.*), its own file per blueprint under
+#                 .aqueduct/observability/<blueprint_id>/, never inside
+#                 observability.db
 #
 # Supported backends:
 #   duckdb    — embedded; single-writer file. Suits local / dev / NFS.
@@ -187,20 +189,26 @@ stores:
     # path: "postgresql://aq@host:5432/aqueduct_db"
 
   # Depot — cross-run KV state (@aq.depot.*). A name-keyed MAP of mounts. The
-  # `default` mount always exists even if omitted; every mount is per-blueprint
-  # KEY-ISOLATED (keys prefixed by blueprint_id) so blueprints never collide on a
-  # shared depot. Read with @aq.depot.get('k') (default) / @aq.depot.<name>.get('k').
+  # `default` mount always exists even if omitted. A duckdb mount with NO `path`
+  # is routed per blueprint to its own file at
+  # .aqueduct/observability/<blueprint_id>/depot.db; a mount with an explicit
+  # `path` shares that one file across blueprints and is KEY-ISOLATED instead
+  # (keys prefixed by blueprint_id). Either way blueprints never collide.
+  # Read with @aq.depot.get('k') (default) / @aq.depot.<name>.get('k').
   depots:
     default:
       backend: duckdb
-      path: ".aqueduct/depot.db"
+      # path: unset (default) → .aqueduct/observability/<blueprint_id>/depot.db
+      # path: ".aqueduct/depot.db"   # one shared file, keys prefixed per blueprint
       # backend: postgres
       # path: "postgresql://aq@host:5432/aqueduct_db"
       # Redis-only fast-path (uncomment + install `aqueduct-core[redis]`):
       # backend: redis
       # path: "redis://host:6379/0"
     # An extra, explicitly CROSS-BLUEPRINT mount (raw keys — the one place
-    # collisions are possible; use postgres/redis for parallel writers):
+    # collisions are possible; use postgres/redis for parallel writers).
+    # `shared: true` always needs an explicit `path`: a per-blueprint file
+    # cannot be shared, so leaving `path` unset is a config error.
     # fleet:
     #   backend: postgres
     #   path: "postgresql://aq@host:5432/fleet_db"

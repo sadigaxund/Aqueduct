@@ -117,7 +117,7 @@ def validate(
                     "master_url": cfg.engine.spark.master_url,
                     "stores": {
                         "observability": cfg.stores.observability.path or "(default)",
-                        "depot": cfg.stores.default_depot().path,
+                        "depot": cfg.stores.default_depot().path or "(default)",
                     },
                     "secrets_provider": cfg.secrets.provider,
                     "webhooks": wh,
@@ -133,7 +133,7 @@ def validate(
                     err=False,
                 )
                 emit(
-                    f"  stores:  observability={cfg.stores.observability.path or '(default)'}  depot={cfg.stores.default_depot().path}",
+                    f"  stores:  observability={cfg.stores.observability.path or '(default)'}  depot={cfg.stores.default_depot().path or '(default)'}",
                     fmt="text",
                     redact=True,
                     err=False,

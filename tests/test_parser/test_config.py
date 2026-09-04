@@ -89,7 +89,9 @@ def test_config_defaults():
     assert config.engine.spark.master_url == "local[*]"
     assert config.stores.observability.path is None
     assert not hasattr(config.stores, "lineage")  # removed — merged into observability
-    assert config.stores.default_depot().path == ".aqueduct/depot.db"
+    # No explicit path — the default mount is routed per blueprint to its own
+    # `<routing root>/<blueprint_id>/depot.db` file (see test_depot_mount_routing).
+    assert config.stores.default_depot().path is None
     assert config.agent.model == "claude-sonnet-4-6"
     assert config.probes.max_sample_rows == 100
     assert config.secrets.provider == "env"

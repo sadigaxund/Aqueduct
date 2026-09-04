@@ -393,7 +393,10 @@ def build_depot_mounts(
 
     Each mount is per-blueprint key-isolated (prefixed ``<blueprint_id>:``)
     unless ``shared: true``. With no ``blueprint_id`` (some non-run contexts)
-    keys are raw — same as pre-isolation.
+    keys are raw — same as pre-isolation. A mount with NO explicit ``path``
+    (DuckDB only) is instead routed to its own file at
+    ``<routing root>/<blueprint_id>/depot.db`` and skips the key prefixing —
+    the file already is the isolation.
 
     ``read_only``: when True and a mount resolves to the DuckDB backend, the
     returned store connects read-only (see ``_DuckDBRelational``) so a preview
@@ -404,13 +407,17 @@ def build_depot_mounts(
     from aqueduct.stores.duckdb_ import DuckDBDepotStore
 
     def _resolve_depot_duckdb_path(mount: Any) -> Path:
-        # Depot mounts: `path` names the db FILE (e.g. .aqueduct/depot.db).
+        # Depot mounts: an explicit `path` names the db FILE.
         if mount.path is None:
-            from aqueduct.config import DEFAULT_OBS_DB_FILENAME
+            # No `path` — route the mount per blueprint, to its OWN file at
+            # <routing root>/<blueprint_id>/depot.db. Deliberately NOT
+            # `observability.db`: the depot is cross-run user state and must
+            # not share a file with the run/observability tables.
+            from aqueduct.config import DEFAULT_DEPOT_DB_FILENAME
             from aqueduct.stores.read import _OBS_ROUTING_ROOT
 
             _base = Path(store_dir_override) if store_dir_override else Path(_OBS_ROUTING_ROOT)
-            return _base / (blueprint_id or "default") / DEFAULT_OBS_DB_FILENAME
+            return _base / (blueprint_id or "default") / DEFAULT_DEPOT_DB_FILENAME
         p = Path(mount.path)
         if store_dir_override is not None and not p.is_absolute():
             return Path(store_dir_override) / p.name
@@ -434,7 +441,9 @@ def build_depot_mounts(
     depots: dict[str, DepotStore] = {}
     for name, mount in cfg.stores.effective_depots().items():
         raw = _build_depot(mount)
-        if blueprint_id and not mount.shared:
+        # A blueprint-routed mount (duckdb, no explicit `path`) already has one
+        # FILE per blueprint, so prefixing its keys would isolate them twice.
+        if blueprint_id and not mount.shared and not mount.is_blueprint_routed:
             depots[name] = _NamespacedDepot(raw, f"{blueprint_id}:")  # type: ignore[assignment]
         else:
             depots[name] = raw

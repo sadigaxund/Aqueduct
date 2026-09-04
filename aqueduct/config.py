@@ -52,6 +52,11 @@ from aqueduct.parser.schema import AgentPolicySchema, CascadeTierSchema
 
 DEFAULT_OBS_DB_FILENAME: str = "observability.db"
 
+# Filename of a per-blueprint-routed DuckDB depot mount. A depot mount with no
+# explicit `path` lives at `<routing root>/<blueprint_id>/depot.db` — its OWN
+# file, next to (never inside) that blueprint's `observability.db`.
+DEFAULT_DEPOT_DB_FILENAME: str = "depot.db"
+
 # The default observability ROUTING directory (not a `.db` file — config load
 # rejects `.db`-suffixed `stores.observability.path` values; per-blueprint
 # files always live at `<this>/<blueprint_id>/observability.db`). Single
@@ -276,16 +281,55 @@ class DepotMountConfig(BaseModel):
         default="duckdb",
         description="`duckdb` (default) / `postgres` (relational) or `redis` (KV-only).",
     )
-    path: Annotated[str, FsPath()] = Field(
-        ...,
-        description="DuckDB: local file path. Postgres: libpq DSN. Redis: `redis://host:port/db`.",
+    path: Annotated[str, FsPath()] | None = Field(
+        default=None,
+        description=(
+            "DuckDB: local file path. Postgres: libpq DSN. Redis: "
+            "`redis://host:port/db`. None (default, DuckDB only) routes the "
+            "mount per blueprint to `<routing root>/<blueprint_id>/depot.db` "
+            "— its own file, never inside `observability.db`. `shared: true` "
+            "and the postgres/redis backends both require an explicit value."
+        ),
     )
     shared: bool = Field(
         default=False,
-        description="False (default) = per-blueprint isolated (keys prefixed by blueprint_id). "
+        description="False (default) = per-blueprint isolated (keys prefixed by blueprint_id, "
+        "or routed to a per-blueprint file when `path` is omitted). "
         "True = cross-blueprint shared (raw keys) — collisions become your "
-        "deliberate semantics; for parallel writers use postgres/redis.",
+        "deliberate semantics; for parallel writers use postgres/redis. "
+        "`shared: true` requires an explicit `path`.",
     )
+
+    @model_validator(mode="after")
+    def _path_required_where_it_cannot_be_derived(self) -> DepotMountConfig:
+        # Two cases where an omitted `path` has nothing to resolve to:
+        #   * a non-DuckDB backend — `path` is the DSN/URL, not a file we route.
+        #   * `shared: true` — sharing across blueprints is meaningless when the
+        #     file itself is per blueprint, so the operator must name the file.
+        if self.path is not None:
+            return self
+        if self.backend != "duckdb":
+            raise ValueError(
+                f"depot mount with backend: {self.backend!r} requires an explicit `path` "
+                "(the DSN/URL). Only the duckdb backend can be routed per blueprint."
+            )
+        if self.shared:
+            raise ValueError(
+                "depot mount with `shared: true` requires an explicit `path`. "
+                "Omitting `path` routes the mount to its own per-blueprint file "
+                "(<routing root>/<blueprint_id>/depot.db), which no other blueprint "
+                "can reach — name the shared file you want instead."
+            )
+        return self
+
+    @property
+    def is_blueprint_routed(self) -> bool:
+        """True when this mount resolves to its own per-blueprint DuckDB file.
+
+        Such a mount needs no key prefixing: the FILE is already per blueprint,
+        so `build_depot_mounts` skips the `_NamespacedDepot` wrapper for it.
+        """
+        return self.backend == "duckdb" and self.path is None
 
 
 class ObjectStoreConfig(BaseModel):
@@ -429,9 +473,7 @@ class StoresConfig(BaseModel):
         ),
     )
     depots: dict[str, DepotMountConfig] = Field(
-        default_factory=lambda: {
-            "default": DepotMountConfig(backend="duckdb", path=".aqueduct/depot.db")
-        },
+        default_factory=lambda: {"default": DepotMountConfig(backend="duckdb")},
         description=(
             "Depot KV mounts (`@aq.depot.*`), keyed by name. The implicit "
             "`default` mount (per-blueprint isolated, DuckDB) always exists even "
@@ -453,14 +495,14 @@ class StoresConfig(BaseModel):
         d = self.depots.get("default")
         if d is not None:
             return d
-        return DepotMountConfig(backend="duckdb", path=".aqueduct/depot.db")
+        return DepotMountConfig(backend="duckdb")
 
     def effective_depots(self) -> dict[str, DepotMountConfig]:
         """All mounts (name → config) including the implicit default if absent."""
         if "default" in self.depots:
             return dict(self.depots)
         return {
-            "default": DepotMountConfig(backend="duckdb", path=".aqueduct/depot.db"),
+            "default": DepotMountConfig(backend="duckdb"),
             **self.depots,
         }
 
