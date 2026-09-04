@@ -272,3 +272,146 @@ def test_run_detail_profile_nonempty_for_duckdb_run(duckdb_con, tmp_path):
     assert profile_by_id["eg"].records_written == 2
     assert profile_by_id["eg"].duration_ms is not None
     assert profile_by_id["ing"].duration_ms is not None
+
+
+# ── records_read: populated per module, not permanently NULL ───────────────
+# `records_read` used to be NULL for every DuckDB module because there is no
+# free equivalent of Spark's Observation. It is now a real COUNT(*) over each
+# module's input (`_rel_rows`) — see the helper's docstring for why the extra
+# aggregate is accepted. `bytes_read` genuinely has no cheap DuckDB source for
+# a mid-pipeline relation and stays NULL by design; see docs/observability_guide.md.
+
+
+def test_records_read_is_populated_per_module(duckdb_con, tmp_path):
+    src_path = _write_parquet(
+        duckdb_con, tmp_path, "src", "SELECT * FROM (VALUES (1),(2),(3),(4)) t(id)"
+    )
+    out_path = str(tmp_path / "out.parquet")
+    store_dir = tmp_path / "obs"
+
+    modules = (
+        _module("ing", "Ingress", {"format": "parquet", "path": src_path}),
+        _module("ch", "Channel", {"op": "filter", "condition": "id > 1"}),
+        _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}),
+    )
+    edges = (
+        Edge(from_id="ing", to_id="ch", port="main"),
+        Edge(from_id="ch", to_id="eg", port="main"),
+    )
+    manifest = Manifest(
+        blueprint_id="test_bp", context={}, modules=modules, edges=edges, engine_config={}
+    )
+
+    result = execute(manifest, duckdb_con, run_id="r_rr1", store_dir=store_dir)
+    assert result.status == ExecutionStatus.SUCCESS
+
+    by_module = {r["module_id"]: r for r in _module_metrics_rows(store_dir, "r_rr1")}
+
+    # Ingress read all 4 source rows; the Channel's input is that same
+    # 4-row relation (its OUTPUT of 3 is a different number, deliberately).
+    assert by_module["ing"]["records_read"] == 4
+    assert by_module["ch"]["records_read"] == 4
+
+    # bytes_read: a real local-file size for Ingress, NULL mid-pipeline.
+    assert by_module["ing"]["bytes_read"] is not None
+    assert by_module["ch"]["bytes_read"] is None
+
+
+def test_records_read_counts_every_funnel_input(duckdb_con, tmp_path):
+    src_a = _write_parquet(duckdb_con, tmp_path, "a", "SELECT * FROM (VALUES (1),(2)) t(x)")
+    src_b = _write_parquet(duckdb_con, tmp_path, "b", "SELECT * FROM (VALUES (3)) t(x)")
+    out_path = str(tmp_path / "out.parquet")
+    store_dir = tmp_path / "obs"
+
+    modules = (
+        _module("ing_a", "Ingress", {"format": "parquet", "path": src_a}),
+        _module("ing_b", "Ingress", {"format": "parquet", "path": src_b}),
+        _module("f", "Funnel", {"mode": "union_all", "inputs": ["ing_a", "ing_b"]}),
+        _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}),
+    )
+    edges = (
+        Edge(from_id="ing_a", to_id="f", port="main"),
+        Edge(from_id="ing_b", to_id="f", port="main"),
+        Edge(from_id="f", to_id="eg", port="main"),
+    )
+    manifest = Manifest(
+        blueprint_id="test_bp", context={}, modules=modules, edges=edges, engine_config={}
+    )
+
+    result = execute(manifest, duckdb_con, run_id="r_rr2", store_dir=store_dir)
+    assert result.status == ExecutionStatus.SUCCESS
+
+    by_module = {r["module_id"]: r for r in _module_metrics_rows(store_dir, "r_rr2")}
+    # Summed across both inputs, not just the first.
+    assert by_module["f"]["records_read"] == 3
+
+
+def test_records_read_on_junction_is_its_input_not_a_branch(duckdb_con, tmp_path):
+    src_path = _write_parquet(
+        duckdb_con, tmp_path, "src", "SELECT * FROM (VALUES (1),(2),(3),(4)) t(a)"
+    )
+    out_hi = str(tmp_path / "hi.parquet")
+    store_dir = tmp_path / "obs"
+
+    modules = (
+        _module("ing", "Ingress", {"format": "parquet", "path": src_path}),
+        _module(
+            "j",
+            "Junction",
+            {
+                "mode": "conditional",
+                "branches": [
+                    {"id": "hi", "condition": "a > 2"},
+                    {"id": "lo", "condition": "_else_"},
+                ],
+            },
+        ),
+        _module("eg_hi", "Egress", {"format": "parquet", "path": out_hi, "mode": "overwrite"}),
+    )
+    edges = (
+        Edge(from_id="ing", to_id="j", port="main"),
+        Edge(from_id="j", to_id="eg_hi", port="hi"),
+    )
+    manifest = Manifest(
+        blueprint_id="test_bp", context={}, modules=modules, edges=edges, engine_config={}
+    )
+
+    result = execute(manifest, duckdb_con, run_id="r_rr3", store_dir=store_dir)
+    assert result.status == ExecutionStatus.SUCCESS
+
+    by_module = {r["module_id"]: r for r in _module_metrics_rows(store_dir, "r_rr3")}
+    # The whole fanned-out input (4), not the 2 rows of the `hi` branch.
+    assert by_module["j"]["records_read"] == 4
+
+
+# ── Probe now writes a module_metrics row at all ───────────────────────────
+
+
+def test_probe_writes_a_module_metrics_row(duckdb_con, tmp_path):
+    """A Probe used to write no `module_metrics` row on this engine."""
+    src_path = _write_parquet(
+        duckdb_con, tmp_path, "src", "SELECT * FROM (VALUES (1),(2),(3),(4),(5)) t(a)"
+    )
+    out_path = str(tmp_path / "out.parquet")
+    store_dir = tmp_path / "obs"
+
+    modules = (
+        _module("ing", "Ingress", {"format": "parquet", "path": src_path}),
+        _module("pr", "Probe", {"type": "row_count"}, attach_to="ing"),
+        _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}),
+    )
+    edges = (Edge(from_id="ing", to_id="eg", port="main"),)
+    manifest = Manifest(
+        blueprint_id="test_bp", context={}, modules=modules, edges=edges, engine_config={}
+    )
+
+    result = execute(manifest, duckdb_con, run_id="r_probe_mm", store_dir=store_dir)
+    assert result.status == ExecutionStatus.SUCCESS
+
+    by_module = {r["module_id"]: r for r in _module_metrics_rows(store_dir, "r_probe_mm")}
+    assert "pr" in by_module, f"Probe wrote no module_metrics row; got {sorted(by_module)}"
+    assert by_module["pr"]["records_read"] == 5
+    assert by_module["pr"]["duration_ms"] is not None
+    # No status column exists on module_metrics — a Probe's outcome lives in
+    # its ModuleResult and in the probe_signals rows execute_probe writes.
+    assert by_module["pr"]["bytes_read"] is None

@@ -300,10 +300,29 @@ User overrides for Probe signals via `aqueduct signal <signal_id> --value`.
 #### `module_metrics`
 
 Per-module I/O metrics (`records_read`, `bytes_read`, `records_written`,
-`bytes_written`, `duration_ms`) from SparkListener and `DataFrame.observe()`.
-`NULL` means "not collected", never "zero records".
+`bytes_written`, `duration_ms`). `NULL` means "not collected", never "zero
+records" — a genuinely empty read or write is stored as a real `0`.
 
-**Cross-engine handoff (2.36).** A synthetic Handoff module (`aqueduct.compiler.handoff`, §10.9) gets a row here like any other module: `bytes_written`/`duration_ms` on the upstream (write) side, `bytes_read`/`duration_ms` on the downstream (read) side, measured from the spill directory's on-disk size. This is DuckDB's first `module_metrics` write: the DDL and writer (`MODULE_METRICS_DDL`/`write_module_metrics`, `aqueduct/executor/models.py`) are engine-agnostic and shared, but DuckDB's own executor otherwise still writes no per-module metrics outside the Handoff case (see that engine's own docstring). `records_read`/`records_written` stay NULL for a Handoff row: the transport is a byte-level parquet copy, not a row-counted operation.
+**Which columns each engine can fill.** The table and its writer are shared
+(`MODULE_METRICS_DDL`/`write_module_metrics`, `aqueduct/executor/models.py`),
+but the two engines derive the numbers by different means, so the NULLs differ
+and that difference is a property of the engine, not a bug in the run:
+
+| Column | Spark | DuckDB |
+| :- | :- | :- |
+| `duration_ms` | Always measured. | Always measured. |
+| `records_read` | From `DataFrame.observe()`, collected off a downstream action that already scans the data (Ingress rows are attributed after the Egress writes). | A real `COUNT(*)` over the module's input, on Ingress, Channel, Junction, Funnel and Probe. |
+| `records_written` | From SparkListener stage metrics. | From the `COPY` statement's own returned count on Egress; no extra scan. |
+| `bytes_read` | From SparkListener stage metrics. | **NULL except where a path can be stat-ed**: a real local-filesystem size for an Ingress reading a local file or directory, and for a Handoff read (the spill directory). A mid-pipeline relation (Channel, Junction, Funnel, Probe) has no cheap byte source in DuckDB at all, and a remote path (`s3://`, `gs://`, …) has no cheap stat, so both stay NULL rather than reporting a fabricated `0`. |
+| `bytes_written` | From SparkListener stage metrics. | Local-filesystem size of the Egress path; NULL for `table:`/`depot:` writes and remote paths. |
+
+DuckDB's `records_read` costs one extra aggregate per module: unlike Spark's
+`Observation`, which rides along on a scan that was happening anyway, a DuckDB
+relation is a lazy plan re-executed at each consumption point, so there is
+nothing to piggyback on. A `COUNT(*)` is the cheapest scan available and the
+column is far more useful populated than permanently `NULL`.
+
+**Cross-engine handoff (2.36).** A synthetic Handoff module (`aqueduct.compiler.handoff`, §10.9) gets a row here like any other module: `bytes_written`/`duration_ms` on the upstream (write) side, `bytes_read`/`duration_ms` on the downstream (read) side, measured from the spill directory's on-disk size. The DDL and writer (`MODULE_METRICS_DDL`/`write_module_metrics`, `aqueduct/executor/models.py`) are engine-agnostic and shared; the Handoff row was DuckDB's first `module_metrics` write, and that engine now writes a row for every module type it runs (see the per-engine table above). `records_read`/`records_written` stay NULL for a Handoff row on both engines: the transport is a byte-level parquet copy, not a row-counted operation.
 
 **Indexes (2.65).** `idx_module_metrics_module (module_id)` serves the
 cross-run per-module trend query (`report --profile --blueprint <id> --last

@@ -177,6 +177,46 @@ def _null_metrics() -> dict[str, Any]:
     }
 
 
+def _rel_rows(rel: Any) -> int | None:
+    """``COUNT(*)`` over a relation, for ``module_metrics.records_read``.
+
+    Spark gets this for free: an ``Observation`` rides along on whatever
+    downstream action already scans the DataFrame. DuckDB has no equivalent —
+    a relation is a lazy plan re-executed at each consumption point — so this
+    is a genuine extra aggregate over the input. It is deliberately accepted
+    (a COUNT(*) is the cheapest possible scan, and DuckDB's columnar reader
+    only touches what the aggregate needs) because a permanently NULL
+    ``records_read`` made the DuckDB engine's observability materially less
+    useful than Spark's for the same Blueprint.
+
+    Returns None (not 0) if the count fails for any reason — metrics must
+    never abort a run, and a number this engine could not derive is a number
+    it must not state.
+    """
+    if rel is None or _is_gate_closed(rel):
+        return None
+    try:
+        row = rel.aggregate("COUNT(*) AS c").fetchone()
+    except Exception as exc:  # noqa: BLE001 — metrics are strictly best-effort
+        logger.debug("records_read COUNT(*) failed: %s", exc)
+        return None
+    return int(row[0]) if row and row[0] is not None else None
+
+
+def _sum_rel_rows(rels: Any) -> int | None:
+    """``records_read`` across several input relations (join / union inputs).
+
+    None when there is nothing countable, so a module whose inputs could not
+    be counted reports NULL rather than a misleading 0.
+    """
+    total: int | None = None
+    for rel in rels:
+        n = _rel_rows(rel)
+        if n is not None:
+            total = n if total is None else total + n
+    return total
+
+
 def _path_bytes(path_str: str | None) -> int | None:
     """Local-filesystem byte size of a path this engine just read/wrote —
     Ingress/Egress's ``config['path']`` may be a single file (the common
@@ -760,15 +800,11 @@ def execute(
                     continue
                 return fail_result
             frame_store[module.id] = rel
-            # ``records_read`` stays NULL here (parity gap vs Spark, not an
-            # oversight): Spark's Observation attaches to the DataFrame and
-            # is read for free off whatever downstream action ALREADY scans
-            # it (Egress write, etc.) — zero extra passes. DuckDB's
-            # relations are re-executed independently at each consumption
-            # point (this `rel` and any downstream reader of it are separate
-            # query plans over the source), so counting rows here would mean
-            # a genuine extra scan of the source purely to report a number —
-            # exactly what this task's spec says not to do. See D1 report.
+            # ``records_read`` is a real COUNT(*) over what this Ingress just
+            # read (see `_rel_rows` for why the extra scan is accepted rather
+            # than leaving the column permanently NULL as it was before).
+            # ``bytes_read`` is local-filesystem-only — a remote path has no
+            # cheap size to stat, so it stays NULL (see `_path_bytes`).
             _write_module_metrics(
                 store_dir,
                 observability_store,
@@ -776,6 +812,7 @@ def execute(
                 module.id,
                 {
                     **_null_metrics(),
+                    "records_read": _rel_rows(rel),
                     "bytes_read": _path_bytes(module.config.get("path")),
                     "duration_ms": int((time.monotonic() - _t0) * 1000),
                 },
@@ -882,16 +919,22 @@ def execute(
                     frame_store[module.id] = _GATE_CLOSED
                     continue
                 return fail_result
-            # Duration only — mirrors Spark's Channel branch, which also
-            # writes null_metrics()+duration_ms only (a Channel has no
-            # natural read/write action of its own to attribute row/byte
-            # counts to on EITHER engine).
+            # ``records_read`` = rows on this Channel's main input (summed
+            # across inputs for a multi-input op such as a join). Spark still
+            # writes duration only here, because it has no free Observation to
+            # read at this point; DuckDB can afford the COUNT(*) (`_rel_rows`).
+            # ``bytes_read`` has no cheap DuckDB source for a mid-pipeline
+            # relation and stays NULL.
             _write_module_metrics(
                 store_dir,
                 observability_store,
                 run_id,
                 module.id,
-                {**_null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
+                {
+                    **_null_metrics(),
+                    "records_read": _sum_rel_rows(upstream.values()),
+                    "duration_ms": int((time.monotonic() - _t0) * 1000),
+                },
             )
 
             spillway_condition: str | None = module.config.get("spillway_condition")
@@ -982,15 +1025,19 @@ def execute(
                         frame_store[f"{module.id}.{branch.get('id', '')}"] = _GATE_CLOSED
                     continue
                 return fail_result
-            # Duration only — mirrors Spark's Junction branch (null_metrics()
-            # + duration_ms; a Junction fans out, it has no read/write of its
-            # own to attribute row/byte counts to).
+            # ``records_read`` = rows on the Junction's main input, i.e. the
+            # relation it fanned out (`_rel_rows`). ``bytes_read`` has no cheap
+            # DuckDB source mid-pipeline and stays NULL.
             _write_module_metrics(
                 store_dir,
                 observability_store,
                 run_id,
                 module.id,
-                {**_null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
+                {
+                    **_null_metrics(),
+                    "records_read": _rel_rows(val),
+                    "duration_ms": int((time.monotonic() - _t0) * 1000),
+                },
             )
             for branch_id, branch_rel in branch_rels.items():
                 frame_store[f"{module.id}.{branch_id}"] = branch_rel
@@ -1054,13 +1101,18 @@ def execute(
                     continue
                 return fail_result
             frame_store[module.id] = rel
-            # Duration only — mirrors Spark's Funnel branch.
+            # ``records_read`` = rows across every input this Funnel merged.
+            # ``bytes_read`` has no cheap DuckDB source mid-pipeline: NULL.
             _write_module_metrics(
                 store_dir,
                 observability_store,
                 run_id,
                 module.id,
-                {**_null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
+                {
+                    **_null_metrics(),
+                    "records_read": _sum_rel_rows(funnel_upstream.values()),
+                    "duration_ms": int((time.monotonic() - _t0) * 1000),
+                },
             )
             _write_checkpoint(con, module, checkpoint_dir, manifest, data={"data": rel})
             module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
@@ -1444,6 +1496,7 @@ def execute(
         # _build_execution_order above), so it reads frame_store directly
         # instead of going through _incoming_main.
         elif module.type == ModuleType.Probe:
+            _t0 = time.monotonic()
             source_id = module.attach_to
             source_val = frame_store.get(source_id) if source_id else None
             _probe_notes: tuple[str, ...] = ()
@@ -1473,6 +1526,26 @@ def execute(
                     )
                 except Exception as exc:
                     logger.warning("[runtime_probe_error] Probe %r failed: %s", module.id, exc)
+            # A Probe used to write no `module_metrics` row at all on this
+            # engine, so `aqueduct report` showed a gap where Spark shows a
+            # row (Spark's Probes get one incidentally, from the SparkListener
+            # stage metrics its probe actions trigger). Write one explicitly:
+            # `records_read` is the row count of the relation the Probe
+            # observed, and `bytes_read` has no cheap DuckDB source for a
+            # mid-pipeline relation, so it stays NULL. `module_metrics` has no
+            # status column — a Probe's outcome is carried by its ModuleResult
+            # and by the probe_signals rows `execute_probe` writes.
+            _write_module_metrics(
+                store_dir,
+                observability_store,
+                run_id,
+                module.id,
+                {
+                    **_null_metrics(),
+                    "records_read": _rel_rows(source_val),
+                    "duration_ms": int((time.monotonic() - _t0) * 1000),
+                },
+            )
             module_results.append(
                 _mr(module_id=module.id, status=ExecutionStatus.SUCCESS, notes=_probe_notes)
             )
