@@ -682,10 +682,8 @@ def execute_probe(
                     if sig_type == "sample_rows":
                         # Phase 85 A1 — retention cap: keep only the most
                         # recent `sample_rows_keep_last_n` rows per probe_id
-                        # for this signal type. Mirrors the rolling-window
-                        # prune `record_explain_snapshot` already uses
-                        # (surveyor.py) — best-effort housekeeping, never
-                        # fails the probe.
+                        # for this signal type — best-effort housekeeping,
+                        # never fails the probe.
                         try:
                             _stale = cur.execute(
                                 """

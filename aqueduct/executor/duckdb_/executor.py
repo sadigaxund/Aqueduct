@@ -602,8 +602,8 @@ def execute(
     """Execute a compiled Manifest against a live DuckDB connection.
 
     Args mirror Spark's ``execute()`` where the concept exists on this engine;
-    Spark-only kwargs (``spark``/``parallel``/``use_observe``/
-    ``explain_capture``) have no DuckDB counterpart this stage and are simply
+    Spark-only kwargs (``spark``/``parallel``/``use_observe``) have no
+    DuckDB counterpart this stage and are simply
     not part of this signature — see ``ExecutorProtocol.execute``'s docstring:
     "the uniform part of the contract is Manifest in, ExecutionResult out;
     kwargs are a per-engine extension point."

@@ -136,20 +136,6 @@ CREATE TABLE IF NOT EXISTS signal_overrides (
 );
 """
 
-_EXPLAIN_SNAPSHOT_DDL = """
-CREATE TABLE IF NOT EXISTS explain_snapshot (
-    blueprint_id     VARCHAR NOT NULL,
-    run_id           VARCHAR NOT NULL,
-    module_id        VARCHAR NOT NULL,
-    captured_at      VARCHAR NOT NULL,
-    exchange_count   INTEGER NOT NULL,
-    python_udf_count INTEGER NOT NULL,
-    broadcast_count  INTEGER NOT NULL,
-    plan_text        VARCHAR NOT NULL,
-    PRIMARY KEY (blueprint_id, run_id, module_id)
-);
-"""
-
 # Per-attempt log for the unified reprompt loop.
 # One row per LLM turn (success or failure) so post-mortem can answer
 # "what did attempt 2 actually say" — which `healing_outcomes` alone could

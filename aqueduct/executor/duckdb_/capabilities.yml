@@ -24,7 +24,7 @@
 # ever lists ENGINE-SCOPED `config.*` leaves (those genuinely dispatch
 # through an engine — probes.*, metrics.use_observe, timezone,
 # checkpoint_root, deployment.target, handoff.root,
-# agent.sandbox_master_url, agent.block_on_explain_regression,
+# agent.sandbox_master_url,
 # danger.allow_full_probe_actions). CORE config leaves (config.webhooks.*,
 # config.secrets.*, config.stores.*, config.lineage.*, most of
 # config.agent.*/config.danger.*, ...) never appear here at all — no engine
@@ -92,9 +92,6 @@ leaves:
   # touch engine internals; DuckDB honors the same knobs Spark does) ───────
   agent.field.allow_defer: supported
   agent.field.approval_mode: supported
-  agent.field.block_on_explain_regression:
-    support: unsupported
-    hint: "block_on_explain_regression relies on Spark's explain()-plan snapshot gate (aqueduct.patch.explain_gate); DuckDB has no equivalent plan-snapshot capture implemented."
   agent.field.confidence_threshold: supported
   agent.field.deep_loop: supported
   agent.field.guardrails: supported
@@ -170,9 +167,6 @@ leaves:
       - tests/test_executor_duckdb/test_executor.py::test_channel_union
 
   # ── Engine config (aqueduct.yml) ─────────────────────────────────────────
-  config.agent.block_on_explain_regression:
-    support: unsupported
-    hint: "relies on the Spark explain()-plan snapshot gate; no DuckDB equivalent implemented."
   config.agent.sandbox_master_url:
     support: unsupported
     hint: "sandbox_master_url pins a Spark master URL for the patch-preview sandbox session; DuckDB has no cluster master to pin (single-process, always local)."

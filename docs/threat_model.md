@@ -95,8 +95,7 @@ deterministic gates before it can touch the on-disk Blueprint
 4. **Gate 3, sandbox**: the patched Blueprint replays against representative
    data (1000 rows per Ingress by default; see §4.3) with all Egress writes
    dropped, before anything real is touched.
-5. **Gate 4, plan regression** and **Gate 5, resolvability**: advisory and
-   dependency checks, not injection-relevant.
+5. **Gate 4, resolvability**: dependency check, not injection-relevant.
 
 This means the injection surface is bounded by what the closed `PatchSpec`
 grammar can express, not by what the model can be talked into saying. A

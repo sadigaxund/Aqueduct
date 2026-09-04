@@ -39,11 +39,11 @@ logger = logging.getLogger(__name__)
 # shared run path (`aqueduct/cli/run.py`) calls through
 # `aqueduct.executor.protocol.call_execute()` with a superset that also
 # carries Spark-only run options — `parallel`, `use_observe`,
-# `observability_store`, `explain_capture`. Those are the "clearly optional
+# `observability_store`. Those are the "clearly optional
 # capabilities an engine may ignore" half of the ExecutorProtocol contract
 # (`OPTIONAL_EXECUTE_KWARGS` in `protocol.py`): DuckDB does not implement them
-# (see capabilities.yml — `feature.parallel_mode`, `config.metrics.use_observe`,
-# and the Spark explain-gate are all UNSUPPORTED/unimplemented this stage).
+# (see capabilities.yml — `feature.parallel_mode`, `config.metrics.use_observe`
+# are UNSUPPORTED/unimplemented this stage).
 # `sampling` (Pass F) moved OUT of this "ignored" set once Probe grew a real
 # DuckDB implementation that genuinely consumes `config.probes.*` — see
 # `duckdb_/probe.py`. This set is handed to `ExecutorProtocol.execute_kwargs` below,

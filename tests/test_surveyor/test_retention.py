@@ -11,7 +11,7 @@ import pytest
 from aqueduct.config import ObservabilityRetentionConfig
 from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
 from aqueduct.surveyor.retention import maybe_prune_store, prune_store, vacuum_store
-from aqueduct.surveyor.surveyor import _DDL, _EXPLAIN_SNAPSHOT_DDL, _HEAL_ATTEMPTS_DDL
+from aqueduct.surveyor.surveyor import _DDL, _HEAL_ATTEMPTS_DDL
 
 pytestmark = pytest.mark.unit
 
@@ -20,7 +20,6 @@ def _store(tmp_path):
     obs = DuckDBObservabilityStore(str(tmp_path / "o.db"))
     with obs.connect() as cur:
         cur.execute(_DDL)
-        cur.execute(_EXPLAIN_SNAPSHOT_DDL)
         cur.execute(_HEAL_ATTEMPTS_DDL)
     return obs
 

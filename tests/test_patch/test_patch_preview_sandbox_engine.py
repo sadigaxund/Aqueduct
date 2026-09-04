@@ -10,7 +10,7 @@ Spark" skip that named the wrong engine. This file proves the fix: a DuckDB
 target gets a REAL DuckDB sandbox run (no Spark touched at all), and a
 missing-session skip names the actual target engine.
 
-Defect B: ``observability_store``/``explain_capture`` are Spark-flavoured
+Defect B: ``observability_store``/``use_observe`` are Spark-flavoured
 optional execute() capabilities (``aqueduct.executor.protocol.
 OPTIONAL_EXECUTE_KWARGS``). Passing them to an engine that cannot honour them
 used to either raise (Spark) or drop silently (DuckDB's old ad-hoc
@@ -208,13 +208,13 @@ def test_call_execute_warns_and_drops_unsupported_optional_kwarg(monkeypatch):
             "session",
             run_id="r1",
             observability_store=object(),
-            explain_capture={},
+            use_observe=True,
         )
 
     assert result == "ok"
     assert captured["kwargs"] == {"run_id": "r1"}  # both optional kwargs dropped
     assert "observability_store" not in captured["kwargs"]
-    assert "explain_capture" not in captured["kwargs"]
+    assert "use_observe" not in captured["kwargs"]
 
 
 def test_call_execute_no_warning_when_engine_declares_no_allowlist(monkeypatch):
@@ -238,11 +238,11 @@ def test_call_execute_no_warning_when_engine_declares_no_allowlist(monkeypatch):
             "manifest",
             "session",
             observability_store=object(),
-            explain_capture={},
+            use_observe=True,
         )
 
     assert result == "ok"
-    assert set(captured["kwargs"]) == {"observability_store", "explain_capture"}
+    assert set(captured["kwargs"]) == {"observability_store", "use_observe"}
 
 
 def test_call_execute_suppress_silences_the_warning(monkeypatch):
@@ -301,15 +301,20 @@ def test_duckdb_execute_kwargs_excludes_every_spark_only_capability():
     assert duckdb_implements <= accepted
 
 
-def test_duckdb_sandbox_gate_warns_engine_kwarg_ignored_for_observability_kwargs(
+def test_duckdb_sandbox_gate_accepts_observability_store_with_no_warning(
     _orders_csv,
     tmp_path,
 ):
-    """End-to-end: a real DuckDB sandbox run forwarding Spark-flavoured
-    observability_store/explain_capture must warn under `engine_kwarg_ignored`
-    (never crash, never silence) and still complete the replay."""
+    """End-to-end: DuckDB genuinely implements `observability_store`
+    (`_DUCKDB_EXECUTE_KWARGS`), so a real DuckDB sandbox run forwarding it
+    completes with no `engine_kwarg_ignored` warning. The dropped-kwarg
+    half of this mechanism (a Spark-only optional kwarg DuckDB does NOT
+    implement) is proven engine-agnostically above against a fake protocol
+    (`test_call_execute_warns_and_drops_unsupported_optional_kwarg`) — every
+    optional kwarg `run_sandbox_gate` itself forwards to a real engine is,
+    by construction, one DuckDB also implements."""
     bp = _csv_blueprint(_orders_csv)
-    with pytest.warns(AqueductWarning, match="engine_kwarg_ignored"):
+    with warnings_must_not_fire():
         result = run_sandbox_gate(
             bp,
             blueprint_path=tmp_path / "bp.yml",
@@ -318,24 +323,6 @@ def test_duckdb_sandbox_gate_warns_engine_kwarg_ignored_for_observability_kwargs
             engine="duckdb",
             cfg=AqueductConfig(),
             observability_store=object(),
-            explain_capture={},
-        )
-    assert result.status == "pass"
-
-
-def test_duckdb_sandbox_gate_kwarg_warning_suppressible(_orders_csv, tmp_path):
-    bp = _csv_blueprint(_orders_csv)
-    with warnings_must_not_fire():
-        result = run_sandbox_gate(
-            bp,
-            blueprint_path=tmp_path / "bp.yml",
-            patch_id="p-duckdb-kwarg-suppressed",
-            failed_module=None,
-            engine="duckdb",
-            cfg=AqueductConfig(),
-            observability_store=object(),
-            explain_capture={},
-            warnings_suppress={"engine_kwarg_ignored"},
         )
     assert result.status == "pass"
 

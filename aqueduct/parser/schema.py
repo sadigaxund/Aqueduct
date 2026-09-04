@@ -168,7 +168,6 @@ class AgentPolicySchema(BaseModel):
     prompt_context: str | None = None
     max_heal_attempts_per_hour: int | None = Field(default=None, ge=1)
     patch_validation: Literal["full_run", "sandbox"] | None = None
-    block_on_explain_regression: bool | None = None
     mode: Literal["oneshot", "agentic"] | None = None
     max_tool_calls: int | None = Field(default=None, ge=1)
     supports_tools: Literal["auto", True, False] | None = None
@@ -234,7 +233,7 @@ class AgentSchema(AgentPolicySchema):
     # healable at the Blueprint level. Default False — the LLM must always produce
     # a real patch unless explicitly permitted to defer.
     allow_defer: bool = Field(default=False)
-    # Phase 43: run sandbox/lineage/explain gates inside the LLM conversation
+    # Phase 43: run sandbox/lineage gates inside the LLM conversation
     # so the model sees rejection feedback and retries in-context. Default False
     # preserves the current behaviour (gates run post-hoc via apply_callback).
     deep_loop: bool = Field(default=False)

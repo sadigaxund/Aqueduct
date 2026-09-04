@@ -4,7 +4,7 @@
 per heal, ~a dozen captured locals) every time ``deep_loop`` was enabled, to
 give ``aqueduct.agent.loop.run_agent_loop``'s ``validate_callback`` parameter
 (``Callable[[Any], tuple[bool, str]]`` — see ``agent/loop.py``) something to
-call. That closure ran the lineage/sandbox/explain gate pyramid
+call. That closure ran the lineage/sandbox/resolvability gate pyramid
 (``aqueduct.cli._run_patch_gates_inline``) against a candidate patch and
 formatted the result into the ``(ok, feedback)`` shape the deep-loop
 in-conversation validation protocol expects.
@@ -30,14 +30,14 @@ from collections.abc import Callable
 from typing import Any
 
 
-def format_gate_feedback(g2: Any, g3: Any, g4: Any, g5: Any = None) -> tuple[bool, str]:
-    """Convert lineage/sandbox/explain/resolvability gate results into
+def format_gate_feedback(g2: Any, g3: Any, g4: Any = None) -> tuple[bool, str]:
+    """Convert lineage/sandbox/resolvability gate results into
     ``(ok, feedback)``.
 
-    ``g2``/``g3``/``g4`` copied verbatim (Phase 85 F-17) from the body of
+    ``g2``/``g3`` copied verbatim (Phase 85 F-17) from the body of
     the ``_validate_cb`` closure that used to live inline in
-    ``aqueduct/cli/run.py::run()`` (~line 2830 pre-split). ``g5``
-    (resolvability, Phase 88) added the same way the other three gates
+    ``aqueduct/cli/run.py::run()`` (~line 2830 pre-split). ``g4``
+    (resolvability, Phase 88) added the same way the other gates
     already feed the reprompt loop: a ``fail`` verdict becomes a failure
     line the model can act on.
     """
@@ -47,9 +47,7 @@ def format_gate_feedback(g2: Any, g3: Any, g4: Any, g5: Any = None) -> tuple[boo
     if g3 is not None and g3.status == "fail":
         failures.append(f"Sandbox gate: {g3.detail}")
     if g4 is not None and g4.status == "fail":
-        failures.append(f"Explain gate: {g4.detail or 'plan regression detected'}")
-    if g5 is not None and g5.status == "fail":
-        failures.append(f"Resolvability gate: {g5.detail}")
+        failures.append(f"Resolvability gate: {g4.detail}")
     if failures:
         return False, " | ".join(failures)
     return True, ""
@@ -94,7 +92,7 @@ def validate_patch_via_gates(
     from aqueduct.cli import _run_patch_gates_inline
 
     try:
-        g2, g3, g4, g5, _g3_passed = _run_patch_gates_inline(
+        g2, g3, g4, _g3_passed = _run_patch_gates_inline(
             patch=patch_spec,
             blueprint_path=blueprint_path,
             bundle=bundle,
@@ -111,6 +109,6 @@ def validate_patch_via_gates(
         )
         if announce_unavailable is not None:
             announce_unavailable(g3)
-        return format_gate_feedback(g2, g3, g4, g5)
+        return format_gate_feedback(g2, g3, g4)
     except Exception as exc:
         return False, f"Validation error: {exc}"

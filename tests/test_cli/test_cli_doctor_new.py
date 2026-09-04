@@ -1,23 +1,23 @@
 # tests/test_cli/test_cli_doctor_new.py
 import os
 import sys
-import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 from click.testing import CliRunner
 
+from aqueduct.cli import cli
 from aqueduct.doctor import (
     CheckResult,
-    check_agent,
-    check_cascade_tiers,
-    check_storage,
     _host_port,
     _tcp_ok,
+    check_agent,
+    check_cascade_tiers,
     check_spark,
+    check_storage,
     run_doctor,
 )
-from aqueduct.patch.explain_gate import _formatted_plan
-from aqueduct.cli import cli
 
 pytestmark = pytest.mark.unit
 
@@ -136,31 +136,6 @@ def test_check_agent_anthropic_scenarios(monkeypatch):
     res_ok = check_agent("anthropic", base_url=None, model="claude-3")
     assert res_ok.status == "ok"
     assert "ANTHROPIC_API_KEY present (API not called)" in res_ok.detail
-
-
-# ── 6. _formatted_plan sql_ctx access removal test ───────────────────────────
-
-
-def test_explain_formatted_plan_no_sql_ctx_access():
-    """_formatted_plan uses df.sparkSession directly and NEVER accesses df.sql_ctx if present."""
-    mock_spark = MagicMock()
-    mock_spark._jvm.org.apache.spark.sql.execution.ExplainMode.fromString.return_value = "formatted"
-
-    mock_jdf = MagicMock()
-    mock_jdf.queryExecution.return_value.explainString.return_value = "MockFormattedPlan"
-
-    class MockDF:
-        def __init__(self):
-            self._jdf = mock_jdf
-            self.sparkSession = mock_spark
-
-        @property
-        def sql_ctx(self):
-            raise AssertionError("sql_ctx was accessed!")
-
-    df = MockDF()
-    plan = _formatted_plan(df)
-    assert plan == "MockFormattedPlan"
 
 
 # ── 7 & 8. TCP Reachability and Parsing Tests ─────────────────────────────────
@@ -436,10 +411,11 @@ stores:
     )
 
     from aqueduct.config import (
-        load_config as _real_load_config,
-        RelationalStoreConfig,
-        KVStoreConfig,
         DepotMountConfig,
+        RelationalStoreConfig,
+    )
+    from aqueduct.config import (
+        load_config as _real_load_config,
     )
 
     def _load_with_relative_paths(path=None):
@@ -541,8 +517,9 @@ inject_failure: {module: m1}
 
 def test_warning_suppression_and_sentinels():
     """Verify warnings.suppress: ["*"] and other blacklists/sentinels in warnings.py."""
-    import aqueduct.warnings as aqw
     import warnings
+
+    import aqueduct.warnings as aqw
 
     # 1. Reset defaults
     aqw.set_default_suppress([])
@@ -575,7 +552,7 @@ def test_warning_suppression_and_sentinels():
 
 def test_warnings_config_silence_all_removed(tmp_path):
     """WarningsConfig(silence_all=...) raises ConfigError because extra is forbidden."""
-    from aqueduct.config import load_config, ConfigError
+    from aqueduct.config import ConfigError, load_config
 
     config_file = tmp_path / "aqueduct.yml"
 
@@ -648,10 +625,11 @@ edges: []
     )
 
     from aqueduct.config import (
-        load_config as _real_load_config,
-        RelationalStoreConfig,
-        KVStoreConfig,
         DepotMountConfig,
+        RelationalStoreConfig,
+    )
+    from aqueduct.config import (
+        load_config as _real_load_config,
     )
 
     def _load_with_relative_paths(path=None):
@@ -691,18 +669,18 @@ edges: []
 def test_doctor_package_split_public_names_resolve():
     """Every public check name resolves from aqueduct.doctor; pyspark not imported eagerly."""
     from aqueduct.doctor import (
+        CheckResult,
+        check_aqscenario,
+        check_aqtest,
+        check_blueprint_sources,
+        check_blueprint_sources_from_manifest,
         check_cascade_tiers,
+        check_cloudpickle_compat,
         check_config,
         check_spark,
         check_storage,
         check_store_backend,
-        check_blueprint_sources,
-        check_blueprint_sources_from_manifest,
-        check_aqtest,
-        check_aqscenario,
-        check_cloudpickle_compat,
         run_doctor,
-        CheckResult,
     )
 
     # All names are callable (functions) or classes
@@ -825,7 +803,7 @@ class TestCheckSpillwayErrorTypes:
 
     def test_spillway_edge_matching_error_type_no_warning(self):
         from aqueduct.doctor import _check_spillway_error_types
-        from aqueduct.parser.models import Module, Edge
+        from aqueduct.parser.models import Edge, Module
 
         m = self._manifest(
             modules=(
@@ -879,7 +857,7 @@ class TestCheckSpillwayErrorTypes:
 
 # ── T27 Part 1: Spark version handshake (major.minor, no matrix) ────────────────
 
-from aqueduct.doctor import _spark_version_verdict, _parse_java_major, check_java
+from aqueduct.doctor import _parse_java_major, _spark_version_verdict, check_java
 
 
 class TestSparkVersionVerdict:
@@ -1061,7 +1039,8 @@ class TestGhPrCheck:
 
 # ── T27 Part 2: preflight checks (agent ping, UDF import) ───────────────────────
 
-from aqueduct.doctor import _check_udf_registry, check_agent as _check_agent
+from aqueduct.doctor import _check_udf_registry
+from aqueduct.doctor import check_agent as _check_agent
 
 
 class _FakeManifest:
@@ -1128,7 +1107,8 @@ class TestAgentPreflightPing:
 # ── T27 Part 2: store round-trip + JDBC preflight ──────────────────────────────
 
 from types import SimpleNamespace
-from aqueduct.doctor import check_store_backend, _jdbc_preflight_auth, _jdbc_result
+
+from aqueduct.doctor import _jdbc_preflight_auth, _jdbc_result, check_store_backend
 
 
 class TestStoreRoundTrip:

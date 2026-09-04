@@ -55,11 +55,10 @@ def test_sandbox_mode_sample_forwards_default_1000_rows(mock_run_sandbox, tmp_pa
 
     mock_patch = MagicMock()
     mock_patch.patch_id = "p-sample"
-    # Phase 88 — Gate 5 (resolvability) iterates patch.operations; must be
+    # Phase 88 — Gate 4 (resolvability) iterates patch.operations; must be
     # an actual list (no declare_dependency op → not_applicable).
     mock_patch.operations = []
     mock_surveyor = MagicMock()
-    mock_surveyor.latest_explain_snapshots.return_value = {}
     mock_run_sandbox.return_value = MagicMock(
         status="pass", sample_rows=1000, duration_ms=0, detail="OK"
     )
@@ -70,10 +69,6 @@ def test_sandbox_mode_sample_forwards_default_1000_rows(mock_run_sandbox, tmp_pa
         patch(
             "aqueduct.patch.preview.run_lineage_gate",
             return_value=MagicMock(status="pass", touched_modules=[]),
-        ),
-        patch(
-            "aqueduct.patch.explain_gate.run_explain_gate",
-            return_value=MagicMock(status="pass"),
         ),
     ):
         _run_patch_gates_inline(

@@ -48,7 +48,7 @@ class LineageWarning:
 
 @dataclass
 class LineageGateResult:
-    # See `aqueduct/patch/gate_status.py` for the vocabulary all four gates
+    # See `aqueduct/patch/gate_status.py` for the vocabulary the gates
     # share: "pass" | "warn" | "fail" | "not_applicable". This gate has no
     # `unavailable` path — its analysis is pure sqlglot over the two
     # Blueprint dicts it is handed, with no engine, session or store that
@@ -58,9 +58,9 @@ class LineageGateResult:
     touched_modules: list[str] = field(default_factory=list)
     duration_ms: int = 0
     # Short human-readable reason. Populated on the `not_applicable` path (why
-    # the gate has no signal for this patch); the sibling gates
-    # (`SandboxGateResult`, `ExplainGateResult`) already carry an analogous
-    # `detail` field for their non-structured status explanation, so this
+    # the gate has no signal for this patch); the sibling gate
+    # `SandboxGateResult` already carries an analogous
+    # `detail` field for its non-structured status explanation, so this
     # follows the same vocabulary rather than overloading `warnings` — a
     # `list[LineageWarning]` is typed and rendered specifically as *findings*
     # (missing-column regressions), which an informational "nothing to check"
@@ -330,7 +330,6 @@ def run_sandbox_gate(
     profile: str | None = None,
     spark_session: Any = None,
     observability_store: Any = None,
-    explain_capture: dict[str, dict] | None = None,
     sandbox_master_url: str | None = None,
     warnings_suppress: Iterable[str] | None = None,
     timezone: str | None = None,
@@ -647,10 +646,10 @@ def run_sandbox_gate(
                 # enough that the prior optimisation isn't worth the false
                 # negatives.
                 #
-                # observability_store/explain_capture are Spark-flavoured
-                # optional capabilities (`OPTIONAL_EXECUTE_KWARGS`,
+                # observability_store is a Spark-flavoured
+                # optional capability (`OPTIONAL_EXECUTE_KWARGS`,
                 # `aqueduct/executor/protocol.py`) — routed through
-                # `call_execute()` so an engine that can't honour them (e.g.
+                # `call_execute()` so an engine that can't honour it (e.g.
                 # DuckDB Stage A) gets a suppressible `engine_kwarg_ignored`
                 # warning instead of a TypeError or a silent drop.
                 result = call_execute(
@@ -661,7 +660,6 @@ def run_sandbox_gate(
                     store_dir=None,
                     surveyor=None,
                     observability_store=observability_store,
-                    explain_capture=explain_capture,
                     suppress=warnings_suppress,
                 )
             except AqueductError as exc:

@@ -279,12 +279,10 @@ def patch_preview(
 
     Always runs the guardrails gate (schema + post-apply Parser re-check),
     the lineage gate (live lineage impact), and the resolvability gate
-    (Gate 5, Phase 88 — PyPI check for every `declare_dependency` op;
+    (Gate 4, Phase 88 — PyPI check for every `declare_dependency` op;
     `not_applicable` for a patch that declares none). With `--sandbox`, also
     runs the sandbox gate (replay the patched Blueprint on a per-Ingress
-    LIMIT N, Egress modules skipped and listed in the report) and the
-    explain gate (post-patch `explain()` regression
-    check against the most recent baseline in `observability.explain_snapshot`).
+    LIMIT N, Egress modules skipped and listed in the report).
     """
     from pathlib import Path as _Path
 
@@ -296,7 +294,6 @@ def patch_preview(
         apply_patch_to_dict,
         load_patch_spec,
     )
-    from aqueduct.patch.explain_gate import run_explain_gate
     from aqueduct.patch.gate_status import GateStatus, sandbox_gate_blocks_preview
     from aqueduct.patch.preview import (
         SandboxGateResult,
@@ -360,7 +357,7 @@ def patch_preview(
 
     diff = render_unified_diff(bp_raw, bp_after)
     lineage_res = run_lineage_gate(bp_raw, bp_after, spec)
-    # Resolvability gate (Gate 5, Phase 88) — unconditional, like the
+    # Resolvability gate (Gate 4, Phase 88) — unconditional, like the
     # lineage gate: cheap and network-free unless the patch actually
     # declares a dependency (a declare_dependency-free patch short-circuits
     # to `not_applicable` before any PyPI call is made).
@@ -374,13 +371,11 @@ def patch_preview(
         status=GateStatus.NOT_REQUESTED,
         detail="sandbox replay was not requested — pass --sandbox to replay this patch",
     )
-    explain_res = None
     if sandbox:
         from aqueduct.stores import get_stores
 
         bundle = get_stores(cfg)
         failed_module = None
-        explain_after: dict[str, dict] = {}
         # patch_id is used both for run-tagging and tempfile naming
         sandbox_res = run_sandbox_gate(
             bp_after,
@@ -391,34 +386,10 @@ def patch_preview(
             cfg=cfg,
             sample_rows=int(sample_rows),
             observability_store=bundle.observability,
-            explain_capture=explain_after,
             sandbox_master_url=cfg.agent.sandbox_master_url,
             warnings_suppress=cfg.warnings.suppress,
             timezone=cfg.timezone,
             patch_spec=spec,
-        )
-        # Explain gate — baseline read directly from the observability store.
-        try:
-            from aqueduct.stores import get_stores as _gs  # noqa
-            from aqueduct.surveyor.surveyor import Surveyor
-
-            # Compile to retrieve blueprint_id without full run.
-            from aqueduct.parser.parser import parse as _parse
-            from aqueduct.compiler.compiler import compile as _compile
-
-            _bp = _parse(blueprint_path)
-            _mf = _compile(_bp, blueprint_path=_Path(blueprint_path))
-            _surv = Surveyor(
-                manifest=_mf,
-                store_dir=cfg.store_dir,
-                stores=bundle,
-                engine=cfg.deployment.engine,
-            )
-            _baseline = _surv.latest_explain_snapshots(blueprint_id=_mf.blueprint_id)
-        except Exception:
-            _baseline = {}
-        explain_res = run_explain_gate(
-            _baseline, explain_after, touched_modules=lineage_res.touched_modules
         )
 
     if out_format.lower() == "json":
@@ -459,14 +430,6 @@ def patch_preview(
                 "sample_rows": sandbox_res.sample_rows,
                 "duration_ms": sandbox_res.duration_ms,
                 "egress_targets": sandbox_res.egress_targets,
-            }
-        if explain_res is not None:
-            report["explain"] = {
-                "status": explain_res.status,
-                "detail": explain_res.detail,
-                "duration_ms": explain_res.duration_ms,
-                "baseline_run_id": explain_res.baseline_run_id,
-                "regressions": [r.__dict__ for r in explain_res.regressions],
             }
         emit(report, fmt="json")
         # `sandbox_gate_blocks_preview`, NOT the auto-apply predicate
@@ -591,18 +554,6 @@ def patch_preview(
                     f"    {t.get('id')}  → {t.get('format')}  {t.get('path')}"
                     + (f"  (mode={t.get('mode')})" if t.get("mode") else "")
                 )
-
-    if explain_res is not None:
-        click.echo()
-        click.echo(_dim("── Explain gate (plan regression) ────────────────────────────"))
-        _gate_status_line(explain_res.status)
-        click.echo(f"  detail:   {explain_res.detail}")
-        if explain_res.baseline_run_id:
-            click.echo(f"  baseline: run {explain_res.baseline_run_id}")
-        if explain_res.regressions:
-            for r in explain_res.regressions:
-                click.echo(f"  ⚠ {r.detail}")
-        click.echo(f"  duration: {explain_res.duration_ms} ms")
 
     exit_code = exit_codes.SUCCESS
     if lineage_res.status == GateStatus.FAIL:

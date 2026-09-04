@@ -1,6 +1,6 @@
-"""Phase 88 — Gate 5: resolvability of declared dependencies.
+"""Phase 88 — Gate 4: resolvability of declared dependencies.
 
-Sits next to the lineage, sandbox, and explain gates in the gate pyramid
+Sits next to the lineage and sandbox gates in the gate pyramid
 (``aqueduct/cli/__init__.py::_run_patch_gates_inline``, ``aqueduct/cli/
 patch.py::patch_preview``). A patch that carries one or more
 ``declare_dependency`` ops (``aqueduct/patch/grammar.py``) declares that the

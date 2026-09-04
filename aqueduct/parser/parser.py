@@ -496,7 +496,6 @@ def parse_dict(
             deep_loop=validated.agent.deep_loop,
             max_heal_attempts_per_hour=validated.agent.max_heal_attempts_per_hour,
             patch_validation=validated.agent.patch_validation,
-            block_on_explain_regression=validated.agent.block_on_explain_regression,
             sandbox_mode=validated.agent.sandbox_mode,
             mode=validated.agent.mode,
             max_tool_calls=validated.agent.max_tool_calls,

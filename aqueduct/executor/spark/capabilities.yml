@@ -31,7 +31,6 @@ engine: spark
 leaves:
   agent.field.allow_defer: supported
   agent.field.approval_mode: supported
-  agent.field.block_on_explain_regression: supported
   agent.field.confidence_threshold: supported
   agent.field.deep_loop: supported
   agent.field.guardrails: supported
@@ -105,7 +104,6 @@ leaves:
     support: supported
     tests:
       - tests/test_executor/test_executor_channel.py::test_union_two_upstreams
-  config.agent.block_on_explain_regression: supported
   config.agent.sandbox_master_url: supported
   config.checkpoint_root: supported
   config.danger.allow_full_probe_actions: supported

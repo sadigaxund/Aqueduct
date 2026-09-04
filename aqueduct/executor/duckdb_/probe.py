@@ -735,8 +735,8 @@ def execute_probe(
                     if sig_type == "sample_rows":
                         # Phase 85 A1 — retention cap: keep only the most
                         # recent `sample_rows_keep_last_n` rows per probe_id
-                        # for this signal type. Mirrors the Spark twin and
-                        # `record_explain_snapshot`'s rolling-window prune.
+                        # for this signal type. Mirrors the Spark twin's
+                        # rolling-window prune.
                         try:
                             _stale = cur.execute(
                                 """

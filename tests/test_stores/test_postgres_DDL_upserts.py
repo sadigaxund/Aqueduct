@@ -13,7 +13,7 @@ from aqueduct.compiler.provenance import ProvenanceMap
 from aqueduct.parser.models import Edge, Module, RetryPolicy
 from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
 from aqueduct.stores.postgres import PostgresObservabilityStore
-from aqueduct.surveyor.surveyor import _DDL, _EXPLAIN_SNAPSHOT_DDL, _SIGNAL_OVERRIDES_DDL, Surveyor
+from aqueduct.surveyor.surveyor import _DDL, _SIGNAL_OVERRIDES_DDL, Surveyor
 from tests.conftest import _pg_dsn, requires_postgres, requires_redis
 
 # ── Test 1: DDL contains DOUBLE PRECISION and creates clean on both ──────────
@@ -29,7 +29,6 @@ def test_surveyor_ddl_duckdb(tmp_path):
     with store.connect() as cur:
         cur.execute(_DDL)
         cur.execute(_SIGNAL_OVERRIDES_DDL)
-        cur.execute(_EXPLAIN_SNAPSHOT_DDL)
 
         # Verify table exists
         cur.execute("SELECT COUNT(*) FROM healing_outcomes")
@@ -50,7 +49,6 @@ def test_surveyor_ddl_postgres():
         with store.connect() as cur:
             cur.execute(_DDL)
             cur.execute(_SIGNAL_OVERRIDES_DDL)
-            cur.execute(_EXPLAIN_SNAPSHOT_DDL)
 
             cur.execute("SELECT COUNT(*) FROM healing_outcomes")
             assert cur.fetchone()[0] == 0

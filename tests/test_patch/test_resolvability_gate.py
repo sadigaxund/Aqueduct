@@ -1,4 +1,4 @@
-"""Phase 88 — Gate 5 (resolvability gate) tests.
+"""Phase 88 — Gate 4 (resolvability gate) tests.
 
 Every test that would otherwise reach the network mocks `httpx.get` — no test
 in this file may hit the real network.

@@ -69,8 +69,9 @@ class GateStatus:
 
     #: Checked, nothing wrong.
     PASS = "pass"
-    #: Checked, findings that a human should read. Non-blocking by default;
-    #: Gate 4's `warn` blocks only under `agent.block_on_explain_regression`.
+    #: Checked, findings that a human should read. Non-blocking — e.g. the
+    #: lineage gate's `warn` (a downstream column-consumption regression)
+    #: never refuses a patch on its own.
     WARN = "warn"
     #: Checked, the patch is refused.
     FAIL = "fail"
@@ -185,7 +186,7 @@ def sandbox_gate_blocks_preview(sandbox_result: Any) -> bool:
     return getattr(sandbox_result, "status", None) not in PREVIEW_NON_BLOCKING_SANDBOX_STATUSES
 
 
-#: Gate 5 (resolvability — ``aqueduct/patch/resolvability_gate.py``) statuses
+#: Gate 4 (resolvability — ``aqueduct/patch/resolvability_gate.py``) statuses
 #: under which a patch may be applied with no human in the loop. Same
 #: closed-set-of-permitting-values shape as Gate 3's set above, for the same
 #: reason (AGENTS.md "classify by what you EXCLUDE"): a status added later
@@ -196,7 +197,7 @@ AUTO_APPLY_PERMITTING_RESOLVABILITY_STATUSES: frozenset[str] = frozenset(
 
 
 def resolvability_gate_permits_auto_apply(resolvability_result: Any) -> bool:
-    """Return whether Gate 5's result permits applying without a human.
+    """Return whether Gate 4's result permits applying without a human.
 
     Mirrors ``sandbox_gate_permits_auto_apply`` exactly, including its
     fail-CLOSED ``None`` handling: a caller that forgot to run the gate, or

@@ -18,7 +18,7 @@ or DuckDB file locks:
       observability.db     ← run_records, heal_attempts, healing_outcomes,
                              failure_contexts, probe_signals, module_metrics,
                              maintenance_metrics, patch_simulation,
-                             signal_overrides, explain_snapshot,
+                             signal_overrides,
                              column_lineage, patch_index
       blobs/               ← Zstandard-compressed manifest_json, provenance_json,
                              stack_trace payloads (<run_id>/{manifest,prov,stack}.json.zst)
@@ -207,7 +207,7 @@ budget axis tripped before a valid patch landed), the CLI synthesises one
 #### `patch_simulation`
 
 One row per gate the patch went through. `gate` vocabulary: `engine_config`,
-`lineage`, `sandbox`, `explain`, `resolvability` (Gate 5, 2.66: one row per
+`lineage`, `sandbox`, `resolvability` (Gate 4, 2.66: one row per
 patch reporting the worst verdict across every `declare_dependency` op it
 carries; guardrail rejections, meaning `forbidden_ops`, `allowed_paths`, and the
 `set_engine_config` allowlist, are recorded in `heal_attempts`, not here).
@@ -227,16 +227,15 @@ check was *owed*:
   `not_applicable` means there was nothing to look at.
 - **`unavailable`**: a check *was* owed and the environment prevented it.
   The target engine's dependencies are not installed, its session would not
-  start, the Blueprint is polyglot and the sandbox replays only one engine,
-  or plan capture does not exist on this session. **Nothing about the patch
-  was verified.** For the `sandbox` gate this **blocks auto-apply** and
-  requires a human; for `explain` (warn-only by design) it does not.
+  start, or the Blueprint is polyglot and the sandbox replays only one
+  engine. **Nothing about the patch was verified.** For the `sandbox` gate
+  this **blocks auto-apply** and requires a human.
 
 `detail` carries the reason in both cases, e.g. "no module-lineage surface
 for this patch's ops", or "sandbox replay did not run: engine 'spark' would
 not start (…); this patch was NOT replayed".
 
-> **Changed in 2.1.0 (BREAKING).** The `sandbox` and `explain` gates
+> **Changed in 2.1.0 (BREAKING).** The `sandbox` gate
 > previously wrote `skip` for *both* of the above, so a patch that was never
 > verified was indistinguishable from one that needed no verification, and
 > auto-approval accepted both. `skip` is no longer written. Rows recorded
@@ -300,11 +299,6 @@ User overrides for Probe signals via `aqueduct signal <signal_id> --value`.
 One row (`key='global'`) tracking `last_pruned_at`: the throttle marker for
 the automatic daily prune sweep. See "Retention & pruning" below.
 
-#### `explain_snapshot`
-
-Rolling per-module Spark physical-plan summary (`Exchange` / Python UDF /
-broadcast counts). Compared to the previous snapshot by the explain gate.
-
 #### `module_metrics`
 
 Per-module I/O metrics (`records_read`, `bytes_read`, `records_written`,
@@ -354,11 +348,11 @@ so a registered `@aq.secret()` value inside a sampled row is scrubbed to
 count-based retention cap on top of the age-based `probe_signals_days`
 window below: only the most recent `observability.retention.
 sample_rows_keep_last_n` (default 20) rows are kept **per `probe_id`**,
-enforced at write time (mirrors `explain_snapshot`'s rolling-window prune).
+enforced at write time.
 
 ### Retention & pruning (2.65)
 
-Every table but `explain_snapshot` (rolling `keep_last_n=5`) and
+Every table but
 `signal_overrides` (manual `DELETE` only) grew append-only forever before
 2.65. `aqueduct.yml`'s `observability.retention:` block configures per-table
 age windows (defaults below); `aqueduct.surveyor.retention.prune_store()`
@@ -864,7 +858,7 @@ columns or aggregation tables:
 | `runs_over_time` | `list[DayCount]` | Daily run counts over a configurable window (`days` default 30) |
 | `failure_categories` | `dict[str, int]` | Count of failures grouped by `error_class` |
 | `heal_coverage` | `dict[str, int]` | Heals resolved by the signature memory cache (`memory`) vs the LLM (`agent`), per blueprint |
-| `gate_rejection_rates` | `dict[str, int]` | Count of `patch_simulation` rows with `status = 'fail'`, per `gate` (`engine_config`/`lineage`/`sandbox`/`explain`/`resolvability`). `warn`, `not_applicable` and `unavailable` are not rejections: see the function's docstring for why. Note `unavailable` is not a rejection but *is* blocking for the `sandbox` gate, so a rising `unavailable` count means heals are stalling for humans without any patch being judged wrong; count it separately rather than reading it as health. A rising `resolvability` `warn` count (not counted here, see above) similarly means heals are stalling on missing packages rather than bad patches. Falls back to `heal_attempts.gate_that_rejected` counts when `patch_simulation` is unavailable |
+| `gate_rejection_rates` | `dict[str, int]` | Count of `patch_simulation` rows with `status = 'fail'`, per `gate` (`engine_config`/`lineage`/`sandbox`/`resolvability`). `warn`, `not_applicable` and `unavailable` are not rejections: see the function's docstring for why. Note `unavailable` is not a rejection but *is* blocking for the `sandbox` gate, so a rising `unavailable` count means heals are stalling for humans without any patch being judged wrong; count it separately rather than reading it as health. A rising `resolvability` `warn` count (not counted here, see above) similarly means heals are stalling on missing packages rather than bad patches. Falls back to `heal_attempts.gate_that_rejected` counts when `patch_simulation` is unavailable |
 
 DuckDB: the functions iterate discovered per‑pipeline files. Postgres: a single
 schema‑scoped query. Both backends return the same shape.

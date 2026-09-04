@@ -267,21 +267,6 @@ class _CompileResult:
     depot_reads: dict  # depot keys resolved during this compile's Tier 1 (Gate 3 staleness notice)
 
 
-def _emit_explain_regressions(g4) -> None:
-    """Surface explain-gate plan regressions as rule_id'd warnings.
-
-    Standardised (``⚠ [explain_regression] …`` via the output funnel, greppable +
-    suppressible) and called on BOTH the LLM-apply and the zero-token replay
-    paths, so a replayed patch's plan regression is no longer silently dropped
-    while the LLM path printed it."""
-    if g4 is None or getattr(g4, "status", None) != "warn":
-        return
-    from aqueduct.cli.render.funnel import warn as _warn
-
-    for _r in getattr(g4, "regressions", ()) or ():
-        _warn("explain_regression", _r.detail, err=True)
-
-
 def _do_compile(
     blueprint,
     profile,
@@ -682,7 +667,7 @@ def _setup_surveyor(
 
     # The blueprint's compile warnings are now shown once (grouped). The run
     # re-parses/re-compiles the SAME blueprint several times after this point —
-    # heal re-runs, zero-token replay, sandbox/explain gates — each of which would
+    # heal re-runs, zero-token replay, sandbox gates — each of which would
     # otherwise re-emit those identical warnings through the raw `AQ-WARN [...]`
     # fallback formatter (they escape the initial catch_warnings block). Suppress
     # AqueductWarning for the rest of this run so they never leak mid-execution.

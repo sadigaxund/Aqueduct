@@ -124,7 +124,7 @@ class AgentConfig:
     # healable at the Blueprint level. Default False — the LLM must always produce
     # a real patch unless explicitly permitted to defer.
     allow_defer: bool = False
-    # Phase 43: run sandbox/lineage/explain gates inside the LLM conversation
+    # Phase 43: run sandbox/lineage gates inside the LLM conversation
     # so the model sees rejection feedback and retries in-context instead of
     # starting a fresh conversation each time. Default False preserves the
     # current behaviour (gates run post-hoc via apply_callback).
@@ -138,9 +138,6 @@ class AgentConfig:
     # Controls whether `auto` mode validates a generated patch by a full
     # Spark run after the sandbox replay, or by sandbox replay alone.
     patch_validation: str | None = None
-    # Opt-in stricter Gate 4 (explain regression) for `auto` multi-patch mode.
-    # None = inherit from engine default (False).
-    block_on_explain_regression: bool | None = None
     # 1.1.0 — sandbox replay fidelity: "sample" (default), "preflight"
     # (full dataset, requires danger.allow_full_preflight), "off" (skip,
     # requires danger.allow_skip_sandbox).
@@ -176,7 +173,6 @@ class AgentConfig:
             "deep_loop": self.deep_loop,
             "confidence_threshold": self.confidence_threshold,
             "patch_validation": self.patch_validation,
-            "block_on_explain_regression": self.block_on_explain_regression,
             "mode": self.mode,
             "progressive": self.progressive,
             "max_chain": self.max_chain,

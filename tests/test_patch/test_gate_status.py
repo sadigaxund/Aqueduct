@@ -159,7 +159,7 @@ def test_the_preview_non_blocking_set_is_pinned():
     )
 
 
-# ── Phase 88: Gate 5 (resolvability) ────────────────────────────────────────
+# ── Phase 88: Gate 4 (resolvability) ────────────────────────────────────────
 
 
 def test_resolvability_none_does_not_permit():

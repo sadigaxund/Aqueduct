@@ -71,7 +71,6 @@ jobs:
               # -m "not spark" in their home directory's own lane.
               - 'tests/test_surveyor/test_probe.py'
               - 'tests/test_patch/test_patch_preview_gate3.py'
-              - 'tests/test_patch/test_preview_sandbox_explain.py'
               - 'tests/test_sync_constants.py'
               - 'tests/test_executor_duckdb/test_handoff_s3_minio.py'
             surveyor:
@@ -694,7 +693,7 @@ jobs:
       #      tests/test_meta_ci.py::test_every_test_file_is_selected_by_some_pre_merge_lane.
       - run: |
           set +e
-          pytest tests/test_executor/ tests/test_compiler/test_blueprints.py tests/test_surveyor/test_probe.py tests/test_patch/test_patch_preview_gate3.py tests/test_patch/test_preview_sandbox_explain.py tests/test_sync_constants.py tests/test_executor_duckdb/test_handoff_s3_minio.py -m spark --junitxml=results.xml
+          pytest tests/test_executor/ tests/test_compiler/test_blueprints.py tests/test_surveyor/test_probe.py tests/test_patch/test_patch_preview_gate3.py tests/test_sync_constants.py tests/test_executor_duckdb/test_handoff_s3_minio.py -m spark --junitxml=results.xml
           rc=$?
           python scripts/ci-summary.py results.xml --name "Executor"
           pytest tests/test_executor/ -m "not spark" --junitxml=results-unit.xml

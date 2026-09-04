@@ -34,8 +34,8 @@ Each engine declares a verdict for every capability leaf in a YAML data file shi
 
 | Engine | Leaves declared | Supported | Version-gated | Ignored with warning | Unsupported |
 |---|---|---|---|---|---|
-| `duckdb` | 321 | 264 | 0 | 4 | 53 |
-| `spark` | 313 | 312 | 7 | 0 | 1 |
+| `duckdb` | 318 | 263 | 0 | 4 | 51 |
+| `spark` | 310 | 309 | 7 | 0 | 1 |
 
 ### Conditional and refused capabilities
 
@@ -43,7 +43,6 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 
 | Engine | Capability leaf | Verdict | Requires | Notes |
 |---|---|---|---|---|
-| `duckdb` | `agent.field.block_on_explain_regression` | unsupported | — | block_on_explain_regression relies on Spark's explain()-plan snapshot gate (aqueduct.patch.explain_gate); DuckDB has no equivalent plan-snapshot capture implemented. |
 | `duckdb` | `channel.field.broadcast_side` | ignored_with_warning | — | Accepted but never inspected; DuckDB's join planner has no broadcast-hint concept; the query still runs correctly, just without the hint. |
 | `duckdb` | `channel.field.col` | unsupported | — | op: repartition's optional target column is unimplemented on DuckDB; see channel.op.repartition. |
 | `duckdb` | `channel.field.column` | unsupported | — | op: repartition's optional target column is unimplemented on DuckDB; see channel.op.repartition. |
@@ -54,7 +53,6 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 | `duckdb` | `channel.op.cache` | unsupported | — | op=cache maps to Spark's distributed persist(StorageLevel); DuckDB is single-process with no distributed cache tier to spill to. Not implemented. |
 | `duckdb` | `channel.op.coalesce` | unsupported | — | op=coalesce is a Spark physical-partition-count hint; DuckDB has no partition concept to coalesce. Not applicable. |
 | `duckdb` | `channel.op.repartition` | unsupported | — | op=repartition is a Spark physical-partition-count hint; DuckDB has no partition concept to repartition. Not applicable. |
-| `duckdb` | `config.agent.block_on_explain_regression` | unsupported | — | relies on the Spark explain()-plan snapshot gate; no DuckDB equivalent implemented. |
 | `duckdb` | `config.agent.sandbox_master_url` | unsupported | — | sandbox_master_url pins a Spark master URL for the patch-preview sandbox session; DuckDB has no cluster master to pin (single-process, always local). |
 | `duckdb` | `config.metrics.use_observe` | unsupported | — | use_observe toggles Spark's Observation API (a SparkListener-driven zero-cost row-count mechanism); DuckDB has no equivalent listener hook. This engine writes per-module module_metrics (see observability.module_metrics.per_module) via a direct write after each dispatch branch, not a listener callback, so there is no existing collection path for this flag to toggle either way; the key is inert here, not superseded by an always-on alternative. |
 | `duckdb` | `egress.field.class_` | unsupported | — | format: custom is the pyspark>=4.0 Python DataSource registry; Spark-only. Not applicable to DuckDB. |
@@ -157,7 +155,6 @@ roadmap; no Connect support is scheduled.
 | `aqueduct/executor/spark/channel.py:320-350` (`_apply_metrics_boundary`) | `metrics_boundary: true` Channel config: forces a `repartition()` boundary so `SparkListener`-derived stage metrics attribute correctly per-Channel | **Degrades gracefully.** `df.rdd.getNumPartitions()` is now guarded: on a Connect `DataFrame` (`.rdd` is not implemented in Connect) the boundary is skipped and a `[runtime_metrics_boundary_skipped]` warning fires; the transform result flows through unchanged | Graceful: metrics boundary silently skipped, warning surfaced, module still runs |
 | `aqueduct/executor/spark/probe.py:456` (`_execution_partitions`) | `type: execution_partitions` Probe signal | **Degrades.** Same `df.rdd.getNumPartitions()` call, but the dispatch loop in `execute_probe` wraps every signal in a per-signal `try/except` (probe.py:629), the signal is skipped, a `runtime_probe_signal_error` warning fires, and the pipeline continues | Graceful: signal silently omitted, warning surfaced |
 | `aqueduct/executor/spark/metrics.py:101-104` (`_hadoop_fs_bytes`) | Byte-count metrics (`bytes_read`/`bytes_written`) for cloud/HDFS paths (s3a://, gs://, hdfs://, etc.) | **Degrades.** `spark._jvm` / `spark._jsc.hadoopConfiguration()` raise `AttributeError` on a Connect session; the whole function body is wrapped in `try/except Exception: return None` | Graceful: byte-count metrics come back `None` (not collected) rather than 0; no crash |
-| `aqueduct/patch/explain_gate.py:50-90` (`_formatted_plan`/`capture_plan_snapshot`, Gate 4) | Post-patch physical-plan regression detection (`Exchange`/`BroadcastExchange`/`BatchEvalPython` node counts vs. baseline) | **Degrades gracefully.** `df._jdf` does not exist on a Connect `DataFrame`; both the primary path and its own fallback raise, caught by the outer `try/except`, returning `""`. `capture_plan_snapshot` now stamps `plan_available: False` on empty-plan captures, and `run_explain_gate` reports `status="skip"` ("plan capture unavailable on this session, gate skipped") instead of comparing all-zero "after" counts against a real baseline | Graceful: gate reports skip/unavailable, not a false regression |
 | `aqueduct/executor/spark/warnings/jar_availability.py:34-60` (`_loaded_jar_names`) | `jar_availability` compiler/session-startup warning (missing JDBC/Kafka/Delta/Iceberg/Hudi driver JARs) | **Degrades honestly.** `spark.sparkContext._jsc` raises on Connect (`sparkContext` itself is not exposed by a Connect `SparkSession`); `_loaded_jar_names` now returns `None` (inspection failed) rather than `[]` (genuinely no JARs). `check()` distinguishes the two, when a Blueprint declares a JAR-requiring format and inspection is unavailable, it emits a "could not verify JAR availability" note instead of staying silent | Graceful: surfaces an honest "could not verify" note when relevant, rather than a false all-clear |
 | `aqueduct/doctor/__init__.py:825-841` (cloud-URI `--preflight` check) | `aqueduct doctor --preflight` existence check for `s3a://`/`gs://`/`abfss://` Ingress/Egress paths, reusing Spark's own Hadoop `FileSystem` credentials | **Degrades gracefully.** `spark._jvm` / `_jsc.hadoopConfiguration()` raise; caught by the function's own `except Exception as exc: return CheckResult(name, "warn", ...)`, doctor reports a `warn`, not a crash | Graceful: surfaces as a doctor warning with the exception text |
 

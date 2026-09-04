@@ -252,7 +252,7 @@ agent:
   # must always produce a real patch unless explicitly permitted to defer.
   # allow_defer: true
 
-  # deep_loop: run sandbox/lineage/explain gates inside the LLM conversation
+  # deep_loop: run sandbox/lineage gates inside the LLM conversation
   # so the model sees rejection feedback and retries in-context.
   # Default false — gates run post-hoc outside the conversation.
   # deep_loop: true
@@ -277,13 +277,6 @@ agent:
   #   sandbox  — the lineage gate + the sandbox gate only (fastest)
   # Leave unset to inherit aqueduct.yml agent.patch_validation.
   # patch_validation: full_run
-
-  # block_on_explain_regression: when true, the explain gate (post-patch
-  # `explain()` regression check) rejects patches in multi-patch mode
-  # (max_patches > 1) that add shuffles / Python UDF nodes or drop broadcast
-  # hints. Default false → the explain gate is warn-only. Leave unset to
-  # inherit aqueduct.yml.
-  # block_on_explain_regression: false
 
   # sandbox_mode (1.1.0+): how the sandbox gate replays a generated patch before
   # applying it. Default sample is right for almost every project.

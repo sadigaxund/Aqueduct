@@ -328,7 +328,6 @@ def run_polyglot(
     parallel: bool = False,
     use_observe: bool = False,
     sampling: Any = None,
-    explain_capture: dict[str, dict] | None = None,
     record_result: bool = True,
     session_keep_alive: bool = True,
     share_island_state: bool = False,
@@ -373,7 +372,7 @@ def run_polyglot(
                          .execute``'s COMMON kwargs (`aqueduct/executor/
                          protocol.py`), which every registered engine must
                          accept.
-        parallel, use_observe, sampling, explain_capture: forwarded to every
+        parallel, use_observe, sampling: forwarded to every
                          island's ``execute()`` THROUGH ``call_execute()``
                          (`aqueduct/executor/protocol.py`) — these are
                          ``OPTIONAL_EXECUTE_KWARGS``, so an island whose
@@ -630,8 +629,8 @@ def run_polyglot(
 
             try:
                 # `call_execute()` (not `protocol.execute()` directly) so the
-                # OPTIONAL capability kwargs (parallel/use_observe/sampling/
-                # explain_capture) get the same per-engine filter-and-warn
+                # OPTIONAL capability kwargs (parallel/use_observe/sampling)
+                # get the same per-engine filter-and-warn
                 # treatment the single-engine CLI path already applies —
                 # an island whose engine doesn't declare support for one
                 # gets it dropped with a suppressible `engine_kwarg_ignored`
@@ -669,7 +668,6 @@ def run_polyglot(
                     parallel=parallel,
                     use_observe=use_observe,
                     sampling=sampling,
-                    explain_capture=explain_capture,
                     suppress=warnings_suppress,
                 )
             except ExecuteError as exc:

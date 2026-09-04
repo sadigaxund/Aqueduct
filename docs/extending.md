@@ -102,7 +102,7 @@ condition: a DuckDB run emits the same events a Spark run does.) The ones
 that DO appear are the ones that genuinely dispatch through an engine:
 `probes.*`, `metrics.use_observe`, `timezone`, `checkpoint_root`,
 `deployment.target`, `handoff.root`,
-`agent.sandbox_master_url`/`block_on_explain_regression`,
+`agent.sandbox_master_url`,
 `danger.allow_full_probe_actions`. A field under `engine.<name>.*`
 (`engine.spark.master_url`, `engine.duckdb.memory_limit`) is positionally
 yours alone: it never appears on another engine's checklist and no other
@@ -189,7 +189,7 @@ engine's `execute` with the same superset of run options
 (`run_id`, `store_dir`, `checkpoint_root`, `surveyor`, `depot`,
 `resume_run_id`, `from_module`, `to_module`, `block_full_actions`,
 `warnings_*`, plus Spark-only options like `parallel`, `use_observe`,
-`sampling`, `observability_store`, `explain_capture`). An engine with no
+`sampling`, `observability_store`). An engine with no
 equivalent for a Spark-only option drops it in its own protocol adapter.
 See `_DUCKDB_EXECUTE_KWARGS` in `aqueduct/executor/duckdb_/engine.py`, a
 frozenset the adapter filters kwargs against before calling the engine's

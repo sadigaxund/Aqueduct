@@ -125,18 +125,6 @@ class DayCount:
     count: int
 
 
-@dataclass(frozen=True)
-class PlanMetricRow:
-    """Per-module plan complexity from explain_snapshot (zero-Spark-action, every run)."""
-
-    run_id: str
-    started_at: str
-    module_id: str
-    exchange_count: int  # Exchange nodes ≈ shuffles
-    python_udf_count: int  # row-at-a-time python UDFs (non-vectorized)
-    broadcast_count: int
-
-
 # ── Store discovery ─────────────────────────────────────────────────────────
 
 
@@ -608,32 +596,6 @@ def channel_fingerprints(store: Any, blueprint_id: str) -> list[FingerprintRow]:
                 [blueprint_id],
             )
             return [FingerprintRow(*r) for r in cur.fetchall()]
-    except Exception:
-        return []
-
-
-def plan_metrics(store: Any, blueprint_id: str, limit: int = 200) -> list[PlanMetricRow]:
-    """Per-module plan complexity across recent runs of *blueprint_id*.
-
-    Reads ``explain_snapshot`` (captured every real run at zero Spark action by
-    analysing the query plan): exchange_count ≈ shuffles, python_udf_count =
-    non-vectorized python UDFs, broadcast_count. Empty if the table is absent.
-    """
-    try:
-        with store.connect() as cur:
-            cur.execute(
-                """
-                SELECT e.run_id, CAST(r.started_at AS VARCHAR), e.module_id,
-                       e.exchange_count, e.python_udf_count, e.broadcast_count
-                FROM explain_snapshot e
-                JOIN run_records r ON r.run_id = e.run_id
-                WHERE r.blueprint_id = ?
-                ORDER BY r.started_at DESC
-                LIMIT ?
-                """,
-                [blueprint_id, limit],
-            )
-            return [PlanMetricRow(*row) for row in cur.fetchall()]
     except Exception:
         return []
 
@@ -1344,9 +1306,7 @@ def gate_rejection_rates(cfg: Any, store_dir: str | None = None) -> dict[str, in
     `aqueduct/patch/gate_status.py` and `Surveyor.record_patch_simulation`);
     `fail` is deliberately the sole value counted here:
 
-    - `warn` is NOT a rejection: the explain gate is warn-only unless
-      `agent.block_on_explain_regression` is set (a per-run config knob not
-      captured in this row), and a lineage `warn` never blocks at all.
+    - `warn` is NOT a rejection: a lineage `warn` never blocks at all.
     - `not_applicable` means no check was OWED — the patch has no surface
       this gate looks at, or the operator declared none is owed
       (`sandbox_mode: off`). Informational, never blocking.

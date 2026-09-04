@@ -214,7 +214,7 @@ def resolve_agent_connection(engine_agent, blueprint_agent=None):
     r.max_reprompts = (bp.max_reprompts or eng.max_reprompts) if bp else eng.max_reprompts
     r.engine_prompt_context = eng.prompt_context
     r.blueprint_prompt_context = bp.prompt_context if bp else None
-    # Phase 75 — same `is not None` inheritance shape as block_on_explain_regression:
+    # Phase 75 — same `is not None` inheritance shape as patch_validation:
     # these are tri-state (None must mean "inherit"), so `or` merge is wrong
     # (a blueprint explicitly setting supports_tools: false is falsy but valid).
     r.mode = bp.mode if bp and bp.mode is not None else eng.mode
@@ -584,7 +584,7 @@ def _run_patch_gates_inline(  # noqa: F811
     timezone: str | None = None,
     depot_reads_at_failure: dict[str, str] | None = None,
 ):
-    """Phase 29a/b — run the lineage, sandbox, and explain gates inline.
+    """Phase 29a — run the lineage and sandbox gates inline.
 
     Also PERSISTS the engine-config delta gate's verdict (Gate 1's efficacy
     half, ``aqueduct/patch/config_delta.py``) as a fourth
@@ -603,10 +603,10 @@ def _run_patch_gates_inline(  # noqa: F811
     `forbidden_ops` / `allowed_paths` / allowlist rejection (those are
     `heal_attempts` rows, per `docs/observability_guide.md`).
 
-    Returns (lineage_res, sandbox_res, explain_res, resolvability_res,
+    Returns (lineage_res, sandbox_res, resolvability_res,
     gates_passed). ``gates_passed`` is decided by TWO predicates, ANDed:
     ``patch/gate_status.py::sandbox_gate_permits_auto_apply`` (Gate 3) and
-    ``patch/gate_status.py::resolvability_gate_permits_auto_apply`` (Gate 5,
+    ``patch/gate_status.py::resolvability_gate_permits_auto_apply`` (Gate 4,
     Phase 88). Gate 3's sandbox gate must have replayed the patch (`pass`)
     or have been owed no replay at all (`not_applicable`, i.e.
     `agent.sandbox_mode: off`). An ``unavailable`` sandbox result BLOCKS: the
@@ -614,14 +614,11 @@ def _run_patch_gates_inline(  # noqa: F811
     or the Blueprint is polyglot, so nothing about this patch was verified
     and a human decides. That status used to be spelled `skip` and was
     accepted here, which let a never-replayed patch auto-apply as though it
-    had been replayed. Gate 5's resolvability gate must find every declared
+    had been replayed. Gate 4's resolvability gate must find every declared
     dependency already satisfied (`pass`) or owe no check at all
     (`not_applicable` — the patch declares no `declare_dependency` op); a
     `warn` (resolves on PyPI but not installed) or `fail`/`unavailable`
-    result BLOCKS auto-apply the same way. The explain gate does not
-    hard-block from here (it is warn-only unless
-    `agent.block_on_explain_regression` is True, which the CALLER checks —
-    see `cli/run.py`).
+    result BLOCKS auto-apply the same way.
 
     ``engine`` is REQUIRED — passed straight through to
     ``run_sandbox_gate(engine=...)`` (Phase 79) so the sandbox replay runs
@@ -645,14 +642,13 @@ def _run_patch_gates_inline(  # noqa: F811
     in play here, so no notice is possible.
     """
     from aqueduct.patch.apply import _yaml_load, apply_patch_to_dict
-    from aqueduct.patch.explain_gate import run_explain_gate
     from aqueduct.patch.preview import run_lineage_gate, run_sandbox_gate
 
     bp_raw = _yaml_load(blueprint_path)
     try:
         bp_after = apply_patch_to_dict(bp_raw, patch)
     except Exception:
-        return None, None, None, None, False
+        return None, None, None, False
 
     _record_engine_config_simulation(
         patch=patch,
@@ -685,7 +681,6 @@ def _run_patch_gates_inline(  # noqa: F811
     except Exception:
         logger.warning("record_patch_simulation (lineage) failed", exc_info=True)
 
-    explain_after: dict[str, dict] = {}
     # 1.1.0 — sandbox_mode controls replay fidelity:
     #   sample   → sample_rows rows per Ingress, no Egress (default)
     #   preflight → full dataset, no Egress (slow, conclusive)
@@ -721,7 +716,6 @@ def _run_patch_gates_inline(  # noqa: F811
             cfg=cfg,
             sample_rows=_sample_for_call,
             observability_store=bundle.observability,
-            explain_capture=explain_after,
             sandbox_master_url=sandbox_master_url,
             warnings_suppress=warnings_suppress,
             timezone=timezone,
@@ -742,29 +736,7 @@ def _run_patch_gates_inline(  # noqa: F811
     except Exception:
         logger.warning("record_patch_simulation (sandbox) failed", exc_info=True)
 
-    # explain gate — per-module plan-count diff vs baseline in
-    # observability.explain_snapshot
-    explain_res = None
-    try:
-        baseline = surveyor.latest_explain_snapshots(blueprint_id=blueprint_id) if surveyor else {}
-        explain_res = run_explain_gate(
-            baseline, explain_after, touched_modules=lineage_res.touched_modules
-        )
-        surveyor.record_patch_simulation(
-            patch_id=patch.patch_id,
-            gate="explain",
-            status=explain_res.status,
-            detail=explain_res.detail
-            or "; ".join(r.detail for r in explain_res.regressions)
-            or None,
-            duration_ms=explain_res.duration_ms,
-            run_id=iteration_run_id,
-            blueprint_id=blueprint_id,
-        )
-    except Exception:
-        logger.warning("record_patch_simulation (explain) failed", exc_info=True)
-
-    # Resolvability gate (Gate 5, Phase 88) — per-requirement PyPI check for
+    # Resolvability gate (Gate 4, Phase 88) — per-requirement PyPI check for
     # every declare_dependency op in the patch.
     from aqueduct.patch.resolvability_gate import run_resolvability_gate
 
@@ -790,7 +762,7 @@ def _run_patch_gates_inline(  # noqa: F811
     gates_passed = sandbox_gate_permits_auto_apply(
         sandbox_res
     ) and resolvability_gate_permits_auto_apply(resolvability_res)
-    return lineage_res, sandbox_res, explain_res, resolvability_res, gates_passed
+    return lineage_res, sandbox_res, resolvability_res, gates_passed
 
 
 def _stage_failed_patch(

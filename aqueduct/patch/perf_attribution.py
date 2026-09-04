@@ -52,9 +52,7 @@ the patch. Three things are done about that rather than one:
 **What is measured.** Wall-clock run duration
 (``run_records.finished_at - started_at``) is the only metric every engine
 records, so it is the comparison. Shuffle bytes, spill, and stage counts
-are Spark concepts with no DuckDB counterpart; ``explain_snapshot``
-(Exchange/Broadcast counts) already has its own gate (Gate 4) and is not
-duplicated here.
+are Spark concepts with no DuckDB counterpart and are not attempted here.
 """
 
 from __future__ import annotations

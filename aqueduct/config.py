@@ -12,7 +12,7 @@ named). Per-blueprint POLICY (approval, on_pending_patches, max_patches,
 guardrails, ...) lives in the Blueprint agent: block; a shared subset of
 policy fields (max_reprompts, mode, max_tool_calls, supports_tools,
 progressive, max_chain, prompt_context, max_heal_attempts_per_hour,
-patch_validation, block_on_explain_regression) is
+patch_validation) is
 ALSO settable here as the engine-wide default, and the Blueprint's own
 value, when set, wins — see aqueduct.cli.resolve_agent_connection. See
 AgentConnectionConfig's docstring below for the full rationale.
@@ -809,8 +809,7 @@ class AgentConnectionConfig(AgentPolicySchema):
     Extends ``AgentPolicySchema`` for the POLICY fields it shares by name
     with the Blueprint (``max_reprompts``, ``mode``, ``max_tool_calls``,
     ``supports_tools``, ``progressive``, ``max_chain``, ``prompt_context``,
-    ``max_heal_attempts_per_hour``, ``patch_validation``,
-    ``block_on_explain_regression``) — each
+    ``max_heal_attempts_per_hour``, ``patch_validation``) — each
     overridden below with this level's concrete engine-wide default (the
     base class's default is ``None``, meaning "inherit", which has no
     meaning at the level that IS the thing being inherited from). A
@@ -923,17 +922,6 @@ class AgentConnectionConfig(AgentPolicySchema):
             "make the leaderboard lie about model behaviour under the user's "
             "real config."
         ),
-    )
-    block_on_explain_regression: bool = Field(
-        default=False,
-        description=(
-            "Phase 29b — when True, the explain gate (post-patch `explain()` regression "
-            "check) is treated as blocking in `auto` multi-patch mode: a patch that "
-            "adds shuffles / Python UDF nodes or drops broadcast hints is "
-            "rejected instead of merely warned. Default False — the explain gate is "
-            "warn-only across all healing modes, preserving current behaviour."
-        ),
-        json_schema_extra={"engine_scoped": True},
     )
     sandbox_master_url: str | None = Field(
         default=None,

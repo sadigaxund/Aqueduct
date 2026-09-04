@@ -22,7 +22,6 @@ from aqueduct.cli import (
 from aqueduct.cli.render.funnel import emit
 from aqueduct.cli.run_setup import (
     _do_compile,
-    _emit_explain_regressions,
     _load_engine_config,
     _setup_surveyor,
     _zero_token_attempt,
@@ -79,8 +78,8 @@ def _classify_error_label(error_class: str | None) -> str:
 # ── F-16 — print validation gates AS THEY RUN (SCREEN 3/7's numbered
 # ladder) ────────────────────────────────────────────────────────────────
 # Display-only: `_run_patch_gates_inline` (`aqueduct/cli/__init__.py`, W7-
-# owned — not edited here) already computes lineage/sandbox/explain
-# results; this only renders them. Copies `cli/patch.py::_gate_status_line`
+# owned — not edited here) already computes lineage/sandbox/
+# resolvability results; this only renders them. Copies `cli/patch.py::_gate_status_line`
 # icon-per-`GateStatus` PATTERN (dict-dispatch, not an import from
 # patch.py, which Wave 2 does not own) — with an explicit fallback for an
 # unrecognised status so a future `GateStatus` member (e.g. the sandbox
@@ -103,24 +102,23 @@ def _gate_icon(status: str | None) -> tuple[str, str]:
     return "⚠", "yellow"  # unknown status — never silently vanish
 
 
-def _print_gate_ladder(g2, g3, g4, g5, *, verbosity: int, gate1_ok: bool = True) -> None:
-    """Print gate 1-5 outcomes for one candidate patch as they complete.
+def _print_gate_ladder(g2, g3, g4, *, verbosity: int, gate1_ok: bool = True) -> None:
+    """Print gate 1-4 outcomes for one candidate patch as they complete.
 
-    ``g2``/``g3``/``g4``/``g5`` are ``lineage_res``/``sandbox_res``/
-    ``explain_res``/``resolvability_res`` from ``_run_patch_gates_inline``
+    ``g2``/``g3``/``g4`` are ``lineage_res``/``sandbox_res``/
+    ``resolvability_res`` from ``_run_patch_gates_inline``
     (``None`` when that gate did not run — e.g. a heal-cache replay that
     skipped straight to sandbox). Gate 1 (policy/guardrails) already ran
     in-loop via ``_check_guardrails`` before a candidate ever reaches here,
     so ``gate1_ok`` is a plain bool, not a ``GateStatus``. Default: one
-    compact line, collapsing to "gates 1-5 passed" when nothing failed or
+    compact line, collapsing to "gates 1-4 passed" when nothing failed or
     warned. ``-v``: one line per gate.
     """
     entries = [(1, "policy", "pass" if gate1_ok else "fail", None)]
     for num, name, res in (
         (2, "lineage", g2),
         (3, "sandbox", g3),
-        (4, "explain", g4),
-        (5, "resolvability", g5),
+        (4, "resolvability", g4),
     ):
         if res is None:
             continue
@@ -156,7 +154,7 @@ def _print_gate_ladder(g2, g3, g4, g5, *, verbosity: int, gate1_ok: bool = True)
 
 
 # `_zero_token_attempt`, `_LoadConfigResult`, `_load_engine_config`,
-# `_CompileResult`, `_emit_explain_regressions`, `_do_compile`,
+# `_CompileResult`, `_do_compile`,
 # `_SessionHolder`, `_SurveyorSetupResult`, `_setup_surveyor` moved to
 # `aqueduct/cli/run_setup.py` (Phase 85 Wave 5 split) — module-level
 # functions with no closure over run()'s locals, imported below.
@@ -1588,7 +1586,7 @@ def run(
                         if effective_mode == "auto":
                             # Run the gate pyramid on the candidate NOW so a stale
                             # patch costs one sandbox pass, not a production write.
-                            _rg2, _rg3, _rg4, _rg5, _rg3_passed = _aqcli._run_patch_gates_inline(
+                            _rg2, _rg3, _rg4, _rg3_passed = _aqcli._run_patch_gates_inline(
                                 patch=_replay_patch,
                                 blueprint_path=Path(blueprint),
                                 bundle=bundle,
@@ -1619,8 +1617,8 @@ def run(
 
                                 _replay_ok = False
                                 _rg_fail_gate, _rg_fail_res = (
-                                    ("resolvability", _rg5)
-                                    if not _rg_permits(_rg5)
+                                    ("resolvability", _rg4)
+                                    if not _rg_permits(_rg4)
                                     else ("sandbox", _rg3)
                                 )
                                 click.echo(
@@ -1631,10 +1629,7 @@ def run(
                                 )
                             else:
                                 _replay_gates_done = True
-                                # Same plan-regression warning the LLM path gets,
-                                # so a replayed patch's regression isn't silent.
-                                _emit_explain_regressions(_rg4)
-                                _print_gate_ladder(_rg2, _rg3, _rg4, _rg5, verbosity=verbosity)
+                                _print_gate_ladder(_rg2, _rg3, _rg4, verbosity=verbosity)
                         if _replay_ok:
                             from aqueduct.agent import AgentPatchResult as _AgentPatchResult
 
@@ -1825,7 +1820,7 @@ def run(
             # generated PatchSpec against the current Blueprint and feeds any
             # rejection back as a reprompt instead of letting the loop exit
             # 'solved' and then having the outer code silently stage. Slower
-            # gates (lineage / sandbox / explain) stay OUTSIDE the loop — they
+            # gates (lineage / sandbox / resolvability) stay OUTSIDE the loop — they
             # run once per patch in multi-patch mode.
             _bp_path_for_cb = Path(blueprint)
 
@@ -1897,7 +1892,7 @@ def run(
                     return False, "apply_error", str(exc), None
 
             # Phase 43: when deep_loop is enabled, build a validate_callback
-            # that runs sandbox/lineage/explain gates inside the LLM conversation.
+            # that runs sandbox/lineage/resolvability gates inside the LLM conversation.
             # The model sees rejection feedback and retries in-context.
             # Cascade tiers can opt into deep_loop individually, so the
             # callback must exist whenever ANY tier (or the top level) wants it.
@@ -2723,15 +2718,15 @@ def run(
                     )
                     break
 
-                # Multi-patch gate validation: sandbox replay + explain gate check
-                # before writing to the blueprint.
+                # Multi-patch gate validation: sandbox + resolvability replay
+                # check before writing to the blueprint.
                 # Phase 45: gates already ran on a replay candidate at the
                 # heal-cache check — skip the redundant rerun.
                 if _replay_gates_done:
                     _g3_passed = True
-                    _g2, _g3, _g4, _g5 = None, None, None, None
+                    _g2, _g3, _g4 = None, None, None
                 else:
-                    _g2, _g3, _g4, _g5, _g3_passed = _aqcli._run_patch_gates_inline(
+                    _g2, _g3, _g4, _g3_passed = _aqcli._run_patch_gates_inline(
                         patch=patch,
                         blueprint_path=Path(blueprint),
                         bundle=bundle,
@@ -2750,50 +2745,7 @@ def run(
                     _announce_polyglot_sandbox_unavailable(_g3)
                     # F-16 — print the gate ladder as it completes (SCREEN 3/7),
                     # instead of staying silent when everything passes.
-                    _print_gate_ladder(_g2, _g3, _g4, _g5, verbosity=verbosity)
-                _block_on_g4 = (
-                    manifest.agent.block_on_explain_regression
-                    if manifest.agent.block_on_explain_regression is not None
-                    else cfg.agent.block_on_explain_regression
-                )
-                _emit_explain_regressions(_g4)
-                if _block_on_g4 and _g4 is not None and _g4.status == "warn":
-                    last_apply_error = (
-                        f"Patch {patch.patch_id!r} rejected by the explain gate: "
-                        + "; ".join(r.detail for r in _g4.regressions)
-                    )
-                    click.echo(
-                        f"  ✗ multi-patch: explain gate blocked — {last_apply_error}", err=True
-                    )
-                    surveyor.record_healing_outcome(
-                        run_id=iteration_run_id,
-                        failed_module=failure_ctx.failed_module,
-                        parent_run_id=run_id,
-                        failure_category=patch.category,
-                        model=_outcome_model,
-                        patch_id=patch.patch_id,
-                        confidence=patch.confidence,
-                        patch_applied=False,
-                        run_success_after_patch=False,
-                        failure_signature=_sig_exact.hash,
-                        failure_signature_coarse=_sig_coarse.hash,
-                        resolution=_resolution,
-                        model_cascade_position=_cascade_pos,
-                    )
-                    # A validation gate rejected this patch — if the multi-patch loop
-                    # exhausts with no success, this drives the VALIDATION_GATE(4) exit.
-                    patch_rejected_by_gate = True
-                    if patch_count >= max_patches:
-                        # Exhausted: break directly rather than `continue` back to
-                        # the loop top, which resets `patch_rejected_by_gate` to
-                        # False (line ~1921, "reset per iteration") before the
-                        # `patch_count >= max_patches` check at the top ever sees
-                        # it — that ordering silently downgraded every
-                        # gate-rejection-at-exhaustion to DATA_OR_RUNTIME(2)
-                        # instead of VALIDATION_GATE(4), and also wasted one
-                        # extra re-execution of the still-broken blueprint.
-                        break
-                    continue
+                    _print_gate_ladder(_g2, _g3, _g4, verbosity=verbosity)
                 if _g3 is not None and not _g3_passed:
                     click.echo(
                         f"  ✗ multi-patch: sandbox rejected patch — {_g3.detail}",
@@ -2819,7 +2771,15 @@ def run(
                         True  # sandbox gate → VALIDATION_GATE(4) if loop exhausts
                     )
                     if patch_count >= max_patches:
-                        break  # see the identical comment on the explain-gate branch above
+                        # Exhausted: break directly rather than `continue` back to
+                        # the loop top, which resets `patch_rejected_by_gate` to
+                        # False (line ~1921, "reset per iteration") before the
+                        # `patch_count >= max_patches` check at the top ever sees
+                        # it — that ordering silently downgraded every
+                        # gate-rejection-at-exhaustion to DATA_OR_RUNTIME(2)
+                        # instead of VALIDATION_GATE(4), and also wasted one
+                        # extra re-execution of the still-broken blueprint.
+                        break
                     continue  # try next patch iteration
 
                 _patch_validation = manifest.agent.patch_validation or cfg.agent.patch_validation

@@ -405,7 +405,7 @@ class ExecutorProtocol:
             every kwarg any call site sends today, so it declares no
             allowlist. An engine with a narrower signature (DuckDB Stage A:
             no ``parallel``/``use_observe``/``observability_store``/
-            ``explain_capture``/``sampling``) declares the set it DOES
+            ``sampling``) declares the set it DOES
             accept; ``call_execute()`` (below) uses the declared set to warn
             on and drop anything outside it instead of forwarding a kwarg
             the real ``execute()`` would raise ``TypeError`` on, or silently
@@ -671,7 +671,6 @@ def render_native_type(engine: str, spelling: str) -> str:
 OPTIONAL_EXECUTE_KWARGS: frozenset[str] = frozenset(
     {
         "observability_store",
-        "explain_capture",
         "parallel",
         "use_observe",
         "sampling",

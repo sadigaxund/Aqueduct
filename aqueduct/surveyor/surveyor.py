@@ -30,7 +30,6 @@ from aqueduct.models import Manifest
 from aqueduct.redaction import redact as _redact
 from aqueduct.surveyor.ddl import (
     _DDL,
-    _EXPLAIN_SNAPSHOT_DDL,
     _FAILURE_CONTEXTS_MIGRATIONS,
     _HEAL_ATTEMPTS_DDL,
     _HEAL_ATTEMPTS_MIGRATIONS,
@@ -233,7 +232,6 @@ class Surveyor:
         with self._observability.connect() as cur:
             cur.execute(_DDL)
             cur.execute(_SIGNAL_OVERRIDES_DDL)
-            cur.execute(_EXPLAIN_SNAPSHOT_DDL)
             cur.execute(_HEAL_ATTEMPTS_DDL)
             # In-place column migrations for pre-existing databases —
             # CREATE TABLE IF NOT EXISTS never adds columns to an existing
@@ -898,8 +896,7 @@ class Surveyor:
         Args:
             patch_id:     PatchSpec identifier — matches `patches/applied/{id}.json`.
             gate:         `"engine_config"` (effective session-config delta),
-                          `"lineage"`, `"sandbox"` (sandbox replay), or
-                          `"explain"`.
+                          `"lineage"`, or `"sandbox"` (sandbox replay).
             status:       `"pass"` | `"fail"` | `"warn"` | `"skip"` |
                           `"not_applicable"` (lineage and engine_config
                           gates — the patch has nothing for that gate to
@@ -937,131 +934,6 @@ class Surveyor:
                     _dt.datetime.now(_dt.UTC).isoformat(),
                 ],
             )
-
-    def record_explain_snapshot(
-        self,
-        *,
-        run_id: str,
-        module_id: str,
-        exchange_count: int,
-        python_udf_count: int,
-        broadcast_count: int,
-        plan_text: str,
-        blueprint_id: str | None = None,
-        keep_last_n: int = 5,
-    ) -> None:
-        """Append one row to `observability.explain_snapshot` for Gate 4 baseline.
-
-        Phase 29b — physical-plan regression check. Captured per-module after
-        each successful module execution. Rolling baseline: keeps the most
-        recent `keep_last_n` runs per (blueprint_id, module_id), older rows
-        are pruned to bound storage.
-
-        Args:
-            run_id:          Originating run.
-            module_id:       Module the plan belongs to.
-            exchange_count:  Count of `Exchange` nodes (shuffle proxy).
-            python_udf_count:Count of `BatchEvalPython` nodes.
-            broadcast_count: Count of `BroadcastExchange` nodes.
-            plan_text:       Full `explain(mode="formatted")` text for debugging.
-            blueprint_id:    Override Surveyor's manifest id.
-            keep_last_n:     Pruning bound per (blueprint_id, module_id).
-        """
-        if self._observability is None:
-            return
-        import datetime as _dt
-
-        bp_id = blueprint_id or getattr(self._manifest, "blueprint_id", None)
-        if not bp_id:
-            return
-        with self._observability.connect() as cur:
-            cur.execute(
-                """
-                INSERT INTO explain_snapshot
-                  (blueprint_id, run_id, module_id, captured_at,
-                   exchange_count, python_udf_count, broadcast_count, plan_text)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (blueprint_id, run_id, module_id) DO UPDATE SET
-                    captured_at      = EXCLUDED.captured_at,
-                    exchange_count   = EXCLUDED.exchange_count,
-                    python_udf_count = EXCLUDED.python_udf_count,
-                    broadcast_count  = EXCLUDED.broadcast_count,
-                    plan_text        = EXCLUDED.plan_text
-                """,
-                [
-                    bp_id,
-                    run_id,
-                    module_id,
-                    _dt.datetime.now(_dt.UTC).isoformat(),
-                    exchange_count,
-                    python_udf_count,
-                    broadcast_count,
-                    plan_text,
-                ],
-            )
-            # Rolling prune — keep last N run_ids per (blueprint_id, module_id)
-            try:
-                rows = cur.execute(
-                    """
-                    SELECT run_id FROM explain_snapshot
-                    WHERE blueprint_id = ? AND module_id = ?
-                    ORDER BY captured_at DESC
-                    """,
-                    [bp_id, module_id],
-                ).fetchall()
-                if len(rows) > keep_last_n:
-                    stale = [r[0] for r in rows[keep_last_n:]]
-                    for rid in stale:
-                        cur.execute(
-                            "DELETE FROM explain_snapshot WHERE blueprint_id=? AND module_id=? AND run_id=?",
-                            [bp_id, module_id, rid],
-                        )
-            except Exception:
-                pass  # explain-snapshot rotation is best-effort housekeeping; never fail a run for stale cleanup
-
-    def latest_explain_snapshots(
-        self,
-        *,
-        blueprint_id: str | None = None,
-    ) -> dict[str, dict]:
-        """Return most-recent per-module snapshot for the blueprint.
-
-        Returns mapping `module_id` → `{exchange_count, python_udf_count,
-        broadcast_count, plan_text, run_id, captured_at}`. Used by the explain gate
-        as the pre-patch baseline.
-        """
-        if self._observability is None:
-            return {}
-        bp_id = blueprint_id or getattr(self._manifest, "blueprint_id", None)
-        if not bp_id:
-            return {}
-        out: dict[str, dict] = {}
-        with self._observability.connect() as cur:
-            rows = cur.execute(
-                """
-                SELECT module_id, run_id, captured_at, exchange_count,
-                       python_udf_count, broadcast_count, plan_text
-                FROM explain_snapshot
-                WHERE blueprint_id = ?
-                ORDER BY module_id, captured_at DESC
-                """,
-                [bp_id],
-            ).fetchall()
-        seen: set[str] = set()
-        for r in rows:
-            mid = r[0]
-            if mid in seen:
-                continue
-            seen.add(mid)
-            out[mid] = {
-                "run_id": r[1],
-                "captured_at": r[2],
-                "exchange_count": r[3],
-                "python_udf_count": r[4],
-                "broadcast_count": r[5],
-                "plan_text": r[6],
-            }
-        return out
 
     def count_recent_heal_attempts(self, within_minutes: int = 60) -> int:
         """Return the number of LLM healing attempts recorded in this blueprint's
