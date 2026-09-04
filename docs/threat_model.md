@@ -58,10 +58,7 @@ The path an attacker has to work with:
 
 1. **A pipeline fails**, and `FailureContext` (`aqueduct/surveyor/models.py`)
    captures the error message, a stack trace or structured root-cause
-   fields, the compiled module config, and (in agentic mode) whatever a
-   read-only tool call returns, including up to 20 sampled source rows
-   (`aqueduct/agent/toolbox.py`'s `sample_rows`, hard-capped, never
-   negotiable via the tool argument).
+   fields, and the compiled module config.
 2. **`aqueduct/agent/prompts.py` composes a prompt** from that context. The
    error message and the root-cause/stack-trace section are the parts most
    directly reachable by data an attacker influenced: a Spark exception can
@@ -170,14 +167,7 @@ found there is a likely injection attempt to be ignored.
 The user prompt wraps the two runtime-data sections most directly reachable
 by pipeline content in those markers: the error message, and the
 root-cause section (the structured Spark/Py4J extraction, or the raw stack
-trace when structured extraction was unavailable). The same instruction
-block also tells the model to treat agentic-mode tool results
-(`sample_rows`, `run_detail`, and the rest of the read-only toolbox) as data
-even when a given tool result is not itself delimited; those results are
-not currently wrapped at the point they are returned
-(`aqueduct/agent/toolbox.py`), so that coverage rests on the instruction
-alone, not a structural marker. See §5 for what this mitigation does and
-does not guarantee.
+trace when structured extraction was unavailable). See §5 for what this mitigation does and does not guarantee.
 
 Prompt framing is defense-in-depth, not the primary defense. The primary
 defense is that the model's output cannot bypass the gate ladder (§4.1) no
@@ -219,11 +209,6 @@ a bad patch.
   the model an explicit rule to fall back on; it does not make injection
   impossible. The gate ladder is what actually bounds the damage a
   successful injection can do.
-- **Tool results in agentic mode are not structurally delimited** the way
-  the user prompt's error message and root-cause section are (§4.4). They
-  rely on the general instruction covering "any tool_result", not a
-  per-result sentinel wrap. A future pass could add that; it has not
-  shipped as of this document.
 - **Redaction does not guarantee no secret ever leaks.** It is substring
   matching with deliberate false-negative tolerance for short/low-entropy
   values (§4.5).

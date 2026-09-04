@@ -221,8 +221,8 @@ engine:
 # timeout, cascade) are NOT legal here — they are an operator/deployment
 # concern that lives exclusively in aqueduct.yml's agent: block. A Blueprint
 # that could choose its own LLM endpoint could redirect the healing loop's
-# FailureContext (pruned manifest, provenance, error text, and — in agentic
-# mode — sampled data rows) to an arbitrary host on any failure, so these
+# FailureContext (pruned manifest, provenance, error text) to an arbitrary
+# host on any failure, so these
 # fields are a hard schema rejection here, not merely unused.
 
 agent:
@@ -292,15 +292,6 @@ agent:
   #               Combining off + max_patches > 1 prints a
   #               ⚠ DANGER COMBO line at startup; use only on tiny trusted scopes.
   # sandbox_mode: sample
-
-  # mode (agentic heal, opt-in): oneshot (default) is today's single
-  # prompt → PatchSpec turn. agentic lets the model call READ-ONLY
-  # diagnostic tools (run/patch/lineage history, the Blueprint YAML, a live
-  # source schema, a small row sample) before answering — see docs/specs.md
-  # §8.12. Leave unset to inherit aqueduct.yml agent.mode (= oneshot).
-  # mode: oneshot
-  # max_tool_calls: 8       # agentic mode only — cap per heal attempt
-  # supports_tools: auto    # auto|true|false — tool-use capability probe
 
   # LLM Guardrails — per-blueprint restrictions on what the LLM may patch.
   # Violations → patch staged for human review instead of applied automatically.

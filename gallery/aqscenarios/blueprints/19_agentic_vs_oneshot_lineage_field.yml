@@ -10,9 +10,7 @@ name: Pipeline
 # at all: the fix is not a rename from the suggestion list, it is threading
 # a genuinely-existing upstream column through an intermediate module's
 # projection. Root-causing this requires seeing the WHOLE blueprint, not
-# just the failing module's immediate (pruned) context — the intended A/B
-# scenario for oneshot vs agentic-mode healing (see the .aqscenario.yml
-# description for how the mode is selected).
+# just the failing module's immediate (pruned) context.
 modules:
   - id: raw_orders
     type: Ingress

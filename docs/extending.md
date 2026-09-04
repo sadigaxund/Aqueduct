@@ -284,24 +284,22 @@ specifically so a future engine's session needs, anything the four named
 fields don't cover, can be threaded through without a breaking change to
 this frozen dataclass; nothing in core populates it today.
 
-### Optional diagnostic readers: `read_source_schema` / `sample_source_rows`
+### Optional diagnostic reader: `read_source_schema`
 
-`(module, session) -> {column: type}` and
-`(module, session, n, base_dir) -> [{col: val}, ...]` back two of the
-healing agent's toolbox diagnostics (`get_source_schema` and `sample_rows`
-in `aqueduct/agent/toolbox.py`). Both must be metadata-only /
-bounded-by-a-pushed-down-LIMIT: never a full scan or a materializing read.
+`(module, session) -> {column: type}` reads an Ingress module's source
+schema. It backs `aqueduct drift`, which compares a stored baseline against
+the live source. It must be metadata-only: never a full scan or a
+materializing read.
 
-If an engine registers without them (`None`, the default), the toolbox does
-not crash and does not fall back to another engine's reader: it degrades
-to the same structured "unavailable" response it already returns when there
-is no live session. This closed a real coupling: before the protocol
-existed, the toolbox imported Spark's schema reader unconditionally, so a
-heal running against a non-Spark engine still read source schemas through
-Spark. DuckDB implements both (`aqueduct/executor/duckdb_/schema_reader.py`)
-so this degradation does not apply to it in practice, but a new engine that
-skips them ships a working (if less diagnostic) healing loop rather than a
-broken one.
+If an engine registers without it (`None`, the default), nothing crashes and
+no other engine's reader is substituted: the caller degrades to the same
+structured "unavailable" response it already returns when there is no live
+session. This closed a real coupling: before the protocol existed, callers
+imported Spark's schema reader unconditionally, so a non-Spark engine still
+read source schemas through Spark. DuckDB implements it
+(`aqueduct/executor/duckdb_/schema_reader.py`) so this degradation does not
+apply to it in practice, but a new engine that skips it ships a working (if
+less diagnostic) engine rather than a broken one.
 
 ### Optional type mapping: `render_type`
 
@@ -311,8 +309,8 @@ It backs Channel `op: cast`, Ingress `schema_hint`, and (Spark only, so far) UDF
 `return_type`, the three places a Blueprint type string reaches an engine at
 runtime.
 
-Optional at registration, the same class as `read_source_schema` /
-`sample_source_rows` above, not the required class: shipping a complete type
+Optional at registration, the same class as `read_source_schema` above,
+not the required class: shipping a complete type
 mapper for the full hub vocabulary is not a reasonable bar to clear before a
 new engine's first release. The degrade contract when it is missing
 (`render_type=None`, the default) is narrow and must stay honest rather than
@@ -549,14 +547,13 @@ matching its seam fails the build.
 
 ### Entry-point groups
 
-Four exist; only one is live. **Being named is not being loaded**: check before
-assuming a group works.
+Three exist; only one is live. **Being named is not being loaded**: check
+before assuming a group works.
 
 | Group | State |
 | :- | :- |
 | `aqueduct.engines` | **Live.** Declared in `pyproject.toml`, resolved by `executor/capabilities.py::load_engines`. This guide is about writing one. |
 | `aqueduct.probe_signals` | **Resolved but unused.** `executor/probe_plugins.py` reads it; no package declares it. The `module:`/`entry:` pointer path carries the real load today. |
-| `aqueduct.tools` | **Reserved, not resolved.** The constant exists (`tools/registry.py`) and nothing reads it. Deliberate: a tool is code running on the driver, so custom-tool loading needs config allowlisting first. Do not implement loading without that gate. |
 | `aqueduct.actuators` | **Reserved, not in code.** No loader exists and none is currently planned. |
 
 Anywhere plugin code executes on the driver, discovery alone is never

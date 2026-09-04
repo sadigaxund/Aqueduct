@@ -142,12 +142,11 @@ One row per LLM turn inside the unified reprompt loop, finer-grained than
 | `stop_reason`       | VARCHAR             | Filled only on the loop's terminal row (UPDATE post-loop); NULL on intermediate rows |
 | `prompt_version`    | VARCHAR             | `aqueduct.agent.PROMPT_VERSION` at attempt time |
 | `recorded_at`       | VARCHAR NOT NULL    | ISO-8601 |
-| `tool_calls_json`   | VARCHAR             | Agentic mode only (`agent.mode: agentic`): JSON array of `{name, duration_ms}` for every tool call made during this attempt; NULL/absent in oneshot mode. **Trimmed at write time since 2.85 (C1):** the in-memory log also carries `args_summary`/`result_preview` string previews of real argument/result content (the observability audit's single largest per-row bloat/sensitivity risk); only the op name and duration reach the store |
 | `chain_link`        | INTEGER             | 1-based index of which attempt within the chain this heal-attempt row belongs to. Orthogonal to `attempt_num`, which still counts reprompts *within* one attempt |
 | `engine`            | VARCHAR             | Execution engine this attempt targeted (`spark` \| `duckdb`) |
 | `defer_reason`      | VARCHAR             | **(2.66+)** Queryable bucket from `DeferToHumanOp.defer_reason` (`infrastructure` \| `upstream_schema_change` \| `data_shape_change` \| `insufficient_context` \| `other`) when this attempt's patch deferred to a human; NULL for every non-deferring attempt. Filled on the loop's terminal row alongside `stop_reason` (via `update_heal_attempt_stop_reason`), same timing as `stop_reason` itself: the value isn't known at the per-turn `record_heal_attempt` INSERT |
 
-Columns added to `heal_attempts` after a release are migrated in place. Surveyor init runs idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements (see `_HEAL_ATTEMPTS_MIGRATIONS` in `aqueduct/surveyor/ddl.py`, which also carries `tool_calls_json`, `chain_link`, `engine`, and `defer_reason`) right after the `CREATE TABLE IF NOT EXISTS`. A pre-upgrade observability database therefore gains new columns on the next run, with no manual migration needed. `failure_contexts` and `healing_outcomes` gained `engine` the same way, via `_FAILURE_CONTEXTS_MIGRATIONS` and `_HEALING_OUTCOMES_MIGRATIONS` in the same file. `patch_index` gained it via `PATCH_INDEX_MIGRATIONS` in `aqueduct/patch/index.py`; `run_records` gained `engine` (+ its index) the same way via `_RUN_RECORDS_MIGRATIONS` (2.65).
+Columns added to `heal_attempts` after a release are migrated in place. Surveyor init runs idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements (see `_HEAL_ATTEMPTS_MIGRATIONS` in `aqueduct/surveyor/ddl.py`, which also carries `chain_link`, `engine`, and `defer_reason`) right after the `CREATE TABLE IF NOT EXISTS`. A pre-upgrade observability database therefore gains new columns on the next run, with no manual migration needed. `failure_contexts` and `healing_outcomes` gained `engine` the same way, via `_FAILURE_CONTEXTS_MIGRATIONS` and `_HEALING_OUTCOMES_MIGRATIONS` in the same file. `patch_index` gained it via `PATCH_INDEX_MIGRATIONS` in `aqueduct/patch/index.py`; `run_records` gained `engine` (+ its index) the same way via `_RUN_RECORDS_MIGRATIONS` (2.65).
 
 `stop_reason` vocabulary: `solved`, `exhausted_attempts`,
 `budget_seconds_exceeded`, `budget_tokens_exceeded`, `stuck_signature`,
@@ -596,25 +595,6 @@ older rows really were lost.
 indicates the `apply_callback` path is bypassed: verify `_check_guardrails`
 fired by inspecting `gate_that_rejected`.
 
-**When** a heal ran in agentic mode (`agent.mode: agentic`) and you want to
-see which diagnostic tools the model actually consulted before answering.
-**What you learn** Which tools were called, in what order, and how long each
-took: the same detail the `-v` transcript renders live, persisted for
-post-hoc review. (2.85+, C1: only `{name, duration_ms}` is stored; the
-argument/result string previews the live `-v` transcript shows are never
-persisted, so this recipe answers "what did it call" and "how long", not
-"what did it see".)
-**What to do next** If the model kept calling the same tool without ever
-converging on a patch, tighten `agent.max_tool_calls` or add the missing
-context directly to `agent.prompt_context` instead of relying on the tool.
-
-```sql
-SELECT attempt_num, tool_calls_json
-FROM heal_attempts
-WHERE run_id = '<run_id>' AND tool_calls_json IS NOT NULL
-ORDER BY attempt_num;
-```
-
 ```sql
 SELECT ha.run_id,
        COUNT(ha.id) AS attempts,
@@ -806,9 +786,8 @@ schema‑scoped query. Both backends return the same shape.
 
 ### Read‑only access
 
-`aqueduct report`, `aqueduct runs`, and the diagnostics tool registry
-(`aqueduct/tools/`) consume these functions to answer fleet questions on
-demand; none of them run in the data path. Every read is read‑only: DuckDB
+`aqueduct report` and `aqueduct runs` consume these functions to answer
+fleet questions on demand; neither runs in the data path. Every read is read‑only: DuckDB
 connections issue `SET read_only = true`, and Postgres connections use a
 read‑only role.
 

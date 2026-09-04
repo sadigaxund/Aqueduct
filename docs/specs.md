@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.79: Reference Document**
+**Version 2.80: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -980,7 +980,7 @@ The LLM agent operates within a grammar, not in free-form code generation mode. 
 
 **Model-agnostic design.** The PatchSpec grammar is deliberately narrow, 14 schema-checked operations with no code generation, so the agent works reliably across model sizes. A 7B parameter local model handles ~70% of production failures (path typos, format mismatches, column renames, simple SQL fixes) in a single attempt. Larger models unlock `agent.deep_loop` (in-conversation sandbox feedback) and multi-model cascading for complex cases like OOM tuning and multi-module restructures. The deterministic guardrails, gate pyramid, and structured prompt apply the same safety guarantees regardless of model size.
 
-**The `agent:` block is split by kind, at both levels (2.59).** A Blueprint's `agent:` block is **POLICY-ONLY**: risk decisions about THIS pipeline; `approval`, `on_pending_patches`, `max_patches`, `guardrails`, `confidence_threshold`, `on_heal_failure`, `allow_defer`, `deep_loop`, `sandbox_mode`, plus a shared subset (`max_reprompts`, `mode`, `max_tool_calls`, `supports_tools`, `prompt_context`, `max_heal_attempts_per_hour`, `patch_validation`) that overrides the engine's own default when set. `aqueduct.yml`'s `agent:` block (`AgentConnectionConfig`) is the **only** place CONNECTION settings live (`provider`, `base_url`, `api_key`, `model`, `provider_options`, `timeout`, `cascade`) an endpoint fact about the deployment, not a per-pipeline decision. A Blueprint cannot set or override any connection field; writing one into a Blueprint's `agent:` block is a schema-level rejection naming the field (`AgentSchema` uses `extra="forbid"`), not a silent no-op. This is the same split already applied to `engine:` (§10.1): `engine.spark`'s Blueprint-level block omits `master_url`, `engine.duckdb`'s omits `database_path`/`s3_*`; a Blueprint does not get to decide deployment/connection concerns. The security reasoning is sharper here: the healing loop ships `FailureContext` (pruned manifest, provenance, error text, and, in agentic mode, sampled data rows) to whichever endpoint is configured, so if a Blueprint could pick that endpoint, any pipeline failure would be an exfiltration opportunity to a host the pipeline's author (not the operator) controls.
+**The `agent:` block is split by kind, at both levels (2.59).** A Blueprint's `agent:` block is **POLICY-ONLY**: risk decisions about THIS pipeline; `approval`, `on_pending_patches`, `max_patches`, `guardrails`, `confidence_threshold`, `on_heal_failure`, `allow_defer`, `deep_loop`, `sandbox_mode`, plus a shared subset (`max_reprompts`, `prompt_context`, `max_heal_attempts_per_hour`, `patch_validation`) that overrides the engine's own default when set. `aqueduct.yml`'s `agent:` block (`AgentConnectionConfig`) is the **only** place CONNECTION settings live (`provider`, `base_url`, `api_key`, `model`, `provider_options`, `timeout`, `cascade`) an endpoint fact about the deployment, not a per-pipeline decision. A Blueprint cannot set or override any connection field; writing one into a Blueprint's `agent:` block is a schema-level rejection naming the field (`AgentSchema` uses `extra="forbid"`), not a silent no-op. This is the same split already applied to `engine:` (§10.1): `engine.spark`'s Blueprint-level block omits `master_url`, `engine.duckdb`'s omits `database_path`/`s3_*`; a Blueprint does not get to decide deployment/connection concerns. The security reasoning is sharper here: the healing loop ships `FailureContext` (pruned manifest, provenance, error text) to whichever endpoint is configured, so if a Blueprint could pick that endpoint, any pipeline failure would be an exfiltration opportunity to a host the pipeline's author (not the operator) controls.
 
 **Solo vs cascade.** With a single `agent.model:` in `aqueduct.yml`, healing runs **solo**, one model, the flat `agent.*` connection (`model`, `base_url`, `timeout`, `budget`, …). Configuring `agent.cascade:` (also `aqueduct.yml` only) switches to **cascade** mode: a list of tiers tried in the order you define them.
 
@@ -1072,7 +1072,7 @@ Only after every gate passes does the patch run against the real pipeline. The o
 
 Every LLM diagnosis call spends one unit of `max_patches`, regardless of outcome — advance, same-module discard, or gate rejection. The loop ends when the pipeline is fully solved, `max_patches` is exhausted, the model returns no patch, or `agent.on_heal_failure: abort` fires on a same-module retry.
 
-Each attempt's diagnosis (oneshot or agentic, per `agent.mode`) and the pending-patch check (§8.2 step 2) operate independently: an attempt's failure has its own error signature (§8.6) and its own `blueprint_id` check.
+Each attempt's diagnosis and the pending-patch check (§8.2 step 2) operate independently: an attempt's failure has its own error signature (§8.6) and its own `blueprint_id` check.
 
 **Disk invariant.** Nothing is written to the Blueprint until the FULL accumulated patch passes the pipeline end-to-end. There is never a partial/half-correct Blueprint on disk mid-chain: every intermediate apply is the existing in-memory apply path (`_apply_patch_in_memory`), re-applied against the *original* on-disk Blueprint with the growing operation list, never against a previously-written file. Exactly ONE combined `PatchSpec` is ever staged or written for a given heal — never a chain of separate staged patches.
 
@@ -1233,49 +1233,6 @@ of scope (a noisier, separate concern). Exit codes: `0` (no drift / baseline
 set / only benign drift), `DATA_OR_RUNTIME` (a breaking change was found, or a
 source could not be read/diffed).
 
-## **8.10 Diagnostics & the Tool Registry**
-
-`aqueduct/tools/` holds a single internal **ToolRegistry**: the enumeration
-surface the agentic-heal ToolBox (§8.12) reads from. Every registered tool
-is:
-
-- **A thin wrapper over an existing read function.** No tool contains inline
-  SQL; each one calls `stores/queries.py` (the one read-time observability
-  query layer), `patch/index.py` (read paths), or `aqueduct doctor`'s check
-  runner.
-- **Structurally read-only.** A `Tool` carries `read_only: bool = True`;
-  there is no write tool in v1, and no handler ever receives a store's write
-  handle (`open_obs_write`, a mutating cursor, or `PatchStore.write_*`), only
-  `open_obs_read` / `discover_stores` / read-side `patch_index` functions.
-- **Redacted before it leaves the registry.** Every result passes through the
-  same secret-redaction registry (`aqueduct/redaction.py`) the CLI console and
-  observability-store writes already use: an observability row's error blob
-  can embed a resolved secret, so `call_tool()` is the one call path that
-  applies `redact()`, and an individual handler cannot forget it.
-
-| Tool | Wraps | Purpose |
-| :- | :- | :- |
-| `list_runs` | `queries.list_runs` | Recent runs (limit / blueprint_id / status) |
-| `run_detail` | `queries.run_detail` | Module results + resource profile for one run |
-| `lineage` | `queries.lineage` | Column-level lineage for a blueprint/run |
-| `patch_list` | `queries.patch_list` | Patches across the fleet, filterable by status/blueprint |
-| `patch_show` | `patch/index.py` + `queries.load_patch_file` | One patch's metadata (+ body, best-effort) |
-| `probe_signals` | `queries.probe_signals` | Probe signal payloads for a blueprint |
-| `doctor` | `aqueduct.doctor.run_doctor` | Structured `CheckResult`s (supports `skip_spark`) |
-
-**Reserved extensibility seam: not implemented.** `AQ_TOOLS_ENTRYPOINT_GROUP
-= "aqueduct.tools"` names the setuptools entry-point group a custom-tool
-package would register under (the same shape as `probe`'s
-`AQ_PROBE_ENTRYPOINT_GROUP`). No code resolves it yet. When custom-tool
-loading ships, it will require explicit config allowlisting, a tool is CODE
-that runs on the driver, the same trust model as a probe plugin or UDF, so
-v1's tool surface stays closed to exactly the built-ins above.
-
-The internal heal LLM (§8.12's agentic mode) speaks to the registry
-in-process: its tool calls go straight through the provider API request as
-native tool-use blocks (`ToolBox` calls `tools.call_tool()` in-process, the
-same redaction chokepoint, zero IPC).
-
 ## **8.11 Remediation domains**
 
 Aqueduct's self-healing operates in explicit **remediation domains**, a
@@ -1296,12 +1253,9 @@ Every domain, present or future, follows the same principle:
 - **Never freeform code execution**: a domain's operations are data, not
   code; the agent cannot ship an arbitrary script to remediate a failure.
 
-Diagnostics are domain-aware and read-only: the tool registry (§8.10) gives
-the agent visibility into a domain's state, patch history, run outcomes,
-probe signals: without ever granting it a write handle. Framing self-healing
-this way keeps each domain's contract
-explicit and gives any domain added later the same shape to slot into,
-rather than a one-off extension of the patch grammar.
+Framing self-healing this way keeps each domain's contract explicit and
+gives any domain added later the same shape to slot into, rather than a
+one-off extension of the patch grammar.
 
 **A domain is a property of the FIX, not of the failure.** The same failure
 is often reachable from more than one domain: an executor OOM on a large
@@ -1315,66 +1269,6 @@ scenario declaring both is the normal case for a failure with two valid
 fixes, not an ambiguity to be resolved. See
 [`gallery/aqscenarios/README.md`](../gallery/aqscenarios/README.md) for the
 scenario file format.
-
-## **8.12 Agentic heal (opt-in, `agent.mode`)**
-
-By default (`agent.mode: oneshot`) a heal is a single prompt → PatchSpec
-turn (plus reprompts on an invalid response, §8.2), exactly the flow this
-document describes elsewhere in §8. Setting `agent.mode: agentic` (engine
-`aqueduct.yml` default, per-blueprint override: same `None` = inherit
-shape as `agent.patch_validation`) lets the model call **read-only**
-diagnostic tools before answering, so it can investigate the failure
-instead of guessing from the failure report alone.
-
-**Tool list.** Every tool registry entry (§8.10) except `doctor` (a
-health-probe, not a failure-diagnosis tool): `list_runs`, `run_detail`,
-`lineage`, `patch_list`, `patch_show`, `probe_signals`: plus three
-heal-context tools built for this mode:
-
-| Tool | Returns | Notes |
-| :- | :- | :- |
-| `read_blueprint` | The failing Blueprint's YAML source text | Size-capped (20,000 chars) |
-| `get_source_schema` | Live schema of an Ingress module's source | Metadata-only, zero Spark actions; `{"available": false, ...}` with no live Spark session (e.g. `aqueduct benchmark`/`aqueduct heal`) |
-| `sample_rows` | Up to 20 real rows from an Ingress module's source | `limit(n).collect()`: bounded, never a full scan; Ingress modules only; unavailable without a session |
-
-Every tool result: registry or heal-context: passes through
-`redaction.redact()` before it can enter a prompt, same as every other
-LLM-facing surface.
-
-**Caps.** `agent.max_tool_calls` (default 8, per-blueprint override) is a
-hard ceiling on tool calls **per heal attempt**, not per whole heal.
-Exceeding it withdraws tools from the next provider call, forcing the model
-to answer with a PatchSpec on that final no-tools turn. A reprompt turn
-(§8.2, on an invalid PatchSpec) gets its own fresh cap. The failure
-signature (§8.6) is unaffected: tools change the *path* to a patch, never
-the failure identity stamped onto `healing_outcomes`/`patch_index`.
-
-**Provider support.** `agent.supports_tools` (`true` / `false` / `auto`,
-default `auto`) resolves per top-level default, with a per-blueprint and
-per-cascade-tier override (`cascade[].supports_tools`). `provider:
-anthropic` is known tool-capable: `auto` resolves `true` with no probe.
-`provider: openai_compat` probes on the first agentic-mode call of a heal
-session: if the endpoint rejects a tools-enabled request (or a 4xx response
-looks tools-related), the heal degrades to the oneshot path for the *rest
-of that heal* and emits one `[agent_tools_unsupported]` warning, never a
-ReAct/text-emulation fallback, and never a repeated probe per attempt.
-
-**Budget interaction.** Tool-call request/response tokens flow into the
-same `BudgetConfig`/`BudgetTracker` axes (§8's budget model) as every other
-provider call: a tool round-trip's tokens count toward
-`max_tokens_total` and its wall time toward `max_seconds` exactly like a
-oneshot turn's tokens/time would. `heal_attempts` (see
-`docs/observability_guide.md`) gains a per-attempt tool-call count and a
-per-call `tool_calls_json` log (name, args summary, duration, redacted
-result preview) so the diagnosis path is auditable after the fact, even in
-oneshot mode (`tool_calls: 0`, empty log).
-
-**Benchmark.** `aqueduct benchmark` threads `agent.mode` through the same
-engine-level resolution as `aqueduct heal` (no per-scenario Blueprint
-`agent:` block to merge), so a live A/B of oneshot vs agentic across the
-same scenarios/models is possible. Scenario runs never start Spark, so
-`get_source_schema`/`sample_rows` always report unavailable there: the
-registry tools (run/patch/lineage history) still work.
 
 ## **8.14 Heal-patch cross-engine provenance**
 
@@ -2057,7 +1951,7 @@ Compile-time synthesis (2.35, above) only builds the graph shape; a polyglot Man
 
 **Observability.** A Handoff module gets a `module_metrics` row like any other module (`bytes_written` on the write side, `bytes_read` on the read side, plus `duration_ms`) measured from the spill directory's on-disk size, engine-agnostically. `Surveyor.record()` accepts an explicit `engine` override (falling back to its own construction-time engine when omitted) so a polyglot run's `FailureContext.engine` and structured error extraction (`ExecutorProtocol.extract_error`) reflect the ISLAND that actually failed, not the run's nominal deployment engine. The cross-engine heal-patch provenance gate (§10.9, `cross_engine_heal`) is checked once per DISTINCT island engine present in the compile, rather than only against the single `deployment.engine` default, for the same reason.
 
-**Wired into `aqueduct run` (2.37).** `aqueduct/cli/run.py`'s healing loop routes a Manifest with more than one island through `run_polyglot(..., record_result=False)` in place of the single-engine `execute()` call; a single-engine Manifest (`len(manifest.islands) <= 1`) takes the exact same path it always has, unchanged. `record_result=False` lets the CLI call `surveyor.record(result, exc=..., engine=result.failed_engine)` itself, so a failed run is attributed to the ISLAND that actually failed rather than `deployment.engine`: the healing prompt (`generate_agent_patch`/`generate_cascade_patch`), the `patch_index`/`healed_by` provenance record, and the agentic `ToolBox` all key off that same failing-island engine. Lifecycle hooks pass `session=None` for a polyglot run (no single live session survives to hook time: every island's is already closed), which falls through to hooks' existing subprocess path; a `blueprint:` hook entry with `in_process: true` gets a `[hook_in_process_unavailable]` warning naming why (§4.2). Module-range selection (`--from`/`--to`) refuses a polyglot Manifest outright (`CONFIG_ERROR`) rather than silently running the whole graph: which island(s) a range spans is real cross-island work not attempted here. Rendering: the run header names every engine involved (not the single nominal default), each module's transcript line carries its own resolved engine, and a Handoff module's result renders as a first-class step (`⇄ from → to (engineA→engineB)`, bytes transferred, duration) rather than an anonymous module id. `report --format json` gains a top-level `engines` list and a per-module `engine` field (both persisted by `Surveyor.record()`, present for single-engine runs too). One known v1 cost, not yet optimized: each heal iteration calls `run_polyglot()` fresh, so every island's session is rebuilt on a retry rather than reused across iterations the way the single-engine path reuses its one session; the same "not yet optimized" framing as same-engine session reuse WITHIN a run, above.
+**Wired into `aqueduct run` (2.37).** `aqueduct/cli/run.py`'s healing loop routes a Manifest with more than one island through `run_polyglot(..., record_result=False)` in place of the single-engine `execute()` call; a single-engine Manifest (`len(manifest.islands) <= 1`) takes the exact same path it always has, unchanged. `record_result=False` lets the CLI call `surveyor.record(result, exc=..., engine=result.failed_engine)` itself, so a failed run is attributed to the ISLAND that actually failed rather than `deployment.engine`: the healing prompt (`generate_agent_patch`/`generate_cascade_patch`), and the `patch_index`/`healed_by` provenance record both key off that same failing-island engine. Lifecycle hooks pass `session=None` for a polyglot run (no single live session survives to hook time: every island's is already closed), which falls through to hooks' existing subprocess path; a `blueprint:` hook entry with `in_process: true` gets a `[hook_in_process_unavailable]` warning naming why (§4.2). Module-range selection (`--from`/`--to`) refuses a polyglot Manifest outright (`CONFIG_ERROR`) rather than silently running the whole graph: which island(s) a range spans is real cross-island work not attempted here. Rendering: the run header names every engine involved (not the single nominal default), each module's transcript line carries its own resolved engine, and a Handoff module's result renders as a first-class step (`⇄ from → to (engineA→engineB)`, bytes transferred, duration) rather than an anonymous module id. `report --format json` gains a top-level `engines` list and a per-module `engine` field (both persisted by `Surveyor.record()`, present for single-engine runs too). One known v1 cost, not yet optimized: each heal iteration calls `run_polyglot()` fresh, so every island's session is rebuilt on a retry rather than reused across iterations the way the single-engine path reuses its one session; the same "not yet optimized" framing as same-engine session reuse WITHIN a run, above.
 
 ### The version check
 

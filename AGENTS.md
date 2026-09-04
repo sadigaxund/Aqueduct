@@ -66,8 +66,8 @@ feature-named extra — never runs in the data path, stays out of `all`.
 ## Layer rules & Source Code Navigation Map
 
 **Every extensibility seam is an entry-point group + an allowlist** —
-discovery is never authorization (`aqueduct.engines`, `aqueduct.probe_signals`,
-reserved `aqueduct.tools`). The patch grammar is NOT a seam — ops are a closed
+discovery is never authorization (`aqueduct.engines`,
+`aqueduct.probe_signals`). The patch grammar is NOT a seam — ops are a closed
 list, permanently.
 
 **Trace every consumer before changing a type or output path** — grep every
@@ -155,7 +155,6 @@ an accepted cross-layer exception (no Spark imports involved).
 | `budget.py`, `signature.py` | budget tracking; stable error-dedup hash |
 | `transcript.py` | turn-by-turn healing display (engine-agnostic) |
 | `merge.py` | `merge_patch_specs` — folds one chained heal into a single `PatchSpec` |
-| `toolbox.py` | per-heal `ToolBox`, routed through `tools.call_tool()` |
 
 **Prompt is COMPOSED, not monolithic**: the engine-independent scaffold
 (`prompts.py`) names no engine; engine-flavored strings live in that engine's
@@ -185,10 +184,9 @@ failure-path tooling or a refactor with identical composed output.
 `_stage_failed_patch`) are accessed via `import aqueduct.cli as _aqcli` so
 test patch paths keep biting.
 
-### `aqueduct/tools/`, `aqueduct/dev/`, `aqueduct/integrations/`
+### `aqueduct/dev/`, `aqueduct/integrations/`
 | Module | Owns |
 |---|---|
-| `tools/registry.py` | read-only diagnostics registry — every handler wraps `stores/queries.py` |
 | `dev/scaffolds.py` | generates seam stubs (probe/assert/udf/datasource/secrets) FROM live contracts |
 | `integrations/airflow/` | thin `subprocess`/polling wrappers over the `aqueduct` CLI; no user code on the driver |
 
@@ -289,7 +287,7 @@ on a branch push; every job runs on `main`.
 | `gallery-tests` | fast parse/compile/load guard |
 | `stores-tests` | `stores/`, `tests/test_depot/` (PG+Redis) — only pre-merge lane for those dirs |
 | `misc-tests` | loose top-level `tests/test_*.py` (incl. `test_meta_ci.py`, `test_meta_quality.py`) |
-| `tools-tests`, `capabilities-tests`, `duckdb-tests`, `typehub-tests`, `deploy-tests` | matching package |
+| `capabilities-tests`, `duckdb-tests`, `typehub-tests`, `deploy-tests` | matching package |
 | `coverage` | `main` + all PRs, `--cov-fail-under=68` |
 
 Gallery e2e snippet runs live in `version-matrix.yml` (`snippets` canary +

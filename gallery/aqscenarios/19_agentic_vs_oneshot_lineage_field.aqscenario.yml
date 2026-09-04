@@ -7,15 +7,9 @@ description: >
   upstream on raw_orders. Spark's suggestion list is drawn only from
   stage_orders' resolved schema, so it never names region_id — the fix
   requires tracing the column back through the blueprint, not renaming from
-  a suggestion list. This is the designated A/B scenario for comparing
-  agentic-mode healing (agent.mode: agentic, which offers the model a
-  read_blueprint tool over the FULL authored YAML) against one-shot healing
-  on the identical failure. The .aqscenario.yml format has no per-scenario
-  mode key — `mode` is resolved once per benchmark run from `agent.mode` in
-  aqueduct.yml (or run_scenario(..., mode=...)) and applies uniformly to
-  every scenario in that run. The A/B pair is therefore this ONE file run
-  twice: once with agent.mode left at its "oneshot" default, once with
-  agent.mode: agentic — not two separate scenario files.
+  a suggestion list. The healer has to read the authored YAML and follow
+  the column across both hops to find where the projection dropped it.
+
 blueprint: blueprints/19_agentic_vs_oneshot_lineage_field.yml
 
 # The fix is a Blueprint edit — a module's config, not an engine knob.
