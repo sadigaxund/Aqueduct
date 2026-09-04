@@ -61,7 +61,7 @@ New dep → map onto an existing axis; never a standalone flag.
 
 **Dev-tooling carve-out**: `dev` (pytest/black/ruff) is the only sanctioned
 feature-named extra — never runs in the data path, stays out of `all`.
-`[mcp]` was deleted this phase; `dev` is now the only such extra.
+`dev` (pytest/black/ruff) is the only one.
 
 ## Layer rules & Source Code Navigation Map
 
