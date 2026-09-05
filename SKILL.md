@@ -296,7 +296,7 @@ MODULE-level fields, siblings of `config:`, NOT config keys:
       - { id: low,  condition: "amount <= 1000" }
       # - { id: other, condition: "_else_" }         # catches unmatched rows
 ```
-Downstream edges use `port: high` / `port: low`. `mode: partition` needs a top-level `partition_key:` (column name) plus each branch's `value:` (defaults to the branch `id`) — rows route where `partition_key = value`.
+Downstream edges use `port: high` / `port: low` (add `as: <name>` when the target is a multi-input SQL Channel). `mode: partition` needs a top-level `partition_key:` (column name) plus each branch's `value:` (defaults to the branch `id`) — rows route where `partition_key = value`.
 
 ### Funnel — fan-in
 ```yaml
@@ -363,8 +363,11 @@ edges:
     to: quarantine_sink
     port: spillway
     error_types: [DataQualityViolation]       # optional typed catch — only these error types
+  - { from: split, to: compare, port: us, as: us_rows }   # name this frame inside the target Channel
 ```
 Ports: `main` (default DataFrame), `spillway` (error rows — from Channel/Assert), `signal` (Probe→Regulator), `<branch_id>` (Junction branch). Spillway rows carry `_aq_error_module/_type/_msg/_ts`.
+
+`as:` names an edge's frame inside the module it points at, which is the name that module's SQL writes. Only legal on an edge into a Channel. A Junction branch's default name is `<junction_id>.<branch_id>`, which no SQL can reference and neither engine registers, so a branch edge into a Channel with 2+ inputs and `op: sql`/`op: join` MUST carry `as`. A single-input Channel can always say `__input__` instead. An `as` may not repeat a module id or another `as` into the same module, and must be a bare identifier.
 
 ## Context Registry (3 tiers)
 - **Tier 0 static** `${ctx.ns.key}` — substituted at parse time. Define under `context:`. Override order: CLI `--ctx k=v` > `AQUEDUCT_CTX_*` env > `context_profiles` (`--profile`) > `context:` defaults. Env interpolation: `${ENV_VAR:-default}`.

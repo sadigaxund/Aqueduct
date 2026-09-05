@@ -125,6 +125,7 @@ class Manifest:
                     "from": e.from_id,
                     "to": e.to_id,
                     "port": e.port,
+                    "as": e.alias,
                     "error_types": list(e.error_types),
                     "injected": e.injected,
                 }

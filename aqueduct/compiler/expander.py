@@ -126,6 +126,7 @@ def _expand_single(
             to_id=id_map[e.to_id],
             port=e.port,
             error_types=e.error_types,
+            alias=e.alias,
         )
         for e in sub_bp.edges
     ]

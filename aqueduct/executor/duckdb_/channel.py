@@ -150,6 +150,14 @@ def _build_join_query(module_id: str, cfg: dict) -> str:
     return f'SELECT * FROM "{left}" {join_type.upper()} JOIN "{right}"{on_clause}'
 
 
+def _is_single_part_name(name: str) -> bool:
+    """A dotted Junction branch frame key (`<junction_id>.<branch_id>`) is not
+    a name SQL can reference unquoted, and is not a legal Spark temp view at
+    all. Kept identical to `spark/channel.py::_is_single_part_name` so a
+    blueprint means the same thing on both engines."""
+    return "." not in name
+
+
 def _run_sql(
     module_id: str,
     query: str,
@@ -180,7 +188,15 @@ def _run_sql(
     """
     import uuid
 
+    # A Junction branch's frame key is `<junction_id>.<branch_id>` unless the
+    # edge names it with `as:`. A dotted name is deliberately NOT registered:
+    # DuckDB would happily accept `FROM "j.hi"` where Spark cannot, and a
+    # blueprint written against that would stop working the moment it moved
+    # engines. `as:` is the one spelling both engines share; an un-named
+    # branch stays reachable through `__input__` when it is the only input.
     for upstream_id, rel in upstream_rels.items():
+        if not _is_single_part_name(upstream_id):
+            continue
         con.register(upstream_id, rel)
 
     single_input_registered = False

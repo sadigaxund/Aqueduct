@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from aqueduct.errors import ParseError
 from aqueduct.parser.graph import (
     detect_cycles,
+    validate_edge_aliases,
     validate_edge_error_types,
     validate_spillway_targets,
 )
@@ -452,6 +453,7 @@ def parse_dict(
             to_id=e.to,
             port=e.port,
             error_types=tuple(e.error_types),
+            alias=e.alias,
         )
         for e in validated.edges
     )
@@ -463,6 +465,7 @@ def parse_dict(
             raise ParseError(f"Cycle detected in module graph. Involved modules: {cycle_nodes}")
         validate_spillway_targets(list(modules))
         validate_edge_error_types(list(edges))
+        validate_edge_aliases(list(modules), list(edges))
     except ValueError as exc:
         raise ParseError(str(exc)) from exc
 

@@ -427,6 +427,70 @@ def test_execute_junction_conditional(spark: SparkSession, tmp_path):
     assert spark.read.parquet(out_odd).count() == 2
 
 
+def test_execute_junction_branches_join_in_one_channel_via_as(spark: SparkSession, tmp_path):
+    """Ingress -> Junction (2 branches) -> ONE multi-input SQL Channel -> Egress.
+
+    A branch's frame key is `<junction_id>.<branch_id>`, which Spark refuses as
+    a temp view name, and `__input__` does not exist with two inputs. The `as:`
+    name on each edge is what makes the join writable at all.
+    """
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(5).selectExpr(
+        "id", "CASE WHEN id % 2 = 0 THEN 'even' ELSE 'odd' END as tag"
+    ).write.parquet(in_path)
+    out_path = str(tmp_path / "out.parquet")
+
+    manifest = Manifest(
+        blueprint_id="test.junc_as",
+        modules=(
+            Module(
+                id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}
+            ),
+            Module(
+                id="jn",
+                type="Junction",
+                label="Jn",
+                config={
+                    "mode": "conditional",
+                    "branches": [
+                        {"id": "even", "condition": "tag = 'even'"},
+                        {"id": "odd", "condition": "tag = 'odd'"},
+                    ],
+                },
+            ),
+            Module(
+                id="fan_in",
+                type="Channel",
+                label="FanIn",
+                config={
+                    "op": "sql",
+                    "query": (
+                        "SELECT (SELECT COUNT(*) FROM even_rows) AS n_even, "
+                        "(SELECT COUNT(*) FROM odd_rows) AS n_odd"
+                    ),
+                },
+            ),
+            Module(
+                id="out", type="Egress", label="Out", config={"format": "parquet", "path": out_path}
+            ),
+        ),
+        edges=(
+            Edge(from_id="in", to_id="jn", port="main"),
+            Edge(from_id="jn", to_id="fan_in", port="even", alias="even_rows"),
+            Edge(from_id="jn", to_id="fan_in", port="odd", alias="odd_rows"),
+            Edge(from_id="fan_in", to_id="out", port="main"),
+        ),
+        context={},
+        engine_config={},
+    )
+
+    result = execute(manifest, spark)
+    assert result.status == "success", result.module_results
+
+    row = spark.read.parquet(out_path).collect()
+    assert [(r["n_even"], r["n_odd"]) for r in row] == [(3, 2)]
+
+
 def test_execute_junction_broadcast(spark: SparkSession, tmp_path):
     """Ingress → Junction (broadcast) → two Egress each receiving all rows."""
     in_path = str(tmp_path / "in.parquet")

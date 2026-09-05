@@ -13,7 +13,18 @@ from __future__ import annotations
 from collections import defaultdict, deque
 
 from aqueduct.errors import ParseError
-from aqueduct.parser.models import Edge, Module
+
+# Same accepted cross-layer exception as `parser/parser.py` importing
+# `executor/path_keys.py`: `channel_ops.py` is the pyspark-free hoist of the
+# canonical op names, already imported by the (equally pyspark-free)
+# capability-leaf walker. No Spark import is involved.
+from aqueduct.executor.channel_ops import SQL_OPS
+from aqueduct.parser.models import Edge, Module, ModuleType
+
+# Ports every module understands without a Junction being involved. Anything
+# else on an edge is a Junction branch id, whose frame key is dotted
+# (`<junction_id>.<branch_id>`) and therefore not writable in SQL.
+_STRUCTURAL_PORTS: frozenset[str] = frozenset({"main", "signal", "spillway"})
 
 
 def _build_adjacency(
@@ -108,4 +119,77 @@ def validate_edge_error_types(edges: list[Edge]) -> None:
                 f"Edge {edge.from_id!r} -> {edge.to_id!r}: error_types is only "
                 f"valid on port='spillway' (got port={edge.port!r}). It filters "
                 "quarantined rows by their _aq_error_type label."
+            )
+
+
+def validate_edge_aliases(modules: list[Module], edges: list[Edge]) -> None:
+    """Enforce the four rules of the edge `as:` alias.
+
+    `as` names an edge's frame inside the module it points at, which only a
+    Channel ever reads (its SQL text, or `left:`/`right:` on `op: join`).
+    The rules:
+
+    a. an edge on a Junction branch port into a multi-input SQL Channel MUST
+       carry `as` — there is no other name its SQL could use, because the
+       frame key is dotted;
+    b. an `as` may not collide with a module id, nor with another `as` on an
+       edge into the same module;
+    c. `as` on a single-input Channel is fine, and simply names the frame
+       alongside the `__input__` alias every single-input Channel gets;
+    d. `as` on anything but a Channel is an error, because nothing else
+       resolves an upstream by name.
+    """
+    modules_by_id = {m.id: m for m in modules}
+    module_ids = set(modules_by_id)
+
+    aliases_per_target: dict[str, dict[str, Edge]] = {}
+    for edge in edges:
+        if edge.alias is None:
+            continue
+        target = modules_by_id.get(edge.to_id)
+        if target is None or target.type != ModuleType.Channel:
+            kind = "unknown module" if target is None else str(target.type)
+            raise ParseError(
+                f"Edge {edge.from_id!r} -> {edge.to_id!r}: as={edge.alias!r} is only "
+                f"valid on an edge into a Channel (target is a {kind}). Only a "
+                "Channel refers to an upstream by name."
+            )
+        if edge.alias in module_ids:
+            raise ParseError(
+                f"Edge {edge.from_id!r} -> {edge.to_id!r}: as={edge.alias!r} collides "
+                "with a module id of the same name. Pick a name no module uses."
+            )
+        claimed = aliases_per_target.setdefault(edge.to_id, {})
+        prior = claimed.get(edge.alias)
+        if prior is not None:
+            raise ParseError(
+                f"Edge {edge.from_id!r} -> {edge.to_id!r}: as={edge.alias!r} is already "
+                f"used by edge {prior.from_id!r} -> {prior.to_id!r}. Two inputs of "
+                f"{edge.to_id!r} cannot share one name."
+            )
+        claimed[edge.alias] = edge
+
+    inbound: dict[str, list[Edge]] = {}
+    for edge in edges:
+        if edge.port == "signal":
+            continue
+        inbound.setdefault(edge.to_id, []).append(edge)
+
+    for to_id, in_edges in inbound.items():
+        target = modules_by_id.get(to_id)
+        if target is None or target.type != ModuleType.Channel:
+            continue
+        if len(in_edges) < 2:
+            continue
+        if str(target.config.get("op", "")).lower() not in SQL_OPS:
+            continue
+        for edge in in_edges:
+            if edge.port in _STRUCTURAL_PORTS or edge.alias is not None:
+                continue
+            raise ParseError(
+                f"Edge {edge.from_id!r} -> {edge.to_id!r} (port {edge.port!r}) needs an "
+                f"`as:` name. Channel {to_id!r} has {len(in_edges)} inputs, and a "
+                f"Junction branch arrives as {edge.from_id}.{edge.port}, which is not a "
+                "name SQL can reference. Add `as: <name>` to the edge and use that "
+                "name in the query."
             )

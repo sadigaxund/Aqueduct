@@ -188,8 +188,12 @@ def insert_handoff_modules(
             synthetic=True,
         )
         new_modules.append(handoff_module)
+        # `as:` names the frame inside the DOWNSTREAM module, so it rides the
+        # second half of the split (the edge that still points at the original
+        # target). The first half feeds the Handoff, which never resolves an
+        # upstream by name.
         new_edges.append(Edge(from_id=e.from_id, to_id=handoff_id, port=e.port))
-        new_edges.append(Edge(from_id=handoff_id, to_id=e.to_id, port="main"))
+        new_edges.append(Edge(from_id=handoff_id, to_id=e.to_id, port="main", alias=e.alias))
         insertions.append(HandoffInsertion(module=handoff_module, boundary=boundary))
 
     return new_modules, new_edges, insertions

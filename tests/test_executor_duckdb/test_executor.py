@@ -1772,17 +1772,18 @@ def test_junction_branch_feeds_channel_fan_shape(duckdb_con, tmp_path):
                 ],
             },
         ),
-        # Each Channel reads its branch by the branch's frame key
-        # (`<junction_id>.<branch_id>`), which is what the SQL text names.
-        _module("ch_hi", "Channel", {"op": "sql", "query": 'SELECT a * 10 AS a FROM "j.hi"'}),
-        _module("ch_lo", "Channel", {"op": "sql", "query": 'SELECT a * 100 AS a FROM "j.lo"'}),
+        # Each Channel reads its branch under the name its edge gave it with
+        # `as:`. The default key is dotted (`<junction_id>.<branch_id>`) and is
+        # deliberately not registered on either engine.
+        _module("ch_hi", "Channel", {"op": "sql", "query": "SELECT a * 10 AS a FROM hi_rows"}),
+        _module("ch_lo", "Channel", {"op": "sql", "query": "SELECT a * 100 AS a FROM lo_rows"}),
         _module("eg_hi", "Egress", {"format": "parquet", "path": out_hi, "mode": "overwrite"}),
         _module("eg_lo", "Egress", {"format": "parquet", "path": out_lo, "mode": "overwrite"}),
     )
     edges = (
         Edge(from_id="ing", to_id="j", port="main"),
-        Edge(from_id="j", to_id="ch_hi", port="hi"),
-        Edge(from_id="j", to_id="ch_lo", port="lo"),
+        Edge(from_id="j", to_id="ch_hi", port="hi", alias="hi_rows"),
+        Edge(from_id="j", to_id="ch_lo", port="lo", alias="lo_rows"),
         Edge(from_id="ch_hi", to_id="eg_hi", port="main"),
         Edge(from_id="ch_lo", to_id="eg_lo", port="main"),
     )
@@ -1798,6 +1799,60 @@ def test_junction_branch_feeds_channel_fan_shape(duckdb_con, tmp_path):
     assert sorted(r[0] for r in duckdb_con.read_parquet(out_lo).fetchall()) == [100, 200]
 
 
+def test_two_junction_branches_join_in_one_channel_via_as(duckdb_con, tmp_path):
+    """Ingress -> Junction (2 branches) -> ONE multi-input Channel -> Egress.
+
+    Neither branch has a name SQL could write without `as:`, and there is no
+    `__input__` to fall back on with two inputs. The aliases are the only
+    thing making the join expressible.
+    """
+    src_path = _write_parquet(
+        duckdb_con, tmp_path, "src", "SELECT * FROM (VALUES (1),(2),(3),(4)) t(a)"
+    )
+    out_path = str(tmp_path / "joined.parquet")
+    modules = (
+        _module("ing", "Ingress", {"format": "parquet", "path": src_path}),
+        _module(
+            "j",
+            "Junction",
+            {
+                "mode": "conditional",
+                "branches": [
+                    {"id": "hi", "condition": "a > 2"},
+                    {"id": "lo", "condition": "_else_"},
+                ],
+            },
+        ),
+        _module(
+            "fan_in",
+            "Channel",
+            {
+                "op": "sql",
+                "query": (
+                    "SELECT (SELECT SUM(a) FROM hi_rows) AS hi, "
+                    "(SELECT SUM(a) FROM lo_rows) AS lo"
+                ),
+            },
+        ),
+        _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}),
+    )
+    edges = (
+        Edge(from_id="ing", to_id="j", port="main"),
+        Edge(from_id="j", to_id="fan_in", port="hi", alias="hi_rows"),
+        Edge(from_id="j", to_id="fan_in", port="lo", alias="lo_rows"),
+        Edge(from_id="fan_in", to_id="eg", port="main"),
+    )
+    manifest = Manifest(
+        blueprint_id="bp", context={}, modules=modules, edges=edges, engine_config={}
+    )
+    result = execute(manifest, duckdb_con, run_id="r_junction_fan_in")
+
+    assert result.status == ExecutionStatus.SUCCESS, [
+        (r.module_id, r.status, r.error) for r in result.module_results
+    ]
+    assert duckdb_con.read_parquet(out_path).fetchall() == [(7, 3)]
+
+
 def test_junction_branch_into_channel_is_not_a_missing_main_port(duckdb_con, tmp_path):
     """Regression: the Channel must not report "no main-port incoming edges"."""
     src_path = _write_parquet(duckdb_con, tmp_path, "src", "SELECT 1 AS a")
@@ -1805,12 +1860,12 @@ def test_junction_branch_into_channel_is_not_a_missing_main_port(duckdb_con, tmp
     modules = (
         _module("ing", "Ingress", {"format": "parquet", "path": src_path}),
         _module("j", "Junction", {"mode": "broadcast", "branches": [{"id": "only"}]}),
-        _module("ch", "Channel", {"op": "sql", "query": 'SELECT a FROM "j.only"'}),
+        _module("ch", "Channel", {"op": "sql", "query": "SELECT a FROM only_rows"}),
         _module("eg", "Egress", {"format": "parquet", "path": out_path, "mode": "overwrite"}),
     )
     edges = (
         Edge(from_id="ing", to_id="j", port="main"),
-        Edge(from_id="j", to_id="ch", port="only"),
+        Edge(from_id="j", to_id="ch", port="only", alias="only_rows"),
         Edge(from_id="ch", to_id="eg", port="main"),
     )
     manifest = Manifest(

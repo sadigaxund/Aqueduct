@@ -819,6 +819,18 @@ edges: []
   #   to: merged_output
   #   port: eu
 
+  # A branch port's frame is keyed `<junction_id>.<branch_id>`, which is not a
+  # name SQL can write. `as:` gives it one inside the module it points at, and
+  # is required when the target is a Channel with more than one input:
+  # - from: split_by_region
+  #   to: compare_regions           # Channel, op: sql
+  #   port: us
+  #   as: us_rows                   # the query then says `FROM us_rows`
+  # - from: split_by_region
+  #   to: compare_regions
+  #   port: eu
+  #   as: eu_rows
+
   # - from: merged_output
   #   to: orders_quality
 

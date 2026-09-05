@@ -227,6 +227,11 @@ class Edge:
     to_id: str
     port: str = "main"
     error_types: tuple[str, ...] = ()
+    # The SQL-visible name of this edge's frame inside the downstream module
+    # (the `as:` key). ``None`` means the frame keeps its default key, which
+    # is the upstream module id, or `<junction_id>.<branch_id>` on a branch
+    # port. Only ever set on an edge into a Channel.
+    alias: str | None = None
     # True when the compiler auto-generated this edge from linear-edge sugar
     # (Blueprint omitted `edges:` entirely). Provenance marker — distinguishes
     # user-declared wiring from compiler-injected decl-order chaining.

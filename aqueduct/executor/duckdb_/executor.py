@@ -356,7 +356,10 @@ def _effective_frame_key(edge: Edge, modules_by_id: dict[str, Module]) -> str:
     upstream by the ORIGINAL Blueprint id, authored before compilation ever
     knows a boundary will land there; when `edge.from_id` is a synthetic
     Handoff module, resolve through to its `config["from_module"]`/
-    `config["port"]` instead of the handoff's own generated id."""
+    `config["port"]` instead of the handoff's own generated id. An explicit
+    `as:` on the edge wins over both."""
+    if edge.alias is not None:
+        return edge.alias
     src = modules_by_id.get(edge.from_id)
     if src is not None and src.type == ModuleType.Handoff:
         from_module = src.config.get("from_module", edge.from_id)

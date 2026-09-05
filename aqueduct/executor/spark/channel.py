@@ -132,15 +132,15 @@ def _run_sql_locked(
 ) -> DataFrame:
     """Body of ``_run_sql``, always called holding ``_SQL_VIEW_LOCK``."""
     registered: list[str] = []
-    # A Junction branch's frame key is `<junction_id>.<branch_id>`, and Spark
-    # rejects a dotted temp view name outright
-    # (TEMP_VIEW_NAME_TOO_MANY_NAME_PARTS). Such an upstream is reachable
-    # through the `__input__` alias below when it is the Channel's ONLY input;
-    # with several inputs there is no name to write in the SQL, so fail loudly
-    # naming the key rather than letting Spark raise a raw AnalysisException.
-    unnameable = [uid for uid in upstream_dfs if not _is_single_part_name(uid)]
+    # A Junction branch's frame key is `<junction_id>.<branch_id>` unless the
+    # edge names it with `as:`, and Spark rejects a dotted temp view name
+    # outright (TEMP_VIEW_NAME_TOO_MANY_NAME_PARTS). An un-named branch is
+    # still reachable through the `__input__` alias below when it is the
+    # Channel's ONLY input, so skip registering it rather than failing; a
+    # multi-input Channel can no longer see one at all, because the parser
+    # requires `as:` there (`parser/graph.py::validate_edge_aliases`).
     for upstream_id, df in upstream_dfs.items():
-        if upstream_id in unnameable:
+        if not _is_single_part_name(upstream_id):
             continue
         spark.catalog.dropTempView(upstream_id)
         df.createTempView(upstream_id)
@@ -150,16 +150,6 @@ def _run_sql_locked(
         spark.catalog.dropTempView(_SINGLE_INPUT_ALIAS)
         next(iter(upstream_dfs.values())).createTempView(_SINGLE_INPUT_ALIAS)
         registered.append(_SINGLE_INPUT_ALIAS)
-    elif unnameable:
-        for view_name in registered:
-            spark.catalog.dropTempView(view_name)
-        raise ChannelError(
-            f"[{module_id}] Channel has {len(upstream_dfs)} inputs, and "
-            f"{unnameable!r} arrive on a Junction branch port whose frame key "
-            "cannot be a Spark temp view name (Spark accepts only single-part "
-            "names). Route the branch through its own single-input Channel "
-            f"(which can read it as {_SINGLE_INPUT_ALIAS}) before joining."
-        )
 
     try:
         return spark.sql(query)

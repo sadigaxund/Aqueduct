@@ -502,6 +502,11 @@ def _effective_frame_key(edge: Edge, modules_by_id: dict[str, Module]) -> str:
     same as `_frame_key(edge.from_id, edge.port)` unless `edge.from_id`
     names a synthetic Handoff module.
 
+    An explicit `as:` on the edge overrides both: it is the name the author
+    asked the frame to have inside this module, and it is the only way to
+    reference a Junction branch (whose default key is dotted) from a
+    multi-input Channel.
+
     A Blueprint author writes `FROM extract` or `inputs: [extract]` before
     compilation ever knows a boundary will land on that exact edge — the
     crossing must stay transparent to a reference that names its upstream
@@ -517,6 +522,8 @@ def _effective_frame_key(edge: Edge, modules_by_id: dict[str, Module]) -> str:
     look their upstream up by name) don't need this and keep using
     `_frame_key` directly.
     """
+    if edge.alias is not None:
+        return edge.alias
     src = modules_by_id.get(edge.from_id)
     if src is not None and src.type == ModuleType.Handoff:
         from_module = src.config.get("from_module", edge.from_id)

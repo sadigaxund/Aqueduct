@@ -222,6 +222,7 @@ leaves:
   config.timezone: supported
 
   # ── Edges / spillway routing — pure filters, engine-independent ─────────
+  edge.field.alias: supported
   edge.field.error_types: supported
   edge.field.from_id: supported
   edge.field.port: supported

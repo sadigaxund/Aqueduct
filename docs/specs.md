@@ -189,7 +189,8 @@ modules:                               # Module list
 edges:                                 # explicit edge definitions
   - from: read_orders
     to:   dedup_orders
-    port: main                         # main (default) or spillway
+    port: main                         # main (default), spillway, signal, or a Junction branch id
+    as:   orders                       # optional: the name this frame has inside the target Channel
 
 engine:                                 # per-engine settings, namespaced by engine name (2.0)
   spark:
@@ -330,6 +331,32 @@ Two structural rules keep v1 from claiming more than it can run:
 | `spillway` | Row-level error DataFrame | Channel, Assert | Egress / Funnel (quarantine sink) |
 | `signal` | Control signal, not a DataFrame | Probe (threshold signal) | Regulator (gate evaluation) |
 | `<branch_id>` | One subset of the upstream Junction's branches | Junction | Any downstream module |
+
+### Naming an input (`as`)
+
+An edge may carry an `as:` key. It sets the name that edge's frame has inside the module the edge points at, which is the name a Channel writes in its `query:` (or in `left:` / `right:` on `op: join`).
+
+Without `as`, a frame is named after the module that produced it, except on a Junction branch port, where the name is `<junction_id>.<branch_id>`. That dotted form is not a name SQL can reference: Spark rejects it as a temp view outright, and neither engine registers it. A single-input Channel does not need one, because it can always say `__input__`. A Channel with more than one input has no such fallback, so a Junction branch reaching one must be named:
+
+```yaml
+edges:
+  - from: split_by_region
+    to: compare_regions            # a Channel with op: sql
+    port: us
+    as: us_rows                    # the query then says `FROM us_rows`
+  - from: split_by_region
+    to: compare_regions
+    port: eu
+    as: eu_rows
+```
+
+The rules, all enforced at parse time:
+
+- a Junction branch edge into a Channel with more than one input and `op: sql` or `op: join` must carry `as`
+- an `as` may not repeat a module id, nor another `as` on an edge into the same module
+- `as` on a single-input Channel is allowed, and names the frame alongside `__input__`
+- `as` on anything but a Channel is an error, since no other module type resolves an upstream by name
+- the value must be a bare identifier: a letter or underscore, then letters, digits or underscores
 
 ### Typed spillway routing (`error_types`)
 

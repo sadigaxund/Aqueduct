@@ -6,6 +6,7 @@ spec requirement that Blueprints are always valid input for LLM patch generation
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
@@ -805,6 +806,9 @@ ModuleSchema = Annotated[
 ]
 
 
+_EDGE_ALIAS_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
 class EdgeSchema(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -812,12 +816,34 @@ class EdgeSchema(BaseModel):
     to: str
     port: str = "main"
     error_types: list[str] = Field(default_factory=list)
+    # `as:` names this edge's frame inside the downstream module, which is the
+    # only way a Junction branch can be referenced from a multi-input Channel's
+    # SQL: the frame key a branch produces is `<junction_id>.<branch_id>`, and
+    # a dotted name is not a legal Spark temp view. Restricted to Channel
+    # targets on purpose (`parser/graph.py::validate_edge_aliases`) — nothing
+    # else looks an upstream up by name.
+    alias: str | None = Field(default=None, alias="as")
 
     @field_validator("port")
     @classmethod
     def validate_port(cls, v: str) -> str:
         if not v.strip():
             raise ValueError("Port name must not be empty")
+        return v
+
+    @field_validator("alias")
+    @classmethod
+    def validate_alias(cls, v: str | None) -> str | None:
+        """`as` becomes a SQL identifier (a Spark temp view, a DuckDB
+        registered relation), so it has to be a bare single-part name."""
+        if v is None:
+            return v
+        if not _EDGE_ALIAS_RE.fullmatch(v):
+            raise ValueError(
+                f"Edge as={v!r} is not a usable SQL name. Use a bare identifier: "
+                "a letter or underscore followed by letters, digits or underscores "
+                "(no dots, spaces or quotes)."
+            )
         return v
 
 

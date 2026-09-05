@@ -107,6 +107,7 @@ leaves:
   config.probes.default_sample_fraction: supported
   config.probes.max_sample_rows: supported
   config.timezone: supported
+  edge.field.alias: supported
   edge.field.error_types: supported
   edge.field.from_id: supported
   edge.field.port: supported
