@@ -818,7 +818,8 @@ def _load_env_file(env_path: Path) -> int:
 # cwd is intentionally NOT searched — a stray ./.env silently changing a run
 # is the exact footgun we're removing. Disable .env discovery entirely with
 # AQ_NO_ENV_FILE=1 (command-independent; CI / prod hermetic). A one-line
-# stderr notice is always emitted so the implicit load is never invisible.
+# stderr notice is emitted so the implicit load is never invisible, except
+# under `--format json`, where nothing but the document may be printed.
 
 
 def _apply_cli_env(cli_env: tuple[str, ...] | list[str]) -> int:
@@ -843,12 +844,35 @@ def _apply_cli_env(cli_env: tuple[str, ...] | list[str]) -> int:
     return n
 
 
+def _machine_readable_output() -> bool:
+    """True when the running command was asked for `--format json`.
+
+    Found by looking at the live click context (and its parents) for an
+    option declared as ``--format`` and reading its value, so the check
+    survives the two different destination names in use (`fmt`,
+    `out_format`). Preamble notices stay silent in that mode: a caller
+    piping the command into a JSON parser must see the document alone,
+    whichever stream the notice would have taken.
+    """
+    ctx = click.get_current_context(silent=True)
+    while ctx is not None:
+        for param in getattr(ctx.command, "params", ()):
+            if "--format" not in getattr(param, "opts", ()):
+                continue
+            value = ctx.params.get(param.name)
+            if isinstance(value, str) and value.lower() == "json":
+                return True
+        ctx = ctx.parent
+    return False
+
+
 def _resolve_and_load_env(
     explicit: str | None,
     anchor: Path | None,
     cli_env: tuple[str, ...] | list[str] | None = None,
 ) -> None:
-    """Apply -e overrides, then load a single .env file. Emits a stderr notice.
+    """Apply -e overrides, then load a single .env file. Emits a stderr notice
+    unless the command is running under `--format json`.
 
     `anchor` = the input file (aqueduct.yml / blueprint) whose directory holds
     the project .env. cwd is never searched. AQ_NO_ENV_FILE=1 disables .env
@@ -857,7 +881,13 @@ def _resolve_and_load_env(
     import os
 
     from aqueduct.cli.style import ICON
-    from aqueduct.cli.style import info as _info
+    from aqueduct.cli.style import info as _style_info
+
+    quiet = _machine_readable_output()
+
+    def _info(msg: str, *, err: bool = True) -> None:
+        if not quiet:
+            _style_info(msg, err=err)
 
     n_over = _apply_cli_env(cli_env or ())
     over = f"; {n_over} from -e" if n_over else ""

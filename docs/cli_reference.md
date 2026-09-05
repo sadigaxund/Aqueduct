@@ -39,6 +39,10 @@ Aqueduct automatically loads `.env` from the directory of the config or blueprin
 - `--env-file <path>`
 - `AQ_NO_ENV_FILE=1` to disable entirely
 
+Each command prints a one-line notice on stderr saying which `.env` it loaded, so the
+implicit load is never invisible. Under `--format json` the notice is dropped, so the
+document is the only thing the command writes.
+
 ---
 
 ## 1. Project setup

@@ -117,3 +117,45 @@ class TestDoctorTextGrouping:
         # The store-group check rows render *after* the "Stores" header.
         assert "observability" in out
         assert out.index("Stores") < out.index("observability")
+
+
+class TestEnvBannerNeverBreaksJson:
+    """A discovered `.env` must not put a preamble line in a JSON document.
+
+    The `· env ·` notice is a stderr line, but a caller that merges the two
+    streams (or a `2>&1` pipeline) still ends up feeding it to a parser, so
+    `--format json` suppresses the notice on every stream instead.
+    """
+
+    def test_doctor_json_stays_parseable_with_a_dotenv(self, tmp_path):
+        cfg = tmp_path / "aqueduct.yml"
+        cfg.write_text('aqueduct_config: "1.0"\n')
+        (tmp_path / ".env").write_text("AQ_TEST_BANNER_VAR=1\n")
+
+        result = RUNNER.invoke(cli, ["doctor", str(cfg), "--skip-spark", "--format", "json"])
+
+        assert result.exit_code == 0
+        assert "env  ·" not in result.output
+        assert json.loads(result.output)["schema_version"] == "1.0"
+
+    def test_patch_list_json_stays_parseable_with_a_dotenv(self, tmp_path):
+        (tmp_path / "aqueduct.yml").write_text('aqueduct_config: "1.0"\n')
+        (tmp_path / ".env").write_text("AQ_TEST_BANNER_VAR=1\n")
+        bp = tmp_path / "blueprint.yml"
+        bp.write_text(BP_SAMPLE)
+
+        result = RUNNER.invoke(cli, ["patch", "list", "--blueprint", str(bp), "--format", "json"])
+
+        assert result.exit_code == 0
+        assert "env  ·" not in result.output
+        assert isinstance(json.loads(result.output), list)
+
+    def test_text_mode_still_announces_the_dotenv(self, tmp_path):
+        cfg = tmp_path / "aqueduct.yml"
+        cfg.write_text('aqueduct_config: "1.0"\n')
+        (tmp_path / ".env").write_text("AQ_TEST_BANNER_VAR=1\n")
+
+        result = RUNNER.invoke(cli, ["doctor", str(cfg), "--skip-spark"])
+
+        assert result.exit_code == 0
+        assert "env  ·" in result.output
