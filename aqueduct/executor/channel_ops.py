@@ -1,34 +1,18 @@
-"""Channel op-name registry — engine-agnostic (no pyspark import).
+"""Channel op-name registry — re-exported from ``parser/channel_ops.py``.
 
-``aqueduct/executor/spark/channel.py`` imports ``pyspark`` at module level
-(``from pyspark.sql import SparkSession``), so its op-name constants cannot
-be imported by code that must stay pyspark-free (the capability-leaf walker,
-the compile-time capability gate). Same precedent as ``path_keys.py`` and
-``probe_plugins.py`` — hoist the pure data to the executor top level and have
-the Spark module import it back.
-
-This module owns the canonical Channel op-name sets; ``spark/channel.py``
-imports ``_ALL_OPS`` etc. from here instead of defining them locally.
+The canonical definitions moved to ``aqueduct.parser.channel_ops`` so that
+``parser/graph.py`` can use ``SQL_OPS`` without a `parser -> executor`
+import (AGENTS.md's Layer rules only accept `parser/parser.py` importing
+`executor/path_keys.py::get_path_keys` as a cross-layer exception; this
+module's old location as the source of ``SQL_OPS`` was not one). This
+module re-exports the same names unchanged so every existing importer
+(``executor/spark/channel.py``, ``executor/duckdb_/channel.py``,
+``executor/capability_leaves.py``, ``executor/probe_plugins.py``, ...)
+keeps working with no changes.
 """
 
 from __future__ import annotations
 
-SQL_OPS: frozenset[str] = frozenset({"sql", "join"})
-SINGLE_INPUT_OPS: frozenset[str] = frozenset(
-    {
-        "deduplicate",
-        "filter",
-        "select",
-        "rename",
-        "cast",
-        "sort",
-        "repartition",
-        "coalesce",
-        "cache",
-    }
-)
-MULTI_INPUT_OPS: frozenset[str] = frozenset({"union"})
-
-ALL_OPS: frozenset[str] = SQL_OPS | SINGLE_INPUT_OPS | MULTI_INPUT_OPS
+from aqueduct.parser.channel_ops import ALL_OPS, MULTI_INPUT_OPS, SINGLE_INPUT_OPS, SQL_OPS
 
 __all__ = ["SQL_OPS", "SINGLE_INPUT_OPS", "MULTI_INPUT_OPS", "ALL_OPS"]

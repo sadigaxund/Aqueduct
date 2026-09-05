@@ -13,12 +13,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 
 from aqueduct.errors import ParseError
-
-# Same accepted cross-layer exception as `parser/parser.py` importing
-# `executor/path_keys.py`: `channel_ops.py` is the pyspark-free hoist of the
-# canonical op names, already imported by the (equally pyspark-free)
-# capability-leaf walker. No Spark import is involved.
-from aqueduct.executor.channel_ops import SQL_OPS
+from aqueduct.parser.channel_ops import SQL_OPS
 from aqueduct.parser.models import Edge, Module, ModuleType
 
 # Ports every module understands without a Junction being involved. Anything
