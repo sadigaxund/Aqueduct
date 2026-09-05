@@ -353,9 +353,14 @@ def test_egress_format_custom_dispatches_to_registered_datasource(
 class MockDepot:
     def __init__(self):
         self.puts = {}
+        self.cleared_intents = []
 
     def put(self, key, value):
         self.puts[key] = value
+
+    def put_and_clear_intent(self, key, value):
+        self.puts[key] = value
+        self.cleared_intents.append(key)
 
 
 def test_egress_missing_format(spark: SparkSession):

@@ -1606,7 +1606,11 @@ def execute(
                 try:
                     _with_retry(
                         lambda: write_egress(
-                            _obs_df, module, depot=depot, base_dir=manifest.base_dir
+                            _obs_df,
+                            module,
+                            depot=depot,
+                            base_dir=manifest.base_dir,
+                            run_id=run_id,
                         ),
                         mod_policy,
                         module.id,

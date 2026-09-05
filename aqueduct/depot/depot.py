@@ -24,8 +24,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from aqueduct.stores.base import DEPOT_INTENT_PREFIX, depot_intent_key
+
 if TYPE_CHECKING:
     from aqueduct.stores import DepotStore as _DepotStoreBackend
+
+__all__ = ["DepotStore", "preview_depots", "DEPOT_INTENT_PREFIX", "depot_intent_key"]
 
 
 class DepotStore:
@@ -65,6 +69,26 @@ class DepotStore:
     def put(self, key: str, value: str) -> None:
         """Upsert *key* → *value* with current UTC timestamp (when supported)."""
         self._backend.kv_put(key, value)
+
+    def put_and_clear_intent(self, key: str, value: str) -> None:
+        """Upsert *key* → *value* and clear its watermark-crash-consistency
+        intent row (``__intent__:<key>``), atomically where the backend
+        supports it (DuckDB, Postgres — see `_RelationalDepotMixin`;
+        best-effort, non-atomic on Redis). Used by a ``format: depot`` Egress
+        writing a value that a `watermark_key:`-bearing append Egress gates
+        against — see `docs/specs.md`'s watermark crash-consistency section.
+        """
+        self._backend.kv_put_and_clear(key, value, depot_intent_key(key))
+
+    def read_intent(self, key: str) -> str:
+        """Return the raw JSON intent row for watermark key *key*, or ``""``
+        if none is pending."""
+        return self._backend.kv_get(depot_intent_key(key), "")
+
+    def clear_intent(self, key: str) -> None:
+        """Clear a leftover intent row for watermark key *key* (``aqueduct
+        depot clear-intent``'s underlying call)."""
+        self._backend.kv_delete(depot_intent_key(key))
 
     def close(self) -> None:
         """No-op — connections are managed by the underlying store backend."""

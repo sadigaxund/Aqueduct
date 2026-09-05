@@ -525,6 +525,7 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
 | **maintenance** | Optional. Post-write compaction/cleanup, format-aware (`delta`: `optimize`/`zorder_by`/`vacuum`; `iceberg`: `rewrite_data_files`/`expire_snapshots`; `hudi`: `compaction`/`clean`); full key reference in `docs/spark_guide.md`'s maintenance table. Runs synchronously after the write, non-fatal on failure. |
 | **header** | CSV only, whether to write a header row (default `true`). Read directly by the DuckDB engine's writer; on Spark, set `options: {header: "true"}` instead (Spark's writer has no dedicated top-level `header:` read). |
 | **key** / **value** / **value_expr** | `format: depot` only. `key` (required) names the Depot KV entry; exactly one of `value` (a literal string) or `value_expr` (a Spark aggregate expression, evaluated with one `.collect()`) supplies it. |
+| **watermark_key** | Optional, `mode: append` only (never legal on `format: depot`). Names the Depot key a downstream `format: depot` Egress writes to gate the next run's incremental read range. See **§10.4.5 Watermark crash-consistency** below. |
 
 **`mode: overwrite_partitions`** is the idempotent-backfill primitive: re-running for the same logical date replaces only that date's data instead of the whole table. Two strategies:
 
@@ -1774,6 +1775,51 @@ file no other blueprint reads, so asking to share it is a contradiction:
 config load fails naming the mount. The `postgres` and `redis` backends also
 require an explicit `path`, because there the value is a DSN or URL, not a
 file this routing can derive.
+
+### **10.4.5 Watermark crash-consistency**
+
+A watermark-driven incremental pipeline is normally two Egress modules:
+one that appends the rows (`mode: append`), and a second, downstream one
+that writes the watermark gating the next run's read range
+(`format: depot`). If the process dies after the append commits and before
+the watermark write commits, the next run resolves the same read range
+again and appends it a second time. Nothing else in Aqueduct notices this
+on its own, because the append and the watermark write are two independent
+module writes with no shared transaction.
+
+**The intent row.** An append Egress may declare `watermark_key: <depot
+key>`, naming the key the downstream `format: depot` Egress writes. Before
+that append's write starts, the executor writes an intent row to the depot
+at key `__intent__:<watermark_key>`, with a JSON value carrying `run_id`,
+`module_id`, and `started_at` (ISO-8601 UTC). The downstream `format: depot`
+Egress that writes `<watermark_key>` clears that intent row in the SAME
+transaction as its watermark upsert (`kv_put_and_clear`, atomic on the
+DuckDB and Postgres depot backends; best-effort, non-atomic on Redis, since
+Redis exposes no transaction spanning two independent commands here).
+
+A Blueprint is rejected at parse time (`ParseError`) if an Egress declares
+`watermark_key` without `mode: append`, if it is set on `format: depot`
+itself, or if no other Egress in the Blueprint writes that key via
+`format: depot`.
+
+**The run-start refusal.** At the start of every run, before the
+incremental read range is resolved, Aqueduct checks every `watermark_key`
+in the Blueprint for a leftover intent row. Finding one means a prior run's
+append may have committed without its watermark ever landing, so the run
+refuses to start with a loud error naming the depot key, the run_id that
+left the intent row, and when it started. Resolving it has two paths:
+
+1. De-duplicate the target range for that run, then run `aqueduct depot
+   clear-intent <key> --blueprint <blueprint.yml>`.
+2. Or, having confirmed the append never actually landed, just run
+   `aqueduct depot clear-intent <key> --blueprint <blueprint.yml>`.
+
+`aqueduct depot clear-intent` clears the `__intent__:<key>` row on the
+default depot mount and reports whether a row was actually there (see
+`docs/cli_reference.md`). It needs `--blueprint` because a depot is per
+blueprint either way: a pathless mount routes to its own file, and a mount
+with an explicit `path` prefixes its keys with the blueprint id. Pass the
+same `--store-dir` the run used, if it used one.
 
 ## **10.5 Deployment targets**
 

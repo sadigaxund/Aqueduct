@@ -565,6 +565,11 @@ leaves:
   egress.field.table: supported
   egress.field.value: supported
   egress.field.value_expr: supported
+  egress.field.watermark_key:
+      support: supported
+      tests:
+        - tests/test_depot/test_watermark_intent.py::test_crash_window_reproduced
+        - tests/test_depot/test_watermark_intent.py::test_clean_run_leaves_no_intent_row
   egress_maintenance.field.clean: supported
   egress_maintenance.field.compaction: supported
   egress_maintenance.field.expire_snapshots: supported

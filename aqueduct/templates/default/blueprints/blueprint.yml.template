@@ -714,6 +714,25 @@ modules: []
   #     path: "s3a://bucket/quarantine/date=${ctx.today}/"
   #     mode: overwrite
 
+  # - id: append_output
+  #   type: Egress
+  #   label: "Append new rows"
+  #   config:
+  #     format: parquet
+  #     path: "s3a://bucket/orders_append/"
+  #     mode: append
+  #     # Crash-consistency (see docs/specs.md §10.4.5): names the depot key
+  #     # the downstream `format: depot` Egress below writes. Before this
+  #     # write starts, an `__intent__:<key>` depot row is recorded; the
+  #     # downstream depot Egress clears it in the same transaction as the
+  #     # watermark upsert. If the process dies between the two writes, the
+  #     # next run refuses to start until `aqueduct depot clear-intent
+  #     # last_processed_date --blueprint <this file>` resolves it. Only
+  #     # legal with mode: append,
+  #     # and only when another Egress in this Blueprint writes this same
+  #     # key via format: depot.
+  #     watermark_key: last_processed_date
+
   # ── EGRESS — Depot KV (persist watermark) ───────────────────────────────────
 
   # - id: save_watermark

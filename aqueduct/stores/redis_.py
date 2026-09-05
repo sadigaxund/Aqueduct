@@ -60,6 +60,16 @@ class RedisDepotStore(DepotStore):
     DuckDB if you need to query when a depot value last changed.
     """
 
+    # kv_put_and_clear is intentionally NOT overridden here — it keeps the
+    # `DepotStore` ABC default (a plain `kv_put` then `kv_delete`, two
+    # separate Redis commands). Redis has no cross-key transaction this
+    # class uses (MULTI/EXEC would need to hold a connection across both
+    # calls, which the shared-client dedup in `_get_client` does not
+    # support), so a crash between the two commands is a real, un-closed
+    # window: the watermark lands but the intent row survives. Redis is the
+    # one depot backend where that window is not eliminated — only DuckDB
+    # and Postgres (via `_RelationalDepotMixin`) close it.
+
     def __init__(self, url: str) -> None:
         self._url = url
 

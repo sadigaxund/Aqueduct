@@ -193,3 +193,39 @@ def validate_edge_aliases(modules: list[Module], edges: list[Edge]) -> None:
                 "name SQL can reference. Add `as: <name>` to the edge and use that "
                 "name in the query."
             )
+
+
+def validate_watermark_keys(modules: list[Module]) -> None:
+    """Every Egress `watermark_key: K` must be matched by another Egress in
+    the same blueprint that writes K via `format: depot`.
+
+    `EgressConfigSchema._validate_watermark_key` already enforces the
+    per-module shape (append mode, a real row-writing format); this is the
+    blueprint-level half — an intent row set by `watermark_key` that nothing
+    ever clears (no `format: depot` Egress writes that key) is a Blueprint
+    that can never pass the run-start refusal check once it takes its first
+    write, so it is rejected here instead of failing confusingly at run time.
+    """
+    depot_writer_keys: set[str] = set()
+    for module in modules:
+        if module.type != ModuleType.Egress:
+            continue
+        if module.config.get("format") == "depot":
+            key = module.config.get("key")
+            if key:
+                depot_writer_keys.add(str(key))
+
+    for module in modules:
+        if module.type != ModuleType.Egress:
+            continue
+        watermark_key = module.config.get("watermark_key")
+        if not watermark_key:
+            continue
+        if str(watermark_key) not in depot_writer_keys:
+            raise ParseError(
+                f"Egress {module.id!r}: watermark_key={watermark_key!r} names a depot "
+                "key that no other Egress in this blueprint writes via "
+                f"'format: depot' + key: {watermark_key!r}. Add a downstream "
+                "`format: depot` Egress that writes this key (it clears the crash-"
+                "consistency intent row `watermark_key` sets), or remove `watermark_key`."
+            )

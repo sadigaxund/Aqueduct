@@ -649,6 +649,35 @@ class EgressConfigSchema(BaseModel):
     # if weaker-than-the-name-implies, reader) — see Pass C findings.
     repartition: int | bool | None = None
     coalesce: int | bool | None = None
+    # Watermark crash-consistency (see docs/specs.md). Names the depot key a
+    # DOWNSTREAM `format: depot` Egress writes to gate the next run's
+    # incremental read range. Before this Egress's write starts, the
+    # executor records an `__intent__:<watermark_key>` depot row; the
+    # downstream depot Egress clears it in the same transaction as the
+    # watermark upsert. A leftover intent row at the next run's start means
+    # the append committed but the watermark write never did (or vice
+    # versa) — `aqueduct run` refuses to start until it is resolved.
+    watermark_key: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_watermark_key(self) -> EgressConfigSchema:
+        if self.watermark_key is None:
+            return self
+        if self.mode != "append":
+            raise ValueError(
+                f"Egress config: watermark_key={self.watermark_key!r} requires "
+                f"mode: append (got mode={self.mode!r}). Crash-consistency intent "
+                "rows only make sense for the append path that can silently "
+                "double-write on a crash between the append and its watermark."
+            )
+        if not self.format or self.format == "depot":
+            raise ValueError(
+                f"Egress config: watermark_key={self.watermark_key!r} requires a real "
+                f"row-writing 'format' (got format={self.format!r}); it is illegal on "
+                "the 'depot' pseudo-format Egress itself — that module is the "
+                "DOWNSTREAM writer that clears the intent row, not the one that sets it."
+            )
+        return self
 
 
 class JunctionConfigSchema(BaseModel):

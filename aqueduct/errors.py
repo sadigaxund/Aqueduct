@@ -242,6 +242,29 @@ class DependencyError(CompileError):
         self.problems = list(problems or [])
 
 
+class WatermarkIntentPendingError(AqueductError):
+    """Raised at run start when a leftover `__intent__:<key>` depot row shows a
+    prior run's append Egress started (or finished) but its downstream
+    `format: depot` watermark Egress never cleared the intent row.
+
+    Classified `CONFIG_ERROR` at the CLI (`aqueduct/cli/run_setup.py`) — like
+    a `ParseError`, this blocks the run before any Spark/DuckDB work starts,
+    since resolving the incremental read range against a stale/ambiguous
+    watermark risks a duplicate append. ``key``/``run_id``/``started_at``
+    carry the intent row's fields so a caller can act on them without
+    re-parsing the message; the message itself names both remediations
+    (de-duplicate then clear, or just clear once satisfied nothing landed).
+    """
+
+    def __init__(
+        self, message: str, *, key: str = "", run_id: str = "", started_at: str = ""
+    ) -> None:
+        super().__init__(message)
+        self.key = key
+        self.run_id = run_id
+        self.started_at = started_at
+
+
 class ExecuteError(AqueductError):
     """Raised for unrecoverable execution-setup failures — the Executor
     layer's root error, mirroring ``ParseError`` (Parser) and

@@ -283,6 +283,60 @@ class _CompileResult:
     depot_reads: dict  # depot keys resolved during this compile's Tier 1 (Gate 3 staleness notice)
 
 
+def check_watermark_intents(bp, depot) -> None:
+    """Refuse to start a run when a leftover watermark crash-consistency
+    intent row shows a prior run's append Egress may have committed without
+    its downstream `format: depot` watermark write ever landing.
+
+    Called between building the run's depot and resolving the incremental
+    read range (before compile) — see `docs/specs.md`'s watermark
+    crash-consistency section. Pulled into its own function so a test can
+    call it directly instead of driving the whole `_do_compile` pipeline.
+
+    Args:
+        bp: The parsed Blueprint (``aqueduct.parser.models.Blueprint``).
+        depot: The run's default-mount ``aqueduct.depot.depot.DepotStore``
+            façade (already namespaced per blueprint).
+
+    Raises:
+        WatermarkIntentPendingError: A pending intent row was found.
+    """
+    import json as _json
+
+    from aqueduct.errors import WatermarkIntentPendingError
+
+    for module in bp.modules:
+        if module.type != "Egress":
+            continue
+        watermark_key = module.config.get("watermark_key")
+        if not watermark_key:
+            continue
+        watermark_key = str(watermark_key)
+        raw = depot.read_intent(watermark_key)
+        if not raw:
+            continue
+        try:
+            intent = _json.loads(raw)
+        except ValueError:
+            intent = {}
+        run_id = str(intent.get("run_id", "<unknown>"))
+        started_at = str(intent.get("started_at", "<unknown>"))
+        raise WatermarkIntentPendingError(
+            f"watermark key {watermark_key!r} has a pending crash-consistency intent "
+            f"row left by run {run_id!r} (started {started_at}). That run's append "
+            "Egress may have committed without its watermark ever being written, so "
+            "resolving the incremental read range now risks appending the same "
+            "range a second time. To resolve:\n"
+            f"  1. De-duplicate the target range for run {run_id!r}, then run "
+            f"`aqueduct depot clear-intent {watermark_key}`.\n"
+            "  2. Or, having confirmed the append never landed, just run "
+            f"`aqueduct depot clear-intent {watermark_key}`.",
+            key=watermark_key,
+            run_id=run_id,
+            started_at=started_at,
+        )
+
+
 def _do_compile(
     blueprint,
     profile,
@@ -357,6 +411,18 @@ def _do_compile(
     bundle = get_stores(cfg, store_dir_override=store_dir_abs, blueprint_id=bp.id)
     depot = _DS(backend=bundle.depot)
     depots_wrapped = {n: _DS(backend=s) for n, s in bundle.depots.items()}
+
+    # ── Watermark crash-consistency refusal ─────────────────────────────────────
+    # Before the incremental read range is resolved (compile, right below) —
+    # a leftover intent row means a prior run's append may have committed
+    # without its watermark ever landing.
+    from aqueduct.errors import WatermarkIntentPendingError
+
+    try:
+        check_watermark_intents(bp, depot)
+    except WatermarkIntentPendingError as exc:
+        _err(str(exc))
+        _sys.exit(exit_codes.CONFIG_ERROR)
 
     # ── Compile ────────────────────────────────────────────────────────────────
     depot_reads: dict[str, str] = {}

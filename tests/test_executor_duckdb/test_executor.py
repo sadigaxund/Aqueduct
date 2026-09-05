@@ -923,9 +923,14 @@ def test_write_egress_on_new_columns_first_write_is_noop(duckdb_con, tmp_path):
 class MockDepot:
     def __init__(self):
         self.puts = {}
+        self.cleared_intents = []
 
     def put(self, key, value):
         self.puts[key] = value
+
+    def put_and_clear_intent(self, key, value):
+        self.puts[key] = value
+        self.cleared_intents.append(key)
 
 
 def test_write_egress_format_depot_no_depot(duckdb_con):

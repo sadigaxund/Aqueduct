@@ -20,6 +20,7 @@ from aqueduct.parser.graph import (
     validate_edge_aliases,
     validate_edge_error_types,
     validate_spillway_targets,
+    validate_watermark_keys,
 )
 from aqueduct.parser.models import (
     AgentConfig,
@@ -466,6 +467,7 @@ def parse_dict(
         validate_spillway_targets(list(modules))
         validate_edge_error_types(list(edges))
         validate_edge_aliases(list(modules), list(edges))
+        validate_watermark_keys(list(modules))
     except ValueError as exc:
         raise ParseError(str(exc)) from exc
 

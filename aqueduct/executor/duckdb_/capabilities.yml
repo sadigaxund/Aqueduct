@@ -770,6 +770,11 @@ leaves:
       hint: "Writes via CREATE OR REPLACE/CREATE/INSERT INTO against DuckDB's own catalog, mode-mapped onto DuckDB's own DDL guards; see feature.table_addressing for the defaulting rule and mutual exclusivity with path:."
   egress.field.value: supported
   egress.field.value_expr: supported
+  egress.field.watermark_key:
+      support: supported
+      tests:
+        - tests/test_depot/test_watermark_intent.py::test_crash_window_reproduced
+        - tests/test_depot/test_watermark_intent.py::test_clean_run_leaves_no_intent_row
   egress_maintenance.field.clean:
       support: unsupported
       hint: "Hudi maintenance procedures require a Hudi table DuckDB does not write. Not implemented; see egress.field.maintenance."

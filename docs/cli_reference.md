@@ -403,6 +403,7 @@ caps than production.
 | Command | Description |
 |---------|-------------|
 | `aqueduct stores info` | Print each store's (observability / depots) resolved backend and location label |
+| `aqueduct depot clear-intent <key> --blueprint <file> [--config <file>] [--store-dir <dir>]` | Clear a leftover watermark crash-consistency `__intent__:<key>` row on that Blueprint's default depot mount and report whether one was actually there. Resolves the run-start refusal described in [specs.md §10.4.5](specs.md#1045-watermark-crash-consistency); exits `0` either way, whether or not a row existed. `--blueprint` is required: the depot is per blueprint, so without the id the command would open the wrong file or delete a key the run never wrote. |
 | `aqueduct config explain [--config <file>] [--blueprint <file>] [-s PATH=VALUE] [--source <src>] [--format table\|json]` | Print every resolved config value with the source it came from: `override` (`-s/--set`), `blueprint` (that Blueprint's own `agent:` block), `env` (an `aqueduct.yml` value written as `${VAR}`, with the variable named), `file` (a literal in `aqueduct.yml`), or `default` (the schema default). Read-only: it never writes anything back. `--blueprint` adds the Blueprint's `agent:` rows, which win for that Blueprint's runs. `--source` shows one source only. |
 
 ---

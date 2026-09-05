@@ -176,6 +176,17 @@ class PostgresDepotStore(_PostgresRelational, _RelationalDepotMixin, DepotStore)
     _SCHEMA = "depot"
     _DDL = DEPOT_KV_DDL
 
+    # kv_put_and_clear is deliberately NOT overridden here: this class does not
+    # define its own, so MRO resolves it to `_RelationalDepotMixin.kv_put_and_clear`
+    # (this class -> _PostgresRelational -> _RelationalDepotMixin -> DepotStore).
+    # That implementation only needs `self.connect()` (provided by
+    # `_PostgresRelational`, which commits the whole `with` block as one
+    # transaction) and `self._DDL` (set above) — both present and correct for
+    # Postgres, so the inherited version is already atomic against this
+    # backend. kv_get/kv_put/kv_delete below stay overridden because they
+    # predate `_RelationalDepotMixin` and skip its file-existence/read-only
+    # guards, which do not apply to Postgres.
+
     def kv_get(self, key: str, default: str = "") -> str:
         try:
             with self.connect() as cur:

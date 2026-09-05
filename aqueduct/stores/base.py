@@ -33,6 +33,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# An "intent" row records that a crash-consistency-sensitive write (currently:
+# an append Egress carrying `watermark_key:`) is ABOUT to start, before it
+# starts. It is cleared in the SAME transaction as the downstream watermark
+# upsert that gates the next run's read range. A leftover intent row at the
+# next run's start means the append committed but the watermark write never
+# ran (or vice versa never happened) — see `depot_intent_key` callers in
+# `aqueduct/executor/{spark,duckdb_}/egress.py` and the run-start refusal in
+# `aqueduct/cli/run_setup.py`.
+DEPOT_INTENT_PREFIX: str = "__intent__:"
+
+
+def depot_intent_key(key: str) -> str:
+    """Return the depot key an intent row for watermark key *key* is stored under."""
+    return f"{DEPOT_INTENT_PREFIX}{key}"
+
+
 class StoreConnectionError(AqueductError):
     """Raised when a configured store backend cannot be reached or used.
 
@@ -163,6 +179,22 @@ class DepotStore(ABC):
     @abstractmethod
     def kv_delete(self, key: str) -> None: ...
 
+    def kv_put_and_clear(self, put_key: str, value: str, clear_key: str) -> None:
+        """Upsert *put_key* -> *value* and delete *clear_key*.
+
+        Used by a `format: depot` Egress writing a watermark to clear that
+        watermark's leftover `__intent__:` row in the SAME transaction as the
+        watermark upsert (see `depot_intent_key`). The default implementation
+        below is NOT atomic — it is just `kv_put` then `kv_delete` — so a
+        crash between the two still leaves an intent row (a false-positive
+        refusal on the next run, never data loss). The pair is genuinely
+        atomic only where a backend overrides it: `_RelationalDepotMixin`
+        (DuckDB and Postgres, both via one `connect()` transaction). Redis
+        keeps this default — see `RedisDepotStore`'s comment for why.
+        """
+        self.kv_put(put_key, value)
+        self.kv_delete(clear_key)
+
     @contextlib.contextmanager
     def connect(self) -> Iterator[RelationalCursor]:
         """Open a relational connection. Raises `BackendUnsupportedError` for Redis."""
@@ -194,6 +226,15 @@ class _RelationalDepotMixin:
     """
 
     _DDL: str = ""
+
+    # Shared with `kv_put_and_clear` below so the two never drift apart.
+    _UPSERT_SQL: str = """
+                INSERT INTO depot_kv (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT (key) DO UPDATE
+                    SET value = excluded.value,
+                        updated_at = excluded.updated_at
+                """
 
     def kv_get(self, key: str, default: str = "") -> str:
         path = getattr(self, "_path", None)
@@ -239,13 +280,7 @@ class _RelationalDepotMixin:
         with self.connect() as cur:
             cur.execute(self._DDL)
             cur.execute(
-                """
-                INSERT INTO depot_kv (key, value, updated_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT (key) DO UPDATE
-                    SET value = excluded.value,
-                        updated_at = excluded.updated_at
-                """,
+                self._UPSERT_SQL,
                 [key, value, datetime.now(tz=UTC).isoformat()],
             )
 
@@ -262,6 +297,27 @@ class _RelationalDepotMixin:
         with self.connect() as cur:
             cur.execute(self._DDL)
             cur.execute("DELETE FROM depot_kv WHERE key = ?", [key])
+
+    def kv_put_and_clear(self, put_key: str, value: str, clear_key: str) -> None:
+        """Atomic (single-transaction) upsert + delete for relational backends.
+
+        Both statements run inside ONE ``with self.connect() as cur:`` block,
+        so a crash between them is impossible — either both land or neither
+        does (the underlying `connect()` commits on success, rolls back on
+        exception). Overrides the non-atomic ``DepotStore`` default.
+        """
+        from datetime import datetime
+
+        if getattr(self, "_read_only", False):
+            raise StoreConnectionError(
+                f"{type(self).__name__}.kv_put_and_clear({put_key!r}): store opened "
+                "read-only (preview compile paths never write) — refusing to write "
+                "rather than silently no-op."
+            )
+        with self.connect() as cur:
+            cur.execute(self._DDL)
+            cur.execute(self._UPSERT_SQL, [put_key, value, datetime.now(tz=UTC).isoformat()])
+            cur.execute("DELETE FROM depot_kv WHERE key = ?", [clear_key])
 
 
 # ── Factory ───────────────────────────────────────────────────────────────────
@@ -290,6 +346,14 @@ class _NamespacedDepot:
 
     def kv_delete(self, key: str) -> None:
         self._inner.kv_delete(f"{self._prefix}{key}")
+
+    def kv_put_and_clear(self, put_key: str, value: str, clear_key: str) -> None:
+        # Both keys must be prefixed — a missed forward here would clear the
+        # UNPREFIXED (wrong-namespace) intent key while writing the correctly
+        # namespaced watermark, silently leaving the real intent row behind.
+        self._inner.kv_put_and_clear(
+            f"{self._prefix}{put_key}", value, f"{self._prefix}{clear_key}"
+        )
 
     def __getattr__(self, name: str) -> Any:  # passthrough (backend, location_label, …)
         return getattr(self._inner, name)

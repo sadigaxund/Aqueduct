@@ -72,12 +72,42 @@ class EgressError(AqueductError):
     """Raised when an Egress module fails to write."""
 
 
+def _write_watermark_intent(module: Module, depot: Any, run_id: str) -> None:
+    """Record a crash-consistency intent row before an append Egress's write starts.
+
+    Mirrors ``aqueduct/executor/spark/egress.py::_write_watermark_intent``
+    exactly. No-op when ``watermark_key`` isn't set. A declared intent that
+    cannot be recorded (no depot wired) must not be silently skipped, so
+    this raises rather than warning.
+    """
+    watermark_key = module.config.get("watermark_key")
+    if not watermark_key:
+        return
+    if depot is None:
+        raise EgressError(
+            f"[{module.id}] watermark_key={watermark_key!r} requires a DepotStore "
+            "to record its crash-consistency intent row, but no depot is wired. "
+            "Pass --config with a valid depot store path."
+        )
+    import json
+    from datetime import UTC, datetime
+
+    from aqueduct.depot.depot import depot_intent_key
+
+    payload = json.dumps(
+        {"run_id": run_id, "module_id": module.id, "started_at": datetime.now(tz=UTC).isoformat()}
+    )
+    depot.put(depot_intent_key(str(watermark_key)), payload)
+    logger.info("[%s] watermark intent recorded for key=%s", module.id, watermark_key)
+
+
 def write_egress(
     rel: duckdb.DuckDBPyRelation,
     module: Module,
     con: duckdb.DuckDBPyConnection,
     depot: Any = None,
     base_dir: str | None = None,
+    run_id: str = "",
 ) -> int | None:
     """Write rel to the target described by module.config.
 
@@ -88,6 +118,8 @@ def write_egress(
         depot:  Optional DepotStore instance for ``format: depot`` writes.
         base_dir: Accepted for signature parity; unused (format: custom is
                   UNSUPPORTED — Spark-only Python DataSource API).
+        run_id: Current run's id — recorded in the watermark crash-consistency
+                intent row when ``module.config['watermark_key']`` is set.
 
     Returns:
         The number of rows actually written this call (``records_written``
@@ -174,6 +206,11 @@ def write_egress(
             f"[{module.id}] mode={mode!r} is not implemented for the DuckDB engine in "
             f"Stage A. Supported: {sorted(SUPPORTED_MODES)}. See docs/compatibility.md."
         )
+
+    # Watermark crash-consistency intent — after format/mode validation, BEFORE
+    # the actual row write starts. Never triggered for `format: depot` — that
+    # branch returned above.
+    _write_watermark_intent(module, depot, run_id)
 
     target = Path(path)
     exists = target.exists()
@@ -575,7 +612,7 @@ def _write_depot(rel: duckdb.DuckDBPyRelation, module: Module, depot: Any) -> No
         value = str(raw_value)
 
     try:
-        depot.put(key, value)
+        depot.put_and_clear_intent(key, value)
     except Exception as exc:
         raise EgressError(f"[{module.id}] depot.put({key!r}) failed: {exc}") from exc
     logger.info("Depot write: %s = %r", key, value)
