@@ -35,7 +35,7 @@ and is never read as a duration.
 
 Directory layout: ``<root>/<manifest_hash>/<run_id>/<edge_id>/`` — see
 ``aqueduct.compiler.handoff`` for where ``edge_id`` comes from and
-``docs/specs.md`` §10.4.3 for the config surface (``handoff.root``,
+``docs/specs/07-stores-and-ops.md`` §10.4.3 for the config surface (``handoff.root``,
 ``handoff.keep_on_failure``).
 
 **Two IO stacks touch one directory.** The ENGINES write the spill

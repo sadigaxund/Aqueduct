@@ -77,4 +77,4 @@ Example agent-trigger gate — signal failure invokes self-healing:
     timeout_seconds: 300   # wait 5 min for an override before healing
 ```
 
-> See `docs/specs.md` §4.7 for the full Regulator reference.
+> See `docs/specs/02-blueprint.md` §4.4 (Regulator) for the full Regulator reference.

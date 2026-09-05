@@ -14,7 +14,7 @@ description: >
 Aqueduct runs **declarative Spark pipelines** ("Blueprints" — YAML) and
 self-heals them with an LLM on failure. You write *what* the pipeline does; the
 engine compiles it to a Manifest and executes it on Spark. This guide teaches an
-LLM to **author** Blueprints. The full reference is `docs/specs.md`; this is the
+LLM to **author** Blueprints. The full reference is `docs/specs.md` (split across `docs/specs/*.md`); this is the
 distilled, token-efficient subset.
 
 ## The authoring loop (no server)
@@ -127,7 +127,7 @@ table under the same `patch_id`, and read back by `aqueduct doctor`. A
 Blueprint still carrying one of those moved fields inside a `healed_by`
 record fails schema validation by name. Purely compiler-consumed metadata
 — no engine executes it, and it never affects the compiled Manifest. See
-docs/specs.md §8.14 for the cross-engine heal-patch gate it feeds.
+docs/specs/06-healing.md §8.14 for the cross-engine heal-patch gate it feeds.
 `aqueduct patch revert <patch_id>` undoes one record's engine-config writes
 and stamps it `reverted_at:` — the record is kept, and every consumer of the
 block (the cross-engine gate, the green-run `validated_on` stamp, the perf
@@ -165,9 +165,9 @@ portable. The compiler partitions the module graph into engine islands at
 the boundaries this creates (derived, never declared) and gates each island
 against its OWN engine's capability table. Probe/Assert must colocate with
 their target's island (`CompileError` on a mismatched pin); a spillway edge
-may not cross islands (v1). See docs/specs.md §4.3.
+may not cross islands (v1). See docs/specs/02-blueprint.md §4.3.
 
-**When to pin an `engine:` at all (docs/specs.md §11.4).** A boundary edge
+**When to pin an `engine:` at all (docs/specs/08-polyglot.md §11.4).** A boundary edge
 costs a full materialise-to-parquet plus a re-read on the other side —
 roughly the order of a shuffle, paid on every run whether or not the split
 was worth it. Don't pin for speed: if a stage can run in the engine you're
@@ -447,7 +447,7 @@ agent:
     forbidden_ops: [remove_module, insert_module]
   sandbox_mode: sample        # sample|preflight|off — how patches are pre-validated
 ```
-`approval` values: `disabled` (never heal) · `human` (stage patch for review) · `auto` (apply validated patch; with `max_patches > 1` enables chained multi-patch healing — the only multi-patch behavior, with no separate opt-in flag). `prompt_context` (above) overrides the `aqueduct.yml`-level default when set; unset inherits it. **CONNECTION fields — `provider`, `base_url`, `model`, `api_key`, `provider_options`, `timeout`, `cascade` — are NOT legal in a Blueprint's `agent:` block.** `extra="forbid"` rejects one by name if you write it here; they configure ONLY in `aqueduct.yml` (next section) — a Blueprint cannot choose its own LLM endpoint, since the healing loop ships `FailureContext` (pruned manifest, provenance, error text) to whatever endpoint is configured, and letting a pipeline author redirect that is a data-exfiltration hole, not a convenience. `max_patches > 1` (`agent.approval: auto`, non-cascade path) chains multi-patch healing across DIFFERENT-module failures instead of re-diagnosing the same first bug every attempt, and requires `sandbox_mode` other than `off` — see `docs/specs.md` §8.2 step 8. Cascade tiers never chain. `max_patches` is the single total-attempt cap for the whole chain — the old separate `max_chain` knob is gone.
+`approval` values: `disabled` (never heal) · `human` (stage patch for review) · `auto` (apply validated patch; with `max_patches > 1` enables chained multi-patch healing — the only multi-patch behavior, with no separate opt-in flag). `prompt_context` (above) overrides the `aqueduct.yml`-level default when set; unset inherits it. **CONNECTION fields — `provider`, `base_url`, `model`, `api_key`, `provider_options`, `timeout`, `cascade` — are NOT legal in a Blueprint's `agent:` block.** `extra="forbid"` rejects one by name if you write it here; they configure ONLY in `aqueduct.yml` (next section) — a Blueprint cannot choose its own LLM endpoint, since the healing loop ships `FailureContext` (pruned manifest, provenance, error text) to whatever endpoint is configured, and letting a pipeline author redirect that is a data-exfiltration hole, not a convenience. `max_patches > 1` (`agent.approval: auto`, non-cascade path) chains multi-patch healing across DIFFERENT-module failures instead of re-diagnosing the same first bug every attempt, and requires `sandbox_mode` other than `off` — see `docs/specs/06-healing.md` §8.2 step 8. Cascade tiers never chain. `max_patches` is the single total-attempt cap for the whole chain — the old separate `max_chain` knob is gone.
 
 ## Engine config (`aqueduct.yml`) — NOT the Blueprint
 Separate file. Configures deployment target, Spark, stores, secrets, webhooks, and the agent's connection settings. Author it only when asked; Blueprints reference its results. Key blocks: `deployment` (engine/target/env), `engine` (per-engine settings namespaced by name — `engine.spark.master_url`, `engine.spark.conf`, `engine.duckdb`), `stores` (observability/depots/blob/benchmark + backend), `agent` (`provider`/`base_url`/`model`/`api_key`/`provider_options`/`timeout`/`cascade` — CONNECTION, engine-only; plus the same policy defaults the Blueprint can override), `danger` (allow_multi_patch, allow_full_probe_actions), `handoff` (`root` — cross-engine spill location, any engine-reachable URI, default `.aqueduct/handoff`; `keep_on_failure` — keep a boundary's spill after a failed run so a rerun skips recomputing it, default true), `timezone` (top-level, e.g. `"UTC"` — applied to EVERY engine's session at creation; only worth setting once a Blueprint spans more than one engine — an explicit `engine.spark.conf.spark.sql.session.timeZone` override still wins for Spark, with a warning naming the divergence). `agent.cascade` is engine-only — a Blueprint cannot declare or override a cascade (no `model: [list]` shorthand either; both were removed as Blueprint features — write an explicit list of tiers here). See `aqueduct/templates/default/aqueduct.yml.template`.

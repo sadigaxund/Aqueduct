@@ -33,8 +33,9 @@ not fold it into the default sweep; it fires on explicit trigger.
 
 ### Phase 0 — Inputs (read fully, solo)
 
-In order: `docs/specs.md` (ENTIRE file — skim-reading misses the accretion pattern that
-is itself a finding), `AGENTS.md`, the `[Unreleased]` tail of `CHANGELOG.md`,
+In order: `docs/specs.md` and every page under `docs/specs/` (ENTIRE set — skim-reading
+misses the accretion pattern that is itself a finding), `AGENTS.md`, the `[Unreleased]`
+tail of `CHANGELOG.md`,
 `pyproject.toml` (extras policy, entry points), skim README + SKILL.md. Note the
 three-version-space state and every place a contract is stamped stable.
 

@@ -39,7 +39,7 @@ Useful when you need to measure a single op's I/O cost in isolation.
 
 > **`op: join`** — native join op (inner, left, semi, anti) is also available
 > on Channel. Unlike the SQL approach, the join key columns are declared
-> declaratively and Spark optimizes them the same way. See `docs/specs.md` §4.4.
+> declaratively and Spark optimizes them the same way. See `docs/specs/02-blueprint.md` §4.4.
 
 ## How to Run
 

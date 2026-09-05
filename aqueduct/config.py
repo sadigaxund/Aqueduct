@@ -24,7 +24,7 @@ Precedence when both file and environment are present:
   File values override built-in defaults; CLI flags passed to commands override
   both (handled in cli.py, not here).
 
-Schema reference: docs/specs.md §10.1
+Schema reference: docs/specs/07-stores-and-ops.md §10.1
 """
 
 from __future__ import annotations
@@ -101,7 +101,7 @@ class DeploymentConfig(BaseModel):
         description=(
             "Execution engine. Validated against the engines registered "
             "through the aqueduct.engines entry-point group (see "
-            "docs/specs.md §10.9) — today just spark."
+            "docs/specs/07-stores-and-ops.md §10.9) — today just spark."
         ),
         json_schema_extra={"engine_scoped": False},
     )
@@ -1101,7 +1101,7 @@ class SparkEngineConfig(BaseModel):
     concern) and the top-level ``spark_config`` dict (named after one engine
     when it was the only one). ``master_url``/``conf`` here are both
     Spark-only; every other engine ignores them (config-leaf governance,
-    docs/specs.md §10.9) without ceremony.
+    docs/specs/07-stores-and-ops.md §10.9) without ceremony.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -1316,7 +1316,7 @@ class EngineConfig(BaseModel):
     """Per-engine configuration, namespaced by engine name (`engine:` block, 2.0).
 
     Replaces the pre-2.0 top-level `spark_config` dict — named after one
-    engine — now that DuckDB is a second registered engine (docs/specs.md
+    engine — now that DuckDB is a second registered engine (docs/specs/07-stores-and-ops.md
     §10.9). A key under `engine.<name>.` belongs to that engine; every other
     engine ignores it (warn, never error — see config-leaf governance).
     Adding a new engine's settings is a new sub-block here, not a new
@@ -1352,7 +1352,7 @@ class HandoffConfig(BaseModel):
     by two deterministic RELEASE events, not by a clock: a successful
     `--resume` deletes the spill it consumed, and the orphan sweep
     reclaims a kept failure once a later run of the same blueprint has
-    succeeded (see `aqueduct/executor/spill.py` and `docs/specs.md`
+    succeeded (see `aqueduct/executor/spill.py` and `docs/specs/07-stores-and-ops.md`
     §10.4.3). There is no retention window and no age threshold.
     """
 

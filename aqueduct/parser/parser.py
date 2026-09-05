@@ -538,7 +538,7 @@ def parse_dict(
         # `jar`/`path` are anchored to base_dir here — udf_registry entries are
         # a top-level list, not a `config:` block, so `_anchor_paths` (which
         # only ever walks a module's `config:` dict) never reached them
-        # despite the "UDF" row already existing in path_keys.py; specs.md
+        # despite the "UDF" row already existing in path_keys.py; docs/specs/03-resolution.md
         # documents relative `jar:` paths as anchoring to the Blueprint dir,
         # which was false at HEAD before this fix (a blueprint run from any
         # CWD other than its own directory got "JAR not found").

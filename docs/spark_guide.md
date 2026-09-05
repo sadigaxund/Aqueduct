@@ -678,7 +678,7 @@ the task level.
 The correct pattern is to write **defensive UDFs** that never raise: catch all
 exceptions inside the UDF and return a sentinel value (e.g. a struct with a nullable
 `result` + `error` string field). The `spillway_condition` then routes rows where
-`error IS NOT NULL`. See the Blueprint Author note in `docs/specs.md` for a code
+`error IS NOT NULL`. See the Blueprint Author note in `docs/specs/02-blueprint.md` for a code
 example.
 
 **5. Validate `schema_hint` explicitly.**

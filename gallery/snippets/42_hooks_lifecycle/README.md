@@ -71,7 +71,7 @@ hooks:
 ## `on_patch_pending` / `on_healed` (mid-run heal milestones)
 
 Two more events beyond `on_success`/`on_failure`, not shown in this
-snippet's `blueprint.yml` (see `docs/specs.md` §Hooks for the full
+snippet's `blueprint.yml` (see `docs/specs/02-blueprint.md` §Hooks for the full
 example): `on_patch_pending` fires every time a heal stages a patch for
 human/CI review; `on_healed` fires once a heal's re-run succeeds — patch
 applied AND the pipeline green again — and always runs BEFORE the outer

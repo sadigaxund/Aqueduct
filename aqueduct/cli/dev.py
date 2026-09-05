@@ -6,7 +6,7 @@ tooling (`aqueduct/executor/capability_tooling.py`). It used to live in
 author who `pip install`ed aqueduct could not generate the ~206-row capability
 table their engine cannot register without (Spark's own checklist today; a new
 engine's is smaller still — no core `config.*` leaves, no other engine's
-`engine.<name>.*` leaves, see Q4 step 2 / `docs/specs.md` §10.9). The alternatives
+`engine.<name>.*` leaves, see Q4 step 2 / `docs/specs/07-stores-and-ops.md` §10.9). The alternatives
 were hand-writing it or copying Spark's, and copying Spark's hands the new engine
 ~206 `supported` rows: a silent claim to implement the whole grammar, which is
 the exact bug the capability framework was just fixed to prevent. So the tool ships.

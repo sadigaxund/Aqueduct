@@ -8,7 +8,7 @@ subset of the grammar. This guide is written from the experience of building
 that shipped, not a design proposal.
 
 For the reference-level contract (verdicts, leaf sets, the compile gate, the
-version check), see `docs/specs.md` §10.9. For the published per-engine
+version check), see `docs/specs/07-stores-and-ops.md` §10.9. For the published per-engine
 capability matrix, see `docs/compatibility.md`. This document is the
 how-to; those are the what-is.
 
@@ -413,7 +413,7 @@ swallow another and re-conflate two states that need different fixes:
   the walker runs (every engine's `capabilities.py` walks it at import, i.e.
   at registration time, never CI-only). This one is a first-party
   `aqueduct/config.py` bug, not something a third-party engine plugin can
-  trigger by shipping bad data. See `docs/specs.md` §10.9 "Config-leaf
+  trigger by shipping bad data. See `docs/specs/07-stores-and-ops.md` §10.9 "Config-leaf
   scoping".
 
 Conflating the first two once already made the closure guarantee meaningless
@@ -594,7 +594,7 @@ Two sets are **closed by decision, not by accident**:
 This is not a parity claim between engines. DuckDB is single-node,
 implements a declared subset of the grammar, and some capabilities the two
 engines do share still behave differently in ways a verdict cannot express
-. See `docs/specs.md` §10.9's "Engine notes" for the current list (DuckDB's
+. See `docs/specs/07-stores-and-ops.md` §10.9's "Engine notes" for the current list (DuckDB's
 `append` write is not atomic; several Channel ops materialize eagerly
 rather than staying lazy). Read the matrix in `docs/compatibility.md`
 before assuming a Blueprint that runs on one engine runs unchanged on

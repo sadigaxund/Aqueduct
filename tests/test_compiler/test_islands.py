@@ -580,7 +580,7 @@ def test_handoff_modules_never_reach_the_capability_gate(monkeypatch):
     `compiler.compile()`'s per-island capability-gate loop filters
     `manifest.modules` down to island membership before calling
     `check_capabilities` (see `aqueduct/compiler/handoff.py`'s module
-    docstring and `docs/specs.md` §10.9). Today that holds because islands
+    docstring and `docs/specs/07-stores-and-ops.md` §10.9). Today that holds because islands
     are derived from the PRE-insertion module graph and handoff synthesis
     runs strictly after.
 

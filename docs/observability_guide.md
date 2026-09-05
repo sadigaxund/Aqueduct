@@ -256,7 +256,7 @@ pipeline-only patch writes no engine config, so there is nothing for it to
 compare) and `pass` when the patch's write really does change the effective
 session config the target engine will run with (`aqueduct.yml`'s
 `engine.<name>` block merged under the Blueprint's own; see
-`docs/specs.md` §8.5). Its `fail` is a `set_engine_config` write whose
+`docs/specs/06-healing.md` §8.5). Its `fail` is a `set_engine_config` write whose
 effective before/after are identical: a clean apply that changes nothing an
 engine can see. That row is written for the record only: the refusal
 itself is enforced at apply time, so a `fail` here is always accompanied by
@@ -308,7 +308,7 @@ the same green-run stamp that updates the Blueprint's `validated_on`). The
 Blueprint's `healed_by` record still names the `patch_id`; these four
 columns are read back by `aqueduct doctor`'s `healed-config:<patch_id>`
 rows and by `aqueduct patch revert`. See `aqueduct/patch/index.py` and
-`docs/specs.md` §8.14.
+`docs/specs/06-healing.md` §8.14.
 
 #### `signal_overrides`
 

@@ -46,7 +46,7 @@ def resolve_duckdb_obs_path(
     """Resolve which DuckDB observability file a read should open (or None).
 
     ``--store-dir`` (when given) and the configured path resolve through the
-    SAME logic below: both are routing base directories (docs/specs.md
+    SAME logic below: both are routing base directories (docs/specs/07-stores-and-ops.md
     §10.4.1). Resolution order (the single source of truth — `cli._resolve_obs_db`
     delegates here) — 2.0 removed the explicit-single-file mode (config load
     rejects ``.db``-suffixed duckdb paths):
@@ -64,7 +64,7 @@ def resolve_duckdb_obs_path(
     """
     if store_dir:
         # --store-dir denotes the SAME routing base as the configured path
-        # (docs/specs.md §10.4.1: "same per-blueprint split, but under your
+        # (docs/specs/07-stores-and-ops.md §10.4.1: "same per-blueprint split, but under your
         # directory") — fall through to the identical blueprint_id/run_id/
         # flat-file resolution below instead of a flat-only lookup.
         routing_root = store_dir
@@ -116,7 +116,7 @@ def resolve_obs_store_dir(
     The single source of truth for per-blueprint write routing (mirrors the
     inline logic in ``cli/run.py`` / ``stores/base.py``'s
     ``_resolve_obs_duckdb_path``): ``--store-dir`` wins as the routing BASE
-    (docs/specs.md §10.4.1 — same per-blueprint split, under your directory);
+    (docs/specs/07-stores-and-ops.md §10.4.1 — same per-blueprint split, under your directory);
     else the configured DuckDB path (a routing base directory; 2.0 removed
     the explicit-file mode) → per-blueprint ``<base>/<blueprint_id>``.
     DuckDB-only (Postgres self-manages its DSN).

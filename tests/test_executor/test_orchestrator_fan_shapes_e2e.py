@@ -1,5 +1,5 @@
 """The fan-shape conformance matrix for cross-engine handoff (Phase 81/82
-batch B) — the phase's acceptance bar per docs/specs.md §10.9: "implemented
+batch B) — the phase's acceptance bar per docs/specs/07-stores-and-ops.md §10.9: "implemented
 properly" IS this matrix being green. Fan shapes are ALLOWED (they fall out
 of edge-level handoff insertion at compile time), but nothing had
 systematically verified they actually run against real engines until now.
@@ -77,8 +77,6 @@ from pathlib import Path
 import duckdb
 import pytest
 
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
-
 from aqueduct.compiler.compiler import compile as ccompile
 from aqueduct.errors import CompileError
 from aqueduct.executor.models import ExecutionStatus
@@ -87,6 +85,8 @@ from aqueduct.executor.orchestrator import run_polyglot
 from aqueduct.models import ModuleType
 from aqueduct.parser.parser import parse_dict
 from aqueduct.surveyor.surveyor import Surveyor
+
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 ENGINE_PAIRS = [("spark", "duckdb"), ("duckdb", "spark")]
 PAIR_IDS = ["spark_to_duckdb", "duckdb_to_spark"]

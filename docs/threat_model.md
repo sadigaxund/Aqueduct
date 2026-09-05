@@ -80,7 +80,7 @@ mitigations below are built for.
 
 Every PatchSpec, regardless of what produced it, passes through the same
 deterministic gates before it can touch the on-disk Blueprint
-(`docs/specs.md` §8.7):
+(`docs/specs/06-healing.md` §8.7):
 
 1. **Gate 1, guardrails** (`aqueduct/patch/apply.py::_check_guardrails`):
    `forbidden_ops`, `allowed_paths`, `deny_patterns`, and the
@@ -136,7 +136,7 @@ never optional.
 ### 4.3 The sandbox
 
 Gate 3 replays the patched Blueprint before any write happens for real.
-`agent.sandbox_mode` (`docs/specs.md` §8.4):
+`agent.sandbox_mode` (`docs/specs/06-healing.md` §8.4):
 
 | Mode | Sample size | Egress writes |
 |---|---|---|
@@ -226,7 +226,7 @@ a bad patch.
 
 ## 6. Related documents
 
-- `docs/specs.md` §8.3 (approval modes), §8.5 (patch grammar), §8.7 (the
+- `docs/specs/06-healing.md` §8.3 (approval modes), §8.5 (patch grammar), §8.7 (the
   gate ladder in full): the mechanics this document summarizes.
 - `docs/production_guide.md`'s "Security considerations" table: operator
   checklist form of §4 above.

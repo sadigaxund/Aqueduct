@@ -315,7 +315,7 @@ class SetEngineConfigOp(BaseModel, extra="forbid"):
     _check_guardrails``) refuses any (engine, key, value) the target
     engine's core ``engine_config_allowlist.yml`` does not permit (deny
     layer first, then allow membership, then type/enum — see
-    ``aqueduct/executor/engine_config_allowlist.py`` and ``docs/specs.md``
+    ``aqueduct/executor/engine_config_allowlist.py`` and ``docs/specs/07-stores-and-ops.md``
     §8 for the full permission model). This is NOT the same thing as a
     default `forbidden_ops` entry — no such default exists, and adding one
     here would make the op dead on arrival in auto mode; the allowlist is

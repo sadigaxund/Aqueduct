@@ -2,7 +2,7 @@
 
 Drop-in operator + deferrable sensor for running Aqueduct blueprints from
 Apache Airflow DAGs. Honors the engine's stable exit-code contract
-(see `docs/specs.md §10.7`) and pauses on `HEAL_PENDING` without holding a
+(see `docs/specs/07-stores-and-ops.md §10.7`) and pauses on `HEAL_PENDING` without holding a
 worker slot.
 
 ## Install

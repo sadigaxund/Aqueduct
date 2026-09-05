@@ -573,7 +573,7 @@ def _check_engine_config_allowlist(op: Any) -> None:
     (engine, key, value) that the target engine's core
     ``engine_config_allowlist.yml`` does not permit (AGENTS.md's
     "everything below core may only SUBTRACT permission" — see
-    ``docs/specs.md`` §8 for the full permission model this backs).
+    ``docs/specs/06-healing.md`` §8 for the full permission model this backs).
 
     Always runs, independent of ``agent.guardrails.forbidden_ops``/
     ``allowed_paths`` — the allowlist is the ONLY thing constraining what

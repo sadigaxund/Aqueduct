@@ -85,4 +85,4 @@ ruff check . && black .
 
 ## Design docs
 
-See `docs/specs.md` and `.dev/JOURNAL.md` for architecture decisions.
+See `docs/specs.md` (index into `docs/specs/*.md`) and `.dev/JOURNAL.md` for architecture decisions.

@@ -289,7 +289,7 @@ def check_watermark_intents(bp, depot) -> None:
     its downstream `format: depot` watermark write ever landing.
 
     Called between building the run's depot and resolving the incremental
-    read range (before compile) — see `docs/specs.md`'s watermark
+    read range (before compile) — see `docs/specs/07-stores-and-ops.md`'s watermark
     crash-consistency section. Pulled into its own function so a test can
     call it directly instead of driving the whole `_do_compile` pipeline.
 

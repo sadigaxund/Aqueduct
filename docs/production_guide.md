@@ -54,7 +54,7 @@ Aqueduct has no built-in scheduler. `aqueduct run` is a one-shot CLI command des
 
 ## Spark cluster configuration
 
-Aqueduct creates a `SparkSession` on the driver. Cluster connection is controlled via the `deployment:` and `engine.spark:` blocks in `aqueduct.yml` (2.0: `master_url` and Spark session config live under `engine.spark:`, namespaced by engine name so a second engine's own settings have somewhere to live; see [specs.md §10.1](specs.md)).
+Aqueduct creates a `SparkSession` on the driver. Cluster connection is controlled via the `deployment:` and `engine.spark:` blocks in `aqueduct.yml` (2.0: `master_url` and Spark session config live under `engine.spark:`, namespaced by engine name so a second engine's own settings have somewhere to live; see [specs/07-stores-and-ops.md §10.1](specs/07-stores-and-ops.md)).
 
 The `target` field is validated against `engine.spark.master_url` at config-load. A
 mismatch raises a `ConfigError` naming both values and the expected shape.
@@ -205,7 +205,7 @@ the blueprint's `engine.spark.conf`.
 ## DuckDB engine configuration
 
 `engine.duckdb:` (`aqueduct.yml`) configures the DuckDB engine's session; see
-`docs/specs.md` §10.9 for the full field reference. Production-relevant points:
+`docs/specs/07-stores-and-ops.md` §10.9 for the full field reference. Production-relevant points:
 
 - **`database_path`** replaces the default `:memory:` connection with a
   persistent local file. This raises a receiving cross-engine handoff island's
@@ -440,7 +440,7 @@ In production, LLM inference runs as a remote HTTP service. CONNECTION settings
 (`provider`, `base_url`, `model`, `api_key`, `timeout`, `cascade`) are configured
 in `aqueduct.yml` **only**; a Blueprint's `agent:` block cannot set or override
 any of them (2.59: this is a deliberate security boundary, not a missing
-feature; see `docs/specs.md` §8.1). A Blueprint's own `agent:` block sets
+feature; see `docs/specs/06-healing.md` §8.1). A Blueprint's own `agent:` block sets
 POLICY only, e.g. `approval: human`, in a separate `agent:` block in the
 Blueprint YAML file.
 
@@ -611,7 +611,7 @@ Without `OPTIMIZE`, incremental pipelines using `mode: append` or `mode: merge` 
 
 ### Retry idempotency: half-write exposure by module
 
-`retry_policy.max_attempts > 1` (blueprint- or module-level, see [specs.md §4](specs.md)) re-runs a failed pipeline. Whether a retry can produce duplicate or corrupted data depends entirely on the write mode of the Egress modules in the retried path:
+`retry_policy.max_attempts > 1` (blueprint- or module-level, see [specs/02-blueprint.md §4](specs/02-blueprint.md)) re-runs a failed pipeline. Whether a retry can produce duplicate or corrupted data depends entirely on the write mode of the Egress modules in the retried path:
 
 | Egress mode | Half-write exposure | Why |
 |---|---|---|

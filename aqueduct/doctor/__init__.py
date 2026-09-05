@@ -2517,7 +2517,7 @@ def run_doctor(
 
     # Cross-engine handoff (Phase 81/82) — free space at handoff.root, and a
     # round-trip access probe for every registered engine. `handoff.root` is
-    # not yet wired into `aqueduct run` (docs/specs.md §10.9), so a relative
+    # not yet wired into `aqueduct run` (docs/specs/07-stores-and-ops.md §10.9), so a relative
     # root is resolved here against the project root the same way
     # `_secrets_base_dir` below already resolves `secrets.resolver`.
     _handoff_project_root = config_path.parent if config_path else Path.cwd()

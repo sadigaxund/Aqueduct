@@ -76,4 +76,4 @@ literals — the original `${ctx.*}` expression is not leaked downstream.
 > **Explicit `edges:` declaration:** This blueprint declares data-flow paths
 > under `edges:` rather than relying on auto-wiring. Required for modules
 > with multiple inputs/outputs (Funnels, Junctions, spillways). See
-> `docs/specs.md` §3.4.
+> `docs/specs/02-blueprint.md` §4.2.

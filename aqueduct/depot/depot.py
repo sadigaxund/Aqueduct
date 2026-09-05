@@ -76,7 +76,7 @@ class DepotStore:
         supports it (DuckDB, Postgres — see `_RelationalDepotMixin`;
         best-effort, non-atomic on Redis). Used by a ``format: depot`` Egress
         writing a value that a `watermark_key:`-bearing append Egress gates
-        against — see `docs/specs.md`'s watermark crash-consistency section.
+        against — see `docs/specs/07-stores-and-ops.md`'s watermark crash-consistency section.
         """
         self._backend.kv_put_and_clear(key, value, depot_intent_key(key))
 
