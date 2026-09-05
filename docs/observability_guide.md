@@ -296,6 +296,21 @@ s3, gcs, and adls patch stores, replacing the former `os.scandir` over the
 patch was healed against (`spark` \| `duckdb`) — auditability only, not used
 by any lookup filter.
 
+**Heal provenance columns.** Four columns carry apply-time heal
+detail that used to live in the Blueprint's own `healed_by:` record and was
+moved here because it grows with every green run: `engine_version`
+(VARCHAR, the installed engine package version at heal time, nullable
+best-effort), `engine_config_delta` (JSON, `{engine: {key: {before,
+after}}}`, present only when the patch changed effective engine config),
+`perf_baseline` (JSON, the pre-patch green run's wall-clock duration and
+volume proxy, present only when a green run preceded the patch), and
+`perf_observations` (JSON, one warn-only perf note per engine, written by
+the same green-run stamp that updates the Blueprint's `validated_on`). The
+Blueprint's `healed_by` record still names the `patch_id`; these four
+columns are read back by `aqueduct doctor`'s `healed-config:<patch_id>`
+rows and by `aqueduct patch revert`. See `aqueduct/patch/index.py` and
+`docs/specs.md` §8.14.
+
 #### `signal_overrides`
 
 User overrides for Probe signals via `aqueduct signal <signal_id> --value`.
@@ -690,6 +705,28 @@ JOIN healing_outcomes ho ON ho.run_id = ha.run_id
 WHERE ha.stop_reason IS NOT NULL
 ORDER BY ha.recorded_at DESC
 LIMIT 20;
+```
+
+### Heal engine-config provenance
+
+**When** a Blueprint's `healed_by:` record names a patch and you want the
+engine-config diff and perf notes it wrote (the Blueprint record itself no
+longer carries them, see the schema reference above).
+**What you learn** What each engine key changed to and from, and the
+warn-only wall-clock ratio a later green run observed.
+**What to do next** Compare against the live `engine.<name>` block, or
+run `aqueduct doctor` for the same information rendered as
+`healed-config:<patch_id>` rows.
+
+```sql
+SELECT patch_id,
+       engine,
+       engine_version,
+       engine_config_delta,
+       perf_baseline,
+       perf_observations
+FROM patch_index
+WHERE patch_id = '<patch_id>';
 ```
 
 ### Cost & performance

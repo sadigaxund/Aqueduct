@@ -116,18 +116,22 @@ separate — ops-owned alerting that fires regardless of blueprint hooks. On an
 Arcade sub-blueprint, `hooks:` is ignored — only the top-level blueprint's fire.
 
 **`healed_by:`** — machine-written only, never hand-authored. `aqueduct patch
-apply` appends one provenance record per applied self-heal patch (engine,
-classification, applied_at, validated_on, `engine_config_delta` when the patch
-changed effective engine/session config, and a warn-only `perf_baseline` /
-`perf_observations` pair reporting how the pipeline's wall-clock duration
-compares to the last green run before the patch — reported, never judged:
-Aqueduct sets no regression threshold). Purely compiler-consumed metadata
+apply` appends one bounded provenance record per applied self-heal patch, and
+those six keys are the whole record: `patch_id`, `engine`, `classification`,
+`applied_at`, `validated_on`, `reverted_at`. The apply-time detail (the
+effective engine/session-config diff the patch wrote, and the warn-only
+perf notes comparing the pipeline's wall-clock duration against the last
+green run before the patch — reported, never judged: Aqueduct sets no
+regression threshold) is recorded in the observability store's `patch_index`
+table under the same `patch_id`, and read back by `aqueduct doctor`. A
+Blueprint still carrying one of those moved fields inside a `healed_by`
+record fails schema validation by name. Purely compiler-consumed metadata
 — no engine executes it, and it never affects the compiled Manifest. See
 docs/specs.md §8.14 for the cross-engine heal-patch gate it feeds.
 `aqueduct patch revert <patch_id>` undoes one record's engine-config writes
 and stamps it `reverted_at:` — the record is kept, and every consumer of the
-block (the cross-engine gate, the green-run `validated_on` /
-`perf_observations` stamps) skips a reverted one.
+block (the cross-engine gate, the green-run `validated_on` stamp, the perf
+note) skips a reverted one.
 
 **Linear-edge sugar:** omit `edges:` entirely and the compiler chains modules in
 declaration order — BUT only if every module is single-in/single-out (Ingress,

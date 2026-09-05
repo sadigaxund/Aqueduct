@@ -1149,7 +1149,7 @@ In `agent.approval: auto`, a **defer-only** patch (every operation is `defer_to_
 
 Applicability is derived from what the patch writes, never from a list of operation names: the patch's operations are re-applied to a copy of the Blueprint whose `engine:` block has been removed, and whatever appears in that block afterwards is exactly the set of engine-config keys the patch writes. A patch that writes none of them reports `not_applicable`: the same first-class status the lineage gate uses (`aqueduct/patch/preview.py::LineageGateResult`) for the same reason: reporting `pass` for a check that had nothing to look at is a lie. `aqueduct patch preview` renders this gate next to the lineage/sandbox gates, and `--format json` carries it as `engine_config` (`status`, `detail`, `delta`, `write_targets`).
 
-**Where the delta is recorded.** When the effective config does change, the diff is written into the applied patch's `healed_by:` provenance record as `engine_config_delta`, shaped `{engine: {key: {before, after}}}` (see `aqueduct/patch/provenance.py::build_healed_by_record`). It lives there, and not in the patch's own `_aq_meta`, because it is an apply-time fact rather than a generation-time one: the same patch applied against a different `aqueduct.yml` produces a different delta, and the model that wrote the patch saw neither. Recording it in the Blueprint puts the YAML write and the behaviour it bought in one `git diff`. The field is absent for a patch that writes no engine config, so a pipeline-only heal's provenance block is unchanged.
+**Where the delta is recorded.** When the effective config does change, the diff is recorded in the `patch_index` table of the observability store, keyed by `patch_id`, shaped `{engine: {key: {before, after}}}`. It is built by `aqueduct/patch/provenance.py::build_heal_provenance` and written by `aqueduct/patch/apply.py::record_heal_facts`. It is recorded there, and not in the patch's own `_aq_meta`, because it is an apply-time fact rather than a generation-time one: the same patch applied against a different `aqueduct.yml` produces a different delta, and the model that wrote the patch saw neither. It is recorded in the patch index rather than the Blueprint because the Blueprint carries only what a travelling artifact's compile-time gate must read, while a before/after config dict is store data that a growing history should not force into the artifact itself. It is surfaced with `aqueduct doctor` (the `healed-config:<patch_id>` rows) instead. No row is written for a patch that writes no engine config, so a pipeline-only heal leaves the patch index's engine-config columns unset.
 
 `replace_macro` replaces the body of an **existing** macro in the Blueprint `macros:` block, the one place bad SQL was previously unreachable, since the agent is told to preserve `{{ macros.* }}` references rather than inline them. Replace-only: unknown macro names are rejected at apply time (also catches name hallucinations). Re-expansion runs through the normal compile + lineage gates, so parameter mismatches and broken columns in *any* consuming module are caught before the patch lands. Because one macro change affects every module referencing it, the recommended default is to add `replace_macro` to `guardrails.forbidden_ops` so it always gets human review.
 
@@ -1290,32 +1290,23 @@ authors never hand-write it:
 healed_by:
   - patch_id: fix-yellow-taxi-path
     engine: duckdb
-    engine_version: "1.5.4"   # nullable — best-effort, from the installed package
-    run_id: run_20240412_143022_a3f9
     classification: engine_shaped   # dialect_neutral | engine_shaped
     applied_at: "2026-07-18T00:00:00Z"
     validated_on: []          # engines a GREEN run has validated this patch on since
     reverted_at: null         # set by `aqueduct patch revert`; absent on a live record
-    engine_config_delta:      # absent unless the patch changed effective engine config (§8.5)
-      duckdb:
-        memory_limit:
-          before: 4GB
-          after: 8GB
-    perf_baseline:            # absent when no green run preceded the patch
-      run_id: run_20240410_090000_11bc
-      duration_ms: 50000
-      engines: [duckdb]
-      records_read: 1000000   # null on an engine that records no module_metrics
-      bytes_read: 100000000
-    perf_observations:        # one per engine, written by the same green-run stamp
-      - status: observed      # observed | not_applicable (never pass, never fail)
-        engine: duckdb
-        observed_at: "2026-07-19T04:11:02Z"
-        duration_ratio: 3.2
-        duration_delta_ms: 110000
-        caveats:
-          - wall-clock duration is not attributable to a single cause: ...
 ```
+
+The record is bounded to these six fields: only what the compile-time
+cross-engine gate and `aqueduct patch revert` need to read out of a
+travelling Blueprint. `engine_config_delta`, `engine_version`,
+`perf_baseline`, `perf_observations` and `run_id` moved to the `patch_index`
+table in the observability store, keyed by the same `patch_id` (see
+"Where the delta is recorded" above and "Perf attribution" below): those
+fields grew with every green run, one before/after config dict per engine
+and one perf note per engine per patch, and turned a Blueprint artifact into
+a changelog. There is no migration and no back-compat read: a `healed_by`
+record still carrying one of the moved fields fails schema validation,
+naming the field and stating that its data now lives in the patch index.
 
 The block is compiler-consumed metadata only: no engine executes it, and it
 is excluded from `Manifest` assembly entirely, so it never perturbs a
@@ -1352,7 +1343,9 @@ path) appends X to every `healed_by` record's `validated_on` list, when the
 block exists and X is not already present: a Blueprint with no `healed_by:`
 block is never touched. The stamp is best-effort: a write failure is logged
 and never fails an otherwise-successful run (`aqueduct/patch/apply.py::
-stamp_validated_engine`).
+stamp_validated_engine`). A green run rewrites the Blueprint only when
+`validated_on` actually changes: a run that adds no new engine to any
+record leaves the YAML untouched.
 
 **Perf attribution (warn-only).** `validated_on` is binary: the run after
 the patch either succeeded or it did not. Config-op success is not binary.
@@ -1360,6 +1353,11 @@ The usual outcome of naive shuffle or partition tuning is a run that
 completes and is much slower, which `validated_on` records as an
 unqualified success while the patch persists into the Blueprint and every
 later run inherits it. Two fields carry the non-binary half.
+
+`perf_baseline` and `perf_observations` are recorded in the `patch_index`
+table, not in the Blueprint (see "Where the delta is recorded" above):
+they are apply-time and green-run facts, and a Blueprint artifact is not
+the place for a history that grows with every run.
 
 `perf_baseline` is snapshotted at apply time: the last green run of this
 blueprint that finished before the patch was applied (wall-clock duration
@@ -1388,21 +1386,25 @@ executor writes only for Handoff modules, so on DuckDB it is reported as
 unavailable with a stated reason, never as a zero. Every remaining
 limitation (co-applied patches, changed input volume, the standing fact
 that wall-clock time has many causes) is written into the note's `caveats`,
-which travel with it into the Blueprint. See
+which travel with it into the patch index record. See
 `aqueduct/patch/perf_attribution.py`.
 
 **Undoing a heal (`aqueduct patch revert`).** A healed patch persists into
 the Blueprint and every later run inherits it, including runs long past the
 failure it was written for. `aqueduct patch revert <patch_id> --blueprint
 <file>` undoes one applied patch's engine-config writes in place: each
-`engine.<name>` key the patch wrote goes back to the value its
-`engine_config_delta` captured, and the `healed_by` record is stamped
-`reverted_at:` rather than deleted. Keeping the record is the point: deleting
+`engine.<name>` key the patch wrote goes back to the value the
+`engine_config_delta` recorded in the patch index captured, and the
+`healed_by` record is stamped `reverted_at:` rather than deleted. Because
+the prior value now lives in the patch index rather than in the record
+itself, an unreachable observability store is a loud refusal, never an
+empty mapping: a missing or unreadable index is indistinguishable from
+"nothing was recorded" unless the command insists on telling the two
+apart. Keeping the record is the point: deleting
 it would erase the fact that a heal ever happened, and leaving it unmarked
 would make it describe a Blueprint that no longer carries its change. Every
 consumer reads the stamp, so a reverted record stops raising the cross-engine
-warning above and stops collecting `validated_on` / `perf_observations`
-entries.
+warning above and stops accruing `validated_on` entries.
 
 Only engine-config writes are revertible, because they are the only change
 for which a prior value is recorded anywhere: `set_module_config_key` and its
@@ -1429,10 +1431,13 @@ in that commit, and is the documented fallback for every case `revert`
 refuses.
 
 **Surfacing healed config keys (`aqueduct doctor`).** For a Blueprint target,
-doctor emits one `healed-config:<patch_id>` row per `healed_by` record that
-carries an `engine_config_delta`: what was changed and when, whether a green
-run has validated it, the perf notes' observed ratios verbatim, and the
-`patch revert` command that undoes it. It states **no staleness threshold**:
+doctor reads the engine-config delta and the perf notes back from the patch
+index, keyed by `patch_id`, and emits one `healed-config:<patch_id>` row per
+`healed_by` record whose patch index entry carries an `engine_config_delta`:
+what was changed and when, whether a green run has validated it, the perf
+notes' observed ratios verbatim, and the `patch revert` command that undoes
+it. An unreadable patch index is a single `warn` row naming the reason,
+never silence. It states **no staleness threshold**:
 "healed more than N days ago" is a number nothing supports, since an
 hour-old heal on a monthly pipeline is older in every sense that matters than
 a year-old one on an hourly pipeline. The one condition that escalates to a
