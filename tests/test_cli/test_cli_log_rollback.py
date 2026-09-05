@@ -13,6 +13,7 @@ pytestmark = pytest.mark.integration
 
 from pathlib import Path
 from click.testing import CliRunner
+from aqueduct import exit_codes
 from aqueduct.cli import cli
 
 
@@ -170,7 +171,7 @@ class TestRollbackCmd:
         runner = CliRunner()
         result = runner.invoke(cli, ["patch", "rollback", str(bp_file), "--to", "P001", "--hard"])
 
-        assert result.exit_code == 2
+        assert result.exit_code == exit_codes.USAGE_ERROR
         assert "no such option" in result.output.lower()
         assert "--hard" in result.output
 
