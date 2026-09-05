@@ -67,10 +67,10 @@ Two rules to keep in mind:
 | `@aq.date.format(date_str, pattern)` | Reformat an ISO date string into a custom pattern. |
 | `@aq.run.id()` | Auto-generated UUID for this pipeline run. |
 | `@aq.run.timestamp()` | ISO-8601 timestamp of compilation. |
-| `@aq.run.prev_id()` | Run ID of the previous pipeline execution (reads `_last_run_id` from Depot). Fails compilation (2.68) if no depot backend is configured — see `@aq.depot.get` below. |
+| `@aq.run.prev_id()` | Run ID of the previous pipeline execution (reads `_last_run_id` from Depot). Fails compilation if no depot backend is configured, see `@aq.depot.get` below. |
 | `@aq.env('KEY')` | Read environment variable. Fails fast when absent, unlike `${VAR:-default}` which supports a fallback. |
 | `@aq.secret('KEY')` | Read from AWS/GCP/Azure secrets manager or environment fallback. |
-| `@aq.depot.get('key')` | Read from the default Depot KV store at compile time. `@aq.depot.<name>.get('key')` reads a named mount (see the Depot glossary entry + Observability Guide). **Fails compilation (`CompileError`, 2.68)** if no depot backend is configured at all — a Blueprint that references a depot read needs a real mount, or the read would silently fall back to the default and mask the pipeline going incremental-in-name-only. A configured depot with the key simply absent is unaffected: that still returns the default, unchanged. |
+| `@aq.depot.get('key')` | Read from the default Depot KV store at compile time. `@aq.depot.<name>.get('key')` reads a named mount (see the Depot glossary entry + Observability Guide). **Fails compilation (`CompileError`)** if no depot backend is configured at all — a Blueprint that references a depot read needs a real mount, or the read would silently fall back to the default and mask the pipeline going incremental-in-name-only. A configured depot with the key simply absent is unaffected: that still returns the default, unchanged. |
 | `@aq.blueprint.id()` | This Blueprint's `id`. |
 | `@aq.blueprint.name()` | This Blueprint's `name`. |
 | `@aq.blueprint.dir()` | Absolute directory of the Blueprint file: the safe "relative-to-this-pipeline" anchor for output paths (e.g. `path: @aq.blueprint.dir()/out`). |
@@ -173,7 +173,7 @@ udf_registry:
 | `jar` | java/scala | JAR file path (relative paths anchor to the Blueprint dir). |
 | `class` | java/scala | Fully-qualified class name. |
 
-## **5.5 Dependencies (`dependencies:`, 2.66)**
+## **5.5 Dependencies (`dependencies:`)**
 
 A top-level Blueprint block, sibling of `udf_registry:`; not engine-scoped, no capability leaf, no `aqueduct.yml` allowlist surface. A flat list of PEP 508-lite requirement strings the Blueprint author declares the runtime environment must already satisfy:
 
