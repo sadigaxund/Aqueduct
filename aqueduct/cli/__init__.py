@@ -389,12 +389,12 @@ def _write_patch_to_blueprint(
     """Write patch permanently to Blueprint, re-parse, re-compile. Returns new Manifest or None.
 
     ``cfg`` (``AqueductConfig``) is used only to record the EFFECTIVE
-    engine-config delta in the ``healed_by:`` provenance record — the same
+    engine-config delta in this patch's heal provenance — the same
     delta Gate 1 computed when it let this patch through. Without it the
     auto-apply path would write a provenance record silently missing the one
-    field that says what a ``set_engine_config`` patch actually changed,
+    fact that says what a ``set_engine_config`` patch actually changed,
     while ``aqueduct patch apply`` recorded it. ``None`` falls back to the
-    ambient config (``load_config(None)``), never to omitting the field.
+    ambient config (``load_config(None)``), never to omitting the fact.
     """
     try:
         import os as _os
@@ -409,8 +409,9 @@ def _write_patch_to_blueprint(
             _yaml_dump,
             _yaml_load,
             apply_patch_to_dict,
+            record_heal_facts,
         )
-        from aqueduct.patch.provenance import build_healed_by_record, detect_engine_version
+        from aqueduct.patch.provenance import build_heal_provenance, detect_engine_version
 
         bp_raw = _yaml_load(blueprint_path)
         patched = apply_patch_to_dict(bp_raw, patch_spec)
@@ -448,7 +449,7 @@ def _write_patch_to_blueprint(
         _perf_baseline = capture_baseline_perf(
             obs_store, str(bp_raw.get("id") or ""), before=_applied_at
         )
-        _healed_by_record = build_healed_by_record(
+        _heal_provenance = build_heal_provenance(
             patch_id=patch_spec.patch_id,
             operations=patch_spec.operations,
             meta=_meta,
@@ -457,7 +458,7 @@ def _write_patch_to_blueprint(
             engine_config_delta=_delta_res.delta,
             perf_baseline=_perf_baseline.to_dict() if _perf_baseline else None,
         )
-        patched = _append_healed_by(patched, _healed_by_record)
+        patched = _append_healed_by(patched, _heal_provenance.record if _heal_provenance else None)
 
         # Backup original
         backup_dir = patches_dir / "backups"
@@ -474,6 +475,11 @@ def _write_patch_to_blueprint(
         tmp_out = blueprint_path.with_suffix(".llm_patch.tmp.yml")
         _yaml_dump(patched, tmp_out)
         _os.replace(tmp_out, blueprint_path)
+
+        # The other half of the provenance split — see
+        # `aqueduct/patch/apply.py::record_heal_facts`. After the write, for
+        # the same reason `apply_patch_file` orders it that way.
+        record_heal_facts(obs_store, _heal_provenance)
 
         archive_patch(
             patch_spec,

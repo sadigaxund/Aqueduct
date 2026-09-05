@@ -257,16 +257,7 @@ leaves:
   healed_by.field.engine:
     support: supported
     hint: Compiler-consumed provenance metadata; no engine executes it.
-  healed_by.field.engine_config_delta:
-    support: supported
-    hint: Patch-apply provenance metadata (effective session-config diff), recorded by core; no engine executes it.
-  healed_by.field.engine_version:
-    support: supported
-    hint: Compiler-consumed provenance metadata; no engine executes it.
   healed_by.field.patch_id:
-    support: supported
-    hint: Compiler-consumed provenance metadata; no engine executes it.
-  healed_by.field.run_id:
     support: supported
     hint: Compiler-consumed provenance metadata; no engine executes it.
   healed_by.field.validated_on:
@@ -658,19 +649,6 @@ leaves:
     support: supported
     tests:
       - tests/test_executor/test_executor_probe.py::test_value_distribution_numeric_columns
-  healed_by.field.perf_baseline:
-    support: supported
-    hint: >-
-      Warn-only perf-attribution provenance — recorded by core from run_records
-      wall-clock time, no engine executes it. The input-volume proxy it carries
-      comes from module_metrics, which the Spark executor writes for every
-      module, so the note reports volume alongside duration on this engine.
-  healed_by.field.perf_observations:
-    support: supported
-    hint: >-
-      Warn-only perf-attribution provenance — recorded by core from run_records
-      wall-clock time, no engine executes it. Reports an observed ratio only;
-      Aqueduct sets no regression threshold and the note never blocks a run.
   healed_by.field.reverted_at:
     support: supported
     hint: >-

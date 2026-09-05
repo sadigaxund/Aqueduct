@@ -9,9 +9,12 @@ silently desynchronises the provenance record from the file it describes.
 
 **What this can and cannot undo — and why the line is where it is.** The
 only prior state Aqueduct actually RECORDS is the effective-engine-config
-diff Gate 1 writes into ``healed_by.engine_config_delta``
-(``{engine: {key: {before, after}}}``). Nothing anywhere stores the previous
-value of a module config key, an edge, or a SQL body: ``set_module_config_key``
+diff Gate 1 writes into the patch index as ``engine_config_delta``
+(``{engine: {key: {before, after}}}``, keyed by ``patch_id`` — see
+``aqueduct/patch/index.py``; the Blueprint's ``healed_by:`` record carries
+only the bounded facts the compile-time gate needs). Nothing anywhere stores
+the previous value of a module config key, an edge, or a SQL body:
+``set_module_config_key``
 carries only the new value, so a module patch has no inverse to compute. This
 module therefore reverts engine-config writes and REFUSES everything else by
 name, rather than reverting the half it can and leaving a Blueprint that
@@ -24,8 +27,8 @@ naming what it cannot do:
   - the patch id is absent from ``healed_by:``, or matches more than one
     record (patch ids are model-authored and not unique by construction);
   - the record is already reverted;
-  - the record carries no ``engine_config_delta`` — nothing prior was
-    recorded, so there is nothing to restore;
+  - the patch index carries no ``engine_config_delta`` for the patch —
+    nothing prior was recorded, so there is nothing to restore;
   - the applied patch body cannot be read, or contains any operation other
     than ``set_engine_config`` — a mixed patch's non-config half cannot be
     undone, so undoing its config half would leave a hybrid;
@@ -58,8 +61,8 @@ erase the fact that a heal ever happened — the thing ``healed_by:`` exists to
 carry — and leaving it untouched would make it describe a Blueprint that no
 longer contains its change. It gains ``reverted_at`` instead, and every
 consumer of the block reads that: the cross-engine compile gate stops
-flagging it, and the green-run stamps stop appending ``validated_on`` /
-``perf_observations`` entries to it.
+flagging it, and the green-run stamps stop appending ``validated_on``
+entries to it or perf notes to its index row.
 """
 
 from __future__ import annotations
@@ -76,7 +79,9 @@ __all__ = [
     "apply_revert",
     "find_healed_by_records",
     "plan_revert",
+    "recorded_deltas",
 ]
+
 
 SET_ENGINE_CONFIG = "set_engine_config"
 
@@ -142,6 +147,43 @@ class RevertPlan:
         }
 
 
+def recorded_deltas(obs_store: Any | None, blueprint: Any) -> dict[str, dict[str, Any]]:
+    """``{patch_id: engine_config_delta}`` for every patch this Blueprint names.
+
+    The deltas moved out of the Blueprint into ``patch_index``, so a revert
+    now needs the observability store the heal was applied against. A missing
+    or unreadable store is a REFUSAL, not an empty mapping: an empty mapping
+    would be indistinguishable from "this patch recorded nothing", and would
+    turn a store outage into a confident, wrong "there is nothing to undo".
+    """
+    if obs_store is None:
+        raise RevertError(
+            "cannot revert: no observability store is reachable, and a patch's "
+            "engine-config delta (the only prior state Aqueduct records) lives "
+            "in the `patch_index` table there, not in the Blueprint. Point "
+            "`stores.observability` at the store this patch was applied "
+            "against, or restore the whole file with `aqueduct patch rollback`."
+        )
+    healed_by = blueprint.get("healed_by") if hasattr(blueprint, "get") else None
+    ids = [
+        str(rec.get("patch_id") or "")
+        for rec in (healed_by or [])
+        if hasattr(rec, "get") and rec.get("patch_id")
+    ]
+    try:
+        from aqueduct.patch import index as _ix
+
+        with obs_store.connect() as cur:
+            _ix.ensure_schema(cur)
+            return {pid: _ix.heal_provenance(cur, pid)["engine_config_delta"] for pid in ids}
+    except Exception as exc:
+        raise RevertError(
+            f"cannot revert: the patch index could not be read ({exc}). It holds "
+            "the engine-config delta this revert restores from; without it there "
+            "is no recorded prior state to restore."
+        ) from exc
+
+
 def find_healed_by_records(blueprint: Any, patch_id: str) -> list[tuple[int, Any]]:
     """``[(index, record), ...]`` for every ``healed_by`` record with *patch_id*.
 
@@ -195,9 +237,18 @@ def _require_config_only(patch_id: str, operations: Any) -> None:
 
 
 def _require_no_later_writer(
-    patch_id: str, healed_by: Any, index: int, delta: dict[str, Any]
+    patch_id: str,
+    healed_by: Any,
+    index: int,
+    delta: dict[str, Any],
+    deltas: dict[str, dict[str, Any]],
 ) -> None:
-    """Refuse when a later, non-reverted record wrote one of the same keys."""
+    """Refuse when a later, non-reverted record wrote one of the same keys.
+
+    ``deltas`` maps ``patch_id`` to that patch's recorded engine-config delta,
+    read from the patch index by the caller (``plan_revert``) — the Blueprint
+    record itself no longer carries one.
+    """
     conflicts: list[str] = []
     for later_index in range(index + 1, len(healed_by or [])):
         later = healed_by[later_index]
@@ -207,7 +258,7 @@ def _require_no_later_writer(
             # Already undone, so its write is not standing on top of ours —
             # this is what makes reverse-order reverting work.
             continue
-        later_delta = later.get("engine_config_delta") or {}
+        later_delta = deltas.get(str(later.get("patch_id") or "")) or {}
         for engine, keys in delta.items():
             later_keys = later_delta.get(engine) or {}
             for key in keys:
@@ -232,12 +283,18 @@ def plan_revert(
     blueprint: Any,
     patch_id: str,
     operations: Any,
+    deltas: dict[str, dict[str, Any]],
 ) -> RevertPlan:
     """Build a VERIFIED plan to undo *patch_id*'s engine-config writes.
 
     ``blueprint`` is the raw (ruamel) Blueprint dict; ``operations`` are the
     applied patch body's operations, needed as proof the patch was
-    config-only (see ``_require_config_only``).
+    config-only (see ``_require_config_only``); ``deltas`` maps ``patch_id``
+    to the engine-config delta the patch index recorded for it, for THIS
+    patch and for every later record the no-later-writer check has to
+    consider. The caller reads it from the index because a Blueprint's
+    ``healed_by`` record no longer carries the delta (see
+    ``aqueduct/patch/index.py::heal_provenance``).
 
     Raises:
         RevertError: for every condition under which the revert would not
@@ -279,20 +336,18 @@ def plan_revert(
             "— its engine-config writes are no longer in this Blueprint."
         )
 
-    delta = {
-        engine: dict(keys) for engine, keys in (record.get("engine_config_delta") or {}).items()
-    }
+    delta = {engine: dict(keys) for engine, keys in (deltas.get(patch_id) or {}).items()}
     if not delta:
         raise RevertError(
-            f"cannot revert patch {patch_id!r}: its healed_by record carries no "
-            "engine_config_delta, so no prior state was ever recorded for it. "
+            f"cannot revert patch {patch_id!r}: the patch index carries no "
+            "engine_config_delta for it, so no prior state was ever recorded. "
             "Only engine-config writes record a before-value; module, edge and "
             "SQL changes do not. Restore the whole file instead: "
             f"aqueduct patch rollback <blueprint> --to {patch_id}"
         )
 
     _require_config_only(patch_id, operations)
-    _require_no_later_writer(patch_id, healed_by, index, delta)
+    _require_no_later_writer(patch_id, healed_by, index, delta, deltas)
 
     layers_now = blueprint_engine_layers(blueprint)
     effective_now = resolve_effective_engine_configs(cfg, layers_now)

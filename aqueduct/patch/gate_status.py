@@ -82,9 +82,8 @@ class GateStatus:
     #: A quantity was recorded and deliberately not judged — perf
     #: attribution's only positive member (`patch/perf_attribution.py`),
     #: which ships no threshold and therefore no `pass`/`fail`. Never
-    #: written to `patch_simulation`: `PerfObservation` is a record in the
-    #: Blueprint's own `healed_by:` block, not a gate, and nothing branches
-    #: on it.
+    #: written to `patch_simulation`: `PerfObservation` is a note recorded on
+    #: the patch's `patch_index` row, not a gate, and nothing branches on it.
     OBSERVED = "observed"
     #: The sandbox gate was deliberately never asked to run — a caller-level
     #: fact about THIS invocation, not a verdict about the patch. Distinct

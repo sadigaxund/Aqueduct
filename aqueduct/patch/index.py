@@ -47,7 +47,19 @@ CREATE TABLE IF NOT EXISTS patch_index (
     -- "duckdb", ...). The signature already scopes lookups by engine (it's
     -- folded into the hash — see agent/signature.py), so this column exists
     -- for auditability ("show me all duckdb heals"), not for lookup filtering.
-    engine             VARCHAR
+    engine             VARCHAR,
+    -- Apply-time heal provenance. These used to live in the Blueprint's own
+    -- `healed_by:` record; they were moved here because they grow (a full
+    -- before/after config dict per engine, one perf note per engine per
+    -- patch) and a Blueprint is an artifact, not a changelog. The Blueprint
+    -- keeps only what the compile-time cross-engine gate reads; everything
+    -- below is read back by `aqueduct doctor`'s healed-config rows and by
+    -- `aqueduct patch revert`. See aqueduct/parser/schema.py::
+    -- HealedByRecordSchema.
+    engine_version       VARCHAR,     -- installed engine package version at heal time
+    engine_config_delta  JSON,        -- {engine: {key: {before, after}}}
+    perf_baseline        JSON,        -- RunPerf.to_dict() of the pre-patch green run
+    perf_observations    JSON         -- list[dict] — one note per engine
 );
 """
 # This DDL used to also create `idx_patch_index_sig (signature, status)` and
@@ -70,6 +82,10 @@ CREATE TABLE IF NOT EXISTS patch_index (
 # table, so a new column needs an idempotent ALTER migration too.
 PATCH_INDEX_MIGRATIONS: tuple[str, ...] = (
     "ALTER TABLE patch_index ADD COLUMN IF NOT EXISTS engine VARCHAR",
+    "ALTER TABLE patch_index ADD COLUMN IF NOT EXISTS engine_version VARCHAR",
+    "ALTER TABLE patch_index ADD COLUMN IF NOT EXISTS engine_config_delta JSON",
+    "ALTER TABLE patch_index ADD COLUMN IF NOT EXISTS perf_baseline JSON",
+    "ALTER TABLE patch_index ADD COLUMN IF NOT EXISTS perf_observations JSON",
 )
 
 
@@ -184,6 +200,113 @@ def set_status(
         )
 
 
+# ── Heal provenance (moved out of the Blueprint's `healed_by:` record) ──────
+# The Blueprint keeps only what the compile-time cross-engine gate and
+# `patch revert` need to read out of a travelling artifact; these apply-time
+# facts live here, keyed by the same `patch_id` the record carries. See
+# `aqueduct/parser/schema.py::HealedByRecordSchema`.
+
+
+def record_heal_provenance(
+    cur: RelationalCursor,
+    patch_id: str,
+    *,
+    engine: str = "",
+    engine_version: str | None = None,
+    run_id: str | None = None,
+    engine_config_delta: dict[str, Any] | None = None,
+    perf_baseline: dict[str, Any] | None = None,
+) -> None:
+    """Persist one applied patch's heal provenance, keyed by ``patch_id``.
+
+    Upserts rather than updates: an apply path can reach here for a patch the
+    index has no row for yet (``aqueduct patch import`` of a body produced on
+    another machine), and dropping the provenance on the floor there would
+    make `doctor` and `patch revert` silently blind to that heal. The
+    synthesized row carries ``status='applied'`` because that is the only
+    state this function is ever called in; a real row's status is left alone.
+    """
+    import json as _json
+
+    now = _now()
+    cur.execute(
+        """
+        INSERT INTO patch_index
+            (patch_id, blueprint_id, run_id, status, object_key, ops,
+             created_at, updated_at, engine, engine_version,
+             engine_config_delta, perf_baseline, perf_observations)
+        VALUES (?, '', ?, 'applied', '', '[]', ?, ?, ?, ?, ?, ?, '[]')
+        ON CONFLICT (patch_id) DO UPDATE SET
+            updated_at          = EXCLUDED.updated_at,
+            engine_version      = EXCLUDED.engine_version,
+            engine_config_delta = EXCLUDED.engine_config_delta,
+            perf_baseline       = EXCLUDED.perf_baseline
+        """,
+        [
+            patch_id,
+            run_id or "",
+            now,
+            now,
+            engine,
+            engine_version,
+            _json.dumps(engine_config_delta or {}),
+            _json.dumps(perf_baseline or {}),
+        ],
+    )
+
+
+def heal_provenance(cur: RelationalCursor, patch_id: str) -> dict:
+    """The heal-provenance facts recorded for *patch_id*.
+
+    Always returns the full shape (empty members for a patch with no row), so
+    a reader never has to tell "no row" from "row with nothing recorded" —
+    neither carries a delta to act on.
+    """
+    empty = {
+        "engine": "",
+        "engine_version": None,
+        "run_id": "",
+        "engine_config_delta": {},
+        "perf_baseline": {},
+        "perf_observations": [],
+    }
+    row = get(cur, patch_id)
+    if row is None:
+        return empty
+    return {k: row.get(k, v) for k, v in empty.items()}
+
+
+def append_perf_observation(
+    cur: RelationalCursor,
+    patch_id: str,
+    observation: dict[str, Any],
+) -> bool:
+    """Append one perf note to *patch_id*'s ``perf_observations``.
+
+    Idempotent per engine — a note for an engine already present is not
+    appended, which is what bounds the list by the engine count rather than
+    the run count (the same cardinality `validated_on` has). Returns True
+    when a note was written.
+    """
+    import json as _json
+
+    if get(cur, patch_id) is None:
+        # No row yet (a body applied on a machine whose index never saw the
+        # stage). Create one rather than letting the UPDATE below no-op the
+        # note away.
+        record_heal_provenance(cur, patch_id, engine=str(observation.get("engine") or ""))
+    existing = heal_provenance(cur, patch_id)["perf_observations"]
+    engine = observation.get("engine")
+    if any(isinstance(o, dict) and o.get("engine") == engine for o in existing):
+        return False
+    merged = [*existing, observation]
+    cur.execute(
+        "UPDATE patch_index SET perf_observations = ?, updated_at = ? WHERE patch_id = ?",
+        [_json.dumps(merged), _now(), patch_id],
+    )
+    return True
+
+
 def _row_to_dict(cols: list[str], row: Any) -> dict:
     import json as _json
 
@@ -193,6 +316,23 @@ def _row_to_dict(cols: list[str], row: Any) -> dict:
             d["ops"] = _json.loads(d["ops"])
         except Exception:
             d["ops"] = []
+    # Heal-provenance JSON columns. A backend may hand these back as text
+    # (DuckDB's JSON type) or already decoded (Postgres jsonb); both are
+    # normalised to the Python shape the readers expect, and an absent/
+    # unparseable value becomes the empty shape rather than None so callers
+    # never branch on three cases.
+    for _col, _empty in (
+        ("engine_config_delta", {}),
+        ("perf_baseline", {}),
+        ("perf_observations", []),
+    ):
+        _v = d.get(_col)
+        if isinstance(_v, str):
+            try:
+                _v = _json.loads(_v)
+            except Exception:
+                _v = None
+        d[_col] = _empty if _v is None else _v
     return d
 
 
@@ -214,6 +354,10 @@ _SELECT_COLS = [
     "created_at",
     "updated_at",
     "engine",
+    "engine_version",
+    "engine_config_delta",
+    "perf_baseline",
+    "perf_observations",
 ]
 _SELECT = ", ".join(_SELECT_COLS)
 

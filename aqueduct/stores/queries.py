@@ -1295,6 +1295,10 @@ def patch_show(cfg: Any, patch_id: str, store_dir: str | None = None) -> dict | 
     for h in discover_stores(cfg, store_dir=store_dir):
         try:
             with h.store.connect() as cur:
+                # Migrate first: `patch_index` gained columns after this
+                # reader shipped, and a store last written by an older
+                # version would fail the SELECT rather than miss a patch.
+                patch_index.ensure_schema(cur)
                 row = patch_index.get(cur, patch_id)
         except Exception:
             continue

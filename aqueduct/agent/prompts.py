@@ -379,6 +379,12 @@ def _load_previous_patches(obs_store: Any, limit: int = _PATCH_HISTORY_MAX) -> l
         from aqueduct.patch import index as _ix
 
         with obs_store.connect() as cur:
+            # Migrate before selecting: `patch_index` gained columns after
+            # this read path shipped (the heal-provenance ones), and a store
+            # last written by an older version has none of them — the SELECT
+            # would fail and this best-effort reader would report "no prior
+            # patches" for a store that has plenty.
+            _ix.ensure_schema(cur)
             rows = _ix.recent_applied(cur, limit)
     except Exception:
         logger.debug("previous-patch history query failed", exc_info=True)

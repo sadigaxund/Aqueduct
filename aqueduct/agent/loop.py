@@ -342,8 +342,9 @@ def stage_patch_for_human(
         "prompt_version": PROMPT_VERSION,
         # Phase 79 — heal-patch provenance: the engine this heal targeted
         # (required on FailureContext) + a best-effort installed version.
-        # Consumed by `aqueduct patch apply` to stamp the blueprint's
-        # `healed_by:` block — see aqueduct/patch/apply.py.
+        # Consumed by `aqueduct patch apply` to record this patch's heal
+        # provenance — see aqueduct/patch/provenance.py's
+        # build_heal_provenance for which half lands where.
         "engine": failure_ctx.engine,
         "engine_version": detect_engine_version(failure_ctx.engine),
         # Full dict (not just hash): coaching renders error_class/where/message

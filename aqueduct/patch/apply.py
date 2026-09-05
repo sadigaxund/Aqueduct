@@ -49,7 +49,7 @@ from aqueduct.patch.perf_attribution import (
     capture_run_perf,
     compare_perf,
 )
-from aqueduct.patch.provenance import build_healed_by_record
+from aqueduct.patch.provenance import HealProvenance, build_heal_provenance
 from aqueduct.redaction import redact as _redact
 from aqueduct.stores.object_store import PatchStore
 
@@ -210,6 +210,42 @@ def _append_healed_by(patched: Any, record: dict[str, Any] | None) -> Any:
     return patched
 
 
+def record_heal_facts(obs_store: Any | None, provenance: HealProvenance | None) -> None:
+    """Persist an applied patch's apply-time facts to ``patch_index``.
+
+    The other half of ``build_heal_provenance``: its ``record`` goes into the
+    Blueprint (``_append_healed_by``), its ``index_facts`` come here. Both
+    apply paths — ``apply_patch_file`` below and the ``agent.approval: auto``
+    direct write in ``aqueduct/cli/__init__.py::_write_patch_to_blueprint`` —
+    call this one function, so the split cannot drift between them.
+
+    Call it AFTER the Blueprint write lands: a verification failure aborts
+    the apply, and the index must not then describe a patch no Blueprint
+    carries.
+
+    Best-effort, never raises: an unreachable store must not fail an
+    otherwise-valid apply, the same posture ``_set_index_status`` takes for
+    the lifecycle write beside it.
+    """
+    if provenance is not None and obs_store is not None:
+        try:
+            from aqueduct.patch import index as _ix
+
+            with obs_store.connect() as cur:
+                _ix.ensure_schema(cur)
+                _ix.record_heal_provenance(
+                    cur, provenance.record["patch_id"], **provenance.index_facts
+                )
+        except Exception:
+            logger.warning(
+                "heal provenance index write failed for %s — the Blueprint's "
+                "healed_by record is written, but `doctor` and `patch revert` "
+                "will not see this patch's engine-config delta",
+                provenance.record["patch_id"],
+                exc_info=True,
+            )
+
+
 def stamp_validated_engine(blueprint_path: Path, engine: str) -> bool:
     """Self-clearing provenance stamp (Phase 79): append *engine* to every
     ``healed_by`` record's ``validated_on`` list on a GREEN run, when it
@@ -267,14 +303,22 @@ def stamp_perf_observation(
     obs_store: Any | None = None,
     run_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Warn-only perf note: append one observation per ``healed_by`` record.
+    """Warn-only perf note: record one observation per ``healed_by`` record.
 
     Runs on the SAME green-run trigger as ``stamp_validated_engine`` above,
     and for the reason that function alone is not enough: ``validated_on``
     answers "did it run?", which a patch that tripled the runtime also
     answers yes to. This answers "what did it cost?".
 
-    Bounded by construction: a record already carrying an observation for
+    Writes NOTHING to the Blueprint. The note and the baseline it compares
+    against live in ``patch_index`` (``aqueduct/patch/index.py``), keyed by
+    ``patch_id``: a per-engine note appended on every green run is exactly
+    the kind of growing record that turns an artifact into a changelog. The
+    Blueprint is only READ here, for the bounded facts the note needs — which
+    patches this Blueprint carries, when each was applied, and whether it has
+    since been reverted.
+
+    Bounded by construction: a patch already carrying an observation for
     *engine* is skipped, so the list grows to at most one entry per engine
     per patch no matter how many green runs follow. Same shape as
     ``validated_on``'s one-entry-per-engine append, deliberately — the two
@@ -290,63 +334,62 @@ def stamp_perf_observation(
     Best-effort and MUST NEVER raise: called from the CLI's run-success
     path, where a diagnostic must never turn a green run red. Returns the
     observations written (empty list when nothing was written), so the
-    caller can report them without re-reading the file.
+    caller can report them without re-reading anything.
     """
     try:
-        if not blueprint_path.exists():
+        if not blueprint_path.exists() or obs_store is None:
             return []
         raw = _yaml_load(blueprint_path)
         healed_by = raw.get("healed_by") if hasattr(raw, "get") else None
         if not healed_by:
             return []
 
+        from aqueduct.patch import index as _ix
+
         current = capture_run_perf(obs_store, run_id or "")
         observed_at = datetime.now(tz=UTC).isoformat()
         written: list[dict[str, Any]] = []
-        changed = False
-        for rec in healed_by:
-            # Same reason `stamp_validated_engine` skips it: this run's
-            # duration says nothing about a patch whose change was reverted
-            # out of the Blueprint before the run started.
-            if rec.get("reverted_at"):
-                continue
-            existing = rec.get("perf_observations")
-            already = {o.get("engine") for o in (existing or []) if hasattr(o, "get")}
-            if engine in already:
-                continue
-            baseline = rec.get("perf_baseline")
-            baseline_dict = dict(baseline) if hasattr(baseline, "get") else None
-            # How many patches this blueprint gained at or after THIS
-            # record's baseline — the shared-attribution count. Derived from
-            # the records themselves (every applied patch is one), never
-            # from a counter someone has to remember to bump.
-            applied_at = str(rec.get("applied_at") or "")
-            co_applied = (
-                sum(
-                    1
-                    for other in healed_by
-                    if str(other.get("applied_at") or "") >= applied_at
-                    # A reverted patch's change is not in the Blueprint this run
-                    # executed, so it shares none of this run's duration.
-                    and not other.get("reverted_at")
+        with obs_store.connect() as cur:
+            _ix.ensure_schema(cur)
+            for rec in healed_by:
+                # Same reason `stamp_validated_engine` skips it: this run's
+                # duration says nothing about a patch whose change was reverted
+                # out of the Blueprint before the run started.
+                if rec.get("reverted_at"):
+                    continue
+                patch_id = str(rec.get("patch_id") or "")
+                if not patch_id:
+                    continue
+                facts = _ix.heal_provenance(cur, patch_id)
+                already = {o.get("engine") for o in facts["perf_observations"] if hasattr(o, "get")}
+                if engine in already:
+                    continue
+                baseline_dict = facts["perf_baseline"] or None
+                # How many patches this blueprint gained at or after THIS
+                # record's baseline — the shared-attribution count. Derived from
+                # the records themselves (every applied patch is one), never
+                # from a counter someone has to remember to bump.
+                applied_at = str(rec.get("applied_at") or "")
+                co_applied = (
+                    sum(
+                        1
+                        for other in healed_by
+                        if str(other.get("applied_at") or "") >= applied_at
+                        # A reverted patch's change is not in the Blueprint this
+                        # run executed, so it shares none of this run's duration.
+                        and not other.get("reverted_at")
+                    )
+                    or 1
                 )
-                or 1
-            )
-            observation = compare_perf(
-                baseline=baseline_dict,
-                current=current,
-                engine=engine,
-                observed_at=observed_at,
-                co_applied_patches=co_applied,
-            ).to_dict()
-            if existing is None:
-                rec["perf_observations"] = _to_ruamel([observation])
-            else:
-                existing.append(_to_ruamel(observation))
-            written.append(observation)
-            changed = True
-        if changed:
-            _yaml_dump(raw, blueprint_path)
+                observation = compare_perf(
+                    baseline=baseline_dict,
+                    current=current,
+                    engine=engine,
+                    observed_at=observed_at,
+                    co_applied_patches=co_applied,
+                ).to_dict()
+                if _ix.append_perf_observation(cur, patch_id, observation):
+                    written.append(observation)
         return written
     except Exception:
         logger.warning(
@@ -819,7 +862,7 @@ def apply_patch_file(
     # the healed_by provenance record (engine/engine_version/run_id the heal
     # loop stamped — see aqueduct/agent/loop.py). Best-effort: an unreadable
     # or meta-less patch simply gets no healed_by record (see
-    # build_healed_by_record's docstring — that's correct for a
+    # build_heal_provenance's docstring — that's correct for a
     # hand-authored patch, not just a fallback).
     try:
         _raw_patch_json = json.loads(patch_path.read_text(encoding="utf-8"))
@@ -861,7 +904,7 @@ def apply_patch_file(
     _perf_baseline = capture_baseline_perf(
         obs_store, str(bp_raw.get("id") or ""), before=applied_at
     )
-    _healed_by_record = build_healed_by_record(
+    _heal_provenance = build_heal_provenance(
         patch_id=patch_spec.patch_id,
         operations=patch_spec.operations,
         meta=_patch_meta,
@@ -870,7 +913,7 @@ def apply_patch_file(
         engine_config_delta=_config_delta_res.delta,
         perf_baseline=_perf_baseline.to_dict() if _perf_baseline else None,
     )
-    patched = _append_healed_by(patched, _healed_by_record)
+    patched = _append_healed_by(patched, _heal_provenance.record if _heal_provenance else None)
 
     # ── 5. Re-parse to verify Blueprint validity ──────────────────────────────
     tmp_verify = blueprint_path.with_suffix(".patch_verify.tmp.yml")
@@ -897,6 +940,11 @@ def apply_patch_file(
         if tmp_out.exists():
             tmp_out.unlink()
         raise PatchError(f"Failed to write patched Blueprint: {exc}") from exc
+
+    # ── 6.5 Heal-provenance facts → patch_index ──────────────────────────────
+    # After the write, never before: a verification failure above aborts the
+    # apply, and the index must not then describe a patch no Blueprint carries.
+    record_heal_facts(obs_store, _heal_provenance)
 
     # ── 7. Archive PatchSpec to applied/ (in the PatchStore when given) ───────
     filename = Path(pending_key).name if pending_key else patch_path.name

@@ -28,12 +28,23 @@ from aqueduct.cli.render.funnel import emit
 from aqueduct.cli.render.tables import Column, render_table
 
 
-def _patch_index_obs_store(blueprint_path: Path | None = None):
-    """Best-effort observability store for patch_index status updates (Phase 53).
+def _patch_index_obs_store(blueprint_path: Path | None = None, *, create: bool = False):
+    """Best-effort observability store for patch_index writes (Phase 53).
 
     Postgres → the shared DSN. DuckDB → the per-blueprint store when a blueprint
     is known, else the configured default. Returns None on any failure — the
-    index update is best-effort and never blocks a local patch command."""
+    index update is best-effort and never blocks a local patch command.
+
+    ``create=True`` is for the APPLY paths, which are the only ones that write
+    a fact nothing else can reconstruct: a patch's ``engine_config_delta`` is
+    the prior state `aqueduct patch revert` restores from, and it exists
+    nowhere else once the Blueprint is rewritten. `open_obs_read` returns None
+    for a DuckDB store whose file does not exist yet, which on a project that
+    has never run would silently drop that delta and leave every later revert
+    refusing. So an apply builds the store instead of reading it: the file is
+    created on first connect, exactly as `aqueduct run` would have created it.
+    Every other caller here only updates a lifecycle status that a later run
+    re-derives, so it keeps the read-only resolution and its None."""
     try:
         from aqueduct.cli import _load_config_with_env
         from aqueduct.stores.read import open_obs_read
@@ -50,7 +61,12 @@ def _patch_index_obs_store(blueprint_path: Path | None = None):
             bp_id = _parse(str(blueprint_path)).id
         # Backend-aware (Phase 69): postgres → shared store; duckdb → per-blueprint
         # file when known, else the configured/flat default.
-        return open_obs_read(cfg, blueprint_id=bp_id)
+        store = open_obs_read(cfg, blueprint_id=bp_id)
+        if store is None and create:
+            from aqueduct.stores.base import get_stores
+
+            store = get_stores(cfg, blueprint_id=bp_id).observability
+        return store
     except Exception:
         return None
 
@@ -110,6 +126,10 @@ def _list_rows_via_index(ps, obs_store: Any, statuses: tuple[str, ...]) -> list[
 
     try:
         with obs_store.connect() as cur:
+            # See `aqueduct/patch/index.py`'s schema-evolution rule: a store
+            # last written by an older version is missing later columns, and
+            # the SELECT below names them all.
+            _ix.ensure_schema(cur)
             index_rows: list[dict] = []
             for st in statuses:
                 index_rows.extend(_ix.list_by_status(cur, status=st, limit=10_000))
@@ -880,7 +900,7 @@ def patch_apply(
             blueprint_path=blueprint_path,
             patch_path=ops_path,
             patches_dir=patches_root,
-            obs_store=_patch_index_obs_store(blueprint_path),
+            obs_store=_patch_index_obs_store(blueprint_path, create=True),
             patch_store=ps,
             pending_key=pending_key,
             cfg=_cfg,
@@ -1011,7 +1031,7 @@ def patch_revert(
     from aqueduct.config import ConfigError, load_config
     from aqueduct.parser.parser import ParseError, parse
     from aqueduct.patch.apply import _yaml_dump, _yaml_load
-    from aqueduct.patch.revert import RevertError, apply_revert, plan_revert
+    from aqueduct.patch.revert import RevertError, apply_revert, plan_revert, recorded_deltas
 
     blueprint_path = _Path(blueprint)
     patches_root = (
@@ -1041,7 +1061,19 @@ def patch_revert(
         operations = _applied_patch_operations(
             patches_root, config_path, env_file, cli_env, patch_id, set_items=set_items
         )
-        plan = plan_revert(cfg=cfg, blueprint=bp_raw, patch_id=patch_id, operations=operations)
+        # The prior values a revert restores live in `patch_index`, not in
+        # the Blueprint's `healed_by` record — see
+        # `aqueduct/patch/revert.py::recorded_deltas`.
+        from aqueduct.stores.read import open_obs_read
+
+        _obs = open_obs_read(cfg, blueprint_id=str(bp_raw.get("id") or "") or None)
+        plan = plan_revert(
+            cfg=cfg,
+            blueprint=bp_raw,
+            patch_id=patch_id,
+            operations=operations,
+            deltas=recorded_deltas(_obs, bp_raw),
+        )
     except RevertError as exc:
         style.error(str(exc))
         sys.exit(exit_codes.DATA_OR_RUNTIME)
@@ -1222,7 +1254,7 @@ def patch_import(
             blueprint_path=blueprint_path,
             patch_path=_apply_path,
             patches_dir=patches_root,
-            obs_store=_patch_index_obs_store(blueprint_path),
+            obs_store=_patch_index_obs_store(blueprint_path, create=True),
             patch_store=_ps,
             pending_key=_pending_key,
             cfg=_cfg,
@@ -1412,6 +1444,7 @@ def patch_pull(patch_id: str, blueprint: str, out: str | None) -> None:
         sys.exit(exit_codes.DATA_OR_RUNTIME)
     try:
         with obs.connect() as cur:
+            _ix.ensure_schema(cur)
             row = _ix.get(cur, patch_id)
     except Exception as exc:
         click.echo(f"✗ index query failed: {exc}", err=True)
@@ -2299,7 +2332,7 @@ def patch_pr(
             blueprint_path=blueprint_path,
             patch_path=_apply_path,
             patches_dir=patches_root,
-            obs_store=_patch_index_obs_store(blueprint_path),
+            obs_store=_patch_index_obs_store(blueprint_path, create=True),
             patch_store=_ps,
             pending_key=_pending_key,
             cfg=cfg,

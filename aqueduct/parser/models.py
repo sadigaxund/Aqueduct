@@ -299,19 +299,7 @@ class HealedByRecord:
     engine: str
     classification: str
     applied_at: str
-    engine_version: str | None = None
-    run_id: str | None = None
     validated_on: tuple[str, ...] = ()
-    # Effective session-config diff Gate 1 recorded for this patch, per
-    # engine: {engine: {key: {"before": ..., "after": ...}}}. Empty for a
-    # patch that writes no engine config.
-    engine_config_delta: dict[str, dict[str, Any]] = field(default_factory=dict)
-    # Warn-only perf attribution — see HealedByRecordSchema's comments.
-    # `perf_baseline` is the pre-patch green run's snapshot; each entry of
-    # `perf_observations` is one engine's post-patch note. Both are inert
-    # diagnostics: nothing in the compiler or any engine reads them.
-    perf_baseline: dict[str, Any] = field(default_factory=dict)
-    perf_observations: tuple[dict[str, Any], ...] = ()
     # Set by `aqueduct patch revert` — see HealedByRecordSchema's comment.
     # A reverted record documents a heal that no longer applies: the
     # cross-engine gate skips it and the green-run stamps leave it alone.

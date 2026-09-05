@@ -1387,7 +1387,12 @@ def run(
         if _obs_store is not None and manifest.blueprint_id:
             try:
                 with _obs_store.connect() as _pending_cur:
+                    from aqueduct.patch.index import ensure_schema as _ensure_ix
                     from aqueduct.patch.index import list_by_status as _list_pending
+
+                    # A store last written by an older version is missing
+                    # later `patch_index` columns the SELECT names.
+                    _ensure_ix(_pending_cur)
 
                     _pending_before_run = _list_pending(
                         _pending_cur,

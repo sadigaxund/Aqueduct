@@ -90,14 +90,9 @@ def _healed_by_entry(r) -> HealedByRecord:
     return HealedByRecord(
         patch_id=r.patch_id,
         engine=r.engine,
-        engine_version=r.engine_version,
-        run_id=r.run_id,
         classification=r.classification,
         applied_at=r.applied_at,
         validated_on=tuple(r.validated_on),
-        engine_config_delta={k: dict(v) for k, v in (r.engine_config_delta or {}).items()},
-        perf_baseline=dict(r.perf_baseline or {}),
-        perf_observations=tuple(dict(o) for o in (r.perf_observations or ())),
         reverted_at=r.reverted_at,
     )
 

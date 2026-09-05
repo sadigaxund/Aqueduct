@@ -167,10 +167,10 @@ class PerfObservation:
     caveats: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize for the ``healed_by.perf_observations`` Blueprint block.
+        """Serialize for the patch's ``perf_observations`` index column.
 
         Empty sub-dicts are kept out so a ``not_applicable`` note stays two
-        lines of YAML rather than a skeleton of nulls.
+        keys rather than a skeleton of nulls.
         """
         out: dict[str, Any] = {
             "status": self.status,
@@ -249,9 +249,9 @@ def _parse_ts(value: Any) -> datetime | None:
 def _iso_utc(value: Any) -> str:
     """Normalize a stored timestamp to a UTC ISO-8601 string for the record.
 
-    The ``perf_baseline`` block is written into the Blueprint and read
-    wherever that Blueprint travels, so a session-local rendering would be
-    ambiguous the moment the file leaves the machine that produced it.
+    The ``perf_baseline`` is persisted and read back later, possibly on
+    another machine in another zone, so a session-local rendering would be
+    ambiguous the moment it leaves the process that produced it.
     """
     parsed = _parse_ts(value)
     if parsed is None:
@@ -357,11 +357,11 @@ def capture_baseline_perf(
     """The most recent GREEN run of *blueprint_id* finishing before *before*.
 
     This is the "what was it like before the patch" half of the
-    comparison, captured at APPLY time and snapshotted into the
-    ``healed_by`` record. Snapshotting rather than re-deriving later is
-    deliberate: the record travels with the Blueprint, while the
-    observability store is local, prunable, and may not exist at all on
-    the machine that reads the provenance block.
+    comparison, captured at APPLY time and snapshotted onto the patch's
+    ``patch_index`` row. Snapshotting rather than re-deriving later is
+    deliberate: it pins the comparison to the one run that actually
+    preceded THIS patch, and it survives pruning of ``run_records``, which
+    a query issued at read time would not.
 
     *before* is the patch's ``applied_at``; ``None`` means "no upper
     bound" (the newest green run). A blueprint whose every previous run
@@ -413,9 +413,9 @@ def compare_perf(
 ) -> PerfObservation:
     """Compare a snapshotted *baseline* against the *current* green run.
 
-    *baseline* is the plain dict stored in the ``healed_by`` record (the
-    output of ``RunPerf.to_dict``), not a ``RunPerf``, because that is what
-    survives a YAML round-trip.
+    *baseline* is the plain dict stored on the patch's ``patch_index`` row
+    (the output of ``RunPerf.to_dict``), not a ``RunPerf``, because that is
+    what survives a JSON round-trip.
 
     Every refusal path returns ``not_applicable`` with a ``detail`` saying
     which fact was missing. None of them return ``observed`` with a

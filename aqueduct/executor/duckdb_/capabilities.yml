@@ -379,16 +379,7 @@ leaves:
   healed_by.field.engine:
     support: supported
     hint: Compiler-consumed provenance metadata; no engine executes it.
-  healed_by.field.engine_config_delta:
-    support: supported
-    hint: Patch-apply provenance metadata (effective session-config diff); recorded by core, no engine executes it.
-  healed_by.field.engine_version:
-    support: supported
-    hint: Compiler-consumed provenance metadata; no engine executes it.
   healed_by.field.patch_id:
-    support: supported
-    hint: Compiler-consumed provenance metadata; no engine executes it.
-  healed_by.field.run_id:
     support: supported
     hint: Compiler-consumed provenance metadata; no engine executes it.
   healed_by.field.validated_on:
@@ -901,21 +892,6 @@ leaves:
     tests:
       - tests/test_executor_duckdb/test_probe.py::test_value_distribution_full_scan_numeric_default
       - tests/test_executor_duckdb/test_probe.py::test_value_distribution_blocked_by_block_full_actions
-  healed_by.field.perf_baseline:
-    support: supported
-    hint: >-
-      Warn-only perf-attribution provenance — recorded by core from run_records
-      wall-clock time, no engine executes it. The input-volume proxy it carries
-      comes from module_metrics, which the DuckDB executor now writes for every
-      real module type (see observability.module_metrics.per_module), not
-      only Handoff; patch/perf_attribution.py's own VOLUME_UNAVAILABLE wiring
-      predates that landing and has not yet been revisited to consume it.
-  healed_by.field.perf_observations:
-    support: supported
-    hint: >-
-      Warn-only perf-attribution provenance — recorded by core from run_records
-      wall-clock time, no engine executes it. Reports an observed ratio only;
-      Aqueduct sets no regression threshold and the note never blocks a run.
   healed_by.field.reverted_at:
     support: supported
     hint: >-

@@ -1732,6 +1732,13 @@ def check_healed_engine_config(blueprint_path: Path, cfg: Any) -> list[CheckResu
     regression threshold; see `aqueduct/patch/perf_attribution.py`). A human
     reads the numbers and decides.
 
+    The evidence itself lives in the ``patch_index`` table, not in the
+    Blueprint: the Blueprint's ``healed_by`` record names the patch, this
+    reads the delta and the perf notes back from the store keyed by that
+    ``patch_id`` (see ``aqueduct/patch/index.py::heal_provenance``). An
+    unreadable store is reported as one `warn` row naming the reason, never
+    as "no healed config here".
+
     The ONE condition that does escalate to `warn` is not a threshold but an
     equality: the value the record says the patch wrote is no longer what the
     effective session config resolves to. That is checkable exactly — a later
@@ -1749,11 +1756,47 @@ def check_healed_engine_config(blueprint_path: Path, cfg: Any) -> list[CheckResu
         raw = yaml.safe_load(Path(blueprint_path).read_text(encoding="utf-8")) or {}
     except Exception:
         return []
-    records = [
-        (idx, rec)
-        for idx, rec in enumerate(raw.get("healed_by") or [])
-        if isinstance(rec, dict) and rec.get("engine_config_delta")
-    ]
+    healed_by = [rec for rec in (raw.get("healed_by") or []) if isinstance(rec, dict)]
+    if not healed_by:
+        return []
+
+    from aqueduct.stores.read import open_obs_read
+
+    try:
+        obs_store = open_obs_read(cfg, blueprint_id=str(raw.get("id") or "") or None)
+        if obs_store is None:
+            facts_by_patch: dict[str, dict] = {}
+            store_error = "no observability store exists yet for this blueprint"
+        else:
+            from aqueduct.patch import index as _ix
+
+            store_error = ""
+            with obs_store.connect() as cur:
+                _ix.ensure_schema(cur)
+                facts_by_patch = {
+                    str(rec.get("patch_id") or ""): _ix.heal_provenance(
+                        cur, str(rec.get("patch_id") or "")
+                    )
+                    for rec in healed_by
+                }
+    except Exception as exc:  # noqa: BLE001 — doctor checks never raise
+        facts_by_patch = {}
+        store_error = str(exc)
+    if store_error:
+        return [
+            CheckResult(
+                "healed-config",
+                "warn",
+                f"{len(healed_by)} healed_by record(s) present, but the patch "
+                f"index that holds their engine-config deltas could not be read: "
+                f"{store_error}",
+                _ms(t0),
+                group="agent",
+            )
+        ]
+
+    records = [(rec, facts_by_patch.get(str(rec.get("patch_id") or "")) or {}) for rec in healed_by]
+    records = [(rec, prov) for rec, prov in records if prov.get("engine_config_delta")]
     if not records:
         return []
 
@@ -1779,11 +1822,11 @@ def check_healed_engine_config(blueprint_path: Path, cfg: Any) -> list[CheckResu
         ]
 
     results: list[CheckResult] = []
-    for _idx, rec in records:
+    for rec, provenance in records:
         t = time.monotonic()
         patch_id = str(rec.get("patch_id") or "?")
         name = f"healed-config:{patch_id}"
-        delta = rec.get("engine_config_delta") or {}
+        delta = provenance.get("engine_config_delta") or {}
         wrote = [
             f"{engine} {key} {(ba or {}).get('before')!r}→{(ba or {}).get('after')!r}"
             for engine in sorted(delta)
@@ -1823,7 +1866,7 @@ def check_healed_engine_config(blueprint_path: Path, cfg: Any) -> list[CheckResu
             if validated
             else "no green run has validated it yet"
         )
-        for obs in rec.get("perf_observations") or []:
+        for obs in provenance.get("perf_observations") or []:
             if not isinstance(obs, dict):
                 continue
             ratio = obs.get("duration_ratio")

@@ -1055,6 +1055,19 @@ class HooksSchema(BaseModel):
         return self
 
 
+# Fields a pre-2.x ``healed_by`` record carried that now live in the
+# ``patch_index`` table instead (see HealedByRecordSchema's docstring). Named
+# in the rejection message so the failure says where the data went rather
+# than only that the key is unknown.
+MOVED_HEALED_BY_FIELDS: tuple[str, ...] = (
+    "engine_config_delta",
+    "engine_version",
+    "perf_baseline",
+    "perf_observations",
+    "run_id",
+)
+
+
 class HealedByRecordSchema(BaseModel):
     """One self-heal provenance record (heal-patch cross-engine gate).
 
@@ -1066,6 +1079,16 @@ class HealedByRecordSchema(BaseModel):
     (see ``aqueduct/compiler/capability_check.py::check_cross_engine_heal``
     and ``docs/specs.md`` §8). Purely compiler-consumed metadata — no engine
     reads or executes this block at runtime.
+
+    **BOUNDED BY CONSTRUCTION.** Only the fields the compile-time gate and
+    ``aqueduct patch revert`` need to read out of a travelling Blueprint live
+    here. Every other apply-time fact this record used to carry
+    (``engine_config_delta``, ``perf_baseline``, ``perf_observations``,
+    ``engine_version``, ``run_id``) is written to the ``patch_index`` table in
+    the observability store instead, keyed by ``patch_id`` — those grew with
+    every green run and turned a Blueprint into a changelog. A Blueprint
+    still carrying one of them is REJECTED by name (see ``_reject_moved``):
+    there is no back-compat read path.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1075,10 +1098,6 @@ class HealedByRecordSchema(BaseModel):
     # run's FailureContext.engine — required, no default; see
     # aqueduct/surveyor/models.py).
     engine: str
-    # Best-effort, nullable — the installed engine package version at heal
-    # time (e.g. duckdb.__version__), when cheaply available.
-    engine_version: str | None = None
-    run_id: str | None = None
     # Max over the patch's operations — see aqueduct/patch/provenance.py.
     classification: Literal["dialect_neutral", "engine_shaped"]
     applied_at: str
@@ -1086,34 +1105,6 @@ class HealedByRecordSchema(BaseModel):
     # Appended to (never replaces) by the self-clearing stamp on a successful
     # run — see aqueduct/patch/apply.py::stamp_validated_engine.
     validated_on: list[str] = Field(default_factory=list)
-    # EFFECTIVE session-config diff this patch produced, per engine:
-    # {engine: {key: {before, after}}}. Written by Gate 1's
-    # effective-engine-config check (aqueduct/patch/config_delta.py) at apply
-    # time, because the resolved config depends on the aqueduct.yml the patch
-    # was applied against — not on anything the patch itself carries. Absent
-    # for a patch that writes no engine config (the overwhelmingly common
-    # pipeline-only heal), never an empty mapping.
-    engine_config_delta: dict[str, dict[str, Any]] = Field(default_factory=dict)
-    # WARN-ONLY perf attribution (aqueduct/patch/perf_attribution.py).
-    # `validated_on` above is BINARY — the run after the patch either
-    # succeeded or it did not — but config-op success is not: a shuffle or
-    # partition change routinely completes and is much slower, which
-    # `validated_on` records as an unqualified success. These two fields
-    # carry the non-binary half.
-    #
-    # perf_baseline: the last GREEN run of this blueprint BEFORE the patch
-    # was applied (RunPerf.to_dict()), snapshotted at apply time because the
-    # Blueprint travels and the observability store does not. Absent when no
-    # green run preceded the patch.
-    #
-    # perf_observations: one note per engine, written by the same green-run
-    # stamp that appends to `validated_on` (patch/apply.py::
-    # stamp_perf_observation). Bounded by the engine count, not by the run
-    # count. Each note is `observed` (ratio + both durations + caveats) or
-    # `not_applicable` (which fact was missing) — never `pass`, and never a
-    # verdict: Aqueduct sets no regression threshold.
-    perf_baseline: dict[str, Any] = Field(default_factory=dict)
-    perf_observations: list[dict[str, Any]] = Field(default_factory=list)
     # ISO-8601 timestamp set by `aqueduct patch revert` (aqueduct/patch/
     # revert.py) when this patch's engine-config writes were undone. The
     # record is ANNOTATED rather than deleted: deleting it would erase the
@@ -1121,8 +1112,26 @@ class HealedByRecordSchema(BaseModel):
     # describe a Blueprint that no longer carries its change. Every consumer
     # of the block reads it — the cross-engine compile gate skips a reverted
     # record, and the green-run stamps stop appending `validated_on` /
-    # `perf_observations` entries to it. Absent on a live record.
+    # patch_index perf entries to it. Absent on a live record.
     reverted_at: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_moved(cls, data: Any) -> Any:
+        """Name a moved field instead of letting ``extra="forbid"`` say
+        "Extra inputs are not permitted" about data that still exists, just
+        somewhere else."""
+        if not isinstance(data, dict):
+            return data
+        present = [f for f in MOVED_HEALED_BY_FIELDS if f in data]
+        if present:
+            raise ValueError(
+                f"healed_by record carries {', '.join(present)}, which no longer "
+                "belongs in a Blueprint: that record data now lives in the patch "
+                "index (the `patch_index` table in the observability store), keyed "
+                "by patch_id, so delete the field(s) from this record."
+            )
+        return data
 
 
 class BlueprintSchema(BaseModel):

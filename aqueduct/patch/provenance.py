@@ -29,6 +29,7 @@ that op can write anything from a retry count to a raw SQL string).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from aqueduct.patch.grammar import VALID_PATCH_OPS
@@ -69,7 +70,28 @@ def detect_engine_version(engine: str) -> str | None:
         return None
 
 
-def build_healed_by_record(
+@dataclass(frozen=True)
+class HealProvenance:
+    """One applied patch's provenance, split by where it is written.
+
+    ``record`` is the bounded ``healed_by:`` entry that goes into the
+    Blueprint YAML: only what the compile-time cross-engine gate and
+    ``aqueduct patch revert`` must be able to read out of a travelling
+    artifact. ``index_facts`` is everything else — the apply-time facts that
+    grow with every green run and belong in the ``patch_index`` table
+    (``aqueduct/patch/index.py::record_heal_provenance``), keyed by the same
+    ``patch_id``.
+
+    Both halves are built here, once, so the two apply paths (``aqueduct
+    patch apply`` in ``patch/apply.py`` and the ``agent.approval: auto``
+    direct-write in ``cli/__init__.py``) cannot drift on the record shape.
+    """
+
+    record: dict[str, Any]
+    index_facts: dict[str, Any]
+
+
+def build_heal_provenance(
     *,
     patch_id: str,
     operations: Any,
@@ -78,43 +100,34 @@ def build_healed_by_record(
     fallback_run_id: str | None = None,
     engine_config_delta: dict[str, dict[str, Any]] | None = None,
     perf_baseline: dict[str, Any] | None = None,
-) -> dict[str, Any] | None:
-    """Build one `healed_by:` record dict, or None if there is no heal
-    provenance to record.
+) -> HealProvenance | None:
+    """Build one applied patch's provenance, or None when there is none.
 
     ``meta`` is a patch's ``_aq_meta`` dict (or an equivalent built directly
     from a live ``FailureContext`` — see ``aqueduct/cli/__init__.py::
     _write_patch_to_blueprint``). A patch with no ``engine`` in its meta (a
     hand-authored patch applied outside the heal loop) is NOT stamped —
-    `healed_by` documents heal provenance, not every blueprint edit.
+    provenance documents heals, not every blueprint edit.
 
     ``engine_config_delta`` is the EFFECTIVE session-config diff Gate 1
     computed for this patch (``aqueduct/patch/config_delta.py``): what the
     target engine will actually see change, after
     ``resolve_session_engine_config`` merges ``aqueduct.yml``'s
-    ``engine.<name>`` block with the Blueprint's own. It belongs HERE
-    rather than in ``_aq_meta`` because it is an APPLY-time fact, not a
-    generation-time one: the same patch applied against a different
-    ``aqueduct.yml`` has a different effective delta, and the model that
-    wrote the patch never saw either. ``_aq_meta`` documents how the patch
-    was produced; ``healed_by:`` documents what applying it did — and it
-    lands in the Blueprint beside the change itself, so one `git diff`
-    shows both the YAML write and the behaviour it bought. Omitted from the
-    record when empty (a patch that writes no engine config), so a
-    pipeline-only heal's provenance block is byte-identical to before.
+    ``engine.<name>`` block with the Blueprint's own. It is an APPLY-time
+    fact, not a generation-time one — the same patch applied against a
+    different ``aqueduct.yml`` has a different effective delta, and the model
+    that wrote the patch never saw either — which is why it is recorded here
+    rather than in ``_aq_meta``, and in the patch index rather than in the
+    Blueprint: a full before/after dict per engine is store data, not
+    artifact data.
 
     ``perf_baseline`` is the last GREEN run of this blueprint BEFORE the
     patch (``aqueduct/patch/perf_attribution.py::capture_baseline_perf``),
-    snapshotted here because ``validated_on`` below is binary while
-    config-op success is not: a patch that leaves the pipeline three times
-    slower still records as validated. Same apply-time reasoning as
-    ``engine_config_delta`` — the baseline depends on the observability
-    store this apply ran against, not on anything the patch carries.
-    Omitted when there is no prior green run (the common case for a
-    pipeline that never worked), which is what later makes the observation
-    ``not_applicable`` rather than a comparison against nothing.
-    Snapshotted rather than re-derived on demand on purpose: the Blueprint
-    travels, the observability store does not.
+    captured because ``validated_on`` is binary while config-op success is
+    not: a patch that leaves the pipeline three times slower still records as
+    validated. Absent when no green run preceded the patch, which is what
+    later makes the observation ``not_applicable`` rather than a comparison
+    against nothing.
     """
     meta = meta or {}
     engine = meta.get("engine")
@@ -123,17 +136,18 @@ def build_healed_by_record(
     record = {
         "patch_id": patch_id,
         "engine": engine,
-        "engine_version": meta.get("engine_version"),
-        "run_id": meta.get("run_id") or fallback_run_id,
         "classification": classify_ops(operations),
         "applied_at": applied_at,
         "validated_on": [],
     }
-    if engine_config_delta:
-        record["engine_config_delta"] = engine_config_delta
-    if perf_baseline:
-        record["perf_baseline"] = perf_baseline
-    return record
+    index_facts = {
+        "engine": engine,
+        "engine_version": meta.get("engine_version"),
+        "run_id": meta.get("run_id") or fallback_run_id,
+        "engine_config_delta": engine_config_delta or {},
+        "perf_baseline": perf_baseline or {},
+    }
+    return HealProvenance(record=record, index_facts=index_facts)
 
 
 # ── Field-sensitive refinement for set_module_config_key ───────────────────
@@ -297,7 +311,8 @@ def classify_ops(ops: Any) -> str:
 __all__ = [
     "DIALECT_NEUTRAL",
     "ENGINE_SHAPED",
-    "build_healed_by_record",
+    "HealProvenance",
+    "build_heal_provenance",
     "classify_op",
     "classify_ops",
     "detect_engine_version",
