@@ -1,6 +1,6 @@
 aqueduct_scenario: "1.0"
 
-id: agentic_vs_oneshot_lineage_field
+id: two_hop_lineage_field
 description: >
   enrich_orders joins on stage_orders.region_id, but stage_orders' explicit
   SELECT list drops region_id even though it genuinely exists two hops
@@ -10,7 +10,7 @@ description: >
   a suggestion list. The healer has to read the authored YAML and follow
   the column across both hops to find where the projection dropped it.
 
-blueprint: blueprints/19_agentic_vs_oneshot_lineage_field.yml
+blueprint: blueprints/19_two_hop_lineage_field.yml
 
 # The fix is a Blueprint edit — a module's config, not an engine knob.
 domains: [pipeline]

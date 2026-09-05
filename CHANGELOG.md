@@ -16,6 +16,10 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Changed
+
+- Renamed gallery scenario 19 from `agentic_vs_oneshot_lineage_field` to `two_hop_lineage_field` — agentic mode was removed in 2.3.0, and the new name describes the bug the scenario actually tests (a column dropped two hops upstream in an intermediate module's projection). (`gallery/aqscenarios/19_two_hop_lineage_field.aqscenario.yml`, `gallery/aqscenarios/blueprints/19_two_hop_lineage_field.yml`)
+
 ## [2.3.0] — 2026-09-05
 
 ### Removed
