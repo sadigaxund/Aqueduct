@@ -66,7 +66,7 @@ When `print(file=sys.stderr)` changes to `logger.warning()`, `capsys` no longer 
 
 ```bash
 # Tests using capsys that may need caplog instead
-rg -n 'capsys\)' tests/test_surveyor/test_*webhook*.py tests/test_surveyor/test_openlineage.py
+rg -n 'capsys\)' tests/test_surveyor/test_*webhook*.py
 
 # Verify each capsys.assert matches a real capsys.readouterr() call (not unused fixture)
 ```

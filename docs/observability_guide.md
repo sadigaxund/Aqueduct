@@ -184,7 +184,7 @@ treat them as archival.
 | `failure_signature`       | VARCHAR | exact signature hash of the pipeline failure this heal addressed (16-char sha1 of error class + module + normalized message) |
 | `failure_signature_coarse`| VARCHAR | coarse signature hash (error class + module, no message), enables per-signature-family analytics (which families are solved by which cascade tier) without joining `patch_index` |
 | `resolution`              | VARCHAR | `llm` (fresh agent patch) — the only value written since the signature-keyed heal cache was removed. A pre-2.3.0 database may still carry historical `cached` (pending-patch reuse) / `replayed` (archived patch re-validated through gates) rows; NULL on legacy rows, treat as `llm` (`COALESCE(resolution,'llm')`) |
-| `model_cascade_position`  | INTEGER | 0-based cascade tier index of the producing model. NULL outside cascade or when no LLM ran. `model` records the producing tier's model (previously the top-level `agent.model` even under cascade) |
+| `model_cascade_position`  | INTEGER | 0-based cascade tier index of the producing model. NULL outside cascade or when no LLM ran. `model` records the producing tier's model |
 | `engine`                  | VARCHAR | Execution engine this heal targeted (`spark` \| `duckdb`) |
 
 Zero-token heal coverage: `aqueduct runs --heal-coverage` aggregates
