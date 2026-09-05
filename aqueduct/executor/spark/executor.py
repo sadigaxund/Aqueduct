@@ -79,6 +79,7 @@ from aqueduct.executor.edge_ports import (
 from aqueduct.executor.models import (
     ExecutionResult,
     ExecutionStatus,
+    ModuleMetricsBuffer,
     ModuleResult,
     _add_module_warning,
     _collect_module_warnings,
@@ -414,8 +415,19 @@ def _write_stage_metrics(
     metrics: dict[str, Any],
     store_dir: Path | None,
     observability_store: Any = None,
+    buffer: ModuleMetricsBuffer | None = None,
 ) -> None:
-    """Persist SparkListener stage metrics to the configured observability store (non-fatal)."""
+    """Persist SparkListener stage metrics to the configured observability store (non-fatal).
+
+    When ``buffer`` is given, the row is appended to it instead of opening a
+    connection immediately — ``execute()`` flushes every buffered row under
+    ONE connection at run end. ``buffer=None`` keeps the original
+    immediate-write behavior for any caller outside the main loop (and for
+    existing tests that call this directly).
+    """
+    if buffer is not None:
+        buffer.add(run_id, module_id, metrics)
+        return
     store = _resolve_observability_store(store_dir, observability_store)
     if store is None:
         return
@@ -453,8 +465,21 @@ def _update_metric(
     column: str,
     value: int | None,
     observability_store: Any = None,
+    buffer: ModuleMetricsBuffer | None = None,
 ) -> None:
-    """UPDATE a single column in an existing module_metrics row (non-fatal)."""
+    """UPDATE a single column in an existing module_metrics row (non-fatal).
+
+    GOTCHA this guards against: with batched writes, the module's row may
+    still be sitting unflushed in ``buffer`` (not yet in the DB at all) —
+    a SQL ``UPDATE ... WHERE run_id=? AND module_id=?`` against it would
+    silently match zero rows and the metric would be lost. When ``buffer``
+    is given, mutate the pending row in place first; only fall back to the
+    real SQL UPDATE when the buffer reports no pending row for this
+    ``module_id`` (already flushed, or the row was written by some other
+    immediate-write path).
+    """
+    if buffer is not None and buffer.update(module_id, column, value):
+        return
     store = _resolve_observability_store(store_dir, observability_store)
     if store is None:
         return
@@ -985,6 +1010,13 @@ def execute(
     # (Channel SQL, Funnel `inputs:`) transparently across a Handoff.
     modules_by_id: dict[str, Module] = {m.id: m for m in manifest.modules}
 
+    # Batch every module_metrics row collected across ALL components (thread-
+    # safe — `parallel=True` runs `_run_component` on multiple threads at
+    # once) into ONE flush at run end, in the `finally` below, instead of a
+    # connect()/close() per module. See `ModuleMetricsBuffer`'s docstring for
+    # the `drift.py` pattern this mirrors.
+    _metrics_buffer = ModuleMetricsBuffer()
+
     # Cancellation state — set by the first failing component; sibling threads
     # skip their remaining modules when they see it.
     _cancel_event = threading.Event()
@@ -1097,6 +1129,7 @@ def execute(
                     },
                     store_dir,
                     observability_store=observability_store,
+                    buffer=_metrics_buffer,
                 )
                 frame_store[module.id] = _obs_df
                 _write_checkpoint(module, checkpoint_dir, manifest, data={"data": df})
@@ -1247,6 +1280,7 @@ def execute(
                         {**null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
                         store_dir,
                         observability_store=observability_store,
+                        buffer=_metrics_buffer,
                     )
                     _write_checkpoint(
                         module, checkpoint_dir, manifest, data={"data": frame_store[module.id]}
@@ -1312,6 +1346,7 @@ def execute(
                     {**null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
                     store_dir,
                     observability_store=observability_store,
+                    buffer=_metrics_buffer,
                 )
                 for branch_id, branch_df in branch_dfs.items():
                     frame_store[f"{module.id}.{branch_id}"] = branch_df
@@ -1381,6 +1416,7 @@ def execute(
                     {**null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
                     store_dir,
                     observability_store=observability_store,
+                    buffer=_metrics_buffer,
                 )
                 frame_store[module.id] = df
                 _write_checkpoint(module, checkpoint_dir, manifest, data={"data": df})
@@ -1634,6 +1670,7 @@ def execute(
                     },
                     store_dir,
                     observability_store=observability_store,
+                    buffer=_metrics_buffer,
                 )
                 _write_checkpoint(module, checkpoint_dir, manifest)
 
@@ -1773,6 +1810,7 @@ def execute(
                         },
                         store_dir,
                         observability_store=observability_store,
+                        buffer=_metrics_buffer,
                     )
                     local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
                 else:
@@ -1801,6 +1839,7 @@ def execute(
                         },
                         store_dir,
                         observability_store=observability_store,
+                        buffer=_metrics_buffer,
                     )
                     local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
 
@@ -1843,91 +1882,113 @@ def execute(
         _merge()
 
     # ── Dispatch ──────────────────────────────────────────────────────────────
-    if parallel:
-        all_module_ids = {m.id for m in order}
-        components = _find_connected_components(all_module_ids, manifest.edges, manifest.modules)
-
-        if len(components) > 1:
-            component_orders = [[m for m in order if m.id in comp_ids] for comp_ids in components]
-            logger.info(
-                "Parallel execution: %d independent components detected",
-                len(component_orders),
+    # Wrapped in try/finally so `_metrics_buffer` is flushed under ONE
+    # connection exactly once at run end no matter which exit this run takes:
+    # the normal success return, the `_fail(...)` early return, or an
+    # exception propagating straight out of `_run_component` (e.g. an
+    # unsupported module type raises `ExecuteError` in single-component
+    # mode, bypassing the return statements below entirely) — a run that
+    # dies mid-loop must still persist the metrics it already collected,
+    # same reasoning as `aqueduct/cli/drift.py`'s batched-flush `finally`.
+    try:
+        if parallel:
+            all_module_ids = {m.id for m in order}
+            components = _find_connected_components(
+                all_module_ids, manifest.edges, manifest.modules
             )
-            with concurrent.futures.ThreadPoolExecutor(max_workers=len(component_orders)) as pool:
-                futures = [pool.submit(_run_component, co) for co in component_orders]
-                for f in concurrent.futures.as_completed(futures):
-                    exc = f.exception()
-                    if exc is not None:
-                        logger.error("Component thread raised unexpected exception: %s", exc)
-                        _cancel_event.set()
+
+            if len(components) > 1:
+                component_orders = [
+                    [m for m in order if m.id in comp_ids] for comp_ids in components
+                ]
+                logger.info(
+                    "Parallel execution: %d independent components detected",
+                    len(component_orders),
+                )
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=len(component_orders)
+                ) as pool:
+                    futures = [pool.submit(_run_component, co) for co in component_orders]
+                    for f in concurrent.futures.as_completed(futures):
+                        exc = f.exception()
+                        if exc is not None:
+                            logger.error("Component thread raised unexpected exception: %s", exc)
+                            _cancel_event.set()
+            else:
+                # Single component — no thread overhead
+                _run_component(order)
         else:
-            # Single component — no thread overhead
             _run_component(order)
-    else:
-        _run_component(order)
 
-    if _cancel_event.is_set():
-        return _fail(
-            manifest.blueprint_id,
-            run_id,
-            module_results,
-            trigger_agent=bool(_trigger_agent_flag and _trigger_agent_flag[0]),
-        )
+        if _cancel_event.is_set():
+            return _fail(
+                manifest.blueprint_id,
+                run_id,
+                module_results,
+                trigger_agent=bool(_trigger_agent_flag and _trigger_agent_flag[0]),
+            )
 
-    # ── Collect deferred Ingress observations (fire after all Egress writes) ───
-    if store_dir is not None and _ingress_obs:
-        _succeeded = {r.module_id for r in module_results if r.status == ExecutionStatus.SUCCESS}
-        for _mod_id, _obs in _ingress_obs.items():
-            if _mod_id not in _succeeded or _obs is None:
-                continue
+        # ── Collect deferred Ingress observations (fire after all Egress writes) ──
+        if store_dir is not None and _ingress_obs:
+            _succeeded = {
+                r.module_id for r in module_results if r.status == ExecutionStatus.SUCCESS
+            }
+            for _mod_id, _obs in _ingress_obs.items():
+                if _mod_id not in _succeeded or _obs is None:
+                    continue
+                try:
+                    _rr = get_observation(_obs, "records_read")
+                    if _rr is not None:
+                        _update_metric(
+                            store_dir,
+                            run_id,
+                            _mod_id,
+                            "records_read",
+                            _rr,
+                            observability_store=observability_store,
+                            buffer=_metrics_buffer,
+                        )
+                except Exception as exc:
+                    logger.debug("Observation collection failed for %r: %s", _mod_id, exc)
+
+        # ── Lineage — write after successful execution ─────────────────────────
+        if store_dir is not None:
+            _obs = _resolve_observability_store(store_dir, observability_store)
             try:
-                _rr = get_observation(_obs, "records_read")
-                if _rr is not None:
-                    _update_metric(
-                        store_dir,
-                        run_id,
-                        _mod_id,
-                        "records_read",
-                        _rr,
-                        observability_store=observability_store,
-                    )
+                from aqueduct.compiler.lineage import write_lineage
+
+                write_lineage(
+                    manifest.blueprint_id,
+                    run_id,
+                    manifest.modules,
+                    manifest.edges,
+                    observability_store=_obs,
+                )
             except Exception as exc:
-                logger.debug("Observation collection failed for %r: %s", _mod_id, exc)
+                logger.debug("Lineage write skipped: %s", exc)
+            # Phase 56 — Channel SQL fingerprints (changelog of semantic SQL changes).
+            try:
+                from aqueduct.compiler.fingerprint import write_fingerprints
 
-    # ── Lineage — write after successful execution ─────────────────────────────
-    if store_dir is not None:
-        _obs = _resolve_observability_store(store_dir, observability_store)
-        try:
-            from aqueduct.compiler.lineage import write_lineage
+                write_fingerprints(
+                    manifest.blueprint_id,
+                    run_id,
+                    manifest.modules,
+                    observability_store=_obs,
+                )
+            except Exception as exc:
+                logger.debug("Fingerprint write skipped: %s", exc)
 
-            write_lineage(
-                manifest.blueprint_id,
-                run_id,
-                manifest.modules,
-                manifest.edges,
-                observability_store=_obs,
-            )
-        except Exception as exc:
-            logger.debug("Lineage write skipped: %s", exc)
-        # Phase 56 — Channel SQL fingerprints (changelog of semantic SQL changes).
-        try:
-            from aqueduct.compiler.fingerprint import write_fingerprints
-
-            write_fingerprints(
-                manifest.blueprint_id,
-                run_id,
-                manifest.modules,
-                observability_store=_obs,
-            )
-        except Exception as exc:
-            logger.debug("Fingerprint write skipped: %s", exc)
-
-    return ExecutionResult(
-        blueprint_id=manifest.blueprint_id,
-        run_id=run_id,
-        status=ExecutionStatus.SUCCESS,
-        module_results=tuple(module_results),
-    )
+        return ExecutionResult(
+            blueprint_id=manifest.blueprint_id,
+            run_id=run_id,
+            status=ExecutionStatus.SUCCESS,
+            module_results=tuple(module_results),
+        )
+    finally:
+        # Single connect() for every module_metrics row collected above
+        # (across every component thread), regardless of how this run exits.
+        _metrics_buffer.flush(store_dir, observability_store)
 
 
 def _fail(

@@ -92,6 +92,7 @@ from aqueduct.executor.edge_ports import (
 from aqueduct.executor.models import (
     ExecutionResult,
     ExecutionStatus,
+    ModuleMetricsBuffer,
     ModuleResult,
     _add_module_warning,
     _collect_module_warnings,
@@ -750,6 +751,14 @@ def execute(
     # (Channel SQL, Funnel `inputs:`) transparently across a Handoff.
     modules_by_id: dict[str, Module] = {m.id: m for m in manifest.modules}
 
+    # Batch every module's `module_metrics` row into ONE flush at run end
+    # (`finally` below) instead of one connect()/close() cycle per module —
+    # see `ModuleMetricsBuffer`'s docstring for the `drift.py` pattern this
+    # mirrors. DuckDB's executor is single-threaded (no `parallel=` kwarg
+    # here, unlike Spark), so no cross-module ordering concern beyond the
+    # buffer's own lock.
+    _metrics_buffer = ModuleMetricsBuffer()
+
     try:
         for module in order:
             _collect_module_warnings()
@@ -823,6 +832,7 @@ def execute(
                         "bytes_read": _path_bytes(module.config.get("path")),
                         "duration_ms": int((time.monotonic() - _t0) * 1000),
                     },
+                    buffer=_metrics_buffer,
                 )
                 _write_checkpoint(con, module, checkpoint_dir, manifest, data={"data": rel})
                 module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
@@ -946,6 +956,7 @@ def execute(
                         "records_read": _sum_rel_rows(upstream.values()),
                         "duration_ms": int((time.monotonic() - _t0) * 1000),
                     },
+                    buffer=_metrics_buffer,
                 )
 
                 spillway_condition: str | None = module.config.get("spillway_condition")
@@ -1049,6 +1060,7 @@ def execute(
                         "records_read": _rel_rows(val),
                         "duration_ms": int((time.monotonic() - _t0) * 1000),
                     },
+                    buffer=_metrics_buffer,
                 )
                 for branch_id, branch_rel in branch_rels.items():
                     frame_store[f"{module.id}.{branch_id}"] = branch_rel
@@ -1124,6 +1136,7 @@ def execute(
                         "records_read": _sum_rel_rows(funnel_upstream.values()),
                         "duration_ms": int((time.monotonic() - _t0) * 1000),
                     },
+                    buffer=_metrics_buffer,
                 )
                 _write_checkpoint(con, module, checkpoint_dir, manifest, data={"data": rel})
                 module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
@@ -1367,6 +1380,7 @@ def execute(
                         "bytes_written": _path_bytes(module.config.get("path")),
                         "duration_ms": int((time.monotonic() - _t0) * 1000),
                     },
+                    buffer=_metrics_buffer,
                 )
                 _write_checkpoint(con, module, checkpoint_dir, manifest)
 
@@ -1488,6 +1502,7 @@ def execute(
                             "bytes_written": dir_size_bytes(spill_uri),
                             "duration_ms": int((time.monotonic() - _t0) * 1000),
                         },
+                        buffer=_metrics_buffer,
                     )
                     module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
                 else:
@@ -1514,6 +1529,7 @@ def execute(
                             "bytes_read": dir_size_bytes(spill_uri),
                             "duration_ms": int((time.monotonic() - _t0) * 1000),
                         },
+                        buffer=_metrics_buffer,
                     )
                     module_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
 
@@ -1572,11 +1588,17 @@ def execute(
                         "records_read": _rel_rows(source_val),
                         "duration_ms": int((time.monotonic() - _t0) * 1000),
                     },
+                    buffer=_metrics_buffer,
                 )
                 module_results.append(
                     _mr(module_id=module.id, status=ExecutionStatus.SUCCESS, notes=_probe_notes)
                 )
     finally:
+        # Single connect() for every module_metrics row collected above,
+        # regardless of how many modules ran — even on an exception path
+        # (module_results already holds whatever succeeded before the
+        # failure, and the metrics for those modules should not be lost).
+        _metrics_buffer.flush(store_dir, observability_store)
         drop_tracked_temp_tables(con)
 
     return ExecutionResult(
