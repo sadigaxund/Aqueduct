@@ -23,3 +23,4 @@ This page is the index. Each topic page below owns its sections in full; nothing
 - **[Self-Healing](specs/06-healing.md)** (§8 Self-healing & LLM agent loop): the healing flow, approval and sandbox modes, patch grammar, and drift detection.
 - **[Stores and Engine Ops](specs/07-stores-and-ops.md)** (§9 Type system, §10 Deployment & engine integration): the hub type system, engine configuration, path resolution, and the capability framework.
 - **[Polyglot Engine Boundaries](specs/08-polyglot.md)** (§11 Engine scope & boundaries, plus the synthetic Handoff module and its runtime execution): what Aqueduct is and is not, scheduling, and cross-engine handoff.
+- **[Glossary](glossary.md)**: maps every themed Aqueduct term to the industry-standard term it corresponds to, with a link into the owning topic page.

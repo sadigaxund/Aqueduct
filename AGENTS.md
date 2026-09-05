@@ -37,6 +37,7 @@ cross-reference the relevant page rather than duplicating it.
 | Doc | Owns | When to read |
 |---|---|---|
 | `docs/specs.md` (index) + `docs/specs/*.md` | Overview/architecture §1-3 (`01-overview.md`), Blueprint format §4 (`02-blueprint.md`), Context Registry §5 (`03-resolution.md`), Observability §6 (`04-execution.md`), Lineage §7 (`05-lineage.md`), Self-Healing §8 (`06-healing.md`), Type System §9 + Deployment/Engine Integration §10 (`07-stores-and-ops.md`), Engine Scope §11 (`08-polyglot.md`) | Domain semantics |
+| `docs/glossary.md` | Aqueduct term → industry term mapping, one row per themed name | Onboarding a reader unfamiliar with the naming theme, or naming a new module/concept |
 | `docs/cli_reference.md` | Every CLI command/flag + defaults | New `@click.option`/subcommand |
 | `docs/observability_guide.md` | Store schemas + SQL cookbook | DDL changes, post-mortem queries |
 | `docs/spark_guide.md` | Compiler warnings, perf, Spark gotchas | Executor modules, new Channel ops |
