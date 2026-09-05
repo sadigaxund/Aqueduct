@@ -3,8 +3,6 @@ crash-consistency — see docs/specs.md)."""
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from aqueduct.parser.parser import ParseError, parse_dict
