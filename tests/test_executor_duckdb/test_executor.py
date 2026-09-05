@@ -1748,7 +1748,7 @@ def test_egress_table_ignored_when_register_as_table_also_set(duckdb_con, caplog
         duckdb_con.table("unused_name")
 
 
-# ── Junction branch port → Channel (the 2.2.2 include-list bug) ────────────
+# ── Junction branch port → Channel (the 2.3.0 include-list bug) ────────────
 # `_incoming_main` used to be an include-list (`e.port == "main"`), so every
 # module type except Egress/Handoff rejected a Junction branch-port edge with
 # "has no main-port incoming edges" — even though docs/specs.md's port table

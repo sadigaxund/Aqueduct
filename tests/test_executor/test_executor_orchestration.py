@@ -2412,7 +2412,7 @@ def test_checkpoint_root_resume_missing_raises(spark: SparkSession, tmp_path):
         )
 
 
-# ── Junction branch port → Channel (the 2.2.2 include-list bug) ──────────────
+# ── Junction branch port → Channel (the 2.3.0 include-list bug) ──────────────
 # `_incoming_main` used to be an include-list (`e.port == "main"`), so every
 # module type except Egress/Handoff rejected a Junction branch-port edge with
 # "has no main-port incoming edges" — even though docs/specs.md's port table
