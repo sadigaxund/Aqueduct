@@ -51,7 +51,7 @@ def test_watermark_key_valid_shape_parses(tmp_path):
                     "config": {"format": "depot", "key": "wk1", "value": "x"},
                 },
             ],
-            [{"from": "ing", "to": "append_eg"}, {"from": "ing", "to": "wm_eg"}],
+            [{"from": "ing", "to": "append_eg"}, {"from": "append_eg", "to": "wm_eg"}],
         ),
         base_dir=tmp_path,
     )
@@ -162,6 +162,72 @@ def test_watermark_key_wrong_depot_key_rejected(tmp_path):
                         "type": "Egress",
                         "label": "WmEg",
                         "config": {"format": "depot", "key": "some_other_key", "value": "x"},
+                    },
+                ],
+                [{"from": "ing", "to": "append_eg"}, {"from": "ing", "to": "wm_eg"}],
+            ),
+            base_dir=tmp_path,
+        )
+
+
+def test_watermark_key_depot_writer_before_append_rejected(tmp_path):
+    """Depot Egress writes the right key, but it runs BEFORE (not after) the
+    append Egress — the depot Egress is upstream, so the append is
+    reachable from it instead of the other way around."""
+    with pytest.raises(ParseError, match="watermark_key"):
+        parse_dict(
+            _bp(
+                [
+                    _INGRESS,
+                    {
+                        "id": "wm_eg",
+                        "type": "Egress",
+                        "label": "WmEg",
+                        "config": {"format": "depot", "key": "wk1", "value": "x"},
+                    },
+                    {
+                        "id": "append_eg",
+                        "type": "Egress",
+                        "label": "AppendEg",
+                        "config": {
+                            "format": "parquet",
+                            "path": "/tmp/out",
+                            "mode": "append",
+                            "watermark_key": "wk1",
+                        },
+                    },
+                ],
+                [{"from": "ing", "to": "wm_eg"}, {"from": "wm_eg", "to": "append_eg"}],
+            ),
+            base_dir=tmp_path,
+        )
+
+
+def test_watermark_key_depot_writer_unconnected_rejected(tmp_path):
+    """Depot Egress writes the right key and there IS another Egress
+    downstream of the append, but no edge path connects the append Egress
+    to the depot Egress at all — they are disconnected siblings."""
+    with pytest.raises(ParseError, match="watermark_key"):
+        parse_dict(
+            _bp(
+                [
+                    _INGRESS,
+                    {
+                        "id": "append_eg",
+                        "type": "Egress",
+                        "label": "AppendEg",
+                        "config": {
+                            "format": "parquet",
+                            "path": "/tmp/out",
+                            "mode": "append",
+                            "watermark_key": "wk1",
+                        },
+                    },
+                    {
+                        "id": "wm_eg",
+                        "type": "Egress",
+                        "label": "WmEg",
+                        "config": {"format": "depot", "key": "wk1", "value": "x"},
                     },
                 ],
                 [{"from": "ing", "to": "append_eg"}, {"from": "ing", "to": "wm_eg"}],

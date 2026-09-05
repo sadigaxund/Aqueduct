@@ -195,37 +195,75 @@ def validate_edge_aliases(modules: list[Module], edges: list[Edge]) -> None:
             )
 
 
-def validate_watermark_keys(modules: list[Module]) -> None:
+def validate_watermark_keys(modules: list[Module], edges: list[Edge]) -> None:
     """Every Egress `watermark_key: K` must be matched by another Egress in
-    the same blueprint that writes K via `format: depot`.
+    the same blueprint that writes K via `format: depot`, and that depot
+    Egress must be topologically AFTER the append Egress in the blueprint's
+    edge graph (i.e. reachable from it) — otherwise the depot write can run
+    (or even complete) before the append it is supposed to gate, and the
+    crash-consistency intent row it is meant to clear is never guaranteed to
+    be cleared after the write it protects.
 
     `EgressConfigSchema._validate_watermark_key` already enforces the
     per-module shape (append mode, a real row-writing format); this is the
     blueprint-level half — an intent row set by `watermark_key` that nothing
-    ever clears (no `format: depot` Egress writes that key) is a Blueprint
-    that can never pass the run-start refusal check once it takes its first
-    write, so it is rejected here instead of failing confusingly at run time.
+    ever clears (no `format: depot` Egress writes that key, or one does but
+    is not downstream of the append) is a Blueprint that can never pass the
+    run-start refusal check once it takes its first write, so it is rejected
+    here instead of failing confusingly at run time.
     """
-    depot_writer_keys: set[str] = set()
+    depot_module_ids_by_key: dict[str, list[str]] = defaultdict(list)
     for module in modules:
         if module.type != ModuleType.Egress:
             continue
         if module.config.get("format") == "depot":
             key = module.config.get("key")
             if key:
-                depot_writer_keys.add(str(key))
+                depot_module_ids_by_key[str(key)].append(module.id)
 
-    for module in modules:
-        if module.type != ModuleType.Egress:
-            continue
-        watermark_key = module.config.get("watermark_key")
-        if not watermark_key:
-            continue
-        if str(watermark_key) not in depot_writer_keys:
+    append_modules = [
+        module
+        for module in modules
+        if module.type == ModuleType.Egress and module.config.get("watermark_key")
+    ]
+    if not append_modules:
+        return
+
+    adj, _ = _build_adjacency(modules, edges)
+
+    def _reachable_from(start: str) -> set[str]:
+        seen = {start}
+        queue = deque([start])
+        while queue:
+            node = queue.popleft()
+            for neighbour in adj.get(node, []):
+                if neighbour not in seen:
+                    seen.add(neighbour)
+                    queue.append(neighbour)
+        return seen
+
+    for module in append_modules:
+        watermark_key = str(module.config.get("watermark_key"))
+        depot_ids = depot_module_ids_by_key.get(watermark_key, [])
+        if not depot_ids:
             raise ParseError(
                 f"Egress {module.id!r}: watermark_key={watermark_key!r} names a depot "
                 "key that no other Egress in this blueprint writes via "
                 f"'format: depot' + key: {watermark_key!r}. Add a downstream "
                 "`format: depot` Egress that writes this key (it clears the crash-"
                 "consistency intent row `watermark_key` sets), or remove `watermark_key`."
+            )
+
+        reachable = _reachable_from(module.id)
+        if not any(depot_id in reachable for depot_id in depot_ids):
+            raise ParseError(
+                f"Egress {module.id!r}: watermark_key={watermark_key!r} is written by "
+                f"depot Egress {depot_ids!r}, but none of them is reachable from "
+                f"{module.id!r} in the blueprint's edge graph — either the edges "
+                f"connect them in the wrong order (the depot Egress runs before or "
+                f"in parallel with {module.id!r} instead of after it) or they are not "
+                f"connected at all. Add edges so {module.id!r} is topologically "
+                f"BEFORE a `format: depot` Egress writing {watermark_key!r} (a path "
+                f"{module.id!r} -> ... -> one of {depot_ids!r}), or remove "
+                "`watermark_key`."
             )

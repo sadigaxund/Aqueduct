@@ -525,7 +525,7 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
 | **maintenance** | Optional. Post-write compaction/cleanup, format-aware (`delta`: `optimize`/`zorder_by`/`vacuum`; `iceberg`: `rewrite_data_files`/`expire_snapshots`; `hudi`: `compaction`/`clean`); full key reference in `docs/spark_guide.md`'s maintenance table. Runs synchronously after the write, non-fatal on failure. |
 | **header** | CSV only, whether to write a header row (default `true`). Read directly by the DuckDB engine's writer; on Spark, set `options: {header: "true"}` instead (Spark's writer has no dedicated top-level `header:` read). |
 | **key** / **value** / **value_expr** | `format: depot` only. `key` (required) names the Depot KV entry; exactly one of `value` (a literal string) or `value_expr` (a Spark aggregate expression, evaluated with one `.collect()`) supplies it. |
-| **watermark_key** | Optional, `mode: append` only (never legal on `format: depot`). Names the Depot key a downstream `format: depot` Egress writes to gate the next run's incremental read range. See **§10.4.5 Watermark crash-consistency** below. |
+| **watermark_key** | Optional, `mode: append` only (never legal on `format: depot`). Names the Depot key a `format: depot` Egress writes to gate the next run's incremental read range; that depot Egress must be topologically AFTER this one in the blueprint's edge graph (reachable from it), not merely present somewhere in the Blueprint. See **§10.4.5 Watermark crash-consistency** below. |
 
 **`mode: overwrite_partitions`** is the idempotent-backfill primitive: re-running for the same logical date replaces only that date's data instead of the whole table. Two strategies:
 
@@ -1799,8 +1799,10 @@ Redis exposes no transaction spanning two independent commands here).
 
 A Blueprint is rejected at parse time (`ParseError`) if an Egress declares
 `watermark_key` without `mode: append`, if it is set on `format: depot`
-itself, or if no other Egress in the Blueprint writes that key via
-`format: depot`.
+itself, if no other Egress in the Blueprint writes that key via
+`format: depot`, or if such an Egress exists but is not topologically after
+the append Egress in the blueprint's edge graph (i.e. not reachable from it
+— wrong order or simply unconnected).
 
 **The run-start refusal.** At the start of every run, before the
 incremental read range is resolved, Aqueduct checks every `watermark_key`
