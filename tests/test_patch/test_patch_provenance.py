@@ -12,7 +12,7 @@ from aqueduct.patch.provenance import (
     ENGINE_SHAPED,
     _FIELD_SENSITIVE_OPS,
     _STATIC_OP_CLASSIFICATION,
-    build_healed_by_record,
+    build_heal_provenance,
     classify_op,
     classify_ops,
     detect_engine_version,
@@ -101,9 +101,9 @@ def test_detect_engine_version_duckdb_installed():
     assert isinstance(version, str)
 
 
-def test_build_healed_by_record_none_without_engine_meta():
+def test_build_heal_provenance_none_without_engine_meta():
     """A hand-authored patch with no _aq_meta.engine gets no healed_by record."""
-    rec = build_healed_by_record(
+    rec = build_heal_provenance(
         patch_id="p1",
         operations=[_FakeOp("replace_module_label")],
         meta={},
@@ -111,7 +111,7 @@ def test_build_healed_by_record_none_without_engine_meta():
     )
     assert rec is None
 
-    rec_none_meta = build_healed_by_record(
+    rec_none_meta = build_heal_provenance(
         patch_id="p1",
         operations=[_FakeOp("replace_module_label")],
         meta=None,
@@ -120,31 +120,40 @@ def test_build_healed_by_record_none_without_engine_meta():
     assert rec_none_meta is None
 
 
-def test_build_healed_by_record_with_engine_meta():
-    rec = build_healed_by_record(
+def test_build_heal_provenance_splits_record_from_index_facts():
+    """The YAML record is bounded; every apply-time fact goes to the index."""
+    prov = build_heal_provenance(
         patch_id="p1",
         operations=[_FakeOp("set_engine_config")],
         meta={"engine": "duckdb", "engine_version": "1.5.4", "run_id": "r1"},
         applied_at="2026-01-01T00:00:00Z",
+        engine_config_delta={"duckdb": {"threads": {"before": 2, "after": 4}}},
+        perf_baseline={"run_id": "r0", "duration_ms": 10},
     )
-    assert rec == {
+    assert prov.record == {
         "patch_id": "p1",
         "engine": "duckdb",
-        "engine_version": "1.5.4",
-        "run_id": "r1",
         "classification": ENGINE_SHAPED,
         "applied_at": "2026-01-01T00:00:00Z",
         "validated_on": [],
     }
+    assert prov.index_facts == {
+        "engine": "duckdb",
+        "engine_version": "1.5.4",
+        "run_id": "r1",
+        "engine_config_delta": {"duckdb": {"threads": {"before": 2, "after": 4}}},
+        "perf_baseline": {"run_id": "r0", "duration_ms": 10},
+    }
 
 
-def test_build_healed_by_record_fallback_run_id():
-    rec = build_healed_by_record(
+def test_build_heal_provenance_fallback_run_id():
+    prov = build_heal_provenance(
         patch_id="p1",
         operations=[_FakeOp("remove_module")],
         meta={"engine": "duckdb"},
         applied_at="2026-01-01T00:00:00Z",
         fallback_run_id="fallback-run",
     )
-    assert rec["run_id"] == "fallback-run"
-    assert rec["classification"] == DIALECT_NEUTRAL
+    assert prov.index_facts["run_id"] == "fallback-run"
+    assert prov.record["classification"] == DIALECT_NEUTRAL
+    assert "run_id" not in prov.record

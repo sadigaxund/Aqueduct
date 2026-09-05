@@ -32,6 +32,16 @@ def _cfg(spark_conf=None, duckdb=None):
 
 
 def _record(**over):
+    """A readable authoring helper for a `healed_by` record.
+
+    Still carries `engine_config_delta` as a keyword for convenience — but
+    that field no longer belongs in the Blueprint's own record (see
+    `aqueduct/parser/schema.py::MOVED_HEALED_BY_FIELDS`). `_bp()` strips it
+    out of the YAML-shaped dict below; `_deltas()` pulls it back out into the
+    separate `{patch_id: delta}` mapping `plan_revert(..., deltas=...)` now
+    requires — the same split production code makes between the Blueprint
+    record and the patch index.
+    """
     rec = {
         "patch_id": "p1",
         "engine": "spark",
@@ -56,8 +66,18 @@ def _bp(records=None, conf=None):
     if conf is not None:
         bp["engine"] = {"spark": {"conf": dict(conf)}}
     if records is not None:
-        bp["healed_by"] = list(records)
+        # `engine_config_delta` moved to the patch index — never land it in
+        # the Blueprint's own healed_by record.
+        bp["healed_by"] = [
+            {k: v for k, v in rec.items() if k != "engine_config_delta"} for rec in records
+        ]
     return bp
+
+
+def _deltas(*records):
+    """`{patch_id: engine_config_delta}` — what `plan_revert(deltas=...)`
+    now takes in place of reading the delta out of the Blueprint record."""
+    return {rec["patch_id"]: rec.get("engine_config_delta", {}) for rec in records}
 
 
 _CONFIG_OP = [
@@ -77,12 +97,14 @@ def test_removes_the_key_when_the_prior_value_came_from_aqueduct_yml():
     """`aqueduct.yml` already carries 200, so deleting the Blueprint's own
     key is the correct undo — writing 200 back explicitly would leave the
     Blueprint claiming a value it never claimed before the patch."""
-    bp = _bp([_record()], conf={"spark.sql.shuffle.partitions": "800"})
+    rec = _record()
+    bp = _bp([rec], conf={"spark.sql.shuffle.partitions": "800"})
     plan = plan_revert(
         cfg=_cfg({"spark.sql.shuffle.partitions": "200"}),
         blueprint=bp,
         patch_id="p1",
         operations=_CONFIG_OP,
+        deltas=_deltas(rec),
     )
     assert [(r.engine, r.key, r.action) for r in plan.restores] == [
         ("spark", "spark.sql.shuffle.partitions", "remove")
@@ -104,7 +126,9 @@ def test_writes_the_prior_value_back_when_it_was_the_blueprints_own():
         }
     )
     bp = _bp([rec], conf={"spark.sql.shuffle.partitions": "800"})
-    plan = plan_revert(cfg=_cfg(), blueprint=bp, patch_id="p1", operations=_CONFIG_OP)
+    plan = plan_revert(
+        cfg=_cfg(), blueprint=bp, patch_id="p1", operations=_CONFIG_OP, deltas=_deltas(rec)
+    )
     assert [(r.action, r.value) for r in plan.restores] == [("set", "400")]
     out = apply_revert(bp, plan, reverted_at="t")
     assert out["engine"]["spark"]["conf"]["spark.sql.shuffle.partitions"] == "400"
@@ -129,17 +153,19 @@ def test_reverting_in_reverse_order_works():
     )
     cfg = _cfg({"spark.sql.shuffle.partitions": "200"})
     bp = _bp([first, second], conf={"spark.sql.shuffle.partitions": "1600"})
+    deltas = _deltas(first, second)
 
     plan2 = plan_revert(
         cfg=cfg,
         blueprint=bp,
         patch_id="p2",
         operations=[{**_CONFIG_OP[0], "value": "1600"}],
+        deltas=deltas,
     )
     bp = apply_revert(bp, plan2, reverted_at="t2")
     assert bp["engine"]["spark"]["conf"]["spark.sql.shuffle.partitions"] == "800"
 
-    plan1 = plan_revert(cfg=cfg, blueprint=bp, patch_id="p1", operations=_CONFIG_OP)
+    plan1 = plan_revert(cfg=cfg, blueprint=bp, patch_id="p1", operations=_CONFIG_OP, deltas=deltas)
     bp = apply_revert(bp, plan1, reverted_at="t1")
     assert bp["engine"]["spark"]["conf"] == {}
     assert [r["reverted_at"] for r in bp["healed_by"]] == ["t1", "t2"]
@@ -163,6 +189,7 @@ def test_refuses_when_a_later_patch_wrote_the_same_key():
             blueprint=bp,
             patch_id="p1",
             operations=_CONFIG_OP,
+            deltas=_deltas(first, second),
         )
     assert "'p2'" in str(exc.value)
     assert "spark.sql.shuffle.partitions" in str(exc.value)
@@ -171,7 +198,8 @@ def test_refuses_when_a_later_patch_wrote_the_same_key():
 def test_refuses_a_patch_carrying_a_non_config_operation():
     """A mixed patch's module half has no recorded prior state, so undoing
     only its config half would leave a hybrid Blueprint."""
-    bp = _bp([_record()], conf={"spark.sql.shuffle.partitions": "800"})
+    rec = _record()
+    bp = _bp([rec], conf={"spark.sql.shuffle.partitions": "800"})
     ops = _CONFIG_OP + [
         {"op": "set_module_config_key", "module_id": "m1", "key": "path", "value": "x"}
     ]
@@ -181,51 +209,67 @@ def test_refuses_a_patch_carrying_a_non_config_operation():
             blueprint=bp,
             patch_id="p1",
             operations=ops,
+            deltas=_deltas(rec),
         )
 
 
 def test_refuses_when_the_applied_patch_body_is_unavailable():
     """Without the body there is no proof the patch was config-only."""
-    bp = _bp([_record()], conf={"spark.sql.shuffle.partitions": "800"})
+    rec = _record()
+    bp = _bp([rec], conf={"spark.sql.shuffle.partitions": "800"})
     with pytest.raises(RevertError, match="could not be read"):
         plan_revert(
             cfg=_cfg({"spark.sql.shuffle.partitions": "200"}),
             blueprint=bp,
             patch_id="p1",
             operations=None,
+            deltas=_deltas(rec),
         )
 
 
 def test_refuses_when_the_value_was_edited_since_the_patch():
     """A hand edit since the heal: reverting would silently overwrite it."""
-    bp = _bp([_record()], conf={"spark.sql.shuffle.partitions": "999"})
+    rec = _record()
+    bp = _bp([rec], conf={"spark.sql.shuffle.partitions": "999"})
     with pytest.raises(RevertError) as exc:
         plan_revert(
             cfg=_cfg({"spark.sql.shuffle.partitions": "200"}),
             blueprint=bp,
             patch_id="p1",
             operations=_CONFIG_OP,
+            deltas=_deltas(rec),
         )
     assert "'999'" in str(exc.value)
 
 
-def test_refuses_a_record_with_no_engine_config_delta():
-    """A pipeline-only heal records no prior value for anything."""
-    bp = _bp([_record(engine_config_delta={})])
-    with pytest.raises(RevertError, match="no engine_config_delta"):
-        plan_revert(cfg=_cfg(), blueprint=bp, patch_id="p1", operations=_CONFIG_OP)
+def test_refuses_when_the_patch_index_carries_no_delta():
+    """A pipeline-only heal records no prior value for anything in the patch
+    index — renamed from `test_refuses_a_record_with_no_engine_config_delta`
+    now that the delta (and the refusal it drives) comes from the index, not
+    the Blueprint record."""
+    rec = _record(engine_config_delta={})
+    bp = _bp([rec])
+    with pytest.raises(RevertError, match="the patch index carries no"):
+        plan_revert(
+            cfg=_cfg(), blueprint=bp, patch_id="p1", operations=_CONFIG_OP, deltas=_deltas(rec)
+        )
 
 
 def test_refuses_an_unknown_patch_id_and_names_what_is_recorded():
-    bp = _bp([_record(patch_id="p1")], conf={"spark.sql.shuffle.partitions": "800"})
+    rec = _record(patch_id="p1")
+    bp = _bp([rec], conf={"spark.sql.shuffle.partitions": "800"})
     with pytest.raises(RevertError) as exc:
-        plan_revert(cfg=_cfg(), blueprint=bp, patch_id="nope", operations=_CONFIG_OP)
+        plan_revert(
+            cfg=_cfg(), blueprint=bp, patch_id="nope", operations=_CONFIG_OP, deltas=_deltas(rec)
+        )
     assert "'p1'" in str(exc.value)
 
 
 def test_refuses_a_duplicated_patch_id_rather_than_guessing():
+    r1 = _record(patch_id="p1")
+    r2 = _record(patch_id="p1")
     bp = _bp(
-        [_record(patch_id="p1"), _record(patch_id="p1")],
+        [r1, r2],
         conf={"spark.sql.shuffle.partitions": "800"},
     )
     with pytest.raises(RevertError, match="2 healed_by records"):
@@ -234,13 +278,17 @@ def test_refuses_a_duplicated_patch_id_rather_than_guessing():
             blueprint=bp,
             patch_id="p1",
             operations=_CONFIG_OP,
+            deltas=_deltas(r1, r2),
         )
 
 
 def test_refuses_an_already_reverted_record():
-    bp = _bp([_record(reverted_at="2026-02-02T00:00:00+00:00")], conf={})
+    rec = _record(reverted_at="2026-02-02T00:00:00+00:00")
+    bp = _bp([rec], conf={})
     with pytest.raises(RevertError, match="already reverted"):
-        plan_revert(cfg=_cfg(), blueprint=bp, patch_id="p1", operations=_CONFIG_OP)
+        plan_revert(
+            cfg=_cfg(), blueprint=bp, patch_id="p1", operations=_CONFIG_OP, deltas=_deltas(rec)
+        )
 
 
 def test_refuses_when_the_pre_patch_state_is_no_longer_reachable():
@@ -259,6 +307,7 @@ def test_refuses_when_the_pre_patch_state_is_no_longer_reachable():
             blueprint=bp,
             patch_id="p1",
             operations=_CONFIG_OP,
+            deltas=_deltas(rec),
         )
 
 
@@ -280,19 +329,14 @@ def test_a_typed_engine_field_reverts_through_its_own_addressing():
         engine="duckdb",
         engine_config_delta={"duckdb": {"threads": {"before": 4, "after": 16}}},
     )
-    bp: dict = {
-        "aqueduct": "1.0",
-        "id": "bp",
-        "name": "bp",
-        "modules": [],
-        "engine": {"duckdb": {"threads": 16}},
-        "healed_by": [rec],
-    }
+    bp = _bp([rec])
+    bp["engine"] = {"duckdb": {"threads": 16}}
     plan = plan_revert(
         cfg=_cfg(duckdb=DuckDBEngineConfig(threads=4)),
         blueprint=bp,
         patch_id="p1",
         operations=[{"op": "set_engine_config", "engine": "duckdb", "key": "threads", "value": 16}],
+        deltas=_deltas(rec),
     )
     out = apply_revert(bp, plan, reverted_at="t")
     assert "threads" not in out["engine"]["duckdb"]
@@ -358,11 +402,36 @@ def test_green_run_stamps_skip_a_reverted_record(tmp_path):
     assert list(records[1]["validated_on"]) == ["spark"]
 
     # Same trigger, same rule: a run's duration says nothing about a patch
-    # whose change was reverted out before the run started.
+    # whose change was reverted out before the run started. The note now
+    # lands in `patch_index`, not the YAML — `obs_store=None` makes
+    # `stamp_perf_observation` a guaranteed no-op by design (see its
+    # docstring), so exercising the property needs a real store.
+    from aqueduct.patch import index as _ix
     from aqueduct.patch.apply import stamp_perf_observation
+    from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+    from aqueduct.surveyor.ddl import _DDL
 
-    written = stamp_perf_observation(bp_path, "spark", obs_store=None, run_id="r1")
+    store = DuckDBObservabilityStore(tmp_path / "obs.db")
+    with store.connect() as cur:
+        cur.execute(_DDL)
+        cur.execute(
+            "INSERT INTO run_records (run_id, blueprint_id, status, started_at, "
+            "finished_at, module_results, parent_run_id) VALUES (?,?,?,?,?,?,NULL)",
+            [
+                "r1",
+                "bp",
+                "success",
+                "2026-02-03T00:00:00+00:00",
+                "2026-02-03T00:01:00+00:00",
+                '[{"module_id": "src", "status": "success", "error": null, ' '"engine": "spark"}]',
+            ],
+        )
+
+    written = stamp_perf_observation(bp_path, "spark", obs_store=store, run_id="r1")
+    # Only p2 (not reverted) collects a note; p1's reverted change is not in
+    # the Blueprint this run executed, so it earns nothing.
     assert len(written) == 1
-    records = _yaml_load(bp_path)["healed_by"]
-    assert "perf_observations" not in records[0]
-    assert len(records[1]["perf_observations"]) == 1
+    with store.connect() as cur:
+        _ix.ensure_schema(cur)
+        assert _ix.heal_provenance(cur, "p1")["perf_observations"] == []
+        assert len(_ix.heal_provenance(cur, "p2")["perf_observations"]) == 1

@@ -286,6 +286,14 @@ edges:
 
 
 def test_apply_patch_file_records_the_effective_delta_in_healed_by(tmp_path):
+    from aqueduct.patch import index as _ix
+    from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+    from aqueduct.surveyor.ddl import _DDL
+
+    obs_store = DuckDBObservabilityStore(tmp_path / "obs.db")
+    with obs_store.connect() as cur:
+        cur.execute(_DDL)
+
     bp_path = tmp_path / "bp.yml"
     bp_path.write_text(_BP_YAML, encoding="utf-8")
     patch_path = tmp_path / "patch.json"
@@ -307,25 +315,30 @@ def test_apply_patch_file_records_the_effective_delta_in_healed_by(tmp_path):
         patch_path=patch_path,
         patches_dir=tmp_path / "patches",
         cfg=_cfg(),
+        obs_store=obs_store,
     )
 
     import yaml
 
     patched = yaml.safe_load(bp_path.read_text(encoding="utf-8"))
     record = patched["healed_by"][0]
-    assert record["engine_config_delta"] == {
+    # The delta itself no longer belongs to the Blueprint record — see
+    # aqueduct/parser/schema.py::MOVED_HEALED_BY_FIELDS.
+    assert "engine_config_delta" not in record
+
+    with obs_store.connect() as cur:
+        facts = _ix.heal_provenance(cur, "cfgdelta")
+    assert facts["engine_config_delta"] == {
         "spark": {"spark.sql.shuffle.partitions": {"before": "200", "after": 800}}
     }
 
-    # The stamped Blueprint must still parse — the new field is a real schema
-    # member, not extra baggage `extra="forbid"` rejects on the next load.
+    # The stamped Blueprint must still parse — the bounded record it now
+    # carries is a real schema member, not extra baggage `extra="forbid"`
+    # rejects on the next load.
     from aqueduct.parser.parser import parse
 
     parsed = parse(str(bp_path))
-    assert (
-        parsed.healed_by[0].engine_config_delta["spark"]["spark.sql.shuffle.partitions"]["after"]
-        == 800
-    )
+    assert parsed.healed_by[0].patch_id == "cfgdelta"
 
 
 def test_apply_patch_file_omits_the_field_for_a_pipeline_only_patch(tmp_path):

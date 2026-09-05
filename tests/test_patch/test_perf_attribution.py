@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from aqueduct.executor.models import MODULE_METRICS_DDL
-from aqueduct.patch.apply import stamp_perf_observation
+from aqueduct.patch.apply import stamp_perf_observation, stamp_validated_engine
 from aqueduct.patch.perf_attribution import (
     VOLUME_UNAVAILABLE,
     RunPerf,
@@ -338,32 +338,59 @@ healed_by:
     classification: dialect_neutral
     applied_at: "2026-05-01T10:00:00+00:00"
     validated_on: []
-    perf_baseline:
-      run_id: base
-      status: success
-      started_at: "2026-05-01T09:00:00+00:00"
-      finished_at: "2026-05-01T09:00:50+00:00"
-      duration_ms: 50000
-      engines: [spark]
-      records_read: 1000
-      bytes_read: 10000
 """
+
+# The `perf_baseline` this record used to carry inline now lives in the
+# patch index (aqueduct/parser/schema.py::MOVED_HEALED_BY_FIELDS) — seed it
+# through `record_heal_provenance`, the same function the real apply path
+# writes it with, rather than round-tripping it through YAML.
+_PERF_BASELINE = {
+    "run_id": "base",
+    "status": "success",
+    "started_at": "2026-05-01T09:00:00+00:00",
+    "finished_at": "2026-05-01T09:00:50+00:00",
+    "duration_ms": 50000,
+    "engines": ["spark"],
+    "records_read": 1000,
+    "bytes_read": 10000,
+}
+
+
+def _seed_baseline(store, patch_id="p1", *, engine="spark", perf_baseline=None):
+    from aqueduct.patch import index as _ix
+
+    with store.connect() as cur:
+        _ix.ensure_schema(cur)
+        _ix.record_heal_provenance(
+            cur,
+            patch_id,
+            engine=engine,
+            perf_baseline=_PERF_BASELINE if perf_baseline is None else perf_baseline,
+        )
+
+
+def _observations(store, patch_id="p1"):
+    from aqueduct.patch import index as _ix
+
+    with store.connect() as cur:
+        _ix.ensure_schema(cur)
+        return _ix.heal_provenance(cur, patch_id)["perf_observations"]
 
 
 class TestStampPerfObservation:
     def test_green_run_appends_one_observation(self, tmp_path, store):
         bp = tmp_path / "bp.yml"
         bp.write_text(_BP_WITH_PROVENANCE)
+        _seed_baseline(store)
         _add_run(store, "green", start=_NOW, duration_s=160, records=1000)
         written = stamp_perf_observation(bp, "spark", obs_store=store, run_id="green")
         assert len(written) == 1
         assert written[0]["status"] == "observed"
         assert written[0]["duration_ratio"] == 3.2
-        import yaml
 
-        rec = yaml.safe_load(bp.read_text())["healed_by"][0]
-        assert len(rec["perf_observations"]) == 1
-        assert rec["perf_observations"][0]["engine"] == "spark"
+        observations = _observations(store)
+        assert len(observations) == 1
+        assert observations[0]["engine"] == "spark"
 
     def test_second_green_run_on_the_same_engine_adds_nothing(self, tmp_path, store):
         bp = tmp_path / "bp.yml"
@@ -377,6 +404,7 @@ class TestStampPerfObservation:
     def test_a_second_engine_gets_its_own_note(self, tmp_path, store):
         bp = tmp_path / "bp.yml"
         bp.write_text(_BP_WITH_PROVENANCE)
+        _seed_baseline(store)
         _add_run(store, "green", start=_NOW, duration_s=160, records=1000)
         _add_run(store, "duck", start=_NOW, duration_s=90, engine="duckdb")
         stamp_perf_observation(bp, "spark", obs_store=store, run_id="green")
@@ -384,10 +412,9 @@ class TestStampPerfObservation:
         assert len(written) == 1
         # Baseline ran on spark, this run on duckdb — refused, not compared.
         assert written[0]["status"] == "not_applicable"
-        import yaml
 
-        rec = yaml.safe_load(bp.read_text())["healed_by"][0]
-        assert [o["engine"] for o in rec["perf_observations"]] == ["spark", "duckdb"]
+        observations = _observations(store)
+        assert [o["engine"] for o in observations] == ["spark", "duckdb"]
 
     def test_blueprint_without_provenance_is_left_untouched(self, tmp_path, store):
         bp = tmp_path / "bp.yml"
@@ -403,7 +430,14 @@ class TestStampPerfObservation:
         )
 
     def test_broken_store_never_fails_the_run(self, tmp_path):
-        """The stamp is on the run-success path — it must never raise."""
+        """The stamp is on the run-success path — it must never raise.
+
+        The note and its baseline both live in the patch index now, so a
+        store that cannot connect leaves nothing to write — unlike the old
+        YAML-only shape, there is no longer a way to produce a
+        `not_applicable` note without ever reaching the store. The property
+        under test is narrower but still real: no exception escapes.
+        """
         bp = tmp_path / "bp.yml"
         bp.write_text(_BP_WITH_PROVENANCE)
 
@@ -412,8 +446,7 @@ class TestStampPerfObservation:
                 raise RuntimeError("store is down")
 
         written = stamp_perf_observation(bp, "spark", obs_store=Exploding(), run_id="x")
-        assert len(written) == 1
-        assert written[0]["status"] == "not_applicable"
+        assert written == []
 
     def test_apply_snapshots_the_pre_patch_baseline(self, tmp_path, store):
         """`aqueduct patch apply` records the last green run BEFORE it."""
@@ -444,9 +477,16 @@ class TestStampPerfObservation:
         )
         apply_patch_file(bp, patch, patches_dir=tmp_path / "patches", obs_store=store)
         rec = yaml.safe_load(bp.read_text())["healed_by"][0]
-        assert rec["perf_baseline"]["run_id"] == "pre"
-        assert rec["perf_baseline"]["duration_ms"] == 42_000
-        assert rec["perf_baseline"]["records_read"] == 999
+        assert "perf_baseline" not in rec
+        patch_id = rec["patch_id"]
+
+        from aqueduct.patch import index as _ix
+
+        with store.connect() as cur:
+            facts = _ix.heal_provenance(cur, patch_id)
+        assert facts["perf_baseline"]["run_id"] == "pre"
+        assert facts["perf_baseline"]["duration_ms"] == 42_000
+        assert facts["perf_baseline"]["records_read"] == 999
 
     def test_apply_omits_the_baseline_when_no_green_run_preceded_it(self, tmp_path, store):
         import yaml
@@ -477,15 +517,76 @@ class TestStampPerfObservation:
         rec = yaml.safe_load(bp.read_text())["healed_by"][0]
         assert "perf_baseline" not in rec
 
+        # The property this test is actually about: no baseline was
+        # recorded anywhere, not merely that the Blueprint never carries the
+        # field (it never does now, seeded or not — see the test above).
+        from aqueduct.patch import index as _ix
+
+        with store.connect() as cur:
+            facts = _ix.heal_provenance(cur, rec["patch_id"])
+        assert facts["perf_baseline"] == {}
+
     def test_stamped_blueprint_still_parses(self, tmp_path, store):
-        """The note lands in a schema-valid Blueprint, not a freeform blob."""
+        """A perf stamp writes NOTHING to the Blueprint — a stronger property
+        than "the file still parses" now that the note and its baseline both
+        live in `patch_index`. Assert the file is untouched, then that the
+        note landed in a schema-valid shape by way of `heal_provenance`."""
         from aqueduct.parser.parser import parse
 
         bp = tmp_path / "bp.yml"
         bp.write_text(_BP_WITH_PROVENANCE)
+        _seed_baseline(store)
+        before = bp.read_text()
         _add_run(store, "green", start=_NOW, duration_s=160, records=1000)
         stamp_perf_observation(bp, "spark", obs_store=store, run_id="green")
+        assert bp.read_text() == before
+
         parsed = parse(str(bp))
         rec = parsed.healed_by[0]
-        assert rec.perf_baseline["duration_ms"] == 50000
-        assert rec.perf_observations[0]["duration_ratio"] == 3.2
+
+        facts = _observations(store)
+        assert facts[0]["duration_ratio"] == 3.2
+
+        from aqueduct.patch import index as _ix
+
+        with store.connect() as cur:
+            all_facts = _ix.heal_provenance(cur, rec.patch_id)
+        assert all_facts["perf_baseline"]["duration_ms"] == 50000
+
+    def test_a_fully_stamped_green_run_leaves_the_file_byte_identical(self, tmp_path, store):
+        """Neither green-run stamp writes to a Blueprint that already
+        reflects the outcome: `validated_on` already names the engine, and
+        the perf note already exists in the index. Content AND mtime must
+        be untouched — a rewrite that happens to reproduce the same bytes
+        would still be a real write (and a real cost) that this guards
+        against. The complement — `validated_on` genuinely gaining an
+        engine DOES rewrite the file — is asserted right after, so the
+        untouched case isn't proven merely by an accident of no
+        assertions."""
+        import time
+
+        bp = tmp_path / "bp.yml"
+        bp.write_text(_BP_WITH_PROVENANCE.replace("validated_on: []", "validated_on: [spark]"))
+        _seed_baseline(store)
+        _add_run(store, "green", start=_NOW, duration_s=160, records=1000)
+        # Prime the perf note so the second pass below has nothing left to add.
+        stamp_perf_observation(bp, "spark", obs_store=store, run_id="green")
+
+        before_text = bp.read_text()
+        before_mtime_ns = bp.stat().st_mtime_ns
+        # Give the filesystem clock room to show a change if one occurs —
+        # some filesystems have coarse mtime resolution.
+        time.sleep(0.01)
+
+        changed = stamp_validated_engine(bp, "spark")
+        observations = stamp_perf_observation(bp, "spark", obs_store=store, run_id="green")
+
+        assert changed is False
+        assert observations == []
+        assert bp.read_text() == before_text
+        assert bp.stat().st_mtime_ns == before_mtime_ns
+
+        # Complement: a genuinely new engine DOES rewrite the file.
+        changed2 = stamp_validated_engine(bp, "duckdb")
+        assert changed2 is True
+        assert bp.read_text() != before_text

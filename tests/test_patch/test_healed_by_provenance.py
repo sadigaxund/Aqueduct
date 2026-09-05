@@ -49,6 +49,14 @@ def _write_patch(path, *, patch_id="p1", meta=None, key="path", value="p2"):
 
 
 def test_apply_writes_healed_by_block(tmp_path):
+    from aqueduct.patch import index as _ix
+    from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+    from aqueduct.surveyor.ddl import _DDL
+
+    obs_store = DuckDBObservabilityStore(tmp_path / "obs.db")
+    with obs_store.connect() as cur:
+        cur.execute(_DDL)
+
     bp_path = _write_bp(tmp_path / "bp.yml")
     patch_path = _write_patch(
         tmp_path / "patch.json",
@@ -58,6 +66,7 @@ def test_apply_writes_healed_by_block(tmp_path):
         blueprint_path=bp_path,
         patch_path=patch_path,
         patches_dir=tmp_path / "patches",
+        obs_store=obs_store,
     )
     written = yaml.safe_load(bp_path.read_text())
     assert "healed_by" in written
@@ -65,11 +74,18 @@ def test_apply_writes_healed_by_block(tmp_path):
     rec = written["healed_by"][0]
     assert rec["patch_id"] == "p1"
     assert rec["engine"] == "duckdb"
-    assert rec["engine_version"] == "1.5.4"
-    assert rec["run_id"] == "r1"
     assert rec["classification"] == "dialect_neutral"  # key="path"
     assert rec["validated_on"] == []
     assert "applied_at" in rec
+    # engine_version/run_id moved out of the Blueprint record and into the
+    # patch index — see aqueduct/parser/schema.py::MOVED_HEALED_BY_FIELDS.
+    assert "engine_version" not in rec
+    assert "run_id" not in rec
+
+    with obs_store.connect() as cur:
+        facts = _ix.heal_provenance(cur, "p1")
+    assert facts["engine_version"] == "1.5.4"
+    assert facts["run_id"] == "r1"
 
 
 def test_apply_appends_to_existing_healed_by(tmp_path):
@@ -193,3 +209,81 @@ def test_stamp_validated_engine_multiple_records(tmp_path):
 def test_stamp_validated_engine_never_raises_on_missing_file(tmp_path):
     missing = tmp_path / "does_not_exist.yml"
     assert stamp_validated_engine(missing, "spark") is False
+
+
+# ── old-shape (pre-2.x) healed_by records are rejected by name ─────────────
+#
+# The five fields `HealedByRecordSchema` used to carry now live in the
+# `patch_index` table (aqueduct/patch/index.py) instead — see
+# aqueduct/parser/schema.py::MOVED_HEALED_BY_FIELDS. A Blueprint still
+# carrying one of them fails parsing with the field named, not a generic
+# "extra inputs are not permitted".
+
+
+def _old_shape_record(**extra):
+    return {
+        "patch_id": "p1",
+        "engine": "spark",
+        "classification": "dialect_neutral",
+        "applied_at": "2026-01-01T00:00:00+00:00",
+        "validated_on": [],
+        **extra,
+    }
+
+
+def test_engine_config_delta_in_healed_by_is_rejected_by_name(tmp_path):
+    from aqueduct.parser.parser import parse
+
+    bp_path = _write_bp(
+        tmp_path / "bp.yml",
+        healed_by=[
+            _old_shape_record(
+                engine_config_delta={
+                    "spark": {"spark.sql.shuffle.partitions": {"before": "200", "after": "800"}}
+                }
+            )
+        ],
+    )
+    with pytest.raises(Exception) as exc:
+        parse(str(bp_path))
+    msg = str(exc.value)
+    assert "engine_config_delta" in msg
+    assert "patch index" in msg
+
+
+def test_perf_observations_in_healed_by_is_rejected_by_name(tmp_path):
+    from aqueduct.parser.parser import parse
+
+    bp_path = _write_bp(
+        tmp_path / "bp.yml",
+        healed_by=[
+            _old_shape_record(
+                perf_observations=[{"engine": "spark", "status": "observed"}],
+            )
+        ],
+    )
+    with pytest.raises(Exception) as exc:
+        parse(str(bp_path))
+    msg = str(exc.value)
+    assert "perf_observations" in msg
+    assert "patch index" in msg
+
+
+def test_parse_dict_also_rejects_the_old_shape(tmp_path):
+    """Same rejection on the in-memory entrypoint patch flows use, not just
+    the file-based `parse`."""
+    from aqueduct.parser.parser import parse_dict
+
+    raw = {
+        "aqueduct": "1.0",
+        "id": "test.bp",
+        "name": "Test Blueprint",
+        "modules": [],
+        "edges": [],
+        "healed_by": [_old_shape_record(engine_version="1.5.4")],
+    }
+    with pytest.raises(Exception) as exc:
+        parse_dict(raw, base_dir=tmp_path)
+    msg = str(exc.value)
+    assert "engine_version" in msg
+    assert "patch index" in msg

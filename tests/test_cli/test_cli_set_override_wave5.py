@@ -13,6 +13,7 @@ genuinely diverged revert falsely pass.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 import yaml
@@ -31,6 +32,29 @@ engine:
     conf:
       spark.sql.shuffle.partitions: 200
 """
+
+_BLUEPRINT_ID = "demo_bp"
+
+
+def _touch_obs_store(tmp_path, blueprint_id: str = _BLUEPRINT_ID) -> None:
+    """Pre-create the (empty) DuckDB observability store `patch apply`'s
+    heal-provenance write and `patch revert`'s read both resolve to.
+
+    See `tests/test_cli/test_cli_patch_revert.py::_touch_obs_store` for the
+    full rationale: `_patch_index_obs_store` (`aqueduct/cli/patch.py`)
+    resolves through `open_obs_read`, which returns None — a best-effort
+    skip, not an error — when no `observability.db` file exists yet at the
+    routed path. These tests never `aqueduct run`, so nothing else would
+    create it first. Requires `monkeypatch.chdir(tmp_path)`.
+    """
+    from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+
+    store = DuckDBObservabilityStore(
+        Path(tmp_path) / ".aqueduct" / "observability" / blueprint_id / "observability.db"
+    )
+    with store.connect():
+        pass
+
 
 _BLUEPRINT = """
 aqueduct: "1.0"
@@ -166,12 +190,17 @@ def test_patch_preview_set_pins_the_same_key_the_patch_writes(tmp_path):
 # ── patch revert: --set reaches the resolved config (patch-store lookup) ───────
 
 
-def test_patch_revert_set_reroutes_the_patch_store_used_to_read_the_applied_body(tmp_path):
+def test_patch_revert_set_reroutes_the_patch_store_used_to_read_the_applied_body(
+    tmp_path, monkeypatch
+):
     """`--set stores.blob.path=...` changes WHICH patch store `patch revert`
     reads the applied patch body from — proof `--set` reaches this
     command's resolved config. The equality check itself is untouched by
     this (see the two tests below); this test only exercises the lookup
-    `_applied_patch_operations`/`_patch_store_from` perform."""
+    `_applied_patch_operations`/`_patch_store_from` perform.
+    """
+    monkeypatch.chdir(tmp_path)
+    _touch_obs_store(tmp_path)
     runner = CliRunner()
     patch_file = _project(tmp_path, [_SET_CONF])
     assert _apply(runner, tmp_path, patch_file).exit_code == exit_codes.SUCCESS
@@ -209,12 +238,14 @@ def test_patch_revert_set_reroutes_the_patch_store_used_to_read_the_applied_body
 # ── patch revert: the prior-values equality check stays UNPINNED ───────────────
 
 
-def test_set_override_does_not_make_a_legitimate_revert_abort(tmp_path):
+def test_set_override_does_not_make_a_legitimate_revert_abort(tmp_path, monkeypatch):
     """The dangerous direction (1/2): a `--set` on the SAME key the patch
     recorded must NOT make an otherwise-clean revert abort. If the
     equality check used the --set-PINNED resolution, the pinned value
     (555) would differ from what the patch recorded (800) and the revert
     would incorrectly refuse."""
+    monkeypatch.chdir(tmp_path)
+    _touch_obs_store(tmp_path)
     runner = CliRunner()
     patch_file = _project(tmp_path, [_SET_CONF])
     assert _apply(runner, tmp_path, patch_file).exit_code == exit_codes.SUCCESS
@@ -232,12 +263,14 @@ def test_set_override_does_not_make_a_legitimate_revert_abort(tmp_path):
     assert after["healed_by"][0]["reverted_at"]
 
 
-def test_set_override_does_not_let_a_diverged_revert_falsely_pass(tmp_path):
+def test_set_override_does_not_let_a_diverged_revert_falsely_pass(tmp_path, monkeypatch):
     """The dangerous direction (2/2): a genuinely diverged Blueprint (hand-
     edited to 123 after the patch recorded 800) must still abort even when
     `--set` happens to name the SAME key with the value the patch recorded
     (800) — the coincidence that would mask real drift if the equality
     check were fed the pinned resolution instead of the unpinned one."""
+    monkeypatch.chdir(tmp_path)
+    _touch_obs_store(tmp_path)
     runner = CliRunner()
     patch_file = _project(tmp_path, [_SET_CONF])
     assert _apply(runner, tmp_path, patch_file).exit_code == exit_codes.SUCCESS
@@ -307,9 +340,20 @@ def test_doctor_set_does_not_reach_the_healed_config_drift_check(tmp_path):
     """Same equality danger as `patch revert`'s: `check_healed_engine_config`
     compares a `healed_by` record's recorded value against the effective
     session config. A `--set` on that same key must not manufacture false
-    drift (or hide real drift) for this diagnostic either."""
+    drift (or hide real drift) for this diagnostic either.
+
+    `engine_config_delta` no longer lives inline in the Blueprint's
+    `healed_by:` record (see `aqueduct/patch/index.py::HealedByRecordSchema`)
+    — the Blueprint carries only the bounded record, and the delta is seeded
+    into the `patch_index` table of a real DuckDB observability store at the
+    path `open_obs_read` resolves for this blueprint's `id`.
+    """
+    obs_path = tmp_path / "obs"
     config = tmp_path / "aqueduct.yml"
-    config.write_text(_AQUEDUCT_YML, encoding="utf-8")
+    config.write_text(
+        _AQUEDUCT_YML + f"stores:\n  observability:\n    path: {obs_path}\n",
+        encoding="utf-8",
+    )
     bp = tmp_path / "blueprint.yml"
     bp.write_text(
         _BLUEPRINT.rstrip()
@@ -323,14 +367,23 @@ healed_by:
     engine: spark
     classification: engine_shaped
     applied_at: '2026-01-01T00:00:00+00:00'
-    engine_config_delta:
-      spark:
-        spark.sql.shuffle.partitions:
-          before: 200
-          after: 800
 """,
         encoding="utf-8",
     )
+    from aqueduct.patch import index as _ix
+    from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+
+    store = DuckDBObservabilityStore(obs_path / _BLUEPRINT_ID / "observability.db")
+    with store.connect() as cur:
+        _ix.ensure_schema(cur)
+        _ix.record_heal_provenance(
+            cur,
+            "fix-shuffle",
+            engine="spark",
+            engine_config_delta={
+                "spark": {"spark.sql.shuffle.partitions": {"before": 200, "after": 800}}
+            },
+        )
 
     baseline = run_doctor(config_path=config, skip_spark=True, blueprint_path=bp)
     baseline_row = next(r for r in baseline if r.name.startswith("healed-config"))
