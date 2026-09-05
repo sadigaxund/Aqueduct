@@ -14,9 +14,9 @@ from datetime import datetime
 
 import pytest
 
-pytestmark = pytest.mark.unit
-
 from aqueduct.utils import format_error_loc, utcnow_iso
+
+pytestmark = pytest.mark.unit
 
 
 class TestFormatErrorLoc:

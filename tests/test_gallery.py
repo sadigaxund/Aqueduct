@@ -115,8 +115,8 @@ def test_aqtest_runs_green(test_path, spark):
 def test_aqscenario_heals_with_mocked_agent(sc_path, tmp_path):
     from unittest.mock import patch
 
-    from aqueduct.surveyor.scenario import load_scenario, run_scenario
     from aqueduct.agent import AgentPatchResult, StopReason
+    from aqueduct.surveyor.scenario import load_scenario, run_scenario
 
     scenario = load_scenario(sc_path)
 

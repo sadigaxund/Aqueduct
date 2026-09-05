@@ -6,7 +6,7 @@ import pytest
 from click.testing import CliRunner
 
 from aqueduct.cli import cli
-from aqueduct.exit_codes import CONFIG_ERROR, SUCCESS
+from aqueduct.exit_codes import CONFIG_ERROR
 
 pytestmark = pytest.mark.unit
 

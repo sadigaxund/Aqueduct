@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
-pytestmark = pytest.mark.unit
 from pydantic import ValidationError
 
 from aqueduct.patch.grammar import (
@@ -14,6 +12,8 @@ from aqueduct.patch.grammar import (
     RetiredPatchOpError,
     SetEngineConfigOp,
 )
+
+pytestmark = pytest.mark.unit
 
 
 def test_valid_patch_spec_parsing():

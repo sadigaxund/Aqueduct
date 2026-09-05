@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+from datetime import UTC
+from pathlib import Path
+
+import duckdb
 import pytest
 
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
-import os
-import duckdb
-from pathlib import Path
-from aqueduct.executor.spark.metrics import observe_df, get_observation, dir_bytes, null_metrics
 from aqueduct.executor.spark.executor import _write_stage_metrics
+from aqueduct.executor.spark.metrics import dir_bytes, get_observation, null_metrics, observe_df
+
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 
 def test_observe_df_fallback():
@@ -241,7 +243,8 @@ def test_egress_writes_module_metrics_on_success(spark, tmp_path: Path):
 def test_row_count_estimate_spark_listener_reads_module_metrics(spark, tmp_path: Path):
     """row_count_estimate method=spark_listener: when module_metrics row exists,
     estimate equals records_written value."""
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from aqueduct.executor.spark.probe import _row_count_estimate
 
     store_dir = tmp_path / "store"
@@ -274,7 +277,7 @@ def test_row_count_estimate_spark_listener_reads_module_metrics(spark, tmp_path:
                 77,
                 1024,
                 100,
-                datetime.now(tz=timezone.utc).isoformat(),
+                datetime.now(tz=UTC).isoformat(),
             ],
         )
     finally:

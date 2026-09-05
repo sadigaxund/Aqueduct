@@ -8,9 +8,9 @@ import json
 import pytest
 import yaml
 
-pytestmark = pytest.mark.unit
-
 from aqueduct.patch.apply import apply_patch_file, stamp_validated_engine
+
+pytestmark = pytest.mark.unit
 
 
 def _write_bp(path, healed_by=None):

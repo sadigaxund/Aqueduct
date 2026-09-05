@@ -34,7 +34,7 @@ def _write_bp(tmp_path, agent_block: str = "", extra: str = ""):
 
 def test_approval_aggressive_value_rejected(tmp_path):
     """`approval: aggressive` no longer parses (removed in 2.0) → ParseError."""
-    from aqueduct.parser.parser import parse, ParseError
+    from aqueduct.parser.parser import ParseError, parse
 
     bp = _write_bp(tmp_path, agent_block="agent:\n  approval: aggressive\n")
     with pytest.raises(ParseError):
@@ -43,7 +43,7 @@ def test_approval_aggressive_value_rejected(tmp_path):
 
 def test_approval_mode_key_rejected(tmp_path):
     """The former `approval_mode` YAML key is rejected (extra=forbid)."""
-    from aqueduct.parser.parser import parse, ParseError
+    from aqueduct.parser.parser import ParseError, parse
 
     bp = _write_bp(tmp_path, agent_block="agent:\n  approval_mode: auto\n")
     with pytest.raises(ParseError):
@@ -52,7 +52,7 @@ def test_approval_mode_key_rejected(tmp_path):
 
 def test_aggressive_max_patches_rejected(tmp_path):
     """`aggressive_max_patches` alias removed → rejected."""
-    from aqueduct.parser.parser import parse, ParseError
+    from aqueduct.parser.parser import ParseError, parse
 
     bp = _write_bp(tmp_path, agent_block="agent:\n  aggressive_max_patches: 3\n")
     with pytest.raises(ParseError):
@@ -85,7 +85,7 @@ def test_danger_allow_multi_patch_canonical(tmp_path):
 
 def test_danger_allow_aggressive_patching_rejected(tmp_path):
     """The `allow_aggressive_patching` alias was removed → rejected."""
-    from aqueduct.config import load_config, ConfigError
+    from aqueduct.config import ConfigError, load_config
 
     cfg_file = tmp_path / "aqueduct.yml"
     cfg_file.write_text(
@@ -96,8 +96,8 @@ def test_danger_allow_aggressive_patching_rejected(tmp_path):
 
 
 def test_compiler_manifest_serialises_max_patches(tmp_path):
-    from aqueduct.parser.parser import parse
     from aqueduct.compiler.compiler import compile as compile_bp
+    from aqueduct.parser.parser import parse
 
     bp = _write_bp(tmp_path, agent_block="agent:\n  max_patches: 4\n")
     manifest = compile_bp(parse(bp), blueprint_path=bp)
@@ -110,8 +110,10 @@ def test_compiler_manifest_serialises_max_patches(tmp_path):
 @pytest.mark.spark
 def test_allow_multi_patch_flag_works(tmp_path):
     """`--allow-multi-patch` overrides danger.allow_multi_patch=false (no block)."""
-    from click.testing import CliRunner
     from unittest.mock import MagicMock, patch
+
+    from click.testing import CliRunner
+
     from aqueduct.cli import cli
 
     bp = _write_bp(tmp_path, agent_block="agent:\n  approval: auto\n  max_patches: 2\n")
@@ -135,8 +137,10 @@ def test_allow_multi_patch_flag_works(tmp_path):
 @pytest.mark.spark
 def test_max_patches_gt_one_blocks_without_danger_or_flag(tmp_path):
     """`max_patches: 2` without danger gate AND without --allow-multi-patch → exit 1."""
-    from click.testing import CliRunner
     from unittest.mock import patch
+
+    from click.testing import CliRunner
+
     from aqueduct.cli import cli
 
     bp = _write_bp(tmp_path, agent_block="agent:\n  approval: auto\n  max_patches: 2\n")

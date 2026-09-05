@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.unit
 from aqueduct.patch.grammar import (
     AddArcadeRefOp,
     AddProbeOp,
@@ -23,6 +22,8 @@ from aqueduct.patch.operations import (
     PatchOperationError,
     apply_operation,
 )
+
+pytestmark = pytest.mark.unit
 
 
 @pytest.fixture

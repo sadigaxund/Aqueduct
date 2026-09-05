@@ -5,13 +5,12 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-pytestmark = pytest.mark.unit
 import yaml
-from pathlib import Path
 from pydantic import ValidationError
 
 from aqueduct.config import AqueductConfig, ConfigError, load_config
+
+pytestmark = pytest.mark.unit
 
 
 def test_load_config_implicit_missing(monkeypatch, tmp_path):

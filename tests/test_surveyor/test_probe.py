@@ -7,8 +7,6 @@ from unittest.mock import MagicMock
 import duckdb
 import pytest
 
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
-
 try:
     from pyspark.sql import SparkSession
 except ImportError:
@@ -16,6 +14,8 @@ except ImportError:
 
 from aqueduct.executor.spark.probe import execute_probe
 from aqueduct.parser.models import Module
+
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 
 def test_execute_probe_no_signals(spark: SparkSession, tmp_path: Path):

@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 
 import pytest
-
-pytestmark = pytest.mark.unit
 import yaml
 
 from aqueduct.patch.apply import (
@@ -17,6 +15,8 @@ from aqueduct.patch.apply import (
     reject_patch,
 )
 from aqueduct.patch.grammar import PatchSpec
+
+pytestmark = pytest.mark.unit
 
 
 @pytest.fixture

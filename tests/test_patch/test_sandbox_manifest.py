@@ -15,15 +15,15 @@ Covers:
 from __future__ import annotations
 
 import dataclasses
-from pathlib import Path
 
 import pytest
 
+from aqueduct.compiler.models import Manifest
+from aqueduct.parser.models import Edge, Module
+from aqueduct.patch.preview import build_sandbox_manifest
+
 pytestmark = pytest.mark.unit
 
-from aqueduct.parser.models import Edge, Module
-from aqueduct.compiler.models import Manifest
-from aqueduct.patch.preview import build_sandbox_manifest
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 

@@ -6,8 +6,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-pytestmark = pytest.mark.unit
-
 from aqueduct.patch.grammar import PatchSpec
 from aqueduct.patch.preview import (
     _live_lineage_rows,
@@ -15,6 +13,8 @@ from aqueduct.patch.preview import (
     run_lineage_gate,
     touched_module_ids,
 )
+
+pytestmark = pytest.mark.unit
 
 
 def _patch(*ops):
@@ -361,9 +361,9 @@ class TestGate2NotApplicable:
         assert result.status != "not_applicable"
 
 
-from pydantic import ValidationError
+from pydantic import ValidationError  # noqa: E402
 
-from aqueduct.config import AgentConnectionConfig
+from aqueduct.config import AgentConnectionConfig  # noqa: E402
 
 
 class TestAgentConfigValidation:
@@ -447,7 +447,6 @@ edges: []
         # ExecutorProtocol via get_protocol() and calls THROUGH it — no
         # lazy pyspark-importing `aqueduct.executor` __getattr__ path is
         # touched, so no ExecuteError-seeding workaround is needed anymore.
-        mock_compile = None
         with (
             patch("aqueduct.executor.protocol.get_protocol") as mock_get_protocol,
             patch("aqueduct.parser.parser.parse_dict") as mock_parse,
@@ -534,7 +533,7 @@ edges:
         # test_sandbox_gate_uses_blueprint_parent_as_base_dir.
         with (
             patch("aqueduct.executor.protocol.get_protocol") as mock_get_protocol,
-            patch("aqueduct.parser.parser.parse_dict") as mock_parse,
+            patch("aqueduct.parser.parser.parse_dict"),
             patch("aqueduct.compiler.compiler.compile") as mock_compile,
         ):
             from aqueduct.compiler.models import Manifest

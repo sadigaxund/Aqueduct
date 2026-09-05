@@ -25,7 +25,7 @@ try:
 except ImportError:
     SparkSession = None  # type: ignore[assignment]
 
-from aqueduct.parser.parser import parse
+from aqueduct.parser.parser import parse  # noqa: E402
 
 BLUEPRINTS = Path(__file__).parent.parent / "fixtures" / "blueprints"
 
@@ -435,7 +435,7 @@ def test_table_ingress_egress_round_trip(spark: SparkSession, tmp_path):
 
     bp_path = tmp_path / "bp_table.yml"
     bp_path.write_text(
-        f"""aqueduct: "1.0"
+        """aqueduct: "1.0"
 id: table_test.rt
 name: "Table round trip"
 modules:
@@ -474,7 +474,7 @@ def test_table_and_path_mutually_exclusive_at_parse(spark: SparkSession, tmp_pat
     """table: + path: together are rejected."""
     bp_path = tmp_path / "bp_mutex.yml"
     bp_path.write_text(
-        f"""aqueduct: "1.0"
+        """aqueduct: "1.0"
 id: table_test.mutex
 name: "mutual exclusivity"
 modules:

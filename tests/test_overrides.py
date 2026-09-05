@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import json
-import pickle
-
 import pytest
 
+from aqueduct.config import AqueductConfig
 from aqueduct.overrides import (
     OverrideError,
     _coerce_scalar,
@@ -16,7 +14,6 @@ from aqueduct.overrides import (
     suggest_for_path,
     to_nested,
 )
-from aqueduct.config import AqueductConfig
 
 pytestmark = pytest.mark.unit
 
@@ -250,7 +247,6 @@ class TestRouteOverrides:
             route_overrides(["agent.aproval_mode=auto"], allow_blueprint=False)
 
     def test_unknown_path_with_suggestion(self):
-        from aqueduct.parser.schema import BlueprintSchema as BS
 
         try:
             route_overrides(["agent.aproval_mode=auto"], allow_blueprint=True)

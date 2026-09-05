@@ -7,14 +7,14 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-pytestmark = pytest.mark.unit
 from click.testing import CliRunner
 
 from aqueduct.cli import cli
 from aqueduct.config import AqueductConfig
 from aqueduct.patch.apply import PatchError, _check_guardrails
 from aqueduct.patch.grammar import PatchSpec
+
+pytestmark = pytest.mark.unit
 
 # Gate 1 needs the `aqueduct.yml` layer to answer the effective-engine-config
 # check; these fixtures assert guardrail behaviour, so a defaults-only config

@@ -1,14 +1,17 @@
 """Tests for the Executor layer: SQL Join operation."""
 
 from __future__ import annotations
-from pathlib import Path
-import pytest
 
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
+from pathlib import Path
+
+import pytest
 from pyspark.sql import SparkSession
 
 from aqueduct.executor.spark.channel import ChannelError, execute_channel
 from aqueduct.parser.models import Module
+
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
+
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 
@@ -87,8 +90,8 @@ class TestJoinOperation:
     @pytest.mark.usefixtures("spark")
     def test_join_end_to_end(self, spark, tmp_path):
         from aqueduct.compiler.compiler import compile as compiler_compile
-        from aqueduct.parser.parser import parse
         from aqueduct.executor.spark.executor import execute
+        from aqueduct.parser.parser import parse
 
         p1 = str(tmp_path / "t1.parquet")
         p2 = str(tmp_path / "t2.parquet")
@@ -213,8 +216,9 @@ class TestChannelJoinQuery:
             _build_join_query("m", {"left": "a", "right": "b", "join_type": "inner"})
 
     def test_unsupported_op_raises(self):
-        from aqueduct.executor.spark.channel import ChannelError, execute_channel
         from unittest.mock import MagicMock
+
+        from aqueduct.executor.spark.channel import ChannelError, execute_channel
         from aqueduct.parser.models import Module
 
         mod = Module(id="m", type="Channel", label="M", config={"op": "merge"})

@@ -1,12 +1,11 @@
-import os
-import shutil
 import subprocess
-from pathlib import Path
-from click.testing import CliRunner
+
 import pytest
+from click.testing import CliRunner
+
+from aqueduct.cli import cli
 
 pytestmark = pytest.mark.integration
-from aqueduct.cli import cli
 
 
 @pytest.fixture

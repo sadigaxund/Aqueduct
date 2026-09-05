@@ -1,13 +1,17 @@
 """Tests for the Compiler layer: Arcade expansion, Probe wiring, and Regulator compile-away."""
 
 from __future__ import annotations
+
 from pathlib import Path
+
 import pytest
 
-pytestmark = pytest.mark.unit
 from aqueduct.compiler.compiler import CompileError, compile
 from aqueduct.compiler.models import Manifest
 from aqueduct.parser.parser import parse
+
+pytestmark = pytest.mark.unit
+
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 

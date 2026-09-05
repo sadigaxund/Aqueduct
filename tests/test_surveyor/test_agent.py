@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-pytestmark = pytest.mark.unit
+if TYPE_CHECKING:
+    from aqueduct.compiler.models import Manifest
 
 from aqueduct.agent import PROMPT_VERSION
 from aqueduct.agent.budget import StopReason
@@ -17,6 +19,8 @@ from aqueduct.agent.parse import _parse_patch_spec
 from aqueduct.agent.prompts import _build_guardrails_section
 from aqueduct.patch.grammar import PatchSpec
 from aqueduct.surveyor.models import FailureContext
+
+pytestmark = pytest.mark.unit
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 

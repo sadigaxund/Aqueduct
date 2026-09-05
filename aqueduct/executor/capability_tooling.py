@@ -84,7 +84,7 @@ def _pytest_names(file_path: Path) -> tuple[frozenset[str], dict[str, frozenset[
     funcs: set[str] = set()
     classes: dict[str, set[str]] = {}
     for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith(
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name.startswith(
             "test_"
         ):
             funcs.add(node.name)
@@ -92,7 +92,7 @@ def _pytest_names(file_path: Path) -> tuple[frozenset[str], dict[str, frozenset[
             methods = {
                 n.name
                 for n in node.body
-                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)
                 and n.name.startswith("test_")
             }
             classes[node.name] = methods

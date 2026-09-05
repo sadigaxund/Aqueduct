@@ -289,5 +289,5 @@ def test_load_config_with_env_explicit_path(tmp_path, clean_env):
         encoding="utf-8",
     )
 
-    cfg = _load_config_with_env(cfg_p)
+    _load_config_with_env(cfg_p)
     assert os.environ.get("EXPLICIT_VAR") == "explicit"

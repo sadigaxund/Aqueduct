@@ -1,13 +1,16 @@
 # tests/test_cli.py
 import json
-import pytest
-
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
 from pathlib import Path
 from unittest.mock import MagicMock
+
+import pytest
 from click.testing import CliRunner
+
 from aqueduct.agent.budget import StopReason
 from aqueduct.cli import cli
+
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
+
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 
@@ -369,7 +372,7 @@ stores:
 """
     )
 
-    from unittest.mock import patch, MagicMock
+    from unittest.mock import MagicMock, patch
 
     mock_bundle = MagicMock()
     mock_bundle.depot.backend = "postgres"
@@ -410,7 +413,7 @@ class TestPhase34CLI:
         runner = CliRunner()
         bp_path = tmp_path / "bp.yml"
         bp_path.write_text(
-            f"""
+            """
 aqueduct: '1.0'
 id: heal_hook
 name: heal_hook
@@ -418,7 +421,7 @@ modules:
   - id: m1
     type: Ingress
     label: M1
-    config: {{format: csv, path: /missing.csv}}
+    config: {format: csv, path: /missing.csv}
 edges: []
 agent:
   approval: human
@@ -492,7 +495,7 @@ agent:
         runner = CliRunner()
         bp_path = tmp_path / "bp.yml"
         bp_path.write_text(
-            f"""
+            """
 aqueduct: '1.0'
 id: heal_cli
 name: heal_cli
@@ -508,8 +511,8 @@ edges: []
             f"agent: {{model: claude-3}}\n" f"stores: {{observability: {{path: {tmp_path}}}}}\n"
         )
 
-        from aqueduct.surveyor.surveyor import Surveyor
         from aqueduct.compiler.models import Manifest
+        from aqueduct.surveyor.surveyor import Surveyor
 
         s = Surveyor(
             Manifest(

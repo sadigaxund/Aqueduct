@@ -1,6 +1,6 @@
 import os
 import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -320,7 +320,7 @@ def ensure_minio_bucket(bucket: str, *, endpoint: str | None = None) -> None:
     ep = (endpoint or _minio_endpoint()).rstrip("/")
     access_key, secret_key, region = _minio_access_key(), _minio_secret_key(), "us-east-1"
 
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
     amz_date = now.strftime("%Y%m%dT%H%M%SZ")
     date_stamp = now.strftime("%Y%m%d")
     host = ep.split("://", 1)[-1]
@@ -477,7 +477,7 @@ def seed_ts():
     default, count_recent_heal_attempts)."""
 
     def _ts(**delta):  # seed_ts(hours=-1), seed_ts(days=-2)
-        return (datetime.now(timezone.utc) + timedelta(**delta)).isoformat()
+        return (datetime.now(UTC) + timedelta(**delta)).isoformat()
 
     return _ts
 

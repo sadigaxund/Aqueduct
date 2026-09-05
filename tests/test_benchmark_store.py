@@ -14,9 +14,6 @@ import duckdb
 import pytest
 
 from aqueduct.agent.budget import StopReason
-
-pytestmark = pytest.mark.unit
-
 from aqueduct.surveyor.benchmark_store import (
     BenchmarkRow,
     DiffEntry,
@@ -28,6 +25,8 @@ from aqueduct.surveyor.benchmark_store import (
     persist_results,
 )
 from aqueduct.surveyor.scenario import ScenarioResult
+
+pytestmark = pytest.mark.unit
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 

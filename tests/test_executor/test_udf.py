@@ -1,8 +1,10 @@
 """Tests for the Executor layer: UDF registration and execution."""
 
 from __future__ import annotations
+
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+
 import pytest
 
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
@@ -375,8 +377,9 @@ class TestUdfRegistration:
     def test_ship_module_to_executors_ships_flat_file(self, tmp_path):
         """A single-file (non-package) UDF module gets zipped and shipped via
         addPyFile — the flat-file branch of _ship_module_to_executors."""
-        from aqueduct.executor.spark.udf import _ship_module_to_executors
         import importlib.util
+
+        from aqueduct.executor.spark.udf import _ship_module_to_executors
 
         mod_file = tmp_path / "flat_udf_mod.py"
         mod_file.write_text("def triple(x):\n    return x * 3\n")

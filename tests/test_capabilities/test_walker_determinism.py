@@ -24,7 +24,7 @@ every interpreter after the fix.
 
 from __future__ import annotations
 
-from typing import Optional, Union  # noqa: UP035 — pre-604 spellings tested deliberately
+from typing import Union  # noqa: UP035 — pre-604 spellings tested deliberately
 
 import pytest
 from pydantic import BaseModel
@@ -54,7 +54,7 @@ class _OuterOptional(BaseModel):
     ``typing`` spellings (origin ``typing.Union`` on every version) that the
     pre-fix walker handled, to prove the two spellings now agree."""
 
-    inner: Optional[_Inner] = None  # noqa: UP045 — deliberately the pre-604 spelling
+    inner: _Inner | None = None  # noqa: UP045 — deliberately the pre-604 spelling
     top: int = 0
 
 

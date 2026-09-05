@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import json
-
 import pytest
-
-pytestmark = pytest.mark.unit
 
 from aqueduct.agent.signature import (
     ErrorSignature,
@@ -17,6 +13,8 @@ from aqueduct.agent.signature import (
     from_validation_error,
     make_signature,
 )
+
+pytestmark = pytest.mark.unit
 
 # ── make_signature / ErrorSignature ──────────────────────────────────────────
 
@@ -433,8 +431,9 @@ class TestFromFailureContext:
         assert "deep detail" in exact.normalized_message
 
     def test_duck_typed_context_never_raises(self):
-        from aqueduct.agent.signature import from_failure_context
         from unittest.mock import MagicMock
+
+        from aqueduct.agent.signature import from_failure_context
 
         ctx = MagicMock()
         ctx.error_class = "UNRESOLVED_COLUMN"

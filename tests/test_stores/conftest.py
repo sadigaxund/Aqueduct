@@ -1,6 +1,8 @@
 import uuid
+
 import pytest
-from tests.conftest import _pg_dsn, _pg_is_reachable, _redis_url, _redis_is_reachable
+
+from tests.conftest import _pg_dsn, _pg_is_reachable, _redis_is_reachable, _redis_url
 
 
 @pytest.fixture(params=["duckdb", pytest.param("postgres", marks=pytest.mark.integration)])

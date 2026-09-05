@@ -7,14 +7,14 @@ Covers ⏳ items from TEST_MANIFEST.md Phase 18 git-lifecycle section:
 
 import json
 import subprocess
+
 import pytest
-
-pytestmark = pytest.mark.integration
-
-from pathlib import Path
 from click.testing import CliRunner
+
 from aqueduct import exit_codes
 from aqueduct.cli import cli
+
+pytestmark = pytest.mark.integration
 
 
 @pytest.fixture
@@ -110,7 +110,7 @@ class TestLogCmd:
 
         assert result.exit_code == 0
         # The 40-char column has at most 40 chars visible for patches
-        lines = [l for l in result.output.splitlines() if "P0" in l]
+        lines = [line for line in result.output.splitlines() if "P0" in line]
         if lines:
             # Cell value is truncated
             assert ".." in result.output or len(long_patch_name) > 40

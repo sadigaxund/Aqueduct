@@ -1,14 +1,16 @@
 import sys
+
 import pytest
-from tests.conftest import requires_postgres, _pg_dsn
+
 from aqueduct.stores.postgres import PostgresObservabilityStore
+from tests.conftest import _pg_dsn, requires_postgres
 
 
 @requires_postgres
 def test_postgres_pool_caching():
     dsn = _pg_dsn()
-    store1 = PostgresObservabilityStore(dsn)
-    store2 = PostgresObservabilityStore(dsn)
+    PostgresObservabilityStore(dsn)
+    PostgresObservabilityStore(dsn)
 
     # We don't actually connect to db, just check the pool cache
     from aqueduct.stores.postgres import _get_pool

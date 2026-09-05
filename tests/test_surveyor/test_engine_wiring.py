@@ -17,11 +17,11 @@ from __future__ import annotations
 import duckdb
 import pytest
 
-pytestmark = [pytest.mark.unit]
-
 from aqueduct.compiler.models import Manifest
 from aqueduct.executor.models import ExecutionResult, ExecutionStatus, ModuleResult
 from aqueduct.surveyor.surveyor import Surveyor
+
+pytestmark = [pytest.mark.unit]
 
 
 @pytest.fixture

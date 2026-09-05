@@ -1,8 +1,8 @@
+from pathlib import Path
+
 import duckdb
 from rich.console import Console
 from rich.table import Table
-import os
-from pathlib import Path
 
 console = Console()
 

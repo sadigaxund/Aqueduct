@@ -1,9 +1,9 @@
 import pytest
-from pathlib import Path
-from aqueduct.executor.spark.executor import execute
+
 from aqueduct.compiler.models import Manifest
 from aqueduct.compiler.provenance import ProvenanceMap
-from aqueduct.parser.models import Module, Edge, RetryPolicy
+from aqueduct.executor.spark.executor import execute
+from aqueduct.parser.models import Edge, Module, RetryPolicy
 
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
@@ -281,8 +281,9 @@ def test_compute_watermark_from_output_missing_path_returns_none(spark, tmp_path
 
 def test_compute_watermark_from_output_delta_format(spark, tmp_path):
     """delta format → spark.sql('SELECT MAX...FROM delta.`path`') called; fallback None on no Delta."""
+    from unittest.mock import MagicMock
+
     from aqueduct.executor.spark.executor import _compute_watermark_from_output
-    from unittest.mock import MagicMock, patch
 
     captured = {}
     mock_result = MagicMock()
@@ -420,8 +421,9 @@ def test_watermark_no_depot_warns_and_persists_nothing(spark, tmp_path, caplog):
 
 def test_watermark_computed_from_output_not_channel_df(spark, tmp_path):
     """Watermark MAX computed from Egress output path, not the lazy Channel df (no double-scan)."""
-    from aqueduct.executor.spark.executor import execute
     from unittest.mock import patch
+
+    from aqueduct.executor.spark.executor import execute
 
     in_path = str(tmp_path / "in_nodbl.parquet")
     out_path = str(tmp_path / "out_nodbl")

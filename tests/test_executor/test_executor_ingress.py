@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import pytest
-
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
 from pyspark.sql import SparkSession
 
 from aqueduct.executor.spark.ingress import IngressError, read_ingress
 from aqueduct.parser.models import Module
+
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 
 def test_ingress_unsupported_format(spark: SparkSession):
@@ -602,9 +602,9 @@ def test_pathless_ingress_formats_are_expected_set():
 
 # ── Phase 61 — time-travel reads ────────────────────────────────────────────
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock  # noqa: E402
 
-from aqueduct.executor.spark.ingress import _apply_time_travel
+from aqueduct.executor.spark.ingress import _apply_time_travel  # noqa: E402
 
 
 def test_time_travel_version_sets_option():
@@ -664,7 +664,7 @@ def test_time_travel_empty_raises():
 
 # ── Phase 61 — on_new_columns (Ingress source contract) ─────────────────────
 
-from aqueduct.executor.spark.ingress import _enforce_on_new_columns
+from aqueduct.executor.spark.ingress import _enforce_on_new_columns  # noqa: E402
 
 
 def test_ingress_on_new_columns_fail(spark: SparkSession):

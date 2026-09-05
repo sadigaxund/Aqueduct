@@ -1,14 +1,11 @@
 import pytest
 
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
-import time
-import threading
-from pathlib import Path
-from aqueduct.parser.models import Module, Edge, ContextRegistry, Blueprint
 from aqueduct.compiler.models import Manifest
-from aqueduct.executor.spark.executor import execute, ExecuteError
-from aqueduct.executor.models import ModuleResult
+from aqueduct.executor.spark.executor import execute
 from aqueduct.executor.spark.session import make_spark_session
+from aqueduct.parser.models import Edge, Module
+
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 
 @pytest.fixture

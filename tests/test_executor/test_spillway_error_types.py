@@ -8,7 +8,7 @@ pytestmark = pytest.mark.unit
 
 
 def test_is_gate_closed_detects_sentinel():
-    from aqueduct.executor.spark.executor import _is_gate_closed, _GATE_CLOSED
+    from aqueduct.executor.spark.executor import _GATE_CLOSED, _is_gate_closed
 
     assert _is_gate_closed(_GATE_CLOSED) is True
     assert _is_gate_closed(None) is False
@@ -49,7 +49,7 @@ def test_apply_spillway_filter_noop_on_none():
 
 def test_apply_spillway_filter_noop_on_gate_closed():
     """_GATE_CLOSED sentinel passes through unfiltered."""
-    from aqueduct.executor.spark.executor import _apply_spillway_filter, _GATE_CLOSED
+    from aqueduct.executor.spark.executor import _GATE_CLOSED, _apply_spillway_filter
     from aqueduct.parser.models import Edge
 
     edge = Edge(from_id="a", to_id="b", port="spillway", error_types=["DataQualityViolation"])

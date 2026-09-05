@@ -6,9 +6,9 @@ import warnings
 
 import pytest
 
-pytestmark = pytest.mark.unit
-
 from aqueduct import warnings as aqw
+
+pytestmark = pytest.mark.unit
 
 
 @pytest.fixture(autouse=True)

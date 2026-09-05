@@ -4,8 +4,6 @@ Ensures that the newly added ``replace_macro`` operation is exposed to the model
 via the ``_VALID_OPS`` constant used in the system prompt.
 """
 
-import pytest
-
 from aqueduct.agent.prompts import _VALID_OPS
 
 

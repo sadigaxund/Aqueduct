@@ -98,7 +98,8 @@ def test_run_duckdb_blueprint_succeeds_without_pyspark(tmp_path):
     cfg_path = tmp_path / "aqueduct.yml"
     cfg_path.write_text(_CFG, encoding="utf-8")
 
-    proc = _run(f"""
+    proc = _run(
+        f"""
         import sys
 
         class _BlockPyspark:
@@ -126,7 +127,8 @@ def test_run_duckdb_blueprint_succeeds_without_pyspark(tmp_path):
         finally:
             sys.meta_path.remove(_blocker)
         print("OK")
-    """)
+    """
+    )
     assert proc.returncode == 0, (
         f"aqueduct run on duckdb crashed with pyspark blocked\n"
         f"stdout={proc.stdout!r}\nstderr={proc.stderr!r}"

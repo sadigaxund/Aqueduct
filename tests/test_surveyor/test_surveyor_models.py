@@ -7,9 +7,9 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-pytestmark = pytest.mark.unit
-
 from aqueduct.surveyor.models import FailureContext, RunRecord
+
+pytestmark = pytest.mark.unit
 
 
 def test_run_record_frozen():

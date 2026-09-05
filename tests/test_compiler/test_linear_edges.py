@@ -20,7 +20,8 @@ from pathlib import Path
 
 import pytest
 
-from aqueduct.compiler.compiler import CompileError, compile as compiler_compile
+from aqueduct.compiler.compiler import CompileError
+from aqueduct.compiler.compiler import compile as compiler_compile
 from aqueduct.parser.parser import parse
 
 pytestmark = pytest.mark.unit

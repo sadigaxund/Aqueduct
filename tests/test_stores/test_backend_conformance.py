@@ -13,7 +13,7 @@ work a finite, self-updating list instead of surprise slivers.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from click.testing import CliRunner
@@ -63,7 +63,7 @@ _CONF_TABLES = (
 # (tests/conftest.py) is the canonical way to do this; this one stays a
 # module-level constant (computed once, reused by several fixture bodies
 # below) rather than being threaded through as a per-test fixture.
-_TS = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+_TS = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
 
 
 @pytest.fixture(

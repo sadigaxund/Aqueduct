@@ -1,7 +1,7 @@
 import pytest
-from pathlib import Path
 from click.testing import CliRunner
-from aqueduct.cli import cli, _patches_root_from_blueprint
+
+from aqueduct.cli import _patches_root_from_blueprint, cli
 
 pytestmark = pytest.mark.unit
 

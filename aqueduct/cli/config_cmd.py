@@ -102,7 +102,7 @@ def _env_referencing_paths(raw_data: Any) -> dict[str, str]:
 def _render(value: Any) -> str:
     if value is None:
         return "(none)"
-    if isinstance(value, (dict, list)):
+    if isinstance(value, dict | list):
         import json
 
         return json.dumps(value, default=str, sort_keys=True)

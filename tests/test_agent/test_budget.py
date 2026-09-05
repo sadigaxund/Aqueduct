@@ -2,24 +2,23 @@
 
 from __future__ import annotations
 
-import time
 from dataclasses import FrozenInstanceError
 from unittest.mock import patch
 
 import pytest
 
-pytestmark = pytest.mark.unit
-
 from aqueduct.agent.budget import (
-    AttemptRecord,
-    BudgetConfig,
-    BudgetTracker,
     DEFAULT_BUDGET,
     STOP_REASONS,
+    BudgetConfig,
+    BudgetTracker,
     StopReason,
 )
+from aqueduct.agent.signature import ErrorSignature, make_signature
 from aqueduct.errors import ConfigError
-from aqueduct.agent.signature import make_signature
+
+pytestmark = pytest.mark.unit
+
 
 # ── BudgetConfig ──────────────────────────────────────────────────────────────
 
@@ -121,8 +120,7 @@ class TestDefaultBudget:
 # ── BudgetTracker ─────────────────────────────────────────────────────────────
 
 
-def _sig(tag: str = "default") -> "ErrorSignature":
-    from aqueduct.agent.signature import make_signature
+def _sig(tag: str = "default") -> ErrorSignature:
 
     return make_signature("err", "root", f"message {tag}", engine="spark")
 

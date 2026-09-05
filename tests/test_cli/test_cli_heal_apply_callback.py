@@ -250,7 +250,7 @@ def test_cli_heal_wires_apply_callback(mock_open, mock_generate_patch, tmp_path)
     )
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["heal", "run-123", "--store-dir", str(tmp_path)])
+    runner.invoke(cli, ["heal", "run-123", "--store-dir", str(tmp_path)])
 
     assert mock_generate_patch.called
     agent_cfg = mock_generate_patch.call_args[1]["agent_cfg"]

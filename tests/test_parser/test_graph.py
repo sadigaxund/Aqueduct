@@ -1,8 +1,11 @@
 """Tests for the Parser layer: Cycle detection and graph structure."""
 
 from __future__ import annotations
+
 from pathlib import Path
+
 import pytest
+
 from aqueduct.parser.parser import ParseError, parse
 
 pytestmark = pytest.mark.unit
@@ -122,7 +125,7 @@ class TestParserGraphTopologicalSort:
 
     def test_topological_order_linear(self):
         from aqueduct.parser.graph import topological_order
-        from aqueduct.parser.models import Module, Edge
+        from aqueduct.parser.models import Edge, Module
 
         m1 = Module(id="a", type="Ingress", label="A", config={})
         m2 = Module(id="b", type="Channel", label="B", config={})
@@ -131,9 +134,10 @@ class TestParserGraphTopologicalSort:
         assert order == ["a", "b"]
 
     def test_topological_order_with_depends_on(self):
-        from aqueduct.parser.graph import topological_order
-        from aqueduct.parser.models import Module, Edge
         import dataclasses
+
+        from aqueduct.parser.graph import topological_order
+        from aqueduct.parser.models import Module
 
         m1 = Module(id="x", type="Ingress", label="X", config={})
         m2 = dataclasses.replace(
@@ -147,7 +151,7 @@ class TestParserGraphTopologicalSort:
 
     def test_build_adjacency_unknown_from_raises(self):
         from aqueduct.parser.graph import _build_adjacency
-        from aqueduct.parser.models import Module, Edge
+        from aqueduct.parser.models import Edge, Module
 
         m1 = Module(id="a", type="Ingress", label="A", config={})
         bad_edge = Edge(from_id="NOPE", to_id="a", port="main")
@@ -156,7 +160,7 @@ class TestParserGraphTopologicalSort:
 
     def test_build_adjacency_unknown_to_raises(self):
         from aqueduct.parser.graph import _build_adjacency
-        from aqueduct.parser.models import Module, Edge
+        from aqueduct.parser.models import Edge, Module
 
         m1 = Module(id="a", type="Ingress", label="A", config={})
         bad_edge = Edge(from_id="a", to_id="NOPE", port="main")

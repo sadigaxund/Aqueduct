@@ -14,8 +14,6 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
-pytestmark = pytest.mark.unit
-
 from aqueduct.cli import cli
 from aqueduct.patch.ci import (
     CI_WEBHOOK_REQUIRED_KEYS,
@@ -27,6 +25,8 @@ from aqueduct.patch.ci import (
     resolve_repo_root_conflict,
     validate_ci_payload,
 )
+
+pytestmark = pytest.mark.unit
 
 # ── validate_ci_payload ──────────────────────────────────────────────────────
 

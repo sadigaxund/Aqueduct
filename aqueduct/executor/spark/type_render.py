@@ -27,7 +27,7 @@ from __future__ import annotations
 from aqueduct import typehub as hub
 
 
-def render_spark_type(t: "hub.HubType | hub.NativeType") -> str:
+def render_spark_type(t: hub.HubType | hub.NativeType) -> str:
     """Render one parsed hub type (or ``NativeType``) to Spark's DDL spelling.
 
     Registered as Spark's ``ExecutorProtocol.render_type``

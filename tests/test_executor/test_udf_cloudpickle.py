@@ -1,12 +1,13 @@
-import sys
+import logging
+from collections import namedtuple
+from unittest.mock import MagicMock, patch
+
 import pytest
 
-pytestmark = pytest.mark.spark
-import logging
-from unittest.mock import MagicMock, patch
-from collections import namedtuple
-import importlib
 from aqueduct.executor.spark.udf import _patch_pyspark_cloudpickle
+
+pytestmark = pytest.mark.spark
+
 
 VersionInfo = namedtuple("VersionInfo", ["major", "minor", "micro", "releaselevel", "serial"])
 

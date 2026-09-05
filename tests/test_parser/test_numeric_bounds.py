@@ -20,29 +20,33 @@ pytestmark = pytest.mark.unit
 
 class TestBackoffSchemaBounds:
     def test_base_seconds_zero(self):
-        from aqueduct.parser.schema import BackoffSchema
         from pydantic import ValidationError
+
+        from aqueduct.parser.schema import BackoffSchema
 
         with pytest.raises(ValidationError, match=r"Input should be greater than or equal to 1"):
             BackoffSchema(base_seconds=0)
 
     def test_base_seconds_negative(self):
-        from aqueduct.parser.schema import BackoffSchema
         from pydantic import ValidationError
+
+        from aqueduct.parser.schema import BackoffSchema
 
         with pytest.raises(ValidationError, match=r"Input should be greater than or equal to 1"):
             BackoffSchema(base_seconds=-1)
 
     def test_max_seconds_zero(self):
-        from aqueduct.parser.schema import BackoffSchema
         from pydantic import ValidationError
+
+        from aqueduct.parser.schema import BackoffSchema
 
         with pytest.raises(ValidationError, match=r"Input should be greater than or equal to 1"):
             BackoffSchema(max_seconds=0)
 
     def test_max_seconds_negative(self):
-        from aqueduct.parser.schema import BackoffSchema
         from pydantic import ValidationError
+
+        from aqueduct.parser.schema import BackoffSchema
 
         with pytest.raises(ValidationError, match=r"Input should be greater than or equal to 1"):
             BackoffSchema(max_seconds=-1)
@@ -60,29 +64,33 @@ class TestBackoffSchemaBounds:
 
 class TestRetryPolicySchemaBounds:
     def test_max_attempts_zero(self):
-        from aqueduct.parser.schema import RetryPolicySchema
         from pydantic import ValidationError
+
+        from aqueduct.parser.schema import RetryPolicySchema
 
         with pytest.raises(ValidationError, match=r"Input should be greater than or equal to 1"):
             RetryPolicySchema(max_attempts=0)
 
     def test_max_attempts_negative(self):
-        from aqueduct.parser.schema import RetryPolicySchema
         from pydantic import ValidationError
+
+        from aqueduct.parser.schema import RetryPolicySchema
 
         with pytest.raises(ValidationError, match=r"Input should be greater than or equal to 1"):
             RetryPolicySchema(max_attempts=-1)
 
     def test_deadline_seconds_zero(self):
-        from aqueduct.parser.schema import RetryPolicySchema
         from pydantic import ValidationError
+
+        from aqueduct.parser.schema import RetryPolicySchema
 
         with pytest.raises(ValidationError, match=r"Input should be greater than 0"):
             RetryPolicySchema(deadline_seconds=0)
 
     def test_deadline_seconds_negative(self):
-        from aqueduct.parser.schema import RetryPolicySchema
         from pydantic import ValidationError
+
+        from aqueduct.parser.schema import RetryPolicySchema
 
         with pytest.raises(ValidationError, match=r"Input should be greater than 0"):
             RetryPolicySchema(deadline_seconds=-5)
@@ -106,15 +114,17 @@ class TestRetryPolicySchemaBounds:
 
 class TestAgentSchemaBounds:
     def test_max_patches_zero(self):
-        from aqueduct.parser.schema import AgentSchema
         from pydantic import ValidationError
+
+        from aqueduct.parser.schema import AgentSchema
 
         with pytest.raises(ValidationError, match=r"Input should be greater than or equal to 1"):
             AgentSchema(max_patches=0)
 
     def test_max_patches_negative(self):
-        from aqueduct.parser.schema import AgentSchema
         from pydantic import ValidationError
+
+        from aqueduct.parser.schema import AgentSchema
 
         with pytest.raises(ValidationError, match=r"Input should be greater than or equal to 1"):
             AgentSchema(max_patches=-1)
@@ -135,23 +145,26 @@ class TestAgentSchemaBounds:
         # 2.59 — `timeout` is a CONNECTION field, removed from the Blueprint
         # `agent:` block entirely (engine-only now, see test_agent_connection_
         # config_bounds below). extra="forbid" rejects it by name.
-        from aqueduct.parser.schema import AgentSchema
         from pydantic import ValidationError
+
+        from aqueduct.parser.schema import AgentSchema
 
         with pytest.raises(ValidationError, match=r"timeout"):
             AgentSchema(timeout=120.0)
 
     def test_max_reprompts_zero(self):
-        from aqueduct.parser.schema import AgentSchema
         from pydantic import ValidationError
+
+        from aqueduct.parser.schema import AgentSchema
 
         with pytest.raises(ValidationError, match=r"Input should be greater than or equal to 1"):
             AgentSchema(max_reprompts=0)
 
     @pytest.mark.parametrize("bad", [-1, -10])
     def test_max_reprompts_negative(self, bad):
-        from aqueduct.parser.schema import AgentSchema
         from pydantic import ValidationError
+
+        from aqueduct.parser.schema import AgentSchema
 
         with pytest.raises(ValidationError, match=r"Input should be greater than or equal to 1"):
             AgentSchema(max_reprompts=bad)
@@ -163,15 +176,17 @@ class TestAgentSchemaBounds:
         assert s.max_reprompts is None
 
     def test_confidence_threshold_negative(self):
-        from aqueduct.parser.schema import AgentSchema
         from pydantic import ValidationError
+
+        from aqueduct.parser.schema import AgentSchema
 
         with pytest.raises(ValidationError, match=r"Input should be greater than or equal to 0"):
             AgentSchema(confidence_threshold=-0.1)
 
     def test_confidence_threshold_too_high(self):
-        from aqueduct.parser.schema import AgentSchema
         from pydantic import ValidationError
+
+        from aqueduct.parser.schema import AgentSchema
 
         with pytest.raises(ValidationError, match=r"Input should be less than or equal to 1"):
             AgentSchema(confidence_threshold=1.5)
@@ -195,8 +210,9 @@ class TestAgentSchemaBounds:
         assert s.confidence_threshold == 0.7
 
     def test_max_heal_attempts_per_hour_zero(self):
-        from aqueduct.parser.schema import AgentSchema
         from pydantic import ValidationError
+
+        from aqueduct.parser.schema import AgentSchema
 
         with pytest.raises(ValidationError, match=r"Input should be greater than or equal to 1"):
             AgentSchema(max_heal_attempts_per_hour=0)
@@ -214,39 +230,6 @@ class TestAgentSchemaBounds:
         assert s.max_heal_attempts_per_hour == 5
 
 
-# ── AgentConnectionConfig bounds (from aqueduct/config.py) ─────────────────────
-# 2.59 — `timeout` (and every other CONNECTION field) moved here, engine-only;
-# these replace the old AgentSchema-level timeout bound tests above.
-
-
-class TestAgentConnectionConfigBounds:
-    def test_timeout_zero(self):
-        from aqueduct.config import AgentConnectionConfig
-        from pydantic import ValidationError
-
-        with pytest.raises(ValidationError, match=r"Input should be greater than 0"):
-            AgentConnectionConfig(timeout=0)
-
-    def test_timeout_negative(self):
-        from aqueduct.config import AgentConnectionConfig
-        from pydantic import ValidationError
-
-        with pytest.raises(ValidationError, match=r"Input should be greater than 0"):
-            AgentConnectionConfig(timeout=-1.0)
-
-    def test_timeout_default(self):
-        from aqueduct.config import AgentConnectionConfig
-
-        s = AgentConnectionConfig()
-        assert s.timeout == 300.0
-
-    def test_timeout_valid(self):
-        from aqueduct.config import AgentConnectionConfig
-
-        s = AgentConnectionConfig(timeout=120.0)
-        assert s.timeout == 120.0
-
-
 # ── ProbesConfig bounds (from aqueduct/config.py) ──────────────────────────────
 # Note: requires fix for ISSUE-030 (missing model_validator import in config.py)
 # before these can be collected.
@@ -254,8 +237,9 @@ class TestAgentConnectionConfigBounds:
 
 class TestProbesConfigBounds:
     def test_max_sample_rows_zero(self):
-        from aqueduct.config import ProbesConfig
         from pydantic import ValidationError
+
+        from aqueduct.config import ProbesConfig
 
         with pytest.raises(ValidationError, match=r"Input should be greater than or equal to 1"):
             ProbesConfig(max_sample_rows=0)
@@ -267,22 +251,25 @@ class TestProbesConfigBounds:
         assert p.max_sample_rows == 100
 
     def test_default_sample_fraction_zero(self):
-        from aqueduct.config import ProbesConfig
         from pydantic import ValidationError
+
+        from aqueduct.config import ProbesConfig
 
         with pytest.raises(ValidationError, match=r"Input should be greater than 0"):
             ProbesConfig(default_sample_fraction=0)
 
     def test_default_sample_fraction_too_high(self):
-        from aqueduct.config import ProbesConfig
         from pydantic import ValidationError
+
+        from aqueduct.config import ProbesConfig
 
         with pytest.raises(ValidationError, match=r"Input should be less than or equal to 1"):
             ProbesConfig(default_sample_fraction=1.5)
 
     def test_default_sample_fraction_negative(self):
-        from aqueduct.config import ProbesConfig
         from pydantic import ValidationError
+
+        from aqueduct.config import ProbesConfig
 
         with pytest.raises(ValidationError, match=r"Input should be greater than 0"):
             ProbesConfig(default_sample_fraction=-0.5)
@@ -305,15 +292,17 @@ class TestProbesConfigBounds:
 
 class TestAgentConnectionConfigBounds:
     def test_timeout_zero(self):
-        from aqueduct.config import AgentConnectionConfig
         from pydantic import ValidationError
+
+        from aqueduct.config import AgentConnectionConfig
 
         with pytest.raises(ValidationError, match=r"Input should be greater than 0"):
             AgentConnectionConfig(timeout=0)
 
     def test_timeout_negative(self):
-        from aqueduct.config import AgentConnectionConfig
         from pydantic import ValidationError
+
+        from aqueduct.config import AgentConnectionConfig
 
         with pytest.raises(ValidationError, match=r"Input should be greater than 0"):
             AgentConnectionConfig(timeout=-10.0)
@@ -331,15 +320,17 @@ class TestAgentConnectionConfigBounds:
         assert c.timeout == 300.0
 
     def test_max_reprompts_zero(self):
-        from aqueduct.config import AgentConnectionConfig
         from pydantic import ValidationError
+
+        from aqueduct.config import AgentConnectionConfig
 
         with pytest.raises(ValidationError, match=r"Input should be greater than or equal to 1"):
             AgentConnectionConfig(max_reprompts=0)
 
     def test_max_reprompts_negative(self):
-        from aqueduct.config import AgentConnectionConfig
         from pydantic import ValidationError
+
+        from aqueduct.config import AgentConnectionConfig
 
         with pytest.raises(ValidationError, match=r"Input should be greater than or equal to 1"):
             AgentConnectionConfig(max_reprompts=-1)
@@ -351,8 +342,9 @@ class TestAgentConnectionConfigBounds:
         assert c.max_reprompts == 3
 
     def test_max_heal_attempts_per_hour_zero(self):
-        from aqueduct.config import AgentConnectionConfig
         from pydantic import ValidationError
+
+        from aqueduct.config import AgentConnectionConfig
 
         with pytest.raises(ValidationError, match=r"Input should be greater than or equal to 1"):
             AgentConnectionConfig(max_heal_attempts_per_hour=0)
@@ -375,15 +367,17 @@ class TestAgentConnectionConfigBounds:
 
 class TestWebhookEndpointConfigBounds:
     def test_timeout_zero(self):
-        from aqueduct.config import WebhookEndpointConfig
         from pydantic import ValidationError
+
+        from aqueduct.config import WebhookEndpointConfig
 
         with pytest.raises(ValidationError, match=r"Input should be greater than or equal to 1"):
             WebhookEndpointConfig(url="http://example.com/hook", timeout=0)
 
     def test_timeout_negative(self):
-        from aqueduct.config import WebhookEndpointConfig
         from pydantic import ValidationError
+
+        from aqueduct.config import WebhookEndpointConfig
 
         with pytest.raises(ValidationError, match=r"Input should be greater than or equal to 1"):
             WebhookEndpointConfig(url="http://example.com/hook", timeout=-5)
@@ -401,8 +395,9 @@ class TestWebhookEndpointConfigBounds:
         assert w.timeout == 30
 
     def test_url_is_required(self):
-        from aqueduct.config import WebhookEndpointConfig
         from pydantic import ValidationError
+
+        from aqueduct.config import WebhookEndpointConfig
 
         with pytest.raises(ValidationError, match=r"Field required"):
             WebhookEndpointConfig()

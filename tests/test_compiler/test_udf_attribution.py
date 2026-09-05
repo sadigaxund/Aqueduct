@@ -24,7 +24,7 @@ import pytest
 import aqueduct.executor.duckdb_.capabilities  # noqa: F401
 import aqueduct.executor.spark.capabilities  # noqa: F401
 from aqueduct.compiler.compiler import compile as ccompile
-from aqueduct.compiler.islands import Island, derive_islands, resolve_module_engines
+from aqueduct.compiler.islands import derive_islands
 from aqueduct.compiler.lineage import (
     referenced_function_names,
     referenced_function_names_in_expr,

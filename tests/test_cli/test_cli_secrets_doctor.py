@@ -7,9 +7,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from aqueduct.doctor import _check_heal_guardrail_typos, check_secrets
+
 pytestmark = pytest.mark.unit
 
-from aqueduct.doctor import CheckResult, check_secrets, _check_heal_guardrail_typos
 
 # ── check_secrets() ───────────────────────────────────────────────────────────
 

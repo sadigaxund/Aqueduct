@@ -1,16 +1,16 @@
 import pytest
 
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
-from aqueduct.parser.models import Module, Edge
-from aqueduct.compiler.models import Manifest
 from aqueduct.executor.spark.executor import (
-    _topo_sort,
-    _find_connected_components,
-    _reachable_forward,
-    _reachable_backward,
-    _selector_included,
     ExecuteError,
+    _find_connected_components,
+    _reachable_backward,
+    _reachable_forward,
+    _selector_included,
+    _topo_sort,
 )
+from aqueduct.parser.models import Edge, Module
+
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 
 @pytest.fixture

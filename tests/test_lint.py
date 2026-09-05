@@ -1,16 +1,14 @@
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 
 import pytest
 
-from aqueduct.lint import LintFinding, run_lint
-from aqueduct.parser.parser import ParseError, parse
+from aqueduct.lint import run_lint
+from aqueduct.parser.parser import parse
 
 pytestmark = pytest.mark.unit
-
-
-import tempfile
 
 
 def bp_yml(content: str, tmp_path: Path | None = None) -> Path:

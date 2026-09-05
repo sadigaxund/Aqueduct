@@ -1,11 +1,11 @@
+import datetime as _dt
+import uuid
+
+import duckdb
 import pytest
 from click.testing import CliRunner
+
 from aqueduct.cli import cli
-from pathlib import Path
-import json
-import uuid
-import duckdb
-import datetime as _dt
 
 
 @pytest.mark.spark
@@ -55,7 +55,7 @@ edges: []
         )
     """
     )
-    now_iso = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    now_iso = _dt.datetime.now(_dt.UTC).isoformat()
     conn.execute(
         "INSERT INTO healing_outcomes (id, run_id, applied_at) VALUES (?, ?, ?)",
         [str(uuid.uuid4()), "prior-run", now_iso],

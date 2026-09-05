@@ -210,8 +210,8 @@ def test_blob_config_rejects_unknown_backend():
 # s3/gcs/adls without needing moto or network — process-local, deterministic.
 # Each test uses a unique base since the memory filesystem is process-global.
 
-import importlib.util as _import_util
-import uuid as _uuid
+import importlib.util as _import_util  # noqa: E402
+import uuid as _uuid  # noqa: E402
 
 # fsspec ships with the [object-store] extra — skip these where it is absent
 # (a base install / the minimal CI matrix leg). They run in the object-store env.

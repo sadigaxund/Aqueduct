@@ -2,9 +2,10 @@
 
 import pytest
 
-pytestmark = pytest.mark.spark
 from aqueduct.executor.spark.executor import _cache_if_multi_spillway
 from aqueduct.parser.models import Edge
+
+pytestmark = pytest.mark.spark
 
 
 class DummyDF:

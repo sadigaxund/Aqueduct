@@ -6,10 +6,10 @@ from unittest.mock import patch
 
 import pytest
 
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
-
 from aqueduct.executor.spark.executor import _backoff_seconds, _is_retriable, _with_retry
 from aqueduct.parser.models import RetryPolicy
+
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 
 def _policy(**kwargs) -> RetryPolicy:
@@ -292,8 +292,8 @@ class TestOnRetryExhausted:
         return Module(id=mid, type="Ingress", label="L", config={})
 
     def test_abort_returns_false_with_fail_result(self):
-        from aqueduct.executor.spark.executor import _on_retry_exhausted
         from aqueduct.executor.models import ModuleResult
+        from aqueduct.executor.spark.executor import _on_retry_exhausted
 
         policy = self._make_policy("abort")
         module = self._make_module()
@@ -307,8 +307,8 @@ class TestOnRetryExhausted:
         assert fail_result.trigger_agent is False
 
     def test_alert_only_returns_true_with_none(self):
-        from aqueduct.executor.spark.executor import _on_retry_exhausted
         from aqueduct.executor.models import ModuleResult
+        from aqueduct.executor.spark.executor import _on_retry_exhausted
 
         policy = self._make_policy("alert_only")
         module = self._make_module()
@@ -320,8 +320,8 @@ class TestOnRetryExhausted:
         assert fail_result is None
 
     def test_trigger_agent_returns_false_with_trigger_agent_true(self):
-        from aqueduct.executor.spark.executor import _on_retry_exhausted
         from aqueduct.executor.models import ModuleResult
+        from aqueduct.executor.spark.executor import _on_retry_exhausted
 
         policy = self._make_policy("trigger_agent")
         module = self._make_module()
@@ -334,8 +334,8 @@ class TestOnRetryExhausted:
         assert fail_result.trigger_agent is True
 
     def test_abort_records_module_result_as_error(self):
-        from aqueduct.executor.spark.executor import _on_retry_exhausted
         from aqueduct.executor.models import ModuleResult
+        from aqueduct.executor.spark.executor import _on_retry_exhausted
 
         policy = self._make_policy("abort")
         module = self._make_module("failing_module")

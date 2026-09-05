@@ -9,10 +9,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-pytestmark = pytest.mark.unit
-
 from aqueduct import redaction
 from aqueduct.secrets import SecretsError, load_resolver_fn, resolve_secret
+
+pytestmark = pytest.mark.unit
 
 
 @pytest.fixture(autouse=True)

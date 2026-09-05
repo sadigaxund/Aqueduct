@@ -4,10 +4,10 @@ When a Blueprint defines ``macros:`` the user prompt should include an
 instruction about the ``replace_macro`` operation.
 """
 
-import pytest
 from pathlib import Path
-from aqueduct.surveyor.models import FailureContext
+
 from aqueduct.agent.prompts import build_prompt
+from aqueduct.surveyor.models import FailureContext
 
 
 def test_user_prompt_includes_replace_macro_hint(tmp_path: Path):

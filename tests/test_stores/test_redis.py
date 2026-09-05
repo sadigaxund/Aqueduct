@@ -1,7 +1,9 @@
 import sys
+
 import pytest
-from tests.conftest import requires_redis, _redis_url
+
 from aqueduct.stores.redis_ import RedisDepotStore
+from tests.conftest import _redis_url, requires_redis
 
 
 @requires_redis

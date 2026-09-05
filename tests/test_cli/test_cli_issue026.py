@@ -11,12 +11,11 @@ is to exercise the real guard, not the old test-side workaround.
 from __future__ import annotations
 
 import pytest
-
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
-
 from click.testing import CliRunner
 
 from aqueduct.cli import cli
+
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 
 @pytest.fixture

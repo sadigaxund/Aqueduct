@@ -1,11 +1,7 @@
 import pytest
 from click.testing import CliRunner
+
 from aqueduct.cli import cli
-from pathlib import Path
-import json
-import uuid
-import duckdb
-import datetime as _dt
 from aqueduct.surveyor.surveyor import Surveyor
 
 

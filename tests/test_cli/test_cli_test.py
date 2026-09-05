@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import pytest
+from unittest.mock import patch
 
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
-from pathlib import Path
+import pytest
 from click.testing import CliRunner
+
 from aqueduct.cli import cli
 
-from unittest.mock import patch
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 
 @pytest.fixture(autouse=True)

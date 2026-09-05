@@ -15,19 +15,18 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-pytestmark = pytest.mark.unit
-
 from click.testing import CliRunner
 
 from aqueduct.agent.budget import StopReason
 from aqueduct.cli import cli
 from aqueduct.exit_codes import HEAL_PENDING
 
+pytestmark = pytest.mark.unit
+
 
 def _write_bp(path: Path, extra: str):
     path.write_text(
-        """\
+        f"""\
 aqueduct: '1.0'
 id: heal_cache
 name: heal_cache
@@ -35,33 +34,31 @@ modules:
   - id: m1
     type: Ingress
     label: M1
-    config: {format: csv, path: /missing.csv}
+    config: {{format: csv, path: /missing.csv}}
 edges: []
 agent:
-  %s
+  {extra}
   # 2.2.0: approval: auto denies file-touching ops by default unless an
   # allowlist is configured (item A, security workstream) — these fixtures
   # patch a `path` config key under auto mode, so they need one.
-  guardrails: {allowed_paths: ["*"]}
+  guardrails: {{allowed_paths: ["*"]}}
 """
-        % extra
     )
 
 
 def _write_config(path: Path, extra: str = ""):
     path.write_text(
-        """\
+        f"""\
 aqueduct_config: "1.0"
 stores:
   observability:
-    path: %s/obs
+    path: {path.parent}/obs
 agent:
   provider: anthropic
   model: claude-3
   base_url: https://api.anthropic.example
-  %s
+  {extra}
 """
-        % (path.parent, extra)
     )
 
 

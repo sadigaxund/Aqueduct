@@ -1,5 +1,5 @@
-import os
 import csv
+import os
 
 os.makedirs("data/input", exist_ok=True)
 
