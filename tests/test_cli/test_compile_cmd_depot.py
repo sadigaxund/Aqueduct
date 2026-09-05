@@ -92,7 +92,7 @@ def test_compile_no_aqueduct_yml_uses_implicit_default_mount_like_run_does(tmp_p
 
     `StoresConfig.effective_depots()` (aqueduct/config.py) always synthesizes
     an implicit DuckDB `default` mount when `depots:` declares none — routed
-    per blueprint to `.aqueduct/observability/<blueprint_id>/depot.db`. The RUN path has always inherited that implicit mount via
+    per blueprint to `.aqueduct/<blueprint_id>/depot.db`. The RUN path has always inherited that implicit mount via
     `get_stores`, so `@aq.depot.get` has never raised on a real run. Item 1's
     whole point is that preview matches run — so preview inherits it too, and
     an absent key resolves to the Blueprint's own default rather than raising.
@@ -120,9 +120,7 @@ def test_compile_no_aqueduct_yml_uses_implicit_default_mount_like_run_does(tmp_p
     # Item 3 end-to-end: the read-only preview connect must NOT create the
     # depot file (or its parent dir) just by compiling. A preview never writes.
     assert not (tmp_path / ".aqueduct" / "depot.db").exists()
-    assert not (
-        tmp_path / ".aqueduct" / "observability" / "compile.depot.demo" / "depot.db"
-    ).exists()
+    assert not (tmp_path / ".aqueduct" / "compile.depot.demo" / "depot.db").exists()
 
 
 def test_compile_depot_build_failure_falls_back_to_loud_compile_error(tmp_path, monkeypatch):

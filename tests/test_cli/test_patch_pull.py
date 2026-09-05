@@ -46,7 +46,7 @@ def _seed_index(row_status: str, object_key: str, patch_id: str = "p1") -> None:
     from aqueduct.patch import index as ix
     from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
 
-    db = Path(".aqueduct/observability/test.bp/observability.db")
+    db = Path(".aqueduct/test.bp/observability.db")
     db.parent.mkdir(parents=True, exist_ok=True)
     store = DuckDBObservabilityStore(db)
     with store.connect() as cur:

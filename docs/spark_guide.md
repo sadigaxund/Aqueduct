@@ -321,7 +321,7 @@ warning emitted by `aqueduct run`, not a compile-time compiler warning.
 
 On cluster targets, the Spark driver may start in an ephemeral working directory
 (YARN container, Kubernetes pod, remote Spark worker). A relative path like
-`.aqueduct/observability` resolves against the current working directory, which
+`.aqueduct` resolves against the current working directory, which
 may differ across runs or disappear after a restart.
 
 **Fix:** Set an absolute path (or use `stores.observability.backend: postgres` for

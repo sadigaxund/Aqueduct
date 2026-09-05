@@ -105,9 +105,9 @@ Aqueduct has four processing layers and three persistent stores. Each layer has 
 
 | Store | Description |
 | :- | :- |
-| **Observability Store** | Append-only log of all runtime signals: Probe readings, stage metrics, errors. Per-pipeline routing (1.1.0+): `.aqueduct/observability/<blueprint_id>/observability.db`. Grows unbounded; pruning it is the operator's responsibility (no built-in retention feature). |
+| **Observability Store** | Append-only log of all runtime signals: Probe readings, stage metrics, errors. Per-pipeline routing (1.1.0+): `.aqueduct/<blueprint_id>/observability.db`. Grows unbounded; pruning it is the operator's responsibility (no built-in retention feature). |
 | **Column Lineage** | Column lineage graphs and Flow Reports live in the `column_lineage` table **inside the observability store** (no separate store). The former `stores.lineage` config option has been **removed**; a legacy block in `aqueduct.yml` raises a `ConfigError` (2.0). |
-| **Depot (KV Store)** | Persistent key-value store for pipeline state across runs: watermarks, last-run metadata. Configured under `stores.depots` (a name-keyed map of mounts; a `default` mount always exists). Every mount is **per-blueprint isolated** by default, by one of two mechanisms (§10.4.4): a mount with no `path` gets its own file at `.aqueduct/observability/<blueprint_id>/depot.db`, and a mount with an explicit `path` shares that file with transparent `<blueprint_id>:` key prefixing. Opt a mount into cross-blueprint sharing with `shared: true`, which requires an explicit `path` (read via `@aq.depot.<name>.get`). Incremental Channels persist their watermark to the Depot (if configured); without a Depot the watermark is lost between runs and every run re-scans all source data. The compiler emits `perf_incremental_watermark_scan` when an incremental Channel has no upstream cache/checkpoint, because computing `MAX(watermark_column)` on the output requires a second full scan. |
+| **Depot (KV Store)** | Persistent key-value store for pipeline state across runs: watermarks, last-run metadata. Configured under `stores.depots` (a name-keyed map of mounts; a `default` mount always exists). Every mount is **per-blueprint isolated** by default, by one of two mechanisms (§10.4.4): a mount with no `path` gets its own file at `.aqueduct/<blueprint_id>/depot.db`, and a mount with an explicit `path` shares that file with transparent `<blueprint_id>:` key prefixing. Opt a mount into cross-blueprint sharing with `shared: true`, which requires an explicit `path` (read via `@aq.depot.<name>.get`). Incremental Channels persist their watermark to the Depot (if configured); without a Depot the watermark is lost between runs and every run re-scans all source data. The compiler emits `perf_incremental_watermark_scan` when an incremental Channel has no upstream cache/checkpoint, because computing `MAX(watermark_column)` on the output requires a second full scan. |
 | **Object Store** (1.3+) | Transport for driver-side **blobs** and the **patch lifecycle**, configured under `stores.blob`. A single backend (`local` default, or `s3` / `gcs` / `adls` via one `fsspec` handle, the `object-store` extra, folded into `[stores]`) serves two semantic stores: a **BlobStore** (zstd-externalised `manifest_json` / `stack_trace` / `provenance_json`) and a **PatchStore** (the `pending` / `applied` / `rejected` patch directories). The `local` backend is byte-identical to the historical on-disk layout, so the git-diff review workflow is unchanged; the cloud backends let a run on an ephemeral pod leave no local-FS artefacts under its cwd. |
 | **Benchmark Store** (1.3+) | Stores scenario benchmark results (`benchmark_results` table), leaderboard aggregates, and regression gate history. Configurable under `stores.benchmark` with a `local` DuckDB default or `postgres` backend in a dedicated `benchmark` schema. Separate from the observability store, rows are not tied to a real `run_id`. |
 
@@ -1659,7 +1659,7 @@ directory** (2.0: the earlier single-shared-file layout was removed; a
 
 | `path` value | Layout | Parallelism |
 | :- | :- | :- |
-| *(unset: default)* | **Per-blueprint routing**: each blueprint writes its own file at `.aqueduct/observability/<blueprint_id>/observability.db` | ✅ Safe to run different blueprints in parallel, separate files |
+| *(unset: default)* | **Per-blueprint routing**: each blueprint writes its own file at `.aqueduct/<blueprint_id>/observability.db` | ✅ Safe to run different blueprints in parallel, separate files |
 | A directory, e.g. `/mnt/aqueduct/obs` | **Location-only routing**: same per-blueprint split, but under your directory: `<dir>/<blueprint_id>/observability.db` | ✅ Safe: separate files, custom location |
 | ~~A file, e.g. `/mnt/aqueduct/obs.db`~~ | **Removed in 2.0**: DuckDB is single-writer, so one shared file was never parallel-safe, and a custom basename split reads from writes. Config load fails with a pointer here. | Use **Postgres** for one shared concurrent store |
 
@@ -1736,7 +1736,7 @@ ways, decided by whether `path` is set.
 
 | `path` value | Layout | Key isolation |
 | :- | :- | :- |
-| *(unset: default)* | **Per-blueprint routing**: the mount gets its own file at `.aqueduct/observability/<blueprint_id>/depot.db`, next to that blueprint's `observability.db` and never inside it | None needed: keys are raw, because the FILE is already per blueprint |
+| *(unset: default)* | **Per-blueprint routing**: the mount gets its own file at `.aqueduct/<blueprint_id>/depot.db`, next to that blueprint's `observability.db` and never inside it | None needed: keys are raw, because the FILE is already per blueprint |
 | A file, e.g. `/mnt/aqueduct/depot.db` | One shared file for every blueprint that names it | Keys are prefixed with `<blueprint_id>:`, unless `shared: true` asks for raw keys |
 
 `--store-dir` replaces the routing base for a per-blueprint mount, the same

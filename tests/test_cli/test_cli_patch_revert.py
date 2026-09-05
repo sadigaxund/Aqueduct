@@ -59,7 +59,7 @@ def _touch_obs_store(tmp_path, blueprint_id: str = _BLUEPRINT_ID) -> None:
     from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
 
     store = DuckDBObservabilityStore(
-        Path(tmp_path) / ".aqueduct" / "observability" / blueprint_id / "observability.db"
+        Path(tmp_path) / ".aqueduct" / blueprint_id / "observability.db"
     )
     with store.connect():
         pass

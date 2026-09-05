@@ -345,7 +345,7 @@ agent:
 
 In `cluster` or `cloud` mode, `aqueduct doctor` warns when a Blueprint contains paths without a URI scheme.
 
-**Checkpoints require a driver+worker-visible filesystem.** `checkpoint: true` writes module checkpoints under the local observability store directory (`.aqueduct/observability/<blueprint_id>/checkpoints/<run_id>/`) by default. When Spark workers run in containers or on remote hosts that don't share the driver's filesystem (Docker-based Standalone, k8s), the checkpoint write fails per-module and degrades to a `runtime_checkpoint_write_failed` warning, the run still succeeds, but the recompute-avoidance benefit (and `--resume` for that module) is lost. Either mount the project directory into the worker containers so the path resolves on both sides, or drop `checkpoint: true` and accept the recompute (for small data the cost is negligible). A remote checkpoint root (`s3a://`) is not yet supported.
+**Checkpoints require a driver+worker-visible filesystem.** `checkpoint: true` writes module checkpoints under the local observability store directory (`.aqueduct/<blueprint_id>/checkpoints/<run_id>/`) by default. When Spark workers run in containers or on remote hosts that don't share the driver's filesystem (Docker-based Standalone, k8s), the checkpoint write fails per-module and degrades to a `runtime_checkpoint_write_failed` warning, the run still succeeds, but the recompute-avoidance benefit (and `--resume` for that module) is lost. Either mount the project directory into the worker containers so the path resolves on both sides, or drop `checkpoint: true` and accept the recompute (for small data the cost is negligible). A remote checkpoint root (`s3a://`) is not yet supported.
 
 **`checkpoint_root` override (2.8).** Set the top-level `checkpoint_root` key in `aqueduct.yml` to point checkpoints at a directory other than the derived `<store_dir>/checkpoints/`, e.g. a volume explicitly mounted into every worker container, or faster local disk on a single-node deployment. Local filesystem paths only; a `s3://`/`s3a://`/`gs://`/`hdfs://`/`abfss://` value is rejected at config-load (see the note above). Example:
 
@@ -402,7 +402,7 @@ The `aqueduct run --store-dir <path>` CLI flag overrides the parent directory fo
 Per-pipeline DuckDB files are the right default: zero setup, single-writer is fine because one pipeline runs at a time, and the file sits next to the project. You have outgrown them when any of these become true:
 
 - **Fleet questions**: "which of my N pipelines healed last night", "heal-rate trend across all blueprints" require querying N separate `.db` files; with Postgres every pipeline writes to one database (the engine creates `observability` / `depots` schemas per store automatically).
-- **Many pipelines**: dozens of per-pipeline files under `.aqueduct/observability/*/` get awkward to back up, retain, and dashboard.
+- **Many pipelines**: dozens of per-pipeline files under `.aqueduct/*/` get awkward to back up, retain, and dashboard.
 - **Ephemeral drivers**: Kubernetes Jobs / CI runners lose local files on every restart; a network DSN removes the PVC requirement above entirely.
 - **Concurrent access**: a BI tool or `aqueduct runs` polling while a run is writing hits DuckDB's single-writer lock; Postgres MVCC does not care.
 
@@ -419,10 +419,10 @@ stores:
       path: "postgresql://aq:${PGPASSWORD}@pg.internal:5432/aqueduct"
 ```
 
-Tables are created on the first run, no migration step is required to start. Old per-pipeline DuckDB history is not imported automatically; it stays queryable in place (`duckdb .aqueduct/observability/<blueprint_id>/observability.db`). If you want the history in Postgres, DuckDB's `postgres` extension can copy it table-by-table:
+Tables are created on the first run, no migration step is required to start. Old per-pipeline DuckDB history is not imported automatically; it stays queryable in place (`duckdb .aqueduct/<blueprint_id>/observability.db`). If you want the history in Postgres, DuckDB's `postgres` extension can copy it table-by-table:
 
 ```sql
--- inside `duckdb .aqueduct/observability/<blueprint_id>/observability.db`
+-- inside `duckdb .aqueduct/<blueprint_id>/observability.db`
 INSTALL postgres; LOAD postgres;
 ATTACH 'dbname=aqueduct user=aq host=pg.internal' AS pg (TYPE postgres);
 INSERT INTO pg.observability.run_records       SELECT * FROM run_records;

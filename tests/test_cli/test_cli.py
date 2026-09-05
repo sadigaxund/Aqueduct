@@ -334,7 +334,7 @@ stores:
 
 def test_cli_run_postgres_observability_no_bogus_dir(tmp_path):
     """Verify that using postgres as the stores.observability.backend does NOT create a postgresql:/... directory.
-    It should fall back to a safe per-pipeline local path (.aqueduct/observability/<blueprint_id>) for scratch work.
+    It should fall back to a safe per-pipeline local path (.aqueduct/<blueprint_id>) for scratch work.
     """
     pytest.importorskip("psycopg2")
     runner = CliRunner()
@@ -395,7 +395,7 @@ stores:
         assert len(bogus_cwd) == 0, f"Bogus directory created in CWD: {bogus_cwd}"
         assert len(bogus_tmp) == 0, f"Bogus directory created in tmp_path: {bogus_tmp}"
 
-        fallback_dir = tmp_path / ".aqueduct/observability/postgres_store_test"
+        fallback_dir = tmp_path / ".aqueduct/postgres_store_test"
         assert (
             fallback_dir.exists()
         ), "Local scratch directory was not created under tmp_path/.aqueduct"

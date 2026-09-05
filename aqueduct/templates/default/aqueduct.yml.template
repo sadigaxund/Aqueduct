@@ -157,7 +157,7 @@ engine:
 #                 signals, module + maintenance metrics, healing outcomes, AND
 #                 column-level lineage (column_lineage)
 #   depot.db    — depot KV store (@aq.depot.*), its own file per blueprint under
-#                 .aqueduct/observability/<blueprint_id>/, never inside
+#                 .aqueduct/<blueprint_id>/, never inside
 #                 observability.db
 #
 # Supported backends:
@@ -176,13 +176,13 @@ stores:
     backend: duckdb
     # DuckDB path = a routing base DIRECTORY (see specs §10.4.1):
     #   unset (default) → per-blueprint routing under
-    #     .aqueduct/observability/<blueprint_id>/observability.db (parallel-safe).
+    #     .aqueduct/<blueprint_id>/observability.db (parallel-safe).
     #   a DIRECTORY, e.g. "/mnt/aqueduct/obs" → same per-blueprint split under
     #     your dir (parallel-safe, custom location).
     #   a FILE path (.db suffix) is a CONFIG ERROR — the single-shared-file
     #   layout was removed in 2.0 (never parallel-safe); for one shared
     #   concurrent store use backend: postgres below.
-    # path: ".aqueduct/observability"
+    # path: ".aqueduct"
     # Postgres example (uncomment + install `aqueduct-core[postgres]`) — MVCC,
     # fully concurrent, the right choice for parallel runs + live dashboards:
     # backend: postgres
@@ -191,14 +191,14 @@ stores:
   # Depot — cross-run KV state (@aq.depot.*). A name-keyed MAP of mounts. The
   # `default` mount always exists even if omitted. A duckdb mount with NO `path`
   # is routed per blueprint to its own file at
-  # .aqueduct/observability/<blueprint_id>/depot.db; a mount with an explicit
+  # .aqueduct/<blueprint_id>/depot.db; a mount with an explicit
   # `path` shares that one file across blueprints and is KEY-ISOLATED instead
   # (keys prefixed by blueprint_id). Either way blueprints never collide.
   # Read with @aq.depot.get('k') (default) / @aq.depot.<name>.get('k').
   depots:
     default:
       backend: duckdb
-      # path: unset (default) → .aqueduct/observability/<blueprint_id>/depot.db
+      # path: unset (default) → .aqueduct/<blueprint_id>/depot.db
       # path: ".aqueduct/depot.db"   # one shared file, keys prefixed per blueprint
       # backend: postgres
       # path: "postgresql://aq@host:5432/aqueduct_db"

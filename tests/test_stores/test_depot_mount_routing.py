@@ -117,7 +117,7 @@ def test_preview_depots_reads_the_routed_location(tmp_path, monkeypatch):
     build_depot_mounts(AqueductConfig(), blueprint_id="sales")["default"].kv_put(
         "watermark", "2020-01-01"
     )
-    assert (tmp_path / ".aqueduct" / "observability" / "sales" / DEFAULT_DEPOT_DB_FILENAME).exists()
+    assert (tmp_path / ".aqueduct" / "sales" / DEFAULT_DEPOT_DB_FILENAME).exists()
 
     default, mounts = preview_depots(AqueductConfig(), "sales")
     assert default.get("watermark") == "2020-01-01"

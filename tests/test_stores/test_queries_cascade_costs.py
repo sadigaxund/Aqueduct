@@ -74,7 +74,7 @@ def _healing_outcome(c, run_id, position, resolution, success):
 
 def test_cascade_position_outcomes_reports_tier_vs_outcome(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    root = tmp_path / ".aqueduct" / "observability" / "bp1"
+    root = tmp_path / ".aqueduct" / "bp1"
     root.mkdir(parents=True)
     c = _init(root / "observability.db")
     _healing_outcome(c, "r1", 1, "llm", True)
@@ -92,7 +92,7 @@ def test_cascade_position_outcomes_reports_tier_vs_outcome(tmp_path, monkeypatch
 
 def test_cascade_position_outcomes_ignores_null_position(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    root = tmp_path / ".aqueduct" / "observability" / "bp1"
+    root = tmp_path / ".aqueduct" / "bp1"
     root.mkdir(parents=True)
     c = _init(root / "observability.db")
     _healing_outcome(c, "r1", None, "cached", True)
@@ -139,7 +139,7 @@ def _run_and_attempt(c, run_id, blueprint_id, tokens_in, tokens_out, days_ago=0)
 
 def test_heal_costs_aggregates_per_blueprint_per_month_across_runs(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    root = tmp_path / ".aqueduct" / "observability"
+    root = tmp_path / ".aqueduct"
     (root / "alpha").mkdir(parents=True)
     (root / "beta").mkdir(parents=True)
 
@@ -169,7 +169,7 @@ def test_heal_costs_aggregates_per_blueprint_per_month_across_runs(tmp_path, mon
 
 def test_heal_costs_empty_store_returns_empty_list(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    root = tmp_path / ".aqueduct" / "observability" / "empty"
+    root = tmp_path / ".aqueduct" / "empty"
     root.mkdir(parents=True)
     _init(root / "observability.db").close()
 

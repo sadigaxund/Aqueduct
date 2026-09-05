@@ -33,7 +33,7 @@ edges: []
         encoding="utf-8",
     )
 
-    obs_dir = tmp_path / ".aqueduct" / "observability" / "fail_bp"
+    obs_dir = tmp_path / ".aqueduct" / "fail_bp"
     obs_dir.mkdir(parents=True)
     obs_db = obs_dir / "observability.db"
 

@@ -287,7 +287,7 @@ def _resolve_obs_db(
     Mirrors the per-pipeline routing the WRITE side (``aqueduct run``) does at
     cli.py:1185-1290: when the user keeps the default
     ``.aqueduct/observability.db``, each blueprint writes to
-    ``.aqueduct/observability/<blueprint_id>/observability.db``. READ commands
+    ``.aqueduct/<blueprint_id>/observability.db``. READ commands
     (``runs``, ``report``, ``lineage``, ``heal``) need to find the right per-pipeline
     file — historically each command reinvented this with a naive
     ``Path(cfg.stores.observability.path).parent``, which only worked when the

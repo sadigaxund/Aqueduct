@@ -49,7 +49,7 @@ def _seed(path, blueprint_id, rows, heals=None):
 def _routed_cfg(tmp_path, monkeypatch):
     """Per-blueprint routing root with two blueprints seeded."""
     monkeypatch.chdir(tmp_path)
-    root = tmp_path / ".aqueduct" / "observability"
+    root = tmp_path / ".aqueduct"
     (root / "alpha").mkdir(parents=True)
     (root / "beta").mkdir(parents=True)
     _seed(
@@ -103,7 +103,7 @@ def test_failure_categories_legacy_fallback_uses_real_column(tmp_path, monkeypat
     genuinely pre-`healing_outcomes` legacy store (no healing_outcomes table
     at all) still produces a category distribution via the fallback."""
     monkeypatch.chdir(tmp_path)
-    root = tmp_path / ".aqueduct" / "observability" / "legacy"
+    root = tmp_path / ".aqueduct" / "legacy"
     root.mkdir(parents=True)
     con = duckdb.connect(str(root / "observability.db"))
     con.execute(
@@ -242,7 +242,7 @@ def test_gate_rejection_rates_counts_only_fail(tmp_path, monkeypatch):
     'not_applicable' means the gate had nothing to check.
     """
     monkeypatch.chdir(tmp_path)
-    root = tmp_path / ".aqueduct" / "observability" / "bp"
+    root = tmp_path / ".aqueduct" / "bp"
     root.mkdir(parents=True)
     _seed_patch_simulation(
         root / "observability.db",

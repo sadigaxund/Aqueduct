@@ -58,7 +58,7 @@ def test_resolve_obs_db_per_pipeline_glob(tmp_path):
     mock_cfg.stores.observability.path = None
 
     # 1. Create a dummy per-pipeline DB
-    pipeline_dir = Path(".aqueduct/observability/my_pipeline")
+    pipeline_dir = Path(".aqueduct/my_pipeline")
     pipeline_dir.mkdir(parents=True)
     db_path = pipeline_dir / "observability.db"
 
@@ -78,7 +78,7 @@ def test_resolve_obs_db_per_pipeline_glob(tmp_path):
 def test_runs_command_unions_all_databases(tmp_path):
     """runs command lists runs from all per-pipeline databases in union."""
     # 1. Create two per-pipeline databases
-    p1_dir = Path(".aqueduct/observability/pipeline_1")
+    p1_dir = Path(".aqueduct/pipeline_1")
     p1_dir.mkdir(parents=True)
     db1 = p1_dir / "observability.db"
     conn1 = duckdb.connect(str(db1))
@@ -90,7 +90,7 @@ def test_runs_command_unions_all_databases(tmp_path):
     )
     conn1.close()
 
-    p2_dir = Path(".aqueduct/observability/pipeline_2")
+    p2_dir = Path(".aqueduct/pipeline_2")
     p2_dir.mkdir(parents=True)
     db2 = p2_dir / "observability.db"
     conn2 = duckdb.connect(str(db2))
@@ -128,7 +128,7 @@ def test_heal_command_per_pipeline_routing(tmp_path):
     import datetime
 
     # Create the per-pipeline DB with FailureContext using Surveyor
-    p1_dir = Path(".aqueduct/observability/pipeline_1")
+    p1_dir = Path(".aqueduct/pipeline_1")
     p1_dir.mkdir(parents=True, exist_ok=True)
 
     manifest = Manifest(

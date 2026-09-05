@@ -55,7 +55,12 @@ def resolve_duckdb_obs_path(
          default).
       2. Else the routed file under ``<base>`` whose ``run_records`` contains
          ``run_id``.
-      3. Else the flat file directly under ``<base>``.
+      3. Else the flat file directly under ``<base>``, but ONLY when the
+         base was named explicitly (``--store-dir`` or a configured path).
+         The DEFAULT base is the top-level ``.aqueduct`` directory, and a
+         flat file under it is exactly the pre-1.1.0
+         ``.aqueduct/observability.db`` layout, which 2.0 stopped reading;
+         resolving to it here would quietly bring that store back.
     """
     if store_dir:
         # --store-dir denotes the SAME routing base as the configured path
@@ -63,10 +68,12 @@ def resolve_duckdb_obs_path(
         # directory") — fall through to the identical blueprint_id/run_id/
         # flat-file resolution below instead of a flat-only lookup.
         routing_root = store_dir
+        base_is_explicit = True
     else:
         obs_path = cfg.stores.observability.path
         routing_root = _OBS_ROUTING_ROOT
-        if not _is_default_obs_path(obs_path):
+        base_is_explicit = not _is_default_obs_path(obs_path)
+        if base_is_explicit:
             routing_root = str(obs_path)
     flat_default = Path(routing_root) / DEFAULT_OBS_DB_FILENAME
 
@@ -98,7 +105,7 @@ def resolve_duckdb_obs_path(
             if hit:
                 return candidate
 
-    return flat_default if flat_default.exists() else None
+    return flat_default if base_is_explicit and flat_default.exists() else None
 
 
 def resolve_obs_store_dir(

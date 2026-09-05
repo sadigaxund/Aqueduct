@@ -13,23 +13,22 @@ or DuckDB file locks:
 
 ```
 .aqueduct/
-  observability/
-    <blueprint_id>/
-      observability.db     ← run_records, heal_attempts, healing_outcomes,
-                             failure_contexts, probe_signals, module_metrics,
-                             maintenance_metrics, patch_simulation,
-                             signal_overrides,
-                             column_lineage, patch_index
-      blobs/               ← Zstandard-compressed manifest_json, provenance_json,
-                             stack_trace payloads (<run_id>/{manifest,prov,stack}.json.zst)
-      checkpoints/         ← Parquet checkpoints written by --resume
-      depot.db             ← this blueprint's cross-run KV state (@aq.depot.*),
-                             incremental-Channel watermarks. Its own file,
-                             never inside observability.db. A depot mount with
-                             an explicit `path` lives wherever you point it
-                             instead.
-  benchmark.duckdb         ← appears next to the scenarios dir, not here:
-                             written to <scenarios_dir>/.aqueduct/benchmark.duckdb
+  <blueprint_id>/
+    observability.db     ← run_records, heal_attempts, healing_outcomes,
+                           failure_contexts, probe_signals, module_metrics,
+                           maintenance_metrics, patch_simulation,
+                           signal_overrides,
+                           column_lineage, patch_index
+    blobs/               ← Zstandard-compressed manifest_json, provenance_json,
+                           stack_trace payloads (<run_id>/{manifest,prov,stack}.json.zst)
+    checkpoints/         ← Parquet checkpoints written by --resume
+    depot.db             ← this blueprint's cross-run KV state (@aq.depot.*),
+                           incremental-Channel watermarks. Its own file,
+                           never inside observability.db. A depot mount with
+                           an explicit `path` lives wherever you point it
+                           instead.
+  benchmark.duckdb        ← appears next to the scenarios dir, not here:
+                           written to <scenarios_dir>/.aqueduct/benchmark.duckdb
 ```
 
 **The artefact map (1.2):** The incremental-Channel watermark
@@ -390,7 +389,7 @@ operator's responsibility (there is no built-in retention/pruning feature).
 ### Blob externalisation (1.1.2+)
 
 Large payloads (`manifest_json`, `provenance_json`, `stack_trace`) are stored as
-Zstandard-compressed `.json.zst` files under `.aqueduct/observability/<bp>/blobs/<run_id>/`
+Zstandard-compressed `.json.zst` files under `.aqueduct/<bp>/blobs/<run_id>/`
 instead of inline in the DuckDB row. The DB column stores only the relative blob
 path. `BlobStore.materialize()` (`aqueduct.stores.object_store`) transparently
 resolves blob paths to content on read.
@@ -533,7 +532,7 @@ Cross-run KV state (`@aq.depot.*`). Every mount is **per-blueprint isolated**
 by default, and how depends on the mount's `path`.
 
 A mount with no `path` (the default `default` mount) is routed to its own file
-at `.aqueduct/observability/<blueprint_id>/depot.db`. Keys inside it are raw,
+at `.aqueduct/<blueprint_id>/depot.db`. Keys inside it are raw,
 because the file already belongs to one blueprint.
 
 A mount with an explicit `path` is one file shared by every blueprint that

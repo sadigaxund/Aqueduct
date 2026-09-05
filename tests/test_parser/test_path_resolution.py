@@ -94,11 +94,11 @@ def test_config_store_path_resolution_relative(tmp_path):
         """
 stores:
   observability:
-    path: .aqueduct/observability
+    path: .aqueduct/obs_custom
 """
     )
     cfg = load_config(cfg_file)
-    expected_path = (cfg_dir / ".aqueduct/observability").resolve()
+    expected_path = (cfg_dir / ".aqueduct/obs_custom").resolve()
     assert cfg.stores.observability.path == str(expected_path)
 
 

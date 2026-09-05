@@ -63,9 +63,11 @@ DEFAULT_DEPOT_DB_FILENAME: str = "depot.db"
 # source of truth for the three call sites that previously each hardcoded
 # this literal independently: `aqueduct/cli/run.py` (`_obs_routing_base`),
 # `aqueduct/stores/queries.py` (`_DEFAULT_OBS_ROOT`), and
-# `aqueduct/stores/read.py` (`_OBS_ROUTING_ROOT`). Pure DRY — no behavior
-# change; the value is unchanged.
-DEFAULT_OBS_ROUTING_ROOT: str = ".aqueduct/observability"
+# `aqueduct/stores/read.py` (`_OBS_ROUTING_ROOT`). Per-blueprint store
+# directories live directly under `.aqueduct/<blueprint_id>/` (no
+# `observability` segment) - the routing root IS the top-level `.aqueduct`
+# directory.
+DEFAULT_OBS_ROUTING_ROOT: str = ".aqueduct"
 
 # Default root for cross-engine handoff spill files (Phase 81 step 2's
 # `handoff:` block, `handoff.root`). Unlike `checkpoint_root` (LOCAL
@@ -209,7 +211,7 @@ class RelationalStoreConfig(BaseModel):
         description=(
             "DuckDB: a DIRECTORY (routing base) — per-blueprint files are "
             "created underneath as `<path>/<blueprint_id>/observability.db`; "
-            "None (default) routes under `.aqueduct/observability/`. A file "
+            "None (default) routes under `.aqueduct/`. A file "
             "path (`.db` suffix) is a config error (2.0: the single-shared-"
             "file mode was removed — DuckDB is single-writer, so it was never "
             "parallel-safe; use `backend: postgres` for one shared concurrent "

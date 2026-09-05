@@ -55,4 +55,4 @@ python inspect_results.py
 ```
 
 Results land in `probe_signals` (signal_type = `custom`) in the default
-per-pipeline `.aqueduct/observability/<blueprint_id>/observability.db`.
+per-pipeline `.aqueduct/<blueprint_id>/observability.db`.

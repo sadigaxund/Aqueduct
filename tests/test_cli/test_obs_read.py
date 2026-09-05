@@ -65,16 +65,16 @@ def test_resolve_flat_default(tmp_path, monkeypatch):
 
 def test_resolve_per_pipeline_by_run_id(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    _make_db(tmp_path / ".aqueduct/observability/alpha/observability.db", with_run="r9")
+    _make_db(tmp_path / ".aqueduct/alpha/observability.db", with_run="r9")
     got = resolve_duckdb_obs_path(_cfg(), run_id="r9")
-    assert got == Path(".aqueduct/observability/alpha/observability.db")
+    assert got == Path(".aqueduct/alpha/observability.db")
 
 
 def test_resolve_per_pipeline_by_blueprint_id(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    _make_db(tmp_path / ".aqueduct/observability/beta/observability.db")
+    _make_db(tmp_path / ".aqueduct/beta/observability.db")
     got = resolve_duckdb_obs_path(_cfg(), blueprint_id="beta")
-    assert got == Path(".aqueduct/observability/beta/observability.db")
+    assert got == Path(".aqueduct/beta/observability.db")
 
 
 def test_resolve_location_only_dir_routes_per_blueprint(tmp_path):
@@ -126,7 +126,7 @@ def test_open_postgres_uses_get_stores():
 
 
 def test_write_dir_default_routes_per_blueprint():
-    assert resolve_obs_store_dir(_cfg(), "beta") == Path(".aqueduct/observability/beta")
+    assert resolve_obs_store_dir(_cfg(), "beta") == Path(".aqueduct/beta")
 
 
 def test_write_dir_location_only_dir(tmp_path):
