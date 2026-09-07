@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
+from aqueduct import exit_codes
 from aqueduct.cli import _run_patch_gates_inline, cli
 from aqueduct.config import AqueductConfig
 
@@ -121,10 +122,20 @@ def test_sandbox_mode_off_allowed_with_danger_gate(mock_get_exec, mock_surveyor_
 
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 @patch("aqueduct.executor.get_executor")
-def test_danger_combo_warning(mock_get_exec, mock_surveyor_cls, tmp_path):
-    """sandbox_mode=off + max_patches > 1 -> prints DANGER COMBO warning.
+def test_danger_combo_warning_now_refuses(mock_get_exec, mock_surveyor_cls, tmp_path):
+    """sandbox_mode=off + max_patches > 1 still prints the DANGER COMBO
+    warning, but 2.3.0 no longer just warns and proceeds: chained
+    multi-patch healing (the only heal-loop behavior now that
+    `agent.progressive`/`agent.max_chain` are gone) needs per-link sandbox
+    validation, so `require_sandbox_for_chained_healing`
+    (`aqueduct/cli/run_setup.py`) refuses the combo outright with a
+    `ConfigError`, after the warning has already printed. See CHANGELOG.md
+    2.3.0 `### Changed`, the `agent.progressive`/`agent.max_chain` entry:
+    "The sandbox guard that used to key off `agent.progressive` now keys
+    off the attempt cap: `agent.sandbox_mode: off` is refused only when
+    `max_patches > 1`".
 
-    1.1.0: combo gate is now keyed on max_patches > 1, not the legacy
+    1.1.0: combo gate is keyed on max_patches > 1, not the legacy
     `approval_mode=aggressive` literal. The blueprint sets
     `max_patches: 2` (deprecated alias) to opt into the loop
     so this test also covers alias-resolution for the gate.
@@ -162,8 +173,9 @@ def test_danger_combo_warning(mock_get_exec, mock_surveyor_cls, tmp_path):
 
     runner = CliRunner()
     result = runner.invoke(cli, ["run", str(bp), "--config", str(cfg)])
-    assert result.exit_code == 0
     assert "⚠ DANGER COMBO: sandbox_mode=off + max_patches > 1" in result.output
+    assert result.exit_code == exit_codes.CONFIG_ERROR
+    assert "requires per-link sandbox validation" in result.output
 
 
 def test_run_patch_gates_inline_off(tmp_path):

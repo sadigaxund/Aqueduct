@@ -16,6 +16,10 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The heal loop still persisted a phantom failure when a chain's attempt budget exhausted on a rejected candidate.** The 2.3.0 `session_config_fingerprint` fix (`### Fixed` below) closed the gap for the FORWARD direction — a patch retry now always executes on a session rebuilt from its own patched manifest — but the inner `while patch_count < max_patches:` loop's normal-exhaustion `else:` branch fell straight through to the outer loop's unconditional `break` without re-executing anything, so `result`/`failure_ctx` were left holding the just-REJECTED candidate's patched retry results. A heal that exhausted its budget therefore recorded and signed the wrong failure — one manufactured by a discarded patch guess, not the real (or accumulated-patches-only) failure. The exhaustion branch now re-executes the manifest reflecting only the PROVEN `accumulated_patches` (never the just-rejected candidate) before the heal ends, reassigning `result`/`failure_ctx` and rendering the module summary the same way the top of the loop does. (`aqueduct/cli/run.py`; tests: `tests/test_cli/test_cli_run_heal_session_rebuild.py`)
+
 ## [2.3.0] — 2026-09-05
 
 ### Removed
