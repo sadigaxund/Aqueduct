@@ -335,17 +335,23 @@ def test_heal_rebuild_happens_on_every_iteration_not_only_the_first(
     """Two heal iterations (max_patches=2, each patch attempt still fails)
     must rebuild the session on BOTH retries, not just the first — the
     unconditional-rebuild-on-mismatch contract this fix commits to (no
-    "first patch only" shortcut) — AND each retry's failure must be
-    followed by a baseline re-execution rebuilt back to the ORIGINAL
-    (unpatched) ``engine_config``, never left running on the config of
-    whichever patch just failed.
+    "first patch only" shortcut) — AND the run must not END on a session
+    built from a rejected candidate's config: the chain's exhaustion is
+    followed by ONE baseline re-execution rebuilt back to the ORIGINAL
+    (unpatched) ``engine_config``.
 
     Verified to fail pre-fix (this file's previous version): the pre-fix
-    mechanism only rebuilds before a patch retry, never before a baseline
-    re-execution, so it produces exactly 3 builds for this scenario
-    (initial + 2 retries) — this test's ``== 5`` assertion would fail with
-    ``got 3``, and both ``baseline_reexecN`` unpacks below would raise
-    ``ValueError`` (not enough values to unpack).
+    mechanism only rebuilds before a patch retry, never before the
+    baseline re-execution, so it produces exactly 3 builds for this
+    scenario (initial + 2 retries) — this test's ``== 4`` assertion would
+    fail with ``got 3``, and the ``baseline_reexec`` unpack below would
+    raise ``ValueError`` (not enough values to unpack).
+
+    Accounting note (2.3.0 chained-healing fold): a wrong same-module
+    candidate is DISCARDED and the same failure retried — a discard does
+    not itself owe a baseline re-execution. Only the chain's exhaustion
+    does. Hence 4 builds (initial + 2 retries + 1 baseline re-execution),
+    not one re-execution per discarded candidate.
 
     2.3.0 — ``agent.sandbox_mode: off`` + ``max_patches: 2`` is now refused
     at startup by ``require_sandbox_for_chained_healing`` (the sandbox
@@ -371,35 +377,29 @@ def test_heal_rebuild_happens_on_every_iteration_not_only_the_first(
     _assert_no_unexpected_crash(result)
 
     assert mock_generate_patch.call_count == 2
-    # Initial session + (retry rebuild + baseline-reexec rebuild) per patch
-    # attempt — every patch failure is followed by the outer loop rebuilding
-    # BACK to the unpatched config for its mandatory baseline re-execution.
-    assert len(fake_protocol.built_sessions) == 5, (
-        f"expected 5 session builds (initial + 2x[retry + baseline "
-        f"re-execution]), got {len(fake_protocol.built_sessions)}: "
+    # Initial session + one rebuild per patch retry + one final rebuild BACK
+    # to the unpatched config for the exhaustion-time baseline re-execution.
+    assert len(fake_protocol.built_sessions) == 4, (
+        f"expected 4 session builds (initial + 2 retries + 1 baseline "
+        f"re-execution), got {len(fake_protocol.built_sessions)}: "
         f"engine_configs={[s.engine_config for s in fake_protocol.built_specs]}"
     )
 
-    initial, retry1, baseline_reexec1, retry2, baseline_reexec2 = fake_protocol.built_specs
+    initial, retry1, retry2, baseline_reexec = fake_protocol.built_specs
     assert retry1.engine_config.get("spark.sql.shuffle.partitions") == 11
     assert retry2.engine_config.get("spark.sql.shuffle.partitions") == 22
-    # The invariant this fix adds: NEITHER baseline re-execution may still
-    # carry the patch that just failed — both must match the untouched
+    # The invariant this fix adds: the baseline re-execution may not still
+    # carry the patch that just failed — it must match the untouched
     # initial config exactly.
-    assert baseline_reexec1.engine_config == initial.engine_config, (
-        "baseline re-execution after patch p1 failed is still carrying "
-        f"p1's engine_config — got {baseline_reexec1.engine_config}"
-    )
-    assert baseline_reexec2.engine_config == initial.engine_config, (
-        "baseline re-execution after patch p2 failed is still carrying "
-        f"p2's engine_config — got {baseline_reexec2.engine_config}"
+    assert baseline_reexec.engine_config == initial.engine_config, (
+        "baseline re-execution after the heal chain exhausted is still "
+        f"carrying p2's engine_config — got {baseline_reexec.engine_config}"
     )
 
     # Every superseded session is closed before the NEXT one is built.
     assert fake_protocol.built_sessions[0] in fake_protocol.closed_sessions
     assert fake_protocol.built_sessions[1] in fake_protocol.closed_sessions
     assert fake_protocol.built_sessions[2] in fake_protocol.closed_sessions
-    assert fake_protocol.built_sessions[3] in fake_protocol.closed_sessions
 
 
 @patch("aqueduct.agent.generate_agent_patch")
