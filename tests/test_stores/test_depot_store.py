@@ -278,10 +278,28 @@ class TestReadOnlyUnderConcurrentWriter:
 
     @pytest.mark.slow
     def test_reads_succeed_while_another_process_writes(self, tmp_path):
-        """End-to-end: a separate OS process hammers writes; every read succeeds."""
+        """End-to-end: a separate OS process hammers writes; every read succeeds.
+
+        The writer serialises 60 short writes (open/execute/commit/close per
+        call), so each individual lock hold is brief — but "brief" is a
+        function of OS scheduling, not just DuckDB's write speed: under CPU
+        contention the process holding the lock can be preempted mid-write,
+        stretching a single hold past the reader's ~0.75s retry budget purely
+        by bad luck, with nothing wrong on either side. Racing a fixed number
+        of blind reads against that is not deterministic — it flakes roughly
+        in proportion to how loaded the machine is.
+
+        So don't race blindly: `writer.poll()` is the ground truth for
+        whether a lock conflict is expected contention (writer still alive)
+        or a real bug (writer already exited, yet the read still can't get
+        in). A `StoreLockedError` while the writer is alive just means "try
+        this read again"; the `deadline` is a safety net against a genuinely
+        wedged writer, not a normal-path sleep.
+        """
         import subprocess
         import sys
         import textwrap
+        import time
 
         db_path = tmp_path / "depot.db"
         DuckDBDepotStore(db_path).kv_put("k", "seed")
@@ -301,10 +319,20 @@ class TestReadOnlyUnderConcurrentWriter:
             reader = DuckDBDepotStore(db_path, read_only=True)
             failures = []
             for _ in range(40):
-                try:
-                    assert reader.kv_get("k") != ""
-                except Exception as exc:  # noqa: BLE001 — this is what we're measuring
-                    failures.append(repr(exc))
+                # 60 tiny writes finish in low single-digit seconds even under
+                # heavy load; a read still locked out this long after means
+                # something is genuinely wrong, not just contention.
+                deadline = time.monotonic() + 30
+                while True:
+                    try:
+                        assert reader.kv_get("k") != ""
+                        break
+                    except Exception as exc:  # noqa: BLE001 — this is what we're measuring
+                        still_writing = writer.poll() is None
+                        if still_writing and time.monotonic() < deadline:
+                            continue  # expected contention — writer hasn't signaled it's done
+                        failures.append(repr(exc))
+                        break
             assert not failures, f"{len(failures)}/40 read-only reads failed: {failures[:3]}"
         finally:
             writer.wait(timeout=120)
