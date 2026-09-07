@@ -1291,15 +1291,20 @@ def patch_show(cfg: Any, patch_id: str, store_dir: str | None = None) -> dict | 
     through here.
     """
     from aqueduct.patch import index as patch_index
+    from aqueduct.stores.base import StoreLockedError
 
+    # DDL never runs here: it belongs at store-open time (`Surveyor.start()`),
+    # not in a reader — a second connection issuing DDL against a store a
+    # live `aqueduct run` already holds open can block forever (see the
+    # 4a347374 postmortem). A store last written by an older version is
+    # missing later columns and the SELECT fails; that store is skipped
+    # (same as any other lookup miss), not migrated from a reader.
     for h in discover_stores(cfg, store_dir=store_dir):
         try:
             with h.store.connect() as cur:
-                # Migrate first: `patch_index` gained columns after this
-                # reader shipped, and a store last written by an older
-                # version would fail the SELECT rather than miss a patch.
-                patch_index.ensure_schema(cur)
                 row = patch_index.get(cur, patch_id)
+        except StoreLockedError:
+            raise
         except Exception:
             continue
         if row is not None:

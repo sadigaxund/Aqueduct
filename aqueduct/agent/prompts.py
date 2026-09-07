@@ -375,17 +375,23 @@ def _load_previous_patches(obs_store: Any, limit: int = _PATCH_HISTORY_MAX) -> l
     an ``os.scandir`` over ``patches/applied/``. Empty when no store is given."""
     if obs_store is None:
         return []
+    from aqueduct.stores.base import StoreLockedError
+
     try:
         from aqueduct.patch import index as _ix
 
+        # DDL (`ensure_schema`) never runs here: it belongs at store-open
+        # time (`Surveyor.start()`), not in a reader — a second connection
+        # issuing DDL against a store the Surveyor already holds open with
+        # an active write transaction can block forever (see the 4a347374
+        # postmortem). A store last written by an older version is missing
+        # the heal-provenance columns `patch_index` gained since; that is
+        # NOT this reader's problem to migrate — it degrades to "no prior
+        # patches" below instead of crashing.
         with obs_store.connect() as cur:
-            # Migrate before selecting: `patch_index` gained columns after
-            # this read path shipped (the heal-provenance ones), and a store
-            # last written by an older version has none of them — the SELECT
-            # would fail and this best-effort reader would report "no prior
-            # patches" for a store that has plenty.
-            _ix.ensure_schema(cur)
             rows = _ix.recent_applied(cur, limit)
+    except StoreLockedError:
+        raise
     except Exception:
         logger.debug("previous-patch history query failed", exc_info=True)
         return []

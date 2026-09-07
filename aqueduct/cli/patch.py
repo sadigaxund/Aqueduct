@@ -123,16 +123,23 @@ def _list_rows_via_index(ps, obs_store: Any, statuses: tuple[str, ...]) -> list[
     if obs_store is None:
         return None
     from aqueduct.patch import index as _ix
+    from aqueduct.stores.base import StoreLockedError
 
+    # DDL (`ensure_schema`) never runs here: it belongs at store-open time
+    # (`Surveyor.start()`), not in a reader — a second connection issuing
+    # DDL against a store the Surveyor already holds open with an active
+    # write transaction can block forever (see the 4a347374 postmortem). A
+    # store last written by an older version is missing later columns; the
+    # SELECT below then fails and the caller falls back to
+    # `_list_rows_full_scan` — that is this fast path's contract already
+    # (`None` → fallback), not a new failure mode.
     try:
         with obs_store.connect() as cur:
-            # See `aqueduct/patch/index.py`'s schema-evolution rule: a store
-            # last written by an older version is missing later columns, and
-            # the SELECT below names them all.
-            _ix.ensure_schema(cur)
             index_rows: list[dict] = []
             for st in statuses:
                 index_rows.extend(_ix.list_by_status(cur, status=st, limit=10_000))
+    except StoreLockedError:
+        raise
     except Exception:
         return None
 
@@ -1442,9 +1449,11 @@ def patch_pull(patch_id: str, blueprint: str, out: str | None) -> None:
     if obs is None:
         click.echo("✗ no observability store found — cannot resolve the patch index", err=True)
         sys.exit(exit_codes.DATA_OR_RUNTIME)
+    # DDL never runs here: it belongs at store-open time, not in a reader —
+    # a second connection issuing DDL against a store a live `aqueduct run`
+    # already holds open can block forever (see the 4a347374 postmortem).
     try:
         with obs.connect() as cur:
-            _ix.ensure_schema(cur)
             row = _ix.get(cur, patch_id)
     except Exception as exc:
         click.echo(f"✗ index query failed: {exc}", err=True)

@@ -1772,7 +1772,12 @@ def check_healed_engine_config(blueprint_path: Path, cfg: Any) -> list[CheckResu
 
             store_error = ""
             with obs_store.connect() as cur:
-                _ix.ensure_schema(cur)
+                # No `ensure_schema` here: `obs_store` came from
+                # `open_obs_read`, a READ-ONLY connection — DuckDB rejects
+                # any DDL statement on one outright, which made this check
+                # always fail into the `store_error` branch below. DDL
+                # belongs at store-open time on the write path
+                # (`Surveyor.start()`), never in a reader.
                 facts_by_patch = {
                     str(rec.get("patch_id") or ""): _ix.heal_provenance(
                         cur, str(rec.get("patch_id") or "")

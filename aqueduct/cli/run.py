@@ -1387,12 +1387,15 @@ def run(
         if _obs_store is not None and manifest.blueprint_id:
             try:
                 with _obs_store.connect() as _pending_cur:
-                    from aqueduct.patch.index import ensure_schema as _ensure_ix
                     from aqueduct.patch.index import list_by_status as _list_pending
 
-                    # A store last written by an older version is missing
-                    # later `patch_index` columns the SELECT names.
-                    _ensure_ix(_pending_cur)
+                    # No `ensure_schema` here: `_setup_surveyor` above already
+                    # opened this same store and ran `patch_index`'s DDL as
+                    # part of `Surveyor.start()` — a one-time, open-time step.
+                    # Re-running DDL from this second connection would risk
+                    # blocking forever against the Surveyor's still-open
+                    # write transaction (see the 4a347374 postmortem); it is
+                    # also simply redundant.
 
                     _pending_before_run = _list_pending(
                         _pending_cur,
@@ -1404,6 +1407,16 @@ def run(
                 pass  # lookup failure must never block the run — falls through to a normal heal
 
         while True:
+            # LOOP-BOUND INVARIANT: every path through this body either
+            # `break`s or reaches the unconditional `break` that ends the heal
+            # block below, and every LLM diagnosis call spends one unit of
+            # `max_patches` (`patch_count += 1`, win or lose). The guard at the
+            # top (`patch_count >= max_patches`) is therefore a belt-and-braces
+            # second bound, not the only one. Do not add a `continue` — or a
+            # branch that falls off the end of the body — without a
+            # `patch_count` increment: that is exactly the defect that made an
+            # unreachable cascade re-execute the pipeline forever (2.3.0).
+            #
             # `iteration_run_id` is the per-iteration uuid used as `run_id`
             # for execute() and persisted on `run_records`. The user-visible
             # outer `run_id` is captured separately as `parent_run_id` on
@@ -1822,123 +1835,141 @@ def run(
             accumulated_patches: list = []
             current_failure = failure_ctx
 
-            # Phase 44: multi-model cascade takes priority over single-model loop.
-            if _cascade_tiers:
-                from aqueduct.agent.cascade import generate_cascade_patch
+            # ── Chained (progressive) multi-patch healing ────────────────
+            # Phase 92 fold: `max_patches` is the ONE counter for the
+            # whole chain — every LLM diagnosis call below spends one
+            # unit of it, whether the resulting candidate advances the
+            # chain, is discarded as a same-module retry, or is rejected
+            # by a gate/guardrail. A candidate that validates in memory
+            # but leaves the pipeline failing at a DIFFERENT module means
+            # the patch was right: it folds into `accumulated_patches`
+            # and the chain advances to diagnose the new failure. The
+            # SAME module failing again means the patch was wrong: only
+            # THAT candidate is discarded (the already-proven
+            # accumulated patches are kept) and the same failure is
+            # retried. Nothing is written to the Blueprint file until the
+            # full accumulated patch (accumulated_patches + the winning
+            # candidate) passes the pipeline end-to-end — exactly one
+            # combined PatchSpec is ever staged/applied for this heal.
+            #
+            # 2.3.0 fix — the multi-model cascade (Phase 44) runs through
+            # THIS SAME loop. The Phase 92 fold (2991279) had left it as a
+            # bare `if _cascade_tiers: generate_cascade_patch(...)` with no
+            # post-agent handling whatsoever: no `patch_count` increment, no
+            # `break`. Control fell off the end of the outer `while True:`
+            # and re-executed the whole pipeline, forever, whenever the
+            # cascade could not produce a patch (all tiers unreachable / no
+            # credentials). Cascade remains excluded from CHAINING — one
+            # tier patch per attempt, never folded into
+            # `accumulated_patches` — but it is now bounded by the same
+            # `max_patches` budget as every other heal.
+            from aqueduct.agent import merge_patch_specs
 
-                agent_result = generate_cascade_patch(
-                    tiers=list(_cascade_tiers),
-                    failure_ctx=failure_ctx,
-                    patches_dir=patches_dir,
-                    # The FAILING island's engine (Surveyor.record()'s
-                    # per-island override, §10.9) drives the healing
-                    # prompt's persona/rules — never the run's nominal
-                    # default. Identical to `engine` for a single-engine run
-                    # (`failure_ctx.engine` is always that same value there).
-                    engine=(failure_ctx.engine or engine),
-                    provider=resolved_agent_provider,
-                    base_url=resolved_agent_base_url,
-                    api_key=resolved_agent_api_key,
-                    provider_options=resolved_agent_provider_options,
-                    timeout=resolved_agent_timeout,
-                    max_tokens=4096,
-                    max_reprompts=resolved_agent_max_reprompts,
-                    engine_prompt_context=resolved_agent_engine_prompt_context,
-                    blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
-                    last_apply_error=last_apply_error,
-                    guardrails=manifest.agent.guardrails if manifest.agent else None,
-                    budget=_budget,
-                    allow_defer=manifest.agent.allow_defer if manifest.agent else False,
-                    deep_loop=_deep_loop,
-                    apply_callback=_apply_cb,
-                    validate_callback=_validate_cb,
-                    on_attempt=_on_attempt,
-                    on_token=_on_token if _use_stream else None,
-                    memory_coaching=True,
-                    retry_max_retries=cfg.agent.retry.max_retries,
-                    retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
-                    obs_store=_obs_store,
+            _is_cascade = bool(_cascade_tiers)
+            _chain_last_rejected = None  # last discarded same-module/gate-rejected candidate
+            while patch_count < max_patches:
+                patch_rejected_by_gate = (
+                    False  # reset per attempt — only the terminal reason drives the exit code
                 )
-            else:
-                # ── Chained (progressive) multi-patch healing — the ONLY ────
-                # ── loop behavior for the single-model (non-cascade) path ──
-                # Phase 92 fold: `max_patches` is the ONE counter for the
-                # whole chain — every LLM diagnosis call below spends one
-                # unit of it, whether the resulting candidate advances the
-                # chain, is discarded as a same-module retry, or is rejected
-                # by a gate/guardrail. A candidate that validates in memory
-                # but leaves the pipeline failing at a DIFFERENT module means
-                # the patch was right: it folds into `accumulated_patches`
-                # and the chain advances to diagnose the new failure. The
-                # SAME module failing again means the patch was wrong: only
-                # THAT candidate is discarded (the already-proven
-                # accumulated patches are kept) and the same failure is
-                # retried. Nothing is written to the Blueprint file until the
-                # full accumulated patch (accumulated_patches + the winning
-                # candidate) passes the pipeline end-to-end — exactly one
-                # combined PatchSpec is ever staged/applied for this heal.
-                # Cascade (above) is explicitly excluded from chaining — it
-                # keeps its existing one-tier-patch-per-outer-iteration model.
-                from aqueduct.agent import merge_patch_specs
-
-                _chain_last_rejected = None  # last discarded same-module/gate-rejected candidate
-                while patch_count < max_patches:
-                    patch_rejected_by_gate = (
-                        False  # reset per attempt — only the terminal reason drives the exit code
+                if _is_cascade:
+                    # No second header for cascade: the `◆ self-healing …
+                    # cascade · tier 1/N` line printed above already announced
+                    # this attempt, and tier escalation prints its own `├─`
+                    # nodes inside the transcript.
+                    pass
+                elif len(accumulated_patches) == 0:
+                    click.echo(
+                        click.style(
+                            f"◆ self-healing {current_failure.failed_module} · "
+                            f"{resolved_agent_model} · {resolved_agent_provider} "
+                            f"(patch {patch_count + 1}/{max_patches})",
+                            fg="yellow",
+                        ),
+                        err=True,
                     )
-                    if len(accumulated_patches) == 0:
-                        click.echo(
-                            click.style(
-                                f"◆ self-healing {current_failure.failed_module} · "
-                                f"{resolved_agent_model} · {resolved_agent_provider} "
-                                f"(patch {patch_count + 1}/{max_patches})",
-                                fg="yellow",
-                            ),
-                            err=True,
-                        )
-                    else:
-                        click.echo(
-                            click.style(
-                                f"  · chain advanced → diagnosing {current_failure.failed_module} "
-                                f"(link {len(accumulated_patches) + 1}, patch {patch_count + 1}/{max_patches})",
-                                fg="yellow",
-                            ),
-                            err=True,
-                        )
+                else:
+                    click.echo(
+                        click.style(
+                            f"  · chain advanced → diagnosing {current_failure.failed_module} "
+                            f"(link {len(accumulated_patches) + 1}, patch {patch_count + 1}/{max_patches})",
+                            fg="yellow",
+                        ),
+                        err=True,
+                    )
 
-                    _link_budget = _resolve_budget(
-                        getattr(cfg.agent, "budget", None),
+                _link_budget = _resolve_budget(
+                    getattr(cfg.agent, "budget", None),
+                    max_reprompts=resolved_agent_max_reprompts,
+                )
+                _link_validate_cb = None
+                if _any_deep_loop:
+                    from functools import partial
+
+                    from aqueduct.agent.gate_validation import validate_patch_via_gates
+
+                    _link_validate_cb = partial(
+                        validate_patch_via_gates,
+                        blueprint_path=Path(blueprint),
+                        bundle=bundle,
+                        surveyor=surveyor,
+                        failed_module=current_failure.failed_module,
+                        iteration_run_id=iteration_run_id,
+                        blueprint_id=manifest.blueprint_id,
+                        engine=(current_failure.engine or engine),
+                        cfg=cfg,
+                        sandbox_mode=(manifest.agent.sandbox_mode if manifest.agent else "sample"),
+                        sandbox_master_url=resolved_sandbox_master_url,
+                        warnings_suppress=cfg.warnings.suppress,
+                        timezone=cfg.timezone,
+                        announce_unavailable=_announce_polyglot_sandbox_unavailable,
+                    )
+
+                def _chain_on_attempt(rec, _link_index=len(accumulated_patches) + 1):
+                    rec.chain_link = _link_index
+                    _on_attempt(rec)
+
+                if _is_cascade:
+                    from aqueduct.agent.cascade import generate_cascade_patch
+
+                    # Phase 44 multi-model cascade. Excluded from chaining
+                    # (see the loop preamble): it diagnoses `current_failure`,
+                    # which for cascade never advances past this outer
+                    # iteration's failure.
+                    agent_result = generate_cascade_patch(
+                        tiers=list(_cascade_tiers),
+                        failure_ctx=current_failure,
+                        patches_dir=patches_dir,
+                        # The FAILING island's engine (Surveyor.record()'s
+                        # per-island override, §10.9) drives the healing
+                        # prompt's persona/rules — never the run's nominal
+                        # default. Identical to `engine` for a single-engine
+                        # run (`failure_ctx.engine` is always that same value
+                        # there).
+                        engine=(current_failure.engine or engine),
+                        provider=resolved_agent_provider,
+                        base_url=resolved_agent_base_url,
+                        api_key=resolved_agent_api_key,
+                        provider_options=resolved_agent_provider_options,
+                        timeout=resolved_agent_timeout,
+                        max_tokens=4096,
                         max_reprompts=resolved_agent_max_reprompts,
+                        engine_prompt_context=resolved_agent_engine_prompt_context,
+                        blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
+                        last_apply_error=last_apply_error,
+                        guardrails=manifest.agent.guardrails if manifest.agent else None,
+                        budget=_budget,
+                        allow_defer=manifest.agent.allow_defer if manifest.agent else False,
+                        deep_loop=_deep_loop,
+                        apply_callback=_apply_cb,
+                        validate_callback=_validate_cb,
+                        on_attempt=_on_attempt,
+                        on_token=_on_token if _use_stream else None,
+                        memory_coaching=True,
+                        retry_max_retries=cfg.agent.retry.max_retries,
+                        retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
+                        obs_store=_obs_store,
                     )
-                    _link_validate_cb = None
-                    if _any_deep_loop:
-                        from functools import partial
-
-                        from aqueduct.agent.gate_validation import validate_patch_via_gates
-
-                        _link_validate_cb = partial(
-                            validate_patch_via_gates,
-                            blueprint_path=Path(blueprint),
-                            bundle=bundle,
-                            surveyor=surveyor,
-                            failed_module=current_failure.failed_module,
-                            iteration_run_id=iteration_run_id,
-                            blueprint_id=manifest.blueprint_id,
-                            engine=(current_failure.engine or engine),
-                            cfg=cfg,
-                            sandbox_mode=(
-                                manifest.agent.sandbox_mode if manifest.agent else "sample"
-                            ),
-                            sandbox_master_url=resolved_sandbox_master_url,
-                            warnings_suppress=cfg.warnings.suppress,
-                            timezone=cfg.timezone,
-                            announce_unavailable=_announce_polyglot_sandbox_unavailable,
-                        )
-
-                    def _chain_on_attempt(rec, _link_index=len(accumulated_patches) + 1):
-                        rec.chain_link = _link_index
-                        _on_attempt(rec)
-
+                else:
                     agent_result = generate_agent_patch(
                         agent_cfg=AgentRunConfig(
                             failure_ctx=current_failure,
@@ -1971,217 +2002,272 @@ def run(
                             obs_store=_obs_store,
                         ),
                     )
-                    # Every diagnosis call spends one unit of max_patches —
-                    # ALWAYS, win or lose (the rule this fold implements).
-                    patch_count += 1
+                # Every diagnosis call spends one unit of max_patches —
+                # ALWAYS, win or lose (the rule this fold implements).
+                patch_count += 1
 
-                    patch = agent_result.patch
-                    # Phase 46 — record the model that actually produced this
-                    # result (cascade doesn't reach this branch, so this is
-                    # always the top-level agent.model).
-                    _outcome_model = agent_result.model or resolved_agent_model
-                    _cascade_pos = agent_result.model_cascade_position
-                    # Update the last persisted row with stop_reason so
-                    # downstream joins can answer "which axis terminated this
-                    # heal".
-                    if agent_result.attempt_records and agent_result.stop_reason:
-                        try:
-                            _defer_op = next(
-                                (
-                                    op
-                                    for op in (patch.operations if patch is not None else [])
-                                    if op.op == "defer_to_human"
-                                ),
-                                None,
-                            )
-                            surveyor.update_heal_attempt_stop_reason(
-                                run_id=_heal_run_id,
-                                attempt_num=agent_result.attempt_records[-1].attempt_num,
-                                stop_reason=agent_result.stop_reason,
-                                defer_reason=(
-                                    getattr(_defer_op, "defer_reason", None)
-                                    if _defer_op is not None
-                                    else None
-                                ),
-                            )
-                        except Exception:
-                            pass  # updating stop_reason is best-effort; never let persistence block the loop
-                    _summary_model = agent_result.model or agent_result.__dict__.get("model")
-                    _transcript.summary(
-                        agent_result.stop_reason,
-                        agent_result.attempts,
-                        agent_result.tokens_in_total,
-                        agent_result.tokens_out_total,
-                        model=_summary_model or resolved_agent_model,
-                    )
-
-                    if patch is None:
-                        # Unchanged today's no-patch handling — terminal,
-                        # regardless of any progress already accumulated.
-                        if agent_result.stop_reason == "api_error":
-                            from aqueduct.cli.render.funnel import echo as _funnel_echo
-
-                            _rel_bp = os.path.relpath(str(blueprint))
-                            _bp_display = str(blueprint) if _rel_bp.startswith("..") else _rel_bp
-                            _funnel_echo(
-                                "failure context saved · retry once the agent is reachable:",
-                                gutter="   ↳ ",
-                                err=True,
-                                verbose=verbosity >= 1,
-                                style={"fg": "bright_black"},
-                            )
-                            _funnel_echo(
-                                f"aqueduct heal {_bp_display}",
-                                gutter="     ",
-                                err=True,
-                                wrap=False,
-                                style={"fg": "bright_black"},
-                            )
-                        on_hf = manifest.agent.on_heal_failure if manifest.agent else "stage"
-                        if on_hf == "stage" and agent_result.stop_reason != "api_error":
-                            click.echo(
-                                click.style(
-                                    "   ↑ no patch to stage — failure context saved to the observability store",
-                                    fg="bright_black",
-                                ),
-                                err=True,
-                            )
-                        try:
-                            for _rec in agent_result.attempt_records or ():
-                                _fail_cat = (
-                                    _rec.signature.error_class
-                                    if getattr(_rec, "signature", None) is not None
-                                    else None
-                                )
-                                surveyor.record_healing_outcome(
-                                    run_id=iteration_run_id,
-                                    parent_run_id=run_id,
-                                    failed_module=current_failure.failed_module,
-                                    failure_category=_fail_cat,
-                                    model=_outcome_model,
-                                    patch_id=None,
-                                    confidence=None,
-                                    patch_applied=False,
-                                    run_success_after_patch=False,
-                                    failure_signature=_sig_exact.hash,
-                                    failure_signature_coarse=_sig_coarse.hash,
-                                    resolution="llm",
-                                    model_cascade_position=getattr(
-                                        _rec, "model_cascade_position", None
-                                    ),
-                                )
-                        except Exception:
-                            pass  # never let persistence block the loop exit
-                        break
-
-                    # ── Confidence escalation — low-confidence patches go to human ──
-                    _conf_threshold = manifest.agent.confidence_threshold
-                    if (
-                        patch.confidence is not None
-                        and patch.confidence < _conf_threshold
-                        and effective_mode not in ("human", "disabled")
-                    ):
-                        click.echo(
-                            f"  ↑ Agent patch confidence {patch.confidence:.0%} < {_conf_threshold:.0%} — escalating to human review",
-                            err=True,
-                        )
-                        effective_mode = "human"
-
-                    _BENIGN_RECOVERIES = {
-                        "stripped_code_fence",
-                        "stripped_think_block",
-                        "stripped_orphan_think_close",
-                        "stripped_leading_prose",
-                    }
-                    _risky_recovery = [
-                        r for r in agent_result.recovery_applied if r not in _BENIGN_RECOVERIES
-                    ]
-                    if _risky_recovery and effective_mode == "auto":
-                        click.echo(
-                            f"  ↑ Agent response needed mechanical recovery "
-                            f"({', '.join(_risky_recovery)}) — "
-                            f"downgrading to human review for safety",
-                            err=True,
-                        )
-                        effective_mode = "human"
-
-                    # The candidate this attempt validates/applies/writes is
-                    # ALWAYS the full accumulated chain — earlier links plus
-                    # this new one — never the candidate alone. When there
-                    # are no accumulated links yet, merge_patch_specs returns
-                    # the candidate unchanged.
-                    _combined_candidate = (
-                        merge_patch_specs(accumulated_patches + [patch])
-                        if accumulated_patches
-                        else patch
-                    )
-
-                    # ── Guardrail check (pre-staging) ───────────────────────
+                patch = agent_result.patch
+                # Phase 46 — record the model that actually produced this
+                # result: the winning cascade tier's model for a cascade,
+                # the top-level agent.model otherwise.
+                _outcome_model = agent_result.model or resolved_agent_model
+                _cascade_pos = agent_result.model_cascade_position
+                # Update the last persisted row with stop_reason so
+                # downstream joins can answer "which axis terminated this
+                # heal".
+                if agent_result.attempt_records and agent_result.stop_reason:
                     try:
-                        import yaml as _yaml
+                        _defer_op = next(
+                            (
+                                op
+                                for op in (patch.operations if patch is not None else [])
+                                if op.op == "defer_to_human"
+                            ),
+                            None,
+                        )
+                        surveyor.update_heal_attempt_stop_reason(
+                            run_id=_heal_run_id,
+                            attempt_num=agent_result.attempt_records[-1].attempt_num,
+                            stop_reason=agent_result.stop_reason,
+                            defer_reason=(
+                                getattr(_defer_op, "defer_reason", None)
+                                if _defer_op is not None
+                                else None
+                            ),
+                        )
+                    except Exception:
+                        pass  # updating stop_reason is best-effort; never let persistence block the loop
+                _summary_model = agent_result.model or agent_result.__dict__.get("model")
+                _transcript.summary(
+                    agent_result.stop_reason,
+                    agent_result.attempts,
+                    agent_result.tokens_in_total,
+                    agent_result.tokens_out_total,
+                    model=_summary_model or resolved_agent_model,
+                )
 
-                        from aqueduct.patch.apply import PatchError as _PatchError
-                        from aqueduct.patch.apply import (
-                            _check_guardrails as _apply_check_guardrails,
-                        )
+                if patch is None:
+                    # Unchanged today's no-patch handling — terminal,
+                    # regardless of any progress already accumulated.
+                    if agent_result.stop_reason == "api_error":
+                        from aqueduct.cli.render.funnel import echo as _funnel_echo
 
-                        _bp_raw = _yaml.safe_load(blueprint_abs.read_text(encoding="utf-8")) or {}
-                        _apply_check_guardrails(
-                            _combined_candidate,
-                            _bp_raw,
-                            provenance_map=manifest.provenance_map,
-                            cfg=cfg,
+                        _rel_bp = os.path.relpath(str(blueprint))
+                        _bp_display = str(blueprint) if _rel_bp.startswith("..") else _rel_bp
+                        _funnel_echo(
+                            "failure context saved · retry once the agent is reachable:",
+                            gutter="   ↳ ",
+                            err=True,
+                            verbose=verbosity >= 1,
+                            style={"fg": "bright_black"},
                         )
-                        guardrail_err = None
-                    except _PatchError as _ge:
-                        guardrail_err = str(_ge)
-                    except Exception as _gx:
-                        guardrail_err = f"Unexpected guardrail error: {_gx}"
-                    if guardrail_err:
-                        last_apply_error = f"Patch {_combined_candidate.patch_id!r} was blocked by agent guardrail: {guardrail_err}"
+                        _funnel_echo(
+                            f"aqueduct heal {_bp_display}",
+                            gutter="     ",
+                            err=True,
+                            wrap=False,
+                            style={"fg": "bright_black"},
+                        )
+                    on_hf = manifest.agent.on_heal_failure if manifest.agent else "stage"
+                    if on_hf == "stage" and agent_result.stop_reason != "api_error":
                         click.echo(
-                            f"  ✗ Agent patch blocked by guardrail: {guardrail_err}", err=True
-                        )
-                        stage_patch_for_human(
-                            _combined_candidate,
-                            patches_dir,
-                            current_failure,
-                            on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
-                            source=_patch_source,
-                            patch_store=_patch_store,
-                            obs_store=_obs_store,
-                            on_defer_webhook=cfg.webhooks.on_defer,
-                        )
-                        _fire_heal_hook(
-                            "on_patch_pending",
-                            iter_run_id=iteration_run_id,
-                            hook_status="pending",
-                            ctx=current_failure,
-                        )
-                        click.echo(
-                            f"  ▸ Patch staged for human review → "
-                            f"{_patch_store.location_label if _patch_store is not None else patches_dir}/pending/  "
-                            f"(id={_combined_candidate.patch_id})",
+                            click.style(
+                                "   ↑ no patch to stage — failure context saved to the observability store",
+                                fg="bright_black",
+                            ),
                             err=True,
                         )
-                        surveyor.record_healing_outcome(
-                            run_id=iteration_run_id,
-                            failed_module=current_failure.failed_module,
-                            parent_run_id=run_id,
-                            failure_category=_combined_candidate.category,
-                            model=_outcome_model,
-                            patch_id=_combined_candidate.patch_id,
-                            confidence=_combined_candidate.confidence,
-                            patch_applied=False,
-                            run_success_after_patch=False,
-                            failure_signature=_sig_exact.hash,
-                            failure_signature_coarse=_sig_coarse.hash,
-                            resolution=_resolution,
-                            model_cascade_position=_cascade_pos,
-                        )
-                        break
+                    try:
+                        for _rec in agent_result.attempt_records or ():
+                            _fail_cat = (
+                                _rec.signature.error_class
+                                if getattr(_rec, "signature", None) is not None
+                                else None
+                            )
+                            surveyor.record_healing_outcome(
+                                run_id=iteration_run_id,
+                                parent_run_id=run_id,
+                                failed_module=current_failure.failed_module,
+                                failure_category=_fail_cat,
+                                model=_outcome_model,
+                                patch_id=None,
+                                confidence=None,
+                                patch_applied=False,
+                                run_success_after_patch=False,
+                                failure_signature=_sig_exact.hash,
+                                failure_signature_coarse=_sig_coarse.hash,
+                                resolution="llm",
+                                model_cascade_position=getattr(
+                                    _rec, "model_cascade_position", None
+                                ),
+                            )
+                    except Exception:
+                        pass  # never let persistence block the loop exit
+                    break
 
-                    if effective_mode == "human":
+                # ── Confidence escalation — low-confidence patches go to human ──
+                _conf_threshold = manifest.agent.confidence_threshold
+                if (
+                    patch.confidence is not None
+                    and patch.confidence < _conf_threshold
+                    and effective_mode not in ("human", "disabled")
+                ):
+                    click.echo(
+                        f"  ↑ Agent patch confidence {patch.confidence:.0%} < {_conf_threshold:.0%} — escalating to human review",
+                        err=True,
+                    )
+                    effective_mode = "human"
+
+                _BENIGN_RECOVERIES = {
+                    "stripped_code_fence",
+                    "stripped_think_block",
+                    "stripped_orphan_think_close",
+                    "stripped_leading_prose",
+                }
+                _risky_recovery = [
+                    r for r in agent_result.recovery_applied if r not in _BENIGN_RECOVERIES
+                ]
+                if _risky_recovery and effective_mode == "auto":
+                    click.echo(
+                        f"  ↑ Agent response needed mechanical recovery "
+                        f"({', '.join(_risky_recovery)}) — "
+                        f"downgrading to human review for safety",
+                        err=True,
+                    )
+                    effective_mode = "human"
+
+                # The candidate this attempt validates/applies/writes is
+                # ALWAYS the full accumulated chain — earlier links plus
+                # this new one — never the candidate alone. When there
+                # are no accumulated links yet, merge_patch_specs returns
+                # the candidate unchanged.
+                _combined_candidate = (
+                    merge_patch_specs(accumulated_patches + [patch])
+                    if accumulated_patches
+                    else patch
+                )
+
+                # ── Guardrail check (pre-staging) ───────────────────────
+                try:
+                    import yaml as _yaml
+
+                    from aqueduct.patch.apply import PatchError as _PatchError
+                    from aqueduct.patch.apply import (
+                        _check_guardrails as _apply_check_guardrails,
+                    )
+
+                    _bp_raw = _yaml.safe_load(blueprint_abs.read_text(encoding="utf-8")) or {}
+                    _apply_check_guardrails(
+                        _combined_candidate,
+                        _bp_raw,
+                        provenance_map=manifest.provenance_map,
+                        cfg=cfg,
+                    )
+                    guardrail_err = None
+                except _PatchError as _ge:
+                    guardrail_err = str(_ge)
+                except Exception as _gx:
+                    guardrail_err = f"Unexpected guardrail error: {_gx}"
+                if guardrail_err:
+                    last_apply_error = f"Patch {_combined_candidate.patch_id!r} was blocked by agent guardrail: {guardrail_err}"
+                    click.echo(f"  ✗ Agent patch blocked by guardrail: {guardrail_err}", err=True)
+                    stage_patch_for_human(
+                        _combined_candidate,
+                        patches_dir,
+                        current_failure,
+                        on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
+                        source=_patch_source,
+                        patch_store=_patch_store,
+                        obs_store=_obs_store,
+                        on_defer_webhook=cfg.webhooks.on_defer,
+                    )
+                    _fire_heal_hook(
+                        "on_patch_pending",
+                        iter_run_id=iteration_run_id,
+                        hook_status="pending",
+                        ctx=current_failure,
+                    )
+                    click.echo(
+                        f"  ▸ Patch staged for human review → "
+                        f"{_patch_store.location_label if _patch_store is not None else patches_dir}/pending/  "
+                        f"(id={_combined_candidate.patch_id})",
+                        err=True,
+                    )
+                    surveyor.record_healing_outcome(
+                        run_id=iteration_run_id,
+                        failed_module=current_failure.failed_module,
+                        parent_run_id=run_id,
+                        failure_category=_combined_candidate.category,
+                        model=_outcome_model,
+                        patch_id=_combined_candidate.patch_id,
+                        confidence=_combined_candidate.confidence,
+                        patch_applied=False,
+                        run_success_after_patch=False,
+                        failure_signature=_sig_exact.hash,
+                        failure_signature_coarse=_sig_coarse.hash,
+                        resolution=_resolution,
+                        model_cascade_position=_cascade_pos,
+                    )
+                    break
+
+                if effective_mode == "human":
+                    stage_patch_for_human(
+                        _combined_candidate,
+                        patches_dir,
+                        current_failure,
+                        on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
+                        source=_patch_source,
+                        patch_store=_patch_store,
+                        obs_store=_obs_store,
+                        on_defer_webhook=cfg.webhooks.on_defer,
+                    )
+                    _fire_heal_hook(
+                        "on_patch_pending",
+                        iter_run_id=iteration_run_id,
+                        hook_status="pending",
+                        ctx=current_failure,
+                    )
+                    patch_staged_for_review = True
+                    rel_bp = (
+                        Path(blueprint).relative_to(_project_root)
+                        if Path(blueprint).is_relative_to(_project_root)
+                        else Path(blueprint)
+                    )
+                    click.echo(
+                        f"  ▸ Agent patch staged → "
+                        f"{_patch_store.location_label if _patch_store is not None else patches_dir}/pending/  "
+                        f"(id={_combined_candidate.patch_id})\n"
+                        f"    Review: aqueduct patch apply {_combined_candidate.patch_id} --blueprint {rel_bp}",
+                        err=True,
+                    )
+                    surveyor.record_healing_outcome(
+                        run_id=iteration_run_id,
+                        failed_module=current_failure.failed_module,
+                        parent_run_id=run_id,
+                        failure_category=_combined_candidate.category,
+                        model=_outcome_model,
+                        patch_id=_combined_candidate.patch_id,
+                        confidence=_combined_candidate.confidence,
+                        patch_applied=False,
+                        run_success_after_patch=False,
+                        failure_signature=_sig_exact.hash,
+                        failure_signature_coarse=_sig_coarse.hash,
+                        resolution=_resolution,
+                        model_cascade_position=_cascade_pos,
+                    )
+                    break
+
+                elif effective_mode == "auto":
+                    has_defer = any(op.op == "defer_to_human" for op in patch.operations)
+                    _defer_only = has_defer and all(
+                        op.op == "defer_to_human" for op in patch.operations
+                    )
+                    if _defer_only:
+                        click.echo(
+                            "  ▸ defer-only patch — skipping sandbox/gate/apply, "
+                            "staging for human review",
+                            err=True,
+                        )
                         stage_patch_for_human(
                             _combined_candidate,
                             patches_dir,
@@ -2199,7 +2285,7 @@ def run(
                             ctx=current_failure,
                         )
                         patch_staged_for_review = True
-                        rel_bp = (
+                        _rel_bp_defer = (
                             Path(blueprint).relative_to(_project_root)
                             if Path(blueprint).is_relative_to(_project_root)
                             else Path(blueprint)
@@ -2208,7 +2294,7 @@ def run(
                             f"  ▸ Agent patch staged → "
                             f"{_patch_store.location_label if _patch_store is not None else patches_dir}/pending/  "
                             f"(id={_combined_candidate.patch_id})\n"
-                            f"    Review: aqueduct patch apply {_combined_candidate.patch_id} --blueprint {rel_bp}",
+                            f"    Review: aqueduct patch apply {_combined_candidate.patch_id} --blueprint {_rel_bp_defer}",
                             err=True,
                         )
                         surveyor.record_healing_outcome(
@@ -2228,243 +2314,93 @@ def run(
                         )
                         break
 
-                    elif effective_mode == "auto":
-                        has_defer = any(op.op == "defer_to_human" for op in patch.operations)
-                        _defer_only = has_defer and all(
-                            op.op == "defer_to_human" for op in patch.operations
+                    # Multi-patch gate validation: sandbox + resolvability
+                    # replay check before writing to the blueprint —
+                    # against the FULL combined candidate, so a chain's
+                    # earlier links are honored by the gate too.
+                    _g2, _g3, _g4, _g3_passed = _aqcli._run_patch_gates_inline(
+                        patch=_combined_candidate,
+                        blueprint_path=Path(blueprint),
+                        bundle=bundle,
+                        surveyor=surveyor,
+                        failed_module=current_failure.failed_module,
+                        iteration_run_id=iteration_run_id,
+                        blueprint_id=manifest.blueprint_id,
+                        engine=(current_failure.engine or engine),
+                        cfg=cfg,
+                        sandbox_mode=(manifest.agent.sandbox_mode if manifest.agent else "sample"),
+                        sandbox_master_url=resolved_sandbox_master_url,
+                        warnings_suppress=cfg.warnings.suppress,
+                        timezone=cfg.timezone,
+                        depot_reads_at_failure=_cr.depot_reads,
+                    )
+                    _announce_polyglot_sandbox_unavailable(_g3)
+                    _print_gate_ladder(_g2, _g3, _g4, verbosity=verbosity)
+                    if _g3 is not None and not _g3_passed:
+                        click.echo(
+                            f"  ✗ multi-patch: sandbox rejected patch — {_g3.detail}",
+                            err=True,
                         )
-                        if _defer_only:
-                            click.echo(
-                                "  ▸ defer-only patch — skipping sandbox/gate/apply, "
-                                "staging for human review",
-                                err=True,
-                            )
-                            stage_patch_for_human(
-                                _combined_candidate,
-                                patches_dir,
-                                current_failure,
-                                on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
-                                source=_patch_source,
-                                patch_store=_patch_store,
-                                obs_store=_obs_store,
-                                on_defer_webhook=cfg.webhooks.on_defer,
-                            )
-                            _fire_heal_hook(
-                                "on_patch_pending",
-                                iter_run_id=iteration_run_id,
-                                hook_status="pending",
-                                ctx=current_failure,
-                            )
-                            patch_staged_for_review = True
-                            _rel_bp_defer = (
-                                Path(blueprint).relative_to(_project_root)
-                                if Path(blueprint).is_relative_to(_project_root)
-                                else Path(blueprint)
-                            )
-                            click.echo(
-                                f"  ▸ Agent patch staged → "
-                                f"{_patch_store.location_label if _patch_store is not None else patches_dir}/pending/  "
-                                f"(id={_combined_candidate.patch_id})\n"
-                                f"    Review: aqueduct patch apply {_combined_candidate.patch_id} --blueprint {_rel_bp_defer}",
-                                err=True,
-                            )
-                            surveyor.record_healing_outcome(
-                                run_id=iteration_run_id,
-                                failed_module=current_failure.failed_module,
-                                parent_run_id=run_id,
-                                failure_category=_combined_candidate.category,
-                                model=_outcome_model,
-                                patch_id=_combined_candidate.patch_id,
-                                confidence=_combined_candidate.confidence,
-                                patch_applied=False,
-                                run_success_after_patch=False,
-                                failure_signature=_sig_exact.hash,
-                                failure_signature_coarse=_sig_coarse.hash,
-                                resolution=_resolution,
-                                model_cascade_position=_cascade_pos,
-                            )
-                            break
-
-                        # Multi-patch gate validation: sandbox + resolvability
-                        # replay check before writing to the blueprint —
-                        # against the FULL combined candidate, so a chain's
-                        # earlier links are honored by the gate too.
-                        _g2, _g3, _g4, _g3_passed = _aqcli._run_patch_gates_inline(
-                            patch=_combined_candidate,
-                            blueprint_path=Path(blueprint),
-                            bundle=bundle,
-                            surveyor=surveyor,
+                        last_apply_error = f"Patch {_combined_candidate.patch_id!r} rejected by sandbox: {_g3.detail}"
+                        surveyor.record_healing_outcome(
+                            run_id=iteration_run_id,
                             failed_module=current_failure.failed_module,
-                            iteration_run_id=iteration_run_id,
-                            blueprint_id=manifest.blueprint_id,
-                            engine=(current_failure.engine or engine),
-                            cfg=cfg,
-                            sandbox_mode=(
-                                manifest.agent.sandbox_mode if manifest.agent else "sample"
-                            ),
-                            sandbox_master_url=resolved_sandbox_master_url,
-                            warnings_suppress=cfg.warnings.suppress,
-                            timezone=cfg.timezone,
-                            depot_reads_at_failure=_cr.depot_reads,
+                            parent_run_id=run_id,
+                            failure_category=_combined_candidate.category,
+                            model=_outcome_model,
+                            patch_id=_combined_candidate.patch_id,
+                            confidence=_combined_candidate.confidence,
+                            patch_applied=False,
+                            run_success_after_patch=False,
+                            failure_signature=_sig_exact.hash,
+                            failure_signature_coarse=_sig_coarse.hash,
+                            resolution=_resolution,
+                            model_cascade_position=_cascade_pos,
                         )
-                        _announce_polyglot_sandbox_unavailable(_g3)
-                        _print_gate_ladder(_g2, _g3, _g4, verbosity=verbosity)
-                        if _g3 is not None and not _g3_passed:
-                            click.echo(
-                                f"  ✗ multi-patch: sandbox rejected patch — {_g3.detail}",
-                                err=True,
-                            )
-                            last_apply_error = f"Patch {_combined_candidate.patch_id!r} rejected by sandbox: {_g3.detail}"
-                            surveyor.record_healing_outcome(
-                                run_id=iteration_run_id,
-                                failed_module=current_failure.failed_module,
-                                parent_run_id=run_id,
-                                failure_category=_combined_candidate.category,
-                                model=_outcome_model,
-                                patch_id=_combined_candidate.patch_id,
-                                confidence=_combined_candidate.confidence,
-                                patch_applied=False,
-                                run_success_after_patch=False,
-                                failure_signature=_sig_exact.hash,
-                                failure_signature_coarse=_sig_coarse.hash,
-                                resolution=_resolution,
-                                model_cascade_position=_cascade_pos,
-                            )
-                            patch_rejected_by_gate = (
-                                True  # sandbox gate → VALIDATION_GATE(4) if loop exhausts
-                            )
-                            # Gate-rejects it: discard just this candidate
-                            # (accumulated_patches are already proven; kept),
-                            # retry the SAME current_failure.
-                            _chain_last_rejected = patch
-                            if manifest.agent.on_heal_failure == "abort":
-                                _final = (
-                                    merge_patch_specs(accumulated_patches + [patch])
-                                    if accumulated_patches
-                                    else patch
-                                )
-                                _aqcli._stage_failed_patch(
-                                    manifest.agent.on_heal_failure,
-                                    _final,
-                                    patches_dir,
-                                    current_failure,
-                                    cfg,
-                                    click,
-                                    obs_store=_obs_store,
-                                    patch_store=_patch_store,
-                                )
-                                break
-                            continue  # retry current_failure — try next patch
-
-                        _patch_validation = (
-                            manifest.agent.patch_validation or cfg.agent.patch_validation
+                        patch_rejected_by_gate = (
+                            True  # sandbox gate → VALIDATION_GATE(4) if loop exhausts
                         )
-
-                        if (
-                            _patch_validation == "sandbox"
-                            and _g3 is not None
-                            and _g3.status == "pass"
-                        ):
-                            _aqcli._write_patch_to_blueprint(
-                                _combined_candidate,
-                                Path(blueprint),
+                        # Gate-rejects it: discard just this candidate
+                        # (accumulated_patches are already proven; kept),
+                        # retry the SAME current_failure.
+                        _chain_last_rejected = patch
+                        if manifest.agent.on_heal_failure == "abort":
+                            _final = (
+                                merge_patch_specs(accumulated_patches + [patch])
+                                if accumulated_patches
+                                else patch
+                            )
+                            _aqcli._stage_failed_patch(
+                                manifest.agent.on_heal_failure,
+                                _final,
                                 patches_dir,
                                 current_failure,
-                                mode="auto",
+                                cfg,
+                                click,
                                 obs_store=_obs_store,
                                 patch_store=_patch_store,
-                                cfg=cfg,
                             )
-                            click.echo(
-                                f"  ✓ multi-patch: sandbox-only validated ({_g3.sample_rows or '∞'} rows) → {blueprint}",
-                                err=True,
-                            )
-                            surveyor.record_healing_outcome(
-                                run_id=iteration_run_id,
-                                failed_module=current_failure.failed_module,
-                                parent_run_id=run_id,
-                                failure_category=_combined_candidate.category,
-                                model=_outcome_model,
-                                patch_id=_combined_candidate.patch_id,
-                                confidence=_combined_candidate.confidence,
-                                patch_applied=True,
-                                run_success_after_patch=True,
-                                failure_signature=_sig_exact.hash,
-                                failure_signature_coarse=_sig_coarse.hash,
-                                resolution=_resolution,
-                                model_cascade_position=_cascade_pos,
-                            )
-                            failure_ctx = current_failure
                             break
+                        continue  # retry current_failure — try next patch
 
-                        import warnings as _wsup
+                    _patch_validation = (
+                        manifest.agent.patch_validation or cfg.agent.patch_validation
+                    )
 
-                        from aqueduct.warnings import AqueductWarning as _AqWarn
-
-                        with _wsup.catch_warnings():
-                            _wsup.simplefilter("ignore", _AqWarn)
-                            new_manifest = _aqcli._apply_patch_in_memory(
-                                _combined_candidate,
-                                Path(blueprint),
-                                depot,
-                                profile,
-                                cli_overrides or {},
-                            )
-                        if new_manifest is None:
-                            click.echo(
-                                "  ✗ Agent patch produces invalid Blueprint, discarding", err=True
-                            )
-                            last_apply_error = (
-                                f"Patch {_combined_candidate.patch_id!r} produced invalid Blueprint"
-                            )
-                            surveyor.record_healing_outcome(
-                                run_id=iteration_run_id,
-                                failed_module=current_failure.failed_module,
-                                parent_run_id=run_id,
-                                failure_category=_combined_candidate.category,
-                                model=_outcome_model,
-                                patch_id=_combined_candidate.patch_id,
-                                confidence=_combined_candidate.confidence,
-                                patch_applied=False,
-                                run_success_after_patch=False,
-                                failure_signature=_sig_exact.hash,
-                                failure_signature_coarse=_sig_coarse.hash,
-                                resolution=_resolution,
-                                model_cascade_position=_cascade_pos,
-                            )
-                            # Unusable outright — discard just this candidate,
-                            # retry the SAME current_failure.
-                            _chain_last_rejected = patch
-                            if manifest.agent.on_heal_failure == "abort":
-                                _final = (
-                                    merge_patch_specs(accumulated_patches + [patch])
-                                    if accumulated_patches
-                                    else patch
-                                )
-                                _aqcli._stage_failed_patch(
-                                    manifest.agent.on_heal_failure,
-                                    _final,
-                                    patches_dir,
-                                    current_failure,
-                                    cfg,
-                                    click,
-                                    obs_store=_obs_store,
-                                    patch_store=_patch_store,
-                                )
-                                break
-                            continue
-
-                        result2, _exc2 = _execute_target(
-                            new_manifest,
-                            run_id=str(uuid.uuid4()),
-                            store_dir=resolved_store_dir,
-                            checkpoint_root=checkpoint_root_abs,
-                            surveyor=surveyor,
-                            depot=depot,
+                    if _patch_validation == "sandbox" and _g3 is not None and _g3.status == "pass":
+                        _aqcli._write_patch_to_blueprint(
+                            _combined_candidate,
+                            Path(blueprint),
+                            patches_dir,
+                            current_failure,
+                            mode="auto",
+                            obs_store=_obs_store,
+                            patch_store=_patch_store,
+                            cfg=cfg,
                         )
-                        patch_success = result2.status == ExecutionStatus.SUCCESS
-                        failure_ctx2 = surveyor.record(
-                            result2, patched=patch_success, engine=result2.failed_engine
+                        click.echo(
+                            f"  ✓ multi-patch: sandbox-only validated ({_g3.sample_rows or '∞'} rows) → {blueprint}",
+                            err=True,
                         )
                         surveyor.record_healing_outcome(
                             run_id=iteration_run_id,
@@ -2475,133 +2411,227 @@ def run(
                             patch_id=_combined_candidate.patch_id,
                             confidence=_combined_candidate.confidence,
                             patch_applied=True,
-                            run_success_after_patch=patch_success,
+                            run_success_after_patch=True,
                             failure_signature=_sig_exact.hash,
                             failure_signature_coarse=_sig_coarse.hash,
                             resolution=_resolution,
                             model_cascade_position=_cascade_pos,
                         )
-                        result = result2
-                        failure_ctx = failure_ctx2
-                        if patch_success:
-                            _aqcli._write_patch_to_blueprint(
-                                _combined_candidate,
-                                Path(blueprint),
+                        failure_ctx = current_failure
+                        break
+
+                    import warnings as _wsup
+
+                    from aqueduct.warnings import AqueductWarning as _AqWarn
+
+                    with _wsup.catch_warnings():
+                        _wsup.simplefilter("ignore", _AqWarn)
+                        new_manifest = _aqcli._apply_patch_in_memory(
+                            _combined_candidate,
+                            Path(blueprint),
+                            depot,
+                            profile,
+                            cli_overrides or {},
+                        )
+                    if new_manifest is None:
+                        click.echo(
+                            "  ✗ Agent patch produces invalid Blueprint, discarding", err=True
+                        )
+                        last_apply_error = (
+                            f"Patch {_combined_candidate.patch_id!r} produced invalid Blueprint"
+                        )
+                        surveyor.record_healing_outcome(
+                            run_id=iteration_run_id,
+                            failed_module=current_failure.failed_module,
+                            parent_run_id=run_id,
+                            failure_category=_combined_candidate.category,
+                            model=_outcome_model,
+                            patch_id=_combined_candidate.patch_id,
+                            confidence=_combined_candidate.confidence,
+                            patch_applied=False,
+                            run_success_after_patch=False,
+                            failure_signature=_sig_exact.hash,
+                            failure_signature_coarse=_sig_coarse.hash,
+                            resolution=_resolution,
+                            model_cascade_position=_cascade_pos,
+                        )
+                        # Unusable outright — discard just this candidate,
+                        # retry the SAME current_failure.
+                        _chain_last_rejected = patch
+                        if manifest.agent.on_heal_failure == "abort":
+                            _final = (
+                                merge_patch_specs(accumulated_patches + [patch])
+                                if accumulated_patches
+                                else patch
+                            )
+                            _aqcli._stage_failed_patch(
+                                manifest.agent.on_heal_failure,
+                                _final,
                                 patches_dir,
                                 current_failure,
-                                mode="auto",
+                                cfg,
+                                click,
                                 obs_store=_obs_store,
                                 patch_store=_patch_store,
-                                cfg=cfg,
-                            )
-                            click.echo(
-                                f"  {click.style('✓', fg='green', bold=True)} Agent patch validated and applied ({patch_count}/{max_patches}) → {blueprint}",
-                                err=True,
-                            )
-                            _fire_heal_hook(
-                                "on_healed",
-                                iter_run_id=iteration_run_id,
-                                hook_status="healed",
-                                ctx=current_failure,
-                            )
-                            _healed_attempt_num = (
-                                agent_result.attempt_records[-1].attempt_num
-                                if agent_result.attempt_records
-                                else agent_result.attempts
-                            )
-                            _render_module_summary(
-                                result2,
-                                failure_ctx2,
-                                healed_module=current_failure.failed_module,
-                                healed_patch_num=_healed_attempt_num,
                             )
                             break
-                        else:
-                            _next_module = getattr(failure_ctx2, "failed_module", None) or "<root>"
-                            _this_module = current_failure.failed_module or "<root>"
-                            if failure_ctx2 is not None and _next_module != _this_module:
-                                # DIFFERENT module — the candidate was right:
-                                # fold it into the accumulated chain and
-                                # advance to diagnose the new failure.
-                                click.echo(
-                                    f"  ↳ {_this_module} fixed, new failure at "
-                                    f"{_next_module} — chaining ({patch_count}/{max_patches})",
-                                    err=True,
-                                )
-                                accumulated_patches.append(patch)
-                                current_failure = failure_ctx2
-                                _chain_last_rejected = None
-                                last_apply_error = None
-                                continue
+                        continue
 
-                            # SAME module (or no new failure context) — wrong
-                            # patch: discard just this candidate (accumulated
-                            # patches, already proven, are kept) and retry
-                            # the SAME current_failure.
-                            last_apply_error = (
-                                f"Patch {_combined_candidate.patch_id!r} applied in-memory but re-run still failed: "
-                                + (
-                                    result2.module_results[-1].error or "unknown"
-                                    if result2.module_results
-                                    else "unknown"
-                                )
-                            )
-                            click.echo(
-                                f"  {click.style('✗', fg='red', bold=True)} Agent patch did not fix the issue ({patch_count}/{max_patches})",
-                                err=True,
-                            )
-                            _chain_last_rejected = patch
-                            if manifest.agent.on_heal_failure == "abort":
-                                _final = merge_patch_specs(accumulated_patches + [patch])
-                                _aqcli._stage_failed_patch(
-                                    manifest.agent.on_heal_failure,
-                                    _final,
-                                    patches_dir,
-                                    current_failure,
-                                    cfg,
-                                    click,
-                                    obs_store=_obs_store,
-                                    patch_store=_patch_store,
-                                )
-                                break
-                            # discard/stage: chain continues → retry same failure
-                            continue
-
-                else:
-                    # Loop exited via `while patch_count < max_patches`
-                    # becoming false (budget exhausted) rather than an
-                    # explicit `break` above — the last thing that happened
-                    # was either a successful advance (nothing pending) or
-                    # the loop never ran a first attempt. Stage whatever was
-                    # accumulated (+ the last rejected candidate, if any), per
-                    # the same "exactly one combined patch ever staged" rule.
-                    click.echo(
-                        f"⚠  Agent: max_patches={max_patches} reached, stopping self-healing loop",
-                        err=True,
+                    result2, _exc2 = _execute_target(
+                        new_manifest,
+                        run_id=str(uuid.uuid4()),
+                        store_dir=resolved_store_dir,
+                        checkpoint_root=checkpoint_root_abs,
+                        surveyor=surveyor,
+                        depot=depot,
                     )
-                    _final_patches = list(accumulated_patches)
-                    if _chain_last_rejected is not None:
-                        _final_patches.append(_chain_last_rejected)
-                    if _final_patches:
-                        _final = merge_patch_specs(_final_patches)
-                        _aqcli._stage_failed_patch(
-                            manifest.agent.on_heal_failure,
-                            _final,
+                    patch_success = result2.status == ExecutionStatus.SUCCESS
+                    failure_ctx2 = surveyor.record(
+                        result2, patched=patch_success, engine=result2.failed_engine
+                    )
+                    surveyor.record_healing_outcome(
+                        run_id=iteration_run_id,
+                        failed_module=current_failure.failed_module,
+                        parent_run_id=run_id,
+                        failure_category=_combined_candidate.category,
+                        model=_outcome_model,
+                        patch_id=_combined_candidate.patch_id,
+                        confidence=_combined_candidate.confidence,
+                        patch_applied=True,
+                        run_success_after_patch=patch_success,
+                        failure_signature=_sig_exact.hash,
+                        failure_signature_coarse=_sig_coarse.hash,
+                        resolution=_resolution,
+                        model_cascade_position=_cascade_pos,
+                    )
+                    result = result2
+                    failure_ctx = failure_ctx2
+                    if patch_success:
+                        _aqcli._write_patch_to_blueprint(
+                            _combined_candidate,
+                            Path(blueprint),
                             patches_dir,
                             current_failure,
-                            cfg,
-                            click,
+                            mode="auto",
                             obs_store=_obs_store,
                             patch_store=_patch_store,
+                            cfg=cfg,
                         )
+                        click.echo(
+                            f"  {click.style('✓', fg='green', bold=True)} Agent patch validated and applied ({patch_count}/{max_patches}) → {blueprint}",
+                            err=True,
+                        )
+                        _fire_heal_hook(
+                            "on_healed",
+                            iter_run_id=iteration_run_id,
+                            hook_status="healed",
+                            ctx=current_failure,
+                        )
+                        _healed_attempt_num = (
+                            agent_result.attempt_records[-1].attempt_num
+                            if agent_result.attempt_records
+                            else agent_result.attempts
+                        )
+                        _render_module_summary(
+                            result2,
+                            failure_ctx2,
+                            healed_module=current_failure.failed_module,
+                            healed_patch_num=_healed_attempt_num,
+                        )
+                        break
+                    else:
+                        _next_module = getattr(failure_ctx2, "failed_module", None) or "<root>"
+                        _this_module = current_failure.failed_module or "<root>"
+                        if (
+                            not _is_cascade
+                            and failure_ctx2 is not None
+                            and _next_module != _this_module
+                        ):
+                            # DIFFERENT module — the candidate was right:
+                            # fold it into the accumulated chain and
+                            # advance to diagnose the new failure.
+                            click.echo(
+                                f"  ↳ {_this_module} fixed, new failure at "
+                                f"{_next_module} — chaining ({patch_count}/{max_patches})",
+                                err=True,
+                            )
+                            accumulated_patches.append(patch)
+                            current_failure = failure_ctx2
+                            _chain_last_rejected = None
+                            last_apply_error = None
+                            continue
 
-                # The entire chain (all retries, all links) is driven by the
-                # inner `while` above — there is no more outer-loop-driven
-                # retry for the non-cascade path (that was the exact bug this
-                # fold fixes: an outer `continue` used to throw away every
-                # accumulated link and restart a fresh chain). Always end the
-                # run's outer loop here, regardless of how the chain ended.
-                break
+                        # SAME module (or no new failure context) — wrong
+                        # patch: discard just this candidate (accumulated
+                        # patches, already proven, are kept) and retry
+                        # the SAME current_failure.
+                        last_apply_error = (
+                            f"Patch {_combined_candidate.patch_id!r} applied in-memory but re-run still failed: "
+                            + (
+                                result2.module_results[-1].error or "unknown"
+                                if result2.module_results
+                                else "unknown"
+                            )
+                        )
+                        click.echo(
+                            f"  {click.style('✗', fg='red', bold=True)} Agent patch did not fix the issue ({patch_count}/{max_patches})",
+                            err=True,
+                        )
+                        _chain_last_rejected = patch
+                        if manifest.agent.on_heal_failure == "abort":
+                            _final = merge_patch_specs(accumulated_patches + [patch])
+                            _aqcli._stage_failed_patch(
+                                manifest.agent.on_heal_failure,
+                                _final,
+                                patches_dir,
+                                current_failure,
+                                cfg,
+                                click,
+                                obs_store=_obs_store,
+                                patch_store=_patch_store,
+                            )
+                            break
+                        # discard/stage: chain continues → retry same failure
+                        continue
+
+            else:
+                # Loop exited via `while patch_count < max_patches`
+                # becoming false (budget exhausted) rather than an
+                # explicit `break` above — the last thing that happened
+                # was either a successful advance (nothing pending) or
+                # the loop never ran a first attempt. Stage whatever was
+                # accumulated (+ the last rejected candidate, if any), per
+                # the same "exactly one combined patch ever staged" rule.
+                click.echo(
+                    f"⚠  Agent: max_patches={max_patches} reached, stopping self-healing loop",
+                    err=True,
+                )
+                _final_patches = list(accumulated_patches)
+                if _chain_last_rejected is not None:
+                    _final_patches.append(_chain_last_rejected)
+                if _final_patches:
+                    _final = merge_patch_specs(_final_patches)
+                    _aqcli._stage_failed_patch(
+                        manifest.agent.on_heal_failure,
+                        _final,
+                        patches_dir,
+                        current_failure,
+                        cfg,
+                        click,
+                        obs_store=_obs_store,
+                        patch_store=_patch_store,
+                    )
+
+            # The entire heal (all retries, all chain links, all cascade
+            # tiers) is driven by the inner `while patch_count < max_patches`
+            # above — there is no outer-loop-driven retry for ANY path (that
+            # was the exact bug the Phase 92 fold fixed for chaining: an outer
+            # `continue` used to throw away every accumulated link and restart
+            # a fresh chain; and the exact bug it INTRODUCED for cascade: no
+            # handling at all, so control fell through to here-minus-the-break
+            # and looped forever). Always end the run's outer loop here,
+            # regardless of how the heal ended.
+            break
 
         # ── Surveyor stop ─────────────────────────────────────────────────────────
         surveyor.stop()
