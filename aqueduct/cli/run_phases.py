@@ -239,6 +239,50 @@ def run_sandbox_dryrun(
     sys.exit(exit_codes.SUCCESS)
 
 
+def acquire_run_lock(
+    *,
+    resolved_store_dir,
+    obs_routing_base: str,
+    manifest: Manifest,
+    bundle,
+    wait_for_lock: bool,
+    run_stack,
+) -> str:
+    """Per-blueprint run lock.
+
+    Two concurrent runs of one Blueprint share an observability store
+    and a depot. DuckDB serialises their statements so neither crashes,
+    but they still interleave logically (two run_records rows growing
+    at once, two heal loops writing the same depot keys). Take the lock
+    BEFORE the Surveyor exists, since Surveyor setup is itself the
+    first writer, and hold it for the rest of the run: `_run_stack`
+    closes in the outer `finally` below, so an exception or a
+    `sys.exit` releases it too.
+    """
+    from aqueduct.cli.run_setup import resolve_blueprint_store_dir as _resolve_bp_dir
+    from aqueduct.stores.run_lock import RunLockedError as _RunLockedError
+    from aqueduct.stores.run_lock import blueprint_run_lock as _blueprint_run_lock
+
+    _lock_dir = _resolve_bp_dir(resolved_store_dir, obs_routing_base, manifest.blueprint_id)
+    resolved_store_dir = _lock_dir
+    try:
+        run_stack.enter_context(
+            _blueprint_run_lock(
+                _lock_dir,
+                manifest.blueprint_id,
+                obs_store=bundle.observability if bundle is not None else None,
+                wait=wait_for_lock,
+            )
+        )
+    except _RunLockedError as exc:
+        from aqueduct.cli.render.style import error as _style_error
+
+        _style_error(str(exc))
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    return resolved_store_dir
+
+
 def check_from_to_island_guard(
     *,
     manifest: Manifest,
