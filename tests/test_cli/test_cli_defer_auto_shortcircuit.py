@@ -27,7 +27,7 @@ agent:
   approval: auto
   allow_defer: true
   sandbox_mode: "off"
-  max_patches: 2
+  max_patches: 1
 modules:
   - id: m1
     type: Ingress

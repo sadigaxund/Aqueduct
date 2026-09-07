@@ -92,7 +92,7 @@ id: test_bp
 name: Test BP
 agent:
   approval: auto
-  sandbox_mode: "off"
+  sandbox_mode: "{sandbox_mode}"
   max_patches: {max_patches}
 modules:
   - id: m1
@@ -247,9 +247,11 @@ def _assert_no_unexpected_crash(result) -> None:
         raise AssertionError(f"unexpected crash: {result.exception!r}\n{result.output}")
 
 
-def _invoke(tmp_path, max_patches: int):
+def _invoke(tmp_path, max_patches: int, sandbox_mode: str = "off"):
     bp_file = tmp_path / "blueprint.yml"
-    bp_file.write_text(_BP.format(max_patches=max_patches), encoding="utf-8")
+    bp_file.write_text(
+        _BP.format(max_patches=max_patches, sandbox_mode=sandbox_mode), encoding="utf-8"
+    )
     cfg_file = tmp_path / "aqueduct.yml"
     cfg_file.write_text(_CFG, encoding="utf-8")
 
@@ -323,11 +325,12 @@ def test_heal_retry_rebuilds_session_from_patched_manifest(
     assert fake_protocol.built_sessions[1] in fake_protocol.closed_sessions
 
 
+@patch("aqueduct.cli._run_patch_gates_inline")
 @patch("aqueduct.agent.generate_agent_patch")
 @patch("aqueduct.executor.get_executor")
 @patch("aqueduct.executor.protocol.get_protocol")
 def test_heal_rebuild_happens_on_every_iteration_not_only_the_first(
-    mock_get_protocol, mock_get_executor, mock_generate_patch, tmp_path
+    mock_get_protocol, mock_get_executor, mock_generate_patch, mock_run_gates, tmp_path
 ):
     """Two heal iterations (max_patches=2, each patch attempt still fails)
     must rebuild the session on BOTH retries, not just the first — the
@@ -343,16 +346,28 @@ def test_heal_rebuild_happens_on_every_iteration_not_only_the_first(
     (initial + 2 retries) — this test's ``== 5`` assertion would fail with
     ``got 3``, and both ``baseline_reexecN`` unpacks below would raise
     ``ValueError`` (not enough values to unpack).
+
+    2.3.0 — ``agent.sandbox_mode: off`` + ``max_patches: 2`` is now refused
+    at startup by ``require_sandbox_for_chained_healing`` (the sandbox
+    guard now keys off the attempt cap, not the removed
+    ``agent.progressive`` flag). The blueprint now sets ``sandbox_mode:
+    sample`` to stay legal, and ``_run_patch_gates_inline`` — the mid-chain
+    per-candidate gate ladder this test is not exercising — is mocked out
+    to a trivial ``gates_passed=True`` so this test keeps validating only
+    what it always validated: session-rebuild timing, not the sandbox
+    gate's own real replay (which would otherwise spin up a real engine
+    session here).
     """
     fake_protocol = _TrackingProtocol()
     mock_get_protocol.return_value = fake_protocol
     mock_get_executor.return_value = MagicMock(return_value=_failing_result())
+    mock_run_gates.return_value = (None, None, None, True)
     mock_generate_patch.side_effect = [
         _spark_config_patch("p1", 11),
         _spark_config_patch("p2", 22),
     ]
 
-    result = _invoke(tmp_path, max_patches=2)
+    result = _invoke(tmp_path, max_patches=2, sandbox_mode="sample")
     _assert_no_unexpected_crash(result)
 
     assert mock_generate_patch.call_count == 2
