@@ -58,6 +58,9 @@ class RunContext:
     # from `resolved_store_dir` above. `render_module_summary` reads THIS
     # field, not `resolved_store_dir`; see its docstring.
     store_dir_param: str | None
+    run_id: str = ""
+    obs_store: object = None
+    run_started_at: float = 0.0
     handoff_info: dict = field(default_factory=dict)
     polyglot_sandbox_unavailable_warned: bool = False
 
@@ -964,3 +967,235 @@ def announce_polyglot_sandbox_unavailable(ctx: RunContext, _gate_result) -> None
         from aqueduct.cli.render.style import warn as _style_warn
 
         _style_warn(_gate_result.detail, err=True)
+
+
+def finalize_surveyor_and_depot(ctx: RunContext) -> None:
+    """Stop the Surveyor and close the depot after the heal loop ends."""
+    surveyor = ctx.surveyor
+    depot = ctx.depot
+    run_id = ctx.run_id
+
+    # ── Surveyor stop ─────────────────────────────────────────────────────────
+    surveyor.stop()
+
+    # ── Depot — persist run_id for @aq.run.prev_id() ─────────────────
+    try:
+        depot.put("_last_run_id", run_id)
+    except Exception:
+        pass  # depot write is best-effort; prev_run_id unavailability is a soft degradation, not a failure
+    depot.close()
+
+
+def render_runtime_warnings(ctx: RunContext, result) -> None:
+    """T26 end-of-run runtime-warning roll-up."""
+    verbosity = ctx.verbosity
+
+    # ── Report ────────────────────────────────────────────────────────────────
+    # The per-module ✓/✗ summary already printed inline (per heal iteration)
+    # via `_render_module_summary` right after each execute — so the heal
+    # block reads chronologically after the result it heals. Only the framed
+    # terminal footer remains here.
+
+    # T26 — end-of-run runtime-warning roll-up: a single collapsed tally of
+    # everything that warned this run (additive to the inline `↳` lines
+    # under each module — locality there, "don't miss it" tally here). Reuses
+    # the compile-block shape; empty → nothing.
+    _runtime_pairs = [
+        (rid, f"{mr.module_id}: {msg}") for mr in result.module_results for rid, msg in mr.warnings
+    ]
+    if _runtime_pairs:
+        from aqueduct.cli.render.style import emit_warning_pairs
+
+        emit_warning_pairs(_runtime_pairs, label="runtime:", verbose=verbosity >= 1, err=True)
+
+
+def select_failure_exit_code(*, patch_staged_for_review: bool, patch_rejected_by_gate: bool) -> int:
+    """Pure three-way exit-code choice for a non-success/non-patched result.
+
+    Distinguishes the three non-success terminal states for downstream
+    orchestrators (Airflow operator, CI runners):
+      HEAL_PENDING(3)   — a patch was staged for human/ci review
+      VALIDATION_GATE(4)— auto-mode patch rejected by a validation gate
+      DATA_OR_RUNTIME(2)— hard runtime failure, no actionable patch
+    """
+    if patch_staged_for_review:
+        return exit_codes.HEAL_PENDING
+    if patch_rejected_by_gate:
+        return exit_codes.VALIDATION_GATE
+    return exit_codes.DATA_OR_RUNTIME
+
+
+def handle_failure_exit(
+    ctx: RunContext,
+    result,
+    failure_ctx,
+    *,
+    patch_staged_for_review: bool,
+    patch_rejected_by_gate: bool,
+) -> None:
+    """Print the failure footer, fire `on_failure` hooks, and exit.
+
+    Only called when `result.status` is not SUCCESS/PATCHED — terminal.
+    """
+    from aqueduct.cli import _rule
+
+    run_id = ctx.run_id
+    manifest = ctx.manifest
+    blueprint = ctx.blueprint
+    cfg = ctx.cfg
+    _session_holder = ctx.session_holder
+    engine = ctx.engine
+
+    # Print the outer (user-visible) run_id — that's the join key for
+    # heal_attempts and `healing_outcomes.parent_run_id`. In multi-patch
+    # mode `result.run_id` would be the LAST iteration's per-iteration
+    # uuid, which can't be used to retrieve the full heal history.
+    from aqueduct.cli.render.style import dim as _dim
+    from aqueduct.cli.render.style import error as _style_error
+
+    # Stdout, explicitly: the closing divider + verdict are part of
+    # the SAME framed result block as the header/tree above (must
+    # survive `> run.log` piped alone) — `style.error` defaults to
+    # stderr, so the destination is overridden here rather than
+    # fought around.
+    click.echo(_dim(_rule()), err=False)
+    if failure_ctx:
+        _style_error(
+            f"blueprint failed  run_id={run_id}" f"  failed_module={failure_ctx.failed_module}",
+            err=False,
+        )
+    else:
+        _style_error(f"blueprint failed  run_id={run_id}", err=False)
+    # on_failure hooks — after the verdict line, before the exit code.
+    # Hook outcomes never alter the exit code below.
+    from aqueduct.cli.hooks import run_hooks as _run_hooks
+
+    _run_hooks(
+        manifest.hooks.on_failure,
+        "on_failure",
+        run_id=run_id,
+        status="failure",
+        blueprint_id=manifest.blueprint_id,
+        blueprint_path=blueprint,
+        allow_command_hooks=cfg.danger.allow_command_hooks,
+        failure_ctx=failure_ctx,
+        session=_session_holder.session,
+        engine=engine,
+    )
+    sys.exit(
+        select_failure_exit_code(
+            patch_staged_for_review=patch_staged_for_review,
+            patch_rejected_by_gate=patch_rejected_by_gate,
+        )
+    )
+
+
+def stamp_success_provenance(ctx: RunContext, result) -> None:
+    """Self-heal provenance: green run stamps validated_on (Phase 79).
+
+    Best-effort — `stamp_validated_engine` never raises (it logs its own
+    failures internally) and never affects the run's outcome or exit
+    code. No-op when the Blueprint carries no `healed_by:` block at all.
+    """
+    blueprint = ctx.blueprint
+    engine = ctx.engine
+    _obs_store = ctx.obs_store
+
+    try:
+        from aqueduct.patch.apply import stamp_perf_observation, stamp_validated_engine
+
+        stamp_validated_engine(Path(blueprint), engine)
+        # Warn-only perf attribution: `validated_on` above says the run
+        # was green, which a patch that tripled the runtime also says.
+        # This says what it cost. Reports, never blocks, never judges —
+        # Aqueduct sets no regression threshold, so the ratio is printed
+        # and a human decides.
+        for _obs in stamp_perf_observation(
+            Path(blueprint), engine, obs_store=_obs_store, run_id=result.run_id
+        ):
+            if _obs.get("status") != "observed":
+                continue
+            from aqueduct.cli.render.funnel import emit_info as _emit_info
+
+            _emit_info(f"perf vs pre-patch baseline: {_obs['detail']}", err=True)
+            for _caveat in _obs.get("caveats") or []:
+                _emit_info(f"  {_caveat}", err=True)
+    except Exception:
+        pass  # provenance stamping must never affect a successful run
+
+
+def fire_success_webhook(ctx: RunContext, result) -> None:
+    """Fire the `on_success` webhook, if configured."""
+    cfg = ctx.cfg
+    run_id = ctx.run_id
+    manifest = ctx.manifest
+
+    # ── on_success webhook ────────────────────────────────────────────────────
+    if cfg.webhooks.on_success:
+        from aqueduct.surveyor.webhook import fire_webhook
+
+        success_payload = {
+            "run_id": run_id,
+            "blueprint_id": manifest.blueprint_id,
+            "blueprint_name": manifest.name,
+            "module_count": str(len(result.module_results)),
+        }
+        fire_webhook(
+            cfg.webhooks.on_success,
+            full_payload=success_payload,
+            template_vars=success_payload,
+            event="on_success",
+        )
+
+
+def print_success_footer_and_hooks(ctx: RunContext, result, patch_count) -> None:
+    """Print the success footer and run `on_success` hooks."""
+    import time as _time85
+
+    from aqueduct.cli import _rule
+    from aqueduct.executor.models import ExecutionStatus
+
+    run_id = ctx.run_id
+    manifest = ctx.manifest
+    blueprint = ctx.blueprint
+    cfg = ctx.cfg
+    _session_holder = ctx.session_holder
+    engine = ctx.engine
+    _run_started_at = ctx.run_started_at
+
+    status_label = "patched" if result.status == ExecutionStatus.PATCHED else "complete"
+    from aqueduct.cli.render.style import dim as _dim
+    from aqueduct.cli.render.style import success as _style_success
+
+    # Phase 85 Wave 2 — total wall-clock time (one added line vs today,
+    # SCREEN 1 notes) + healed-module count + pending-review hint when
+    # this run auto-applied a patch (SCREEN 2). `patch_count` is the
+    # number of patches actually applied this run (multi-patch loop).
+    _elapsed_s = _time85.monotonic() - _run_started_at
+    _footer_text = f"blueprint {status_label} · {_elapsed_s:.1f}s"
+    if status_label == "patched" and patch_count:
+        _footer_text += (
+            f" · {patch_count} module{'s' if patch_count != 1 else ''} healed" " · pending review"
+        )
+    click.echo(_dim(_rule()), err=False)
+    _style_success(_footer_text, err=False)
+    if status_label == "patched" and patch_count:
+        # Q5 ruling: ONE line, not a multi-line patch-id + command block.
+        click.echo(click.style(f"  ⓘ review: aqueduct patch pull {run_id}", fg="cyan"), err=False)
+
+    # on_success hooks — chained blueprints / webhooks / gated commands.
+    # A hooks section closes with its own `run complete` footer.
+    from aqueduct.cli.hooks import run_hooks as _run_hooks
+
+    if _run_hooks(
+        manifest.hooks.on_success,
+        "on_success",
+        run_id=run_id,
+        status=result.status,
+        blueprint_id=manifest.blueprint_id,
+        blueprint_path=blueprint,
+        allow_command_hooks=cfg.danger.allow_command_hooks,
+        session=_session_holder.session,
+        engine=engine,
+    ):
+        _style_success("run complete", err=False)
