@@ -13,6 +13,7 @@ rename are adjusted); no behaviour change.
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING as _t
 
@@ -22,6 +23,43 @@ from aqueduct import exit_codes
 
 if _t:
     from aqueduct.compiler.models import Manifest
+    from aqueduct.config import AqueductConfig
+
+
+@dataclass
+class RunContext:
+    """Mutable state shared by the phases that run AFTER Surveyor/session
+    setup (the decomposition map's phase J) — the heal loop itself (which
+    stays inline in `run()`, unchanged) and the helper functions it calls
+    (`execute_target`, `render_module_summary`, `fire_heal_hook`,
+    `announce_polyglot_sandbox_unavailable`).
+
+    Built once in `run()` immediately after `_setup_surveyor`'s result is
+    unpacked. `run()` keeps its own plain locals too — this is only the
+    argument object the extracted functions read and mutate, not a
+    replacement for every local in `run()`'s body.
+    """
+
+    manifest: Manifest
+    cfg: AqueductConfig
+    blueprint: str
+    engine: str
+    master_url: str
+    verbosity: int
+    execute: object  # Callable — heavy import (engine-specific), left untyped
+    resolved_store_dir: object
+    checkpoint_root_abs: Path | None
+    handoff_root_abs: str
+    surveyor: object
+    depot: object
+    bundle: object
+    session_holder: object  # `_SessionHolder` (run_setup.py)
+    # RAW `--store-dir` CLI param (possibly None) — deliberately distinct
+    # from `resolved_store_dir` above. `render_module_summary` reads THIS
+    # field, not `resolved_store_dir`; see its docstring.
+    store_dir_param: str | None
+    handoff_info: dict = field(default_factory=dict)
+    polyglot_sandbox_unavailable_warned: bool = False
 
 
 def check_resume_hash_guard(
@@ -307,3 +345,197 @@ def check_from_to_island_guard(
             err=True,
         )
         sys.exit(exit_codes.CONFIG_ERROR)
+
+
+def execute_target(
+    ctx: RunContext,
+    target_manifest,
+    *,
+    run_id: str,
+    resume_run_id: str | None = None,
+    **kw,
+):
+    """Execute *target_manifest* — the single-engine ``execute()``
+    call for a Manifest with exactly one island (byte-for-byte the
+    same call this code made before polyglot routing existed: same
+    kwargs dict, same ``filter_execute_kwargs`` call, same
+    ``ExecuteError`` handling), or ``run_polyglot()`` for one with
+    more than one.
+
+    ``kw`` carries whatever the specific call site already builds
+    for ``execute()`` (``store_dir``, ``checkpoint_root``,
+    ``surveyor``, ``depot``, ``from_module``, ``to_module``,
+    ``block_full_actions``, ``parallel``, ``use_observe``,
+    ``observability_store``, ``sampling``) — the three call sites in
+    this function pass different subsets (the main heal loop passes
+    the full set; the retry-execute calls after a patch pass a
+    narrower one), preserved exactly as each already did.
+
+    Returns ``(result, execute_exc)``. ``execute_exc`` is the raw
+    ``ExecuteError`` on the single-engine path only (kept so callers
+    can still feed it to ``surveyor.record(exc=...)`` for
+    stack_trace enrichment, exactly as today) — a polyglot
+    structural failure is already converted to a synthetic
+    ``ModuleResult`` inside ``run_polyglot()`` itself (see its
+    ``AqueductError`` wrap), so ``execute_exc`` is always ``None``
+    on that path.
+
+    **Session-fingerprint guard (cross-engine remediation).** Before
+    the single-engine branch executes, it compares the session
+    fingerprint *target_manifest* would resolve
+    (``session_config_fingerprint``, in
+    ``aqueduct/executor/session_config.py``) against the one
+    ``_session_holder.session`` was actually built from, rebuilding
+    only on mismatch. This is the ONE funnel every single-engine
+    execution in this run passes through — the outer heal loop's
+    baseline re-execution at the top of ``while True:`` AND every
+    patch retry — so it catches both directions of the invariant
+    "never execute a Manifest on a session built from a DIFFERENT
+    Manifest": a patch retry whose ``set_engine_config`` op the
+    pre-patch session hasn't picked up, AND (the bug this check adds
+    over the earlier Phase 82 fix) the next baseline re-execution of
+    the ORIGINAL manifest running on whatever session a FAILED
+    patch's retry left behind. A mismatch-free call (nothing
+    session-relevant changed) costs one fingerprint recompute and no
+    rebuild — a Spark JVM is never torn down for a patch that never
+    touched engine config. This subsumes the removed
+    ``_rebuild_session_for_patch`` — a Manifest change is now always
+    observed exactly once, at the point of execution, instead of at
+    two separate explicit call sites that could disagree.
+    """
+    from aqueduct.executor import ExecuteError
+    from aqueduct.executor.models import ExecutionResult, ExecutionStatus, ModuleResult
+
+    if len(target_manifest.islands) <= 1:
+        from aqueduct.executor.protocol import (
+            SessionSpec,
+            filter_execute_kwargs,
+            get_protocol,
+        )
+        from aqueduct.executor.session_config import (
+            resolve_session_engine_config,
+            session_config_fingerprint,
+            session_secrets_options,
+        )
+
+        _target_fingerprint = session_config_fingerprint(ctx.cfg, ctx.engine, target_manifest)
+        if (
+            ctx.session_holder.session is not None
+            and ctx.session_holder.engine_config_fingerprint != _target_fingerprint
+        ):
+            _protocol = get_protocol(ctx.engine)
+            # Stop the STALE session before building the new one — a
+            # `getOrCreate()`-style reuse without a genuine teardown
+            # first would silently hand back the same live session
+            # (the exact no-op-that-looks-like-a-fix this rebuild
+            # exists to avoid). See `make_spark_session` — most
+            # engine config (definitely anything `set_engine_config`
+            # changes) has no effect on an already-running session.
+            _protocol.session_closer()(ctx.session_holder.session)
+            ctx.session_holder.session = _protocol.session_factory()(
+                SessionSpec(
+                    blueprint_id=target_manifest.blueprint_id,
+                    engine_config=resolve_session_engine_config(
+                        ctx.cfg, ctx.engine, target_manifest
+                    ),
+                    master_url=ctx.master_url,
+                    quiet_startup=(ctx.verbosity < 2),
+                    timezone=ctx.cfg.timezone,
+                    engine_options=session_secrets_options(ctx.cfg, target_manifest),
+                )
+            )
+            ctx.session_holder.engine_config_fingerprint = _target_fingerprint
+
+        try:
+            _filtered = filter_execute_kwargs(
+                ctx.engine,
+                dict(kw, run_id=run_id, resume_run_id=resume_run_id),
+                suppress=ctx.cfg.warnings.suppress,
+            )
+            return ctx.execute(target_manifest, ctx.session_holder.session, **_filtered), None
+        except ExecuteError as exc:
+            return (
+                ExecutionResult(
+                    blueprint_id=target_manifest.blueprint_id,
+                    run_id=run_id,
+                    status=ExecutionStatus.ERROR,
+                    module_results=(
+                        ModuleResult(
+                            module_id="_executor",
+                            status=ExecutionStatus.ERROR,
+                            error=str(exc),
+                        ),
+                    ),
+                ),
+                exc,
+            )
+
+    # ── Polyglot ──────────────────────────────────────────────────
+    from aqueduct.executor.orchestrator import run_polyglot
+    from aqueduct.executor.session_config import (
+        resolve_session_engine_config,
+        session_secrets_options,
+    )
+
+    _engine_configs: dict[str, dict] = {
+        _isl.engine: resolve_session_engine_config(ctx.cfg, _isl.engine, target_manifest)
+        for _isl in target_manifest.islands
+    }
+
+    polyglot_result = run_polyglot(
+        target_manifest,
+        run_id=run_id,
+        handoff_root=ctx.handoff_root_abs,
+        keep_on_failure=ctx.cfg.handoff.keep_on_failure,
+        resume_run_id=resume_run_id,
+        store_dir=kw.get("store_dir", ctx.resolved_store_dir),
+        checkpoint_root=kw.get("checkpoint_root", ctx.checkpoint_root_abs),
+        surveyor=kw.get("surveyor", ctx.surveyor),
+        depot=kw.get("depot", ctx.depot),
+        observability_store=kw.get("observability_store", ctx.bundle.observability),
+        warnings_suppress=ctx.cfg.warnings.suppress,
+        engine_configs=_engine_configs,
+        master_url=ctx.master_url,
+        quiet_startup=(ctx.verbosity < 2),
+        timezone=ctx.cfg.timezone,
+        secrets_config=session_secrets_options(ctx.cfg, target_manifest)["secrets"],
+        block_full_actions=kw.get("block_full_actions", False),
+        parallel=kw.get("parallel", False),
+        use_observe=kw.get("use_observe", False),
+        sampling=kw.get("sampling"),
+        record_result=False,
+        session_keep_alive=ctx.cfg.execution.session_keep_alive,
+        share_island_state=ctx.cfg.execution.share_island_state,
+        prune_eagerly=ctx.cfg.handoff.prune_eagerly,
+    )
+    # Phase 89 item 1 — one quiet `-v` narrative line per boundary
+    # where a session was kept alive instead of rebuilt, same
+    # funnel/style convention as the `⇄ handoff` boundary rendering
+    # above. `session_reused` is empty whenever keep-alive found no
+    # same-engine adjacency (or `execution.session_keep_alive` is
+    # off), so this is silent in the common case.
+    if ctx.verbosity >= 1 and polyglot_result.session_reused:
+        from aqueduct.cli.render.funnel import info as _funnel_info
+
+        for _reused_engine in polyglot_result.session_reused:
+            _funnel_info(
+                f"session kept alive · {_reused_engine}",
+                gutter="  ",
+                err=True,
+            )
+    # Phase 89 item 3 — same, but for eager spill pruning, one quiet
+    # `-vv` narrative line per boundary whose spill was deleted the
+    # moment its reader island succeeded rather than at run end.
+    # Gated at -vv (not -v, unlike the reuse line above): a pruned
+    # edge is routine per-boundary housekeeping, one level quieter
+    # than "a session build was skipped" is.
+    if ctx.verbosity >= 2 and polyglot_result.pruned_spills:
+        from aqueduct.cli.render.funnel import info as _funnel_info
+
+        for _pruned_edge in polyglot_result.pruned_spills:
+            _funnel_info(
+                f"spill pruned · {_pruned_edge}",
+                gutter="  ",
+                err=True,
+            )
+    return polyglot_result, None
