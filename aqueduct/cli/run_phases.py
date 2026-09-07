@@ -107,6 +107,21 @@ class HealLoopResult:
     patch_rejected_by_gate: bool
 
 
+def combine_chain_patch(accumulated_patches: list, patch):
+    """The chain carry-forward idiom, factored out of the heal loop's 3
+    `merge_patch_specs(accumulated_patches + [patch]) if accumulated_patches
+    else patch` sites.
+
+    Empty ``accumulated_patches`` → the candidate itself, unchanged
+    (identity — `merge_patch_specs` is not even called). Non-empty →
+    `merge_patch_specs(accumulated_patches + [patch])`, earlier links
+    first.
+    """
+    from aqueduct.agent import merge_patch_specs
+
+    return merge_patch_specs(accumulated_patches + [patch]) if accumulated_patches else patch
+
+
 def check_resume_hash_guard(
     *,
     resume_run_id: str | None,
@@ -2107,9 +2122,7 @@ def run_heal_loop(ctx: RunContext) -> HealLoopResult:
             # this new one — never the candidate alone. When there
             # are no accumulated links yet, merge_patch_specs returns
             # the candidate unchanged.
-            _combined_candidate = (
-                merge_patch_specs(accumulated_patches + [patch]) if accumulated_patches else patch
-            )
+            _combined_candidate = combine_chain_patch(accumulated_patches, patch)
 
             # ── Guardrail check (pre-staging) ───────────────────────
             try:
@@ -2331,11 +2344,7 @@ def run_heal_loop(ctx: RunContext) -> HealLoopResult:
                     # retry the SAME current_failure.
                     _chain_last_rejected = patch
                     if manifest.agent.on_heal_failure == "abort":
-                        _final = (
-                            merge_patch_specs(accumulated_patches + [patch])
-                            if accumulated_patches
-                            else patch
-                        )
+                        _final = combine_chain_patch(accumulated_patches, patch)
                         _aqcli._stage_failed_patch(
                             manifest.agent.on_heal_failure,
                             _final,
@@ -2421,11 +2430,7 @@ def run_heal_loop(ctx: RunContext) -> HealLoopResult:
                     # retry the SAME current_failure.
                     _chain_last_rejected = patch
                     if manifest.agent.on_heal_failure == "abort":
-                        _final = (
-                            merge_patch_specs(accumulated_patches + [patch])
-                            if accumulated_patches
-                            else patch
-                        )
+                        _final = combine_chain_patch(accumulated_patches, patch)
                         _aqcli._stage_failed_patch(
                             manifest.agent.on_heal_failure,
                             _final,
