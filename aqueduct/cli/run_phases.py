@@ -100,6 +100,145 @@ def check_resume_hash_guard(
             sys.exit(exit_codes.CONFIG_ERROR)
 
 
+def run_sandbox_dryrun(
+    *,
+    manifest: Manifest,
+    engine: str,
+    run_id: str | None,
+    sample: int,
+    master_url: str,
+    verbosity: int,
+    cfg,
+    depot,
+    from_module: str | None,
+    to_module: str | None,
+    parallel: bool,
+    probe_sampling,
+    execute,
+) -> None:
+    """Sandbox dry-run (short-circuit).
+
+    Dev loop: run the compiled pipeline against sampled inputs with every
+    Egress skipped — no writes, no Surveyor, no self-healing, no
+    observability persistence. Reuses the patch-validation sandbox
+    transform so behaviour matches Gate 3.
+
+    Engine-agnostic (Phase 89 add-on): built THROUGH THE PROTOCOL
+    REGISTRY — `get_protocol(engine).session_factory()` +
+    `resolve_session_engine_config` — the same seam
+    `aqueduct.patch.preview.run_sandbox_gate` (Gate 3's own sandbox
+    replay) and the main run path's `_execute_target` already use,
+    rather than a hardcoded `make_spark_session()` that made
+    `--sandbox` reachable only for `engine=spark` regardless of which
+    engines were actually registered.
+    """
+    import atexit
+    import uuid
+
+    from aqueduct.executor import ExecuteError
+    from aqueduct.executor.capabilities import Support, get_capabilities
+    from aqueduct.executor.models import ExecutionStatus
+    from aqueduct.patch.preview import build_sandbox_manifest
+
+    if len(manifest.islands) > 1:
+        _island_engines = ", ".join(sorted({isl.engine for isl in manifest.islands}))
+        click.echo(
+            f"✗ --sandbox does not support a polyglot Blueprint "
+            f"({len(manifest.islands)} islands: {_island_engines}) — a single-session "
+            "dry-run cannot replay a multi-engine Manifest in this release",
+            err=True,
+        )
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    _sandbox_leaf = get_capabilities(engine).verdict("tooling.sandbox_dry_run")
+    if _sandbox_leaf.support != Support.SUPPORTED:
+        click.echo(
+            f"✗ --sandbox does not support engine {engine!r}: "
+            f"{_sandbox_leaf.hint or 'tooling.sandbox_dry_run is unsupported for this engine'}",
+            err=True,
+        )
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    from aqueduct.executor.protocol import (
+        SessionSpec,
+        filter_execute_kwargs,
+        get_protocol,
+    )
+    from aqueduct.executor.session_config import (
+        resolve_session_engine_config,
+        session_secrets_options,
+    )
+
+    sandboxed_manifest, egress_targets = build_sandbox_manifest(manifest, sample)
+    sandbox_run_id = f"sandbox-{run_id or uuid.uuid4().hex}"  # full uuid — queryable, no collisions
+
+    _limit_desc = f"≤{sample} row(s)/Ingress" if sample and sample > 0 else "no row limit"
+    click.echo(
+        f"⊙ sandbox dry-run — {_limit_desc}, {len(egress_targets)} Egress "
+        "module(s) skipped (no writes, no healing, no persistence)",
+        err=True,
+    )
+
+    _protocol = get_protocol(engine)
+    session = _protocol.session_factory()(
+        SessionSpec(
+            blueprint_id=manifest.blueprint_id,
+            engine_config=resolve_session_engine_config(cfg, engine, manifest),
+            master_url=master_url,
+            quiet_startup=(verbosity < 2),
+            timezone=cfg.timezone,
+            engine_options=session_secrets_options(cfg, manifest),
+        )
+    )
+    atexit.register(lambda: _protocol.session_closer()(session))
+
+    try:
+        _sandbox_kwargs = filter_execute_kwargs(
+            engine,
+            dict(
+                run_id=sandbox_run_id,
+                store_dir=None,
+                surveyor=None,
+                depot=depot,
+                from_module=from_module,
+                to_module=to_module,
+                block_full_actions=not cfg.danger.allow_full_probe_actions,
+                parallel=parallel,
+                sampling=probe_sampling,
+            ),
+            suppress=cfg.warnings.suppress,
+        )
+        result = execute(sandboxed_manifest, session, **_sandbox_kwargs)
+    except ExecuteError as exc:
+        click.echo(f"✗ sandbox run failed: {exc}", err=True)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+    if result.status != ExecutionStatus.SUCCESS:
+        failing = next(
+            (r for r in result.module_results if r.status == ExecutionStatus.ERROR), None
+        )
+        detail = f" — first error in {failing.module_id!r}: {failing.error}" if failing else ""
+        from aqueduct.cli.render.style import error as _style_error
+
+        _style_error(f"sandbox run status={result.status}{detail}", err=False)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+    _ran = sum(1 for r in result.module_results if r.status == ExecutionStatus.SUCCESS)
+    from aqueduct.cli.render.style import success as _style_success
+
+    _style_success(
+        f"sandbox run succeeded — {_ran} module(s) executed, "
+        f"{len(egress_targets)} Egress skipped",
+        err=False,
+    )
+    for tgt in egress_targets:
+        click.echo(
+            f"    · skipped Egress {tgt['id']!r} → " f"{tgt.get('format')} {tgt.get('path')}",
+            err=True,
+        )
+    sys.exit(exit_codes.SUCCESS)
+
+
 def check_from_to_island_guard(
     *,
     manifest: Manifest,
