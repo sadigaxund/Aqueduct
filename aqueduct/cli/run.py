@@ -1889,6 +1889,57 @@ def run(
                         patch_store=_patch_store,
                     )
 
+                # 2.3.0 fix — re-execute the baseline manifest (reflecting
+                # only the PROVEN `accumulated_patches`, never the
+                # just-rejected candidate) before this heal ends. Without
+                # this, `result`/`failure_ctx` were left holding
+                # `result2`/`failure_ctx2` from the last REJECTED
+                # candidate's patched retry (the in-loop
+                # `_apply_patch_in_memory` + `_execute_target` call above),
+                # so the run's persisted failure signature was a phantom
+                # failure manufactured by a wrong patch guess rather than
+                # the real, unpatched (or accumulated-patches-only)
+                # failure. See CHANGELOG.md 2.3.0 ### Fixed, the
+                # session_config_fingerprint entry.
+                if accumulated_patches:
+                    import warnings as _wsup
+
+                    from aqueduct.warnings import AqueductWarning as _AqWarn
+
+                    with _wsup.catch_warnings():
+                        _wsup.simplefilter("ignore", _AqWarn)
+                        _baseline_manifest = _aqcli._apply_patch_in_memory(
+                            merge_patch_specs(accumulated_patches),
+                            Path(blueprint),
+                            depot,
+                            profile,
+                            cli_overrides or {},
+                        )
+                else:
+                    _baseline_manifest = manifest
+
+                if _baseline_manifest is not None:
+                    result, execute_exc = _execute_target(
+                        _baseline_manifest,
+                        run_id=str(uuid.uuid4()),
+                        resume_run_id=None,
+                        store_dir=resolved_store_dir,
+                        checkpoint_root=checkpoint_root_abs,
+                        surveyor=surveyor,
+                        depot=depot,
+                        from_module=from_module,
+                        to_module=to_module,
+                        block_full_actions=not cfg.danger.allow_full_probe_actions,
+                        parallel=parallel,
+                        use_observe=cfg.metrics.use_observe,
+                        observability_store=bundle.observability,
+                        sampling=probe_sampling,
+                    )
+                    failure_ctx = surveyor.record(
+                        result, exc=execute_exc, engine=result.failed_engine
+                    )
+                    _render_module_summary(result, failure_ctx)
+
             # The entire heal (all retries, all chain links, all cascade
             # tiers) is driven by the inner `while patch_count < max_patches`
             # above — there is no outer-loop-driven retry for ANY path (that
