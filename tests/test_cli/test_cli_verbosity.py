@@ -148,7 +148,8 @@ class TestHealBlockStreamRoutingSeam:
     `TranscriptWriter` write-callback and the "waiting for first token"
     cue must pass ``err=True`` explicitly, and the interactive-streaming
     TTY probe must check stderr, not stdout — see the Phase 85 audit notes
-    on aqueduct/cli/run.py (~L2292-2307) and aqueduct/cli/heal.py (~L306)."""
+    on aqueduct/cli/run_phases.py (the run phases extracted from run.py in
+    2.3.0) and aqueduct/cli/heal.py."""
 
     @staticmethod
     def _read_module_source(dotted_path: str) -> str:
@@ -164,7 +165,7 @@ class TestHealBlockStreamRoutingSeam:
         return open(spec.origin, encoding="utf-8").read()
 
     def test_run_py_heal_transcript_write_is_stderr(self) -> None:
-        src = self._read_module_source("aqueduct.cli.run")
+        src = self._read_module_source("aqueduct.cli.run_phases")
         assert "write=lambda s: emit(_style_heal_line(s), err=True)" in src
         # Audit-fixed 2026-08-23: the cue moved off the non-wrapping `emit()`
         # onto the funnel's wrap_line-backed `echo()` (a bare f-string handed
@@ -181,7 +182,7 @@ class TestHealBlockStreamRoutingSeam:
         """The framed run screen (header/tree/closing divider/verdict) must
         survive `> run.log` piped alone — every one of those `click.echo`
         calls carries an explicit `err=False`."""
-        src = self._read_module_source("aqueduct.cli.run")
+        src = self._read_module_source("aqueduct.cli.run_phases")
         assert "click.echo(_dim(_rule()), err=False)" in src
         # Phase 85 Wave 2 — the success footer gained a wall-clock-time +
         # healed-count suffix (`_footer_text`), still explicit stdout.
