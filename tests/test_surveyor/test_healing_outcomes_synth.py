@@ -151,9 +151,13 @@ def test_outer_run_id_reported_in_status_and_webhook():
     """
     from pathlib import Path
 
-    # The `run` command lives in aqueduct/cli/run.py since the cli package split.
-    cli_src = Path(__file__).resolve().parents[2] / "aqueduct" / "cli" / "run.py"
-    text = cli_src.read_text(encoding="utf-8")
+    # The `run` command lives in aqueduct/cli/run.py since the cli package
+    # split; its phases (including the depot write and the webhook payload)
+    # were extracted into aqueduct/cli/run_phases.py in 2.3.0.
+    cli_dir = Path(__file__).resolve().parents[2] / "aqueduct" / "cli"
+    text = (cli_dir / "run.py").read_text(encoding="utf-8") + (cli_dir / "run_phases.py").read_text(
+        encoding="utf-8"
+    )
     # The outer run_id is allocated once near the top of the `run` command
     # and reused everywhere downstream — including the depot write and the
     # success-webhook payload.
