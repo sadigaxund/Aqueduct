@@ -20,6 +20,10 @@ from aqueduct.cli import (
     cli,
 )
 from aqueduct.cli.render.funnel import emit
+from aqueduct.cli.run_phases import (
+    check_from_to_island_guard,
+    check_resume_hash_guard,
+)
 from aqueduct.cli.run_setup import (
     _do_compile,
     _load_engine_config,
@@ -453,86 +457,20 @@ def run(
         execution_date = _cr.execution_date
         cli_overrides = _cr.cli_overrides
 
-        # ── P4: --resume fails closed on a manifest-hash mismatch ─────────────
-        # `--resume <run_id>` reuses checkpoints from a PRIOR run. Two
-        # independent checkpoint mechanisms exist, both keyed off
-        # `aqueduct.executor.models.manifest_hash(manifest)` (a content hash
-        # of the WHOLE compiled Manifest — any Blueprint edit changes it):
-        #
-        #   1. Module checkpoints (`checkpoint_root`/`store_dir/checkpoints`)
-        #      — `<base>/<run_id>/_manifest_hash` stores the hash the ORIGINAL
-        #      run compiled. Both engines' `execute()` already read this back
-        #      and compare it (`spark/executor.py`, `duckdb_/executor.py`) —
-        #      but only ever WARN (`runtime_resume_hash_changed`) and proceed;
-        #      that permissive behaviour is a deliberate, separately-tested
-        #      contract at the engine layer (see
-        #      `test_resume_mismatched_manifest_warns_and_continues`) and is
-        #      left untouched. The hard refusal below happens one layer up, at
-        #      the CLI, BEFORE any engine session is even built.
-        #
-        #   2. Handoff spill (`aqueduct/executor/spill.py`, polyglot Blueprints
-        #      only) — laid out as `<handoff.root>/<manifest_hash>/<run_id>/`,
-        #      keyed STRICTLY by the CURRENT hash. A mismatch here is not an
-        #      observable "wrong hash" condition inside the orchestrator at
-        #      all — it just finds nothing under the new hash and silently
-        #      starts that island fresh. `find_run_under_other_hash` is the
-        #      detector: it tells "genuinely first run of this run_id" apart
-        #      from "run_id exists, but under a stale hash" by scanning every
-        #      OTHER hash directory.
-        #
-        # Either mechanism finding a stale hash is refused identically here,
-        # unless `--force` (validated above) opts back into today's
-        # behaviour (module checkpoints keep warning-and-proceeding; handoff
-        # spill keeps silently re-executing that island).
-        if resume_run_id and not force_resume:
-            from aqueduct.executor.models import manifest_hash as _manifest_hash_fn
-            from aqueduct.executor.spill import find_run_under_other_hash as _find_other_hash
+        check_resume_hash_guard(
+            resume_run_id=resume_run_id,
+            force_resume=force_resume,
+            manifest=manifest,
+            checkpoint_root_abs=checkpoint_root_abs,
+            resolved_store_dir=resolved_store_dir,
+            handoff_root_abs=_handoff_root_abs,
+        )
 
-            _current_hash = _manifest_hash_fn(manifest)
-            _stale_hash: str | None = None
-
-            _checkpoints_base = (
-                checkpoint_root_abs
-                if checkpoint_root_abs
-                else (resolved_store_dir / "checkpoints" if resolved_store_dir else None)
-            )
-            if _checkpoints_base is not None:
-                _stored_hash_path = Path(_checkpoints_base) / resume_run_id / "_manifest_hash"
-                if _stored_hash_path.exists():
-                    _stored_hash = _stored_hash_path.read_text(encoding="utf-8").strip()
-                    if _stored_hash != _current_hash:
-                        _stale_hash = _stored_hash
-
-            if _stale_hash is None and len(manifest.islands) > 1:
-                _stale_hash = _find_other_hash(_handoff_root_abs, resume_run_id, _current_hash)
-
-            if _stale_hash is not None:
-                click.echo(
-                    f"✗ --resume {resume_run_id!r} refused: checkpoint manifest hash "
-                    f"{_stale_hash!r} does not match this run's compiled Manifest hash "
-                    f"{_current_hash!r} — the Blueprint (or its context/profile) has "
-                    "changed since that run's checkpoints were written. Pass --force to "
-                    "reuse them anyway, or drop --resume to start fresh.",
-                    err=True,
-                )
-                sys.exit(exit_codes.CONFIG_ERROR)
-
-        # ── --from / --to are not yet island-aware ────────────────────────────
-        # Module-range selection assumes ONE execution graph; which island(s)
-        # a `--from`/`--to` pair spans, and how a sub-manifest gets built per
-        # island for a partial range, is real cross-island work this batch
-        # does not attempt. Refusing loudly (CONFIG_ERROR) beats silently
-        # running the whole polyglot graph while looking like it honoured the
-        # flag — the same "loud, not silent" choice `--sandbox` already makes
-        # for a polyglot Manifest below.
-        if len(manifest.islands) > 1 and (from_module or to_module):
-            click.echo(
-                "✗ --from/--to do not yet support a polyglot Blueprint "
-                f"({len(manifest.islands)} islands) — module-range selection "
-                "across engine islands is not implemented in this release",
-                err=True,
-            )
-            sys.exit(exit_codes.CONFIG_ERROR)
+        check_from_to_island_guard(
+            manifest=manifest,
+            from_module=from_module,
+            to_module=to_module,
+        )
 
         # ── Sandbox dry-run (short-circuit) ──────────────────────────────────────
         # Dev loop: run the compiled pipeline against sampled inputs with every
