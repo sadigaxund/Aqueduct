@@ -1111,6 +1111,12 @@ class TestLoadPreviousPatches:
                 )
             """
             )
+            # Readers never run DDL (2.3.0): a store is migrated once at
+            # open time, so this hand-built legacy table gets the current
+            # columns here, exactly as Surveyor.start() would give it.
+            from aqueduct.patch.index import ensure_schema
+
+            ensure_schema(cur)
         return s
 
     def _stamp(self, store, patch_id, rationale=None, ops=None):
