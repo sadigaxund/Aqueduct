@@ -90,7 +90,7 @@ def test_acquire_run_lock_releases_on_exitstack_close(tmp_path):
 
     # A second acquire now succeeds — proves the first release actually ran.
     with contextlib.ExitStack() as stack2:
-        acquire_run_lock(
+        resolved = acquire_run_lock(
             resolved_store_dir=str(store_dir),
             obs_routing_base=str(tmp_path),
             manifest=manifest,
@@ -98,6 +98,7 @@ def test_acquire_run_lock_releases_on_exitstack_close(tmp_path):
             wait_for_lock=False,
             run_stack=stack2,
         )
+        assert resolved == str(store_dir)
 
 
 def test_acquire_run_lock_contended_exits_config_error(tmp_path):
