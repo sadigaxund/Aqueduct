@@ -57,7 +57,7 @@ def test_unparseable_dialect_construct_does_not_over_reject_a_valid_polyglot_blu
         and decide the fix: extend the scan surface, special-case a
         known-safe unparseable shape, or accept and document the
         over-rejection as a permanent, deliberate trade-off (in which case
-        update `docs/specs.md` §10.9 to say so explicitly rather than
+        update `docs/specs/07-stores-and-ops.md` §10.9 to say so explicitly rather than
         leaving it untested and undocumented).
     """
 

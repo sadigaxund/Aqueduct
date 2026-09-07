@@ -1,11 +1,12 @@
 import json
+import subprocess
+
 import pytest
+from click.testing import CliRunner
+
+from aqueduct.cli import cli
 
 pytestmark = pytest.mark.integration
-import subprocess
-from pathlib import Path
-from click.testing import CliRunner
-from aqueduct.cli import cli
 
 
 @pytest.fixture

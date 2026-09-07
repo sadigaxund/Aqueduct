@@ -27,10 +27,9 @@ import aqueduct.executor.spark.capabilities  # noqa: F401
 from aqueduct.compiler.compiler import compile as ccompile
 from aqueduct.compiler.handoff import (
     RULE_ID_CROSS_ENGINE_HANDOFF,
-    HandoffInsertion,
     insert_handoff_modules,
 )
-from aqueduct.compiler.islands import BoundaryEdge, derive_islands, find_boundary_edges
+from aqueduct.compiler.islands import BoundaryEdge, find_boundary_edges
 from aqueduct.compiler.lineage import compute_lineage_rows
 from aqueduct.config import AqueductConfig, HandoffConfig
 from aqueduct.errors import ParseError

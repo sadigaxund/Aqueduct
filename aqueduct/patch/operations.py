@@ -293,7 +293,7 @@ def apply_set_module_config_key(bp: dict, op: SetModuleConfigKeyOp) -> dict:
     module = _find_module(bp, op.module_id)
     if "config" not in module or module["config"] is None:
         module["config"] = {}
-    value = _to_ruamel(op.value) if isinstance(op.value, (dict, list)) else op.value
+    value = _to_ruamel(op.value) if isinstance(op.value, dict | list) else op.value
     if isinstance(op.value, str):
         from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 

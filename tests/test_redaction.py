@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-import sys
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import click
@@ -21,26 +18,27 @@ import pytest
 # collects zero tests when every test in the file carries `spark`, and no
 # `-m spark` lane's path filter includes this file either — the redaction
 # suite silently never ran in CI.
-pytestmark = [pytest.mark.unit]
-
 from aqueduct import redaction
 from aqueduct.cli import _install_secret_redaction_hooks
 from aqueduct.surveyor.webhook import fire_webhook
+
+pytestmark = [pytest.mark.unit]
+
 
 try:
     from aqueduct.surveyor.surveyor import Surveyor
 except ImportError:
     pytest.skip("pyspark required by Surveyor's executor dependency", allow_module_level=True)
-from aqueduct.agent import stage_patch_for_human
-from aqueduct.agent.providers import _call_agent
-from aqueduct.compiler.models import Manifest
+from aqueduct.agent import stage_patch_for_human  # noqa: E402
+from aqueduct.agent.providers import _call_agent  # noqa: E402
+from aqueduct.compiler.models import Manifest  # noqa: E402
 
 try:
     from aqueduct.executor.models import ExecutionResult, ModuleResult
 except ImportError:
     pytest.skip("pyspark required", allow_module_level=True)
-from aqueduct.surveyor.models import FailureContext
-from aqueduct.patch.grammar import PatchSpec
+from aqueduct.patch.grammar import PatchSpec  # noqa: E402
+from aqueduct.surveyor.models import FailureContext  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

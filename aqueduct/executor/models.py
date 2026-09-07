@@ -72,21 +72,152 @@ def resolve_observability_store(store_dir: Any, observability_store: Any) -> Any
     return DuckDBObservabilityStore(store_dir / "observability.db")
 
 
+def _module_metrics_row(run_id: str, module_id: str, metrics: dict[str, Any]) -> list[Any]:
+    """Build one ``module_metrics`` INSERT parameter list, ``captured_at``-stamped now."""
+    from datetime import UTC, datetime
+
+    return [
+        run_id,
+        module_id,
+        metrics.get("records_read"),
+        metrics.get("bytes_read"),
+        metrics.get("records_written"),
+        metrics.get("bytes_written"),
+        metrics.get("duration_ms"),
+        datetime.now(tz=UTC).isoformat(),
+    ]
+
+
+class ModuleMetricsBuffer:
+    """Thread-safe collector of ``module_metrics`` rows for ONE run, flushed
+    under a single ``store.connect()`` at run end.
+
+    Mirrors the batching pattern in ``aqueduct/cli/drift.py`` (its
+    ``pending_checks`` list + one ``record_checks`` flush inside a
+    ``finally``): a fresh DuckDB connect()/close() per module inside the main
+    execution loop meant N modules cost N connection round-trips. Rows are
+    gathered here instead — one per module_id, keyed so a later ``update()``
+    call (Spark's deferred Ingress ``records_read`` observation, applied
+    AFTER the row would otherwise already be sitting in the DB) can mutate
+    the row in place — and ``flush()`` writes every buffered row under one
+    connection, called from the executor's ``finally`` so a run that fails
+    partway through still persists whatever it collected (a batched flush
+    must not turn "partial metrics" into "no metrics", same reasoning as
+    ``drift.py``'s comment above its own flush).
+
+    Engine-agnostic and pyspark-free — used by both
+    ``duckdb_/executor.py`` and ``spark/executor.py``.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._rows: dict[str, dict[str, Any]] = {}
+        self._order: list[str] = []
+
+    def add(self, run_id: str, module_id: str, metrics: dict[str, Any]) -> None:
+        """Buffer one row. A repeat ``module_id`` in the same run overwrites
+        the pending row (matches immediate-write semantics: the newest
+        metrics for that module_id are what should end up in the DB)."""
+        from datetime import UTC, datetime
+
+        row = {
+            "run_id": run_id,
+            "module_id": module_id,
+            "records_read": metrics.get("records_read"),
+            "bytes_read": metrics.get("bytes_read"),
+            "records_written": metrics.get("records_written"),
+            "bytes_written": metrics.get("bytes_written"),
+            "duration_ms": metrics.get("duration_ms"),
+            "captured_at": datetime.now(tz=UTC).isoformat(),
+        }
+        with self._lock:
+            if module_id not in self._rows:
+                self._order.append(module_id)
+            self._rows[module_id] = row
+
+    def update(self, module_id: str, column: str, value: Any) -> bool:
+        """Mutate a not-yet-flushed row's column in place.
+
+        Returns True when a pending row existed for ``module_id`` (the
+        caller must NOT also issue a SQL UPDATE — there is nothing in the DB
+        yet to update). Returns False when this buffer holds no pending row
+        for ``module_id`` (already flushed, or never buffered) — the caller
+        should fall back to its own ``UPDATE ... WHERE run_id=? AND
+        module_id=?`` against the store directly.
+        """
+        with self._lock:
+            row = self._rows.get(module_id)
+            if row is None:
+                return False
+            row[column] = value
+            return True
+
+    def __bool__(self) -> bool:
+        with self._lock:
+            return bool(self._rows)
+
+    def flush(self, store_dir: Any, observability_store: Any) -> None:
+        """Write every buffered row under ONE connection (non-fatal)."""
+        with self._lock:
+            rows = [self._rows[mid] for mid in self._order if mid in self._rows]
+            self._rows.clear()
+            self._order.clear()
+        if not rows:
+            return
+        store = resolve_observability_store(store_dir, observability_store)
+        if store is None:
+            return
+        try:
+            with store.connect() as cur:
+                cur.execute(MODULE_METRICS_DDL)
+                for row in rows:
+                    cur.execute(
+                        """
+                        INSERT INTO module_metrics
+                            (run_id, module_id, records_read, bytes_read,
+                             records_written, bytes_written, duration_ms, captured_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        [
+                            row["run_id"],
+                            row["module_id"],
+                            row["records_read"],
+                            row["bytes_read"],
+                            row["records_written"],
+                            row["bytes_written"],
+                            row["duration_ms"],
+                            row["captured_at"],
+                        ],
+                    )
+        except Exception as exc:
+            logger.debug("ModuleMetricsBuffer flush failed for %d row(s): %s", len(rows), exc)
+
+
 def write_module_metrics(
     store_dir: Any,
     observability_store: Any,
     run_id: str,
     module_id: str,
     metrics: dict[str, Any],
+    buffer: ModuleMetricsBuffer | None = None,
 ) -> None:
     """Persist one ``module_metrics`` row (non-fatal — metrics writing must
-    never abort a run). Engine-agnostic; see ``MODULE_METRICS_DDL`` above."""
+    never abort a run). Engine-agnostic; see ``MODULE_METRICS_DDL`` above.
+
+    When ``buffer`` is given, the row is appended to it instead of being
+    written immediately — the caller is expected to ``buffer.flush(...)``
+    once at run end (see ``ModuleMetricsBuffer``). ``buffer=None`` (the
+    default) keeps this function's original single-row-per-call behavior for
+    any caller outside the main execution loop, and for existing tests that
+    call it directly.
+    """
+    if buffer is not None:
+        buffer.add(run_id, module_id, metrics)
+        return
     store = resolve_observability_store(store_dir, observability_store)
     if store is None:
         return
     try:
-        from datetime import UTC, datetime
-
         with store.connect() as cur:
             cur.execute(MODULE_METRICS_DDL)
             cur.execute(
@@ -96,16 +227,7 @@ def write_module_metrics(
                      records_written, bytes_written, duration_ms, captured_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                [
-                    run_id,
-                    module_id,
-                    metrics.get("records_read"),
-                    metrics.get("bytes_read"),
-                    metrics.get("records_written"),
-                    metrics.get("bytes_written"),
-                    metrics.get("duration_ms"),
-                    datetime.now(tz=UTC).isoformat(),
-                ],
+                _module_metrics_row(run_id, module_id, metrics),
             )
     except Exception as exc:
         logger.debug("write_module_metrics failed for %r: %s", module_id, exc)

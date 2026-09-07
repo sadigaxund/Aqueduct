@@ -1,7 +1,8 @@
+from pathlib import Path
+
 import duckdb
 from rich.console import Console
 from rich.table import Table
-from pathlib import Path
 
 console = Console()
 
@@ -11,7 +12,7 @@ def main():
     customer_output = Path("data/output/customers.parquet")
 
     if not product_output.exists() and not customer_output.exists():
-        console.print(f"[bold red]✗[/bold red] No output files found. Did you run the pipeline?")
+        console.print("[bold red]✗[/bold red] No output files found. Did you run the pipeline?")
         console.print(
             "  [dim]This snippet requires a Java UDF JAR at udf/jars/aqueduct-udfs.jar — replace with your compiled JAR.[/dim]"
         )

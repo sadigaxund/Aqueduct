@@ -1,14 +1,15 @@
 """Tests for the Assert executor."""
 
-import pytest
-
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
 from unittest.mock import patch
+
+import pytest
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
-from aqueduct.executor.spark.assert_ import execute_assert, AssertError
+from aqueduct.executor.spark.assert_ import AssertError, execute_assert
 from aqueduct.parser.models import Module
+
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 
 def test_schema_match_passes(spark: SparkSession):
@@ -604,7 +605,7 @@ class TestAssertTriggerAgentPropagation:
     """Assert on_fail=trigger_agent → AssertError.trigger_agent=True."""
 
     def test_aggregate_rule_trigger_agent_sets_flag(self, spark):
-        from aqueduct.executor.spark.assert_ import execute_assert, AssertError
+        from aqueduct.executor.spark.assert_ import AssertError, execute_assert
         from aqueduct.parser.models import Module
 
         # 3 rows, but min_rows=5 → fail

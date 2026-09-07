@@ -16,6 +16,14 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Batched `module_metrics` writes: one observability-store connection per run instead of one per module.** `aqueduct/executor/models.py::write_module_metrics` (DuckDB's engine, called from `aqueduct/executor/duckdb_/executor.py`) and `aqueduct/executor/spark/executor.py::_write_stage_metrics` each opened a fresh DuckDB connection per module inside the main execution loop — an N-module pipeline cost N connect()/close() cycles. Both engines now collect rows in a new `ModuleMetricsBuffer` (`aqueduct/executor/models.py`) during the run and flush every row under ONE connection in a `finally` at run end, mirroring the batched-write pattern already used by `aqueduct drift` (`aqueduct/cli/drift.py`'s `pending_checks`/`record_checks`): a run that fails partway through still persists the metrics rows it collected before the failure. Spark's deferred Ingress `records_read` observation (`_update_metric`) now mutates the still-buffered row in place instead of issuing a SQL `UPDATE` that would silently match zero rows once the row was no longer written immediately. `write_module_metrics`/`_write_stage_metrics` keep their original immediate single-row-write behavior when called without a buffer, so existing direct callers and tests are unaffected. (`aqueduct/executor/models.py`, `aqueduct/executor/duckdb_/executor.py`, `aqueduct/executor/spark/executor.py`; tests: `tests/test_executor/test_module_metrics_batching.py`)
+
+### Changed
+
+- Renamed gallery scenario 19 from `agentic_vs_oneshot_lineage_field` to `two_hop_lineage_field` — agentic mode was removed in 2.3.0, and the new name describes the bug the scenario actually tests (a column dropped two hops upstream in an intermediate module's projection). (`gallery/aqscenarios/19_two_hop_lineage_field.aqscenario.yml`, `gallery/aqscenarios/blueprints/19_two_hop_lineage_field.yml`)
+
 ## [2.3.0] — 2026-09-05
 
 ### Removed

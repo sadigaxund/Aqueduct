@@ -857,7 +857,7 @@ class TestCheckSpillwayErrorTypes:
 
 # ── T27 Part 1: Spark version handshake (major.minor, no matrix) ────────────────
 
-from aqueduct.doctor import _parse_java_major, _spark_version_verdict, check_java
+from aqueduct.doctor import _parse_java_major, _spark_version_verdict, check_java  # noqa: E402
 
 
 class TestSparkVersionVerdict:
@@ -910,7 +910,7 @@ class TestJavaCheck:
 
 # ── Part A: DuckDB session/extension preflight (tooling.doctor.session_preflight) ──
 
-from aqueduct.doctor import check_duckdb
+from aqueduct.doctor import check_duckdb  # noqa: E402
 
 
 class TestCheckDuckDB:
@@ -989,7 +989,7 @@ class TestCheckDuckDB:
 
 # ── Phase 87: `gh` CLI presence + auth (the `patch pr` transport) ───────────
 
-from aqueduct.doctor import check_gh_pr
+from aqueduct.doctor import check_gh_pr  # noqa: E402
 
 
 class TestGhPrCheck:
@@ -1039,8 +1039,8 @@ class TestGhPrCheck:
 
 # ── T27 Part 2: preflight checks (agent ping, UDF import) ───────────────────────
 
-from aqueduct.doctor import _check_udf_registry
-from aqueduct.doctor import check_agent as _check_agent
+from aqueduct.doctor import _check_udf_registry  # noqa: E402
+from aqueduct.doctor import check_agent as _check_agent  # noqa: E402
 
 
 class _FakeManifest:
@@ -1106,9 +1106,9 @@ class TestAgentPreflightPing:
 
 # ── T27 Part 2: store round-trip + JDBC preflight ──────────────────────────────
 
-from types import SimpleNamespace
+from types import SimpleNamespace  # noqa: E402
 
-from aqueduct.doctor import _jdbc_preflight_auth, _jdbc_result, check_store_backend
+from aqueduct.doctor import _jdbc_preflight_auth, _jdbc_result, check_store_backend  # noqa: E402
 
 
 class TestStoreRoundTrip:
@@ -1153,7 +1153,7 @@ class TestJdbcPreflight:
 
 # ── Queued follow-ups: cascade-tier preflight ping + agent model count ──────────
 
-from aqueduct.doctor import check_cascade_tiers as _check_cascade
+from aqueduct.doctor import check_cascade_tiers as _check_cascade  # noqa: E402
 
 
 def _tier_with(provider, model, base_url=None):

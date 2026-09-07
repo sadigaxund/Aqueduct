@@ -1,6 +1,7 @@
 import os
-from pathlib import Path
+
 from click.testing import CliRunner
+
 from aqueduct.cli import cli
 
 

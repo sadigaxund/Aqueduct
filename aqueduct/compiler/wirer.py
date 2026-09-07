@@ -6,7 +6,7 @@ Probe wiring:
   No structural changes are made — Probes stay in the module list.
 
 Spillway wiring:
-  The module-level `Module.spillway: <target>` field (docs/specs.md) is
+  The module-level `Module.spillway: <target>` field (docs/specs/02-blueprint.md) is
   authoring SUGAR, not a second runtime mechanism — `desugar_module_spillway`
   below expands it into a real `port="spillway"` Edge, the ONE mechanism
   every engine's executor actually reads (see its own docstring for why this
@@ -36,7 +36,7 @@ class WireError(AqueductError):
 def validate_probes(modules: list[Module]) -> None:
     """Verify every Probe module has a valid attach_to target.
 
-    Skips a directly-disabled Probe (``enabled: false``) — specs.md §4
+    Skips a directly-disabled Probe (``enabled: false``) — specs/02-blueprint.md §4
     documents "a disabled module still compiles but is skipped at run
     time"; a Probe an author disabled while still wiring it up must not
     block compilation on the very field they haven't finished writing yet.

@@ -7,11 +7,13 @@ Covers ⏳ items from TEST_MANIFEST.md Phase 19 section.
 from __future__ import annotations
 
 import json
+
 import pytest
+
+from aqueduct.surveyor.models import FailureContext
 
 pytestmark = pytest.mark.unit
 
-from aqueduct.surveyor.models import FailureContext
 
 # ── FailureContext.provenance_json ─────────────────────────────────────────────
 
@@ -56,7 +58,7 @@ def test_to_dict_provenance_json_set():
 
 # ── _build_provenance_section ──────────────────────────────────────────────────
 
-from aqueduct.agent.prompts import _build_provenance_section
+from aqueduct.agent.prompts import _build_provenance_section  # noqa: E402
 
 
 def test_build_provenance_section_none_returns_empty():
@@ -181,7 +183,11 @@ try:
     from aqueduct.executor.models import ExecutionResult, ModuleResult
 except ImportError:
     pytest.skip("pyspark required", allow_module_level=True)
-from aqueduct.compiler.provenance import ProvenanceMap, ModuleProvenance, ValueProvenance
+from aqueduct.compiler.provenance import (  # noqa: E402
+    ModuleProvenance,
+    ProvenanceMap,
+    ValueProvenance,
+)
 
 
 def _make_execution_result(
@@ -235,8 +241,8 @@ def test_surveyor_with_provenance_map_sets_provenance_json(tmp_path):
     Phase 39 externalises provenance_json as a blob path when store_dir is set;
     materialize to read the actual content.
     """
-    from aqueduct.surveyor.surveyor import Surveyor
     from aqueduct.stores.object_store import BlobStore, LocalBackend
+    from aqueduct.surveyor.surveyor import Surveyor
 
     pmap = ProvenanceMap(
         blueprint_id="test.bp",
@@ -270,9 +276,9 @@ def test_surveyor_provenance_slice_contains_only_failed_module_and_context(tmp_p
     Phase 39 externalises provenance_json as a blob path when store_dir is set;
     materialize to read the actual content.
     """
-    from aqueduct.surveyor.surveyor import Surveyor
+    from aqueduct.compiler.provenance import ModuleProvenance, ProvenanceMap, ValueProvenance
     from aqueduct.stores.object_store import BlobStore, LocalBackend
-    from aqueduct.compiler.provenance import ProvenanceMap, ModuleProvenance, ValueProvenance
+    from aqueduct.surveyor.surveyor import Surveyor
 
     pmap = ProvenanceMap(
         blueprint_id="test.bp",

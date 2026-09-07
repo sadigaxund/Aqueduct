@@ -1,8 +1,7 @@
-import pytest
 from aqueduct.config import AqueductConfig
-from aqueduct.stores.base import get_stores, StoreBundle
-from aqueduct.stores.duckdb_ import DuckDBObservabilityStore, DuckDBDepotStore
-from aqueduct.stores.postgres import PostgresObservabilityStore, PostgresDepotStore
+from aqueduct.stores.base import StoreBundle, get_stores
+from aqueduct.stores.duckdb_ import DuckDBDepotStore, DuckDBObservabilityStore
+from aqueduct.stores.postgres import PostgresDepotStore, PostgresObservabilityStore
 from aqueduct.stores.redis_ import RedisDepotStore
 
 

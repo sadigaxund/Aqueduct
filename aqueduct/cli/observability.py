@@ -923,7 +923,7 @@ def runs(
         # 2.0: duckdb path = routing base directory; per-blueprint files at
         # <base>/<blueprint_id>/observability.db. Explicit-file mode and the
         # pre-routing flat `.aqueduct/observability.db` fallback are gone.
-        # --store-dir names the SAME routing base (docs/specs.md §10.4.1),
+        # --store-dir names the SAME routing base (docs/specs/07-stores-and-ops.md §10.4.1),
         # not a flat file — it resolves through the identical logic below.
         candidates: list[Path] = []
         if store_dir:

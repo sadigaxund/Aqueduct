@@ -1,16 +1,18 @@
 """Tests for the CLI layer: Observability commands (report, lineage, signal, heal)."""
 
 from __future__ import annotations
-import json
-from pathlib import Path
-import pytest
 
-pytestmark = pytest.mark.integration
-from click.testing import CliRunner
+from pathlib import Path
+
 import duckdb
+import pytest
+from click.testing import CliRunner
 
 from aqueduct.cli import cli
 from aqueduct.surveyor.surveyor import _SIGNAL_OVERRIDES_DDL
+
+pytestmark = pytest.mark.integration
+
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 

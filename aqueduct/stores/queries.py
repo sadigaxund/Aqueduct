@@ -131,7 +131,7 @@ def _duckdb_files(obs_path: str | None, store_dir: str | None, root: str) -> lis
 
     ``base`` is the routing directory: ``--store-dir`` when given, else the
     configured ``path``, else the default root — both resolve identically
-    (docs/specs.md §10.4.1: ``--store-dir`` is "same per-blueprint split, but
+    (docs/specs/07-stores-and-ops.md §10.4.1: ``--store-dir`` is "same per-blueprint split, but
     under your directory"). Per-blueprint files at
     ``<base>/<blueprint_id>/observability.db`` are discovered by globbing;
     a flat ``<base>/observability.db`` (a store written directly at the

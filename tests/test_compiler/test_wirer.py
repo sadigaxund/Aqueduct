@@ -1,7 +1,7 @@
 import pytest
 
-from aqueduct.parser.models import Edge, Module, ModuleType
 from aqueduct.compiler.wirer import WireError, validate_probe_source_edges
+from aqueduct.parser.models import Edge, Module, ModuleType
 
 pytestmark = pytest.mark.unit
 

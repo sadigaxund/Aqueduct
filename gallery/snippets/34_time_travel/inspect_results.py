@@ -1,7 +1,8 @@
+from pathlib import Path
+
 import duckdb
 from rich.console import Console
 from rich.table import Table
-from pathlib import Path
 
 console = Console()
 
@@ -11,7 +12,7 @@ def main():
     current_output = Path("data/output/current_snapshot.parquet")
 
     if not v1_output.exists() and not current_output.exists():
-        console.print(f"[bold red]✗[/bold red] No output files found. Did you run the pipeline?")
+        console.print("[bold red]✗[/bold red] No output files found. Did you run the pipeline?")
         console.print(
             "  [dim]This snippet requires a Delta table at data/delta_events — see populate.py.[/dim]"
         )

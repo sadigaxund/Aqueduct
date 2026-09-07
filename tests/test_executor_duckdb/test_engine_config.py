@@ -320,3 +320,4 @@ class TestEnsureExtension:
             "SELECT current_setting('custom_extension_repository')"
         ).fetchone()[0]
         assert current == "http://aqueduct-test-unreachable.invalid/repo"
+        assert "aqueduct-test-unreachable.invalid" in str(exc_info.value)

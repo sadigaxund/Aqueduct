@@ -2,23 +2,23 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from pathlib import Path
-import pytest
 
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
+import pytest
 from pyspark.sql import SparkSession
-from pyspark.sql.types import TimestampType, DateType
-from datetime import datetime, date
 
 from aqueduct.executor.spark.test_runner import (
+    TestSchemaError,
     _create_df,
-    _run_assertion,
     _execute_module,
+    _run_assertion,
     _run_test_case,
     run_test_file,
-    TestSchemaError,
 )
 from aqueduct.parser.models import Module
+
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 
 def test_create_df_supported_types(spark: SparkSession):
@@ -200,6 +200,7 @@ def test_run_test_file_not_found(spark: SparkSession):
 
 def test_bundled_template_conformance(spark: SparkSession, tmp_path: Path):
     import yaml
+
     from aqueduct.executor.spark.test_runner import run_test_file
 
     # 1. Locate the aqtest.yml.template file

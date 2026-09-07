@@ -1,4 +1,4 @@
-"""Watermark crash-consistency tests (see docs/specs.md).
+"""Watermark crash-consistency tests (see docs/specs/07-stores-and-ops.md).
 
 Covers the two-module (append Egress + `format: depot` Egress) shape's crash
 window: an intent row (`__intent__:<key>`) recorded before the append starts,

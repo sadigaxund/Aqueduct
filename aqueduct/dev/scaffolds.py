@@ -128,7 +128,7 @@ def _datasource_contract() -> list[tuple[str, str]]:
     and the signatures come from ``inspect.signature`` — a Spark release that adds
     a method or changes an argument shows up in the stub instead of in a user's
     traceback. ``stream*`` methods are filtered out: Aqueduct is a batch engine
-    (specs.md §11), so a streaming reader would be dead code here.
+    (specs/08-polyglot.md §11), so a streaming reader would be dead code here.
     """
     import inspect
 

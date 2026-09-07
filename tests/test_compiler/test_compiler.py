@@ -1,9 +1,10 @@
+from datetime import datetime
+
 import pytest
-from pathlib import Path
-from datetime import datetime, timezone
+
+from aqueduct.compiler.compiler import compile as compiler_compile
 from aqueduct.errors import CompileError
 from aqueduct.parser.parser import parse
-from aqueduct.compiler.compiler import compile as compiler_compile
 
 pytestmark = pytest.mark.unit
 

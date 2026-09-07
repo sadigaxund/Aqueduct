@@ -84,7 +84,7 @@ New package → new unit. The executor unit includes `spark/` and `duckdb_/` plu
 | `config` | `engine_scoped` tag on EVERY field (missing tag → `CapabilityScopeError`), template sync per field, silent no-ops, zero-consumer classes |
 | `stores` | Resource leaks (duckdb.connect / psycopg2), raw driver exceptions reaching users, canonical path resolution (`read.py`) |
 | `agent` | Bare ValueError/RuntimeError → AqueductError subclass, recovery-path regexes (sanctioned only after strict parse), provider credential checks, prompt-rule placement (scaffold vs engine packs), PROMPT_VERSION policy |
-| `surveyor` | Lazy pyspark only in the documented sites, DDL constants in ddl.py, webhook/openlineage redaction, zero-cost observability |
+| `surveyor` | Lazy pyspark only in the documented sites, DDL constants in ddl.py, webhook redaction, zero-cost observability |
 | `doctor` | The 4 lazy-pyspark sites only, error taxonomy branching by TYPE, DSN redaction |
 | `compiler` | 4-layer import direction, island classification exclude-lists, capability gate rule_ids + suppression, Manifest immutability |
 | `patch` | Patch-op closure, YAML round-trip fidelity, except justifications |

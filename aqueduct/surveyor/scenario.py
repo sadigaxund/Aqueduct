@@ -841,10 +841,10 @@ def _compare_config_values(
                     f"({type(actual_val).__name__})"
                 )
             continue
-        if isinstance(expected_val, (int, float)):
+        if isinstance(expected_val, int | float):
             if (
                 isinstance(actual_val, bool)
-                or not isinstance(actual_val, (int, float))
+                or not isinstance(actual_val, int | float)
                 or actual_val != expected_val
             ):
                 failures.append(

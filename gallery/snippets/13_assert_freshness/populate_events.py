@@ -22,6 +22,6 @@ with open(csv_path, "w") as f:
         f.write(",".join(str(v) for v in row) + "\n")
 
 print(f"Generated {csv_path}")
-print(f"  Row 1-2: within 12h (fresh)")
-print(f"  Row 3:   18h old (stale > 12h max_age_hours)")
-print(f"  Row 4:   48h old (stale > 12h max_age_hours)")
+print("  Row 1-2: within 12h (fresh)")
+print("  Row 3:   18h old (stale > 12h max_age_hours)")
+print("  Row 4:   48h old (stale > 12h max_age_hours)")

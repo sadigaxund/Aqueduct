@@ -320,7 +320,7 @@ def _register_java_udf(
     from pyspark.sql.types import _parse_datatype_string
 
     jar_path: str | None = entry.get("jar") or entry.get("path")
-    # `class:` is the documented key (specs.md, SKILL.md, capabilities.yml's
+    # `class:` is the documented key (docs/specs/03-resolution.md, SKILL.md, capabilities.yml's
     # udf.field.class_name leaf) — parser/schema.py's UDFRegistrySchema field
     # is `class_name` aliased to `class`, and `by_alias=True` dumps it back
     # to the ALIAS ("class"), never the Python attribute name

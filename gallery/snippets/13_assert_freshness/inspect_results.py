@@ -1,9 +1,10 @@
+import glob
+import os
+from datetime import UTC, datetime
+
 import pandas as pd
 from rich.console import Console
 from rich.table import Table
-import os
-import glob
-from datetime import datetime, timezone
 
 console = Console()
 
@@ -51,7 +52,7 @@ def main():
 
     if not df_fresh.empty:
         latest_ts = pd.to_datetime(df_fresh["processed_at"]).max()
-        age = datetime.now(tz=timezone.utc) - latest_ts.to_pydatetime().replace(tzinfo=timezone.utc)
+        age = datetime.now(tz=UTC) - latest_ts.to_pydatetime().replace(tzinfo=UTC)
         console.print(
             f"[dim]Latest fresh record is {age.total_seconds() / 3600:.2f} hours old "
             f"(max_age_hours=12).[/dim]"

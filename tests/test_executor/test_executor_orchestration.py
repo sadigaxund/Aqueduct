@@ -3,19 +3,17 @@
 from __future__ import annotations
 
 import re
-import uuid
 from dataclasses import FrozenInstanceError
-from pathlib import Path
 
 import pytest
-
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
 from pyspark.sql import SparkSession
 
 from aqueduct.compiler.models import Manifest
-from aqueduct.executor.spark.executor import ExecuteError, execute
 from aqueduct.executor.models import ExecutionResult, ModuleResult
+from aqueduct.executor.spark.executor import ExecuteError, execute
 from aqueduct.parser.models import Edge, Module, RetryPolicy
+
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 
 @pytest.fixture
@@ -996,7 +994,6 @@ def test_execute_udf_integration(spark: SparkSession, tmp_path, monkeypatch):
             {"id": "my_concat", "lang": "python", "module": "my_udfs", "return_type": "string"},
         ),
     )
-    import sys
 
     old_trace = sys.gettrace()
     sys.settrace(None)
@@ -2118,9 +2115,10 @@ class TestExecuteModuleDispatch:
     """Tests for _execute_module dispatch — patched executor functions."""
 
     def test_channel_dispatch(self):
+        from unittest.mock import MagicMock, patch
+
         from aqueduct.executor.spark.test_runner import _execute_module
         from aqueduct.parser.models import Module
-        from unittest.mock import MagicMock, patch
 
         mod = Module(id="ch", type="Channel", label="C", config={})
         fake_df = MagicMock()
@@ -2129,9 +2127,10 @@ class TestExecuteModuleDispatch:
         assert result is not None
 
     def test_junction_dispatch(self):
+        from unittest.mock import MagicMock, patch
+
         from aqueduct.executor.spark.test_runner import _execute_module
         from aqueduct.parser.models import Module
-        from unittest.mock import MagicMock, patch
 
         mod = Module(
             id="jct", type="Junction", label="J", config={"op": "broadcast", "branches": []}
@@ -2142,18 +2141,20 @@ class TestExecuteModuleDispatch:
         assert isinstance(result, dict)
 
     def test_junction_too_many_inputs_raises(self):
+        from unittest.mock import MagicMock
+
         from aqueduct.executor.spark.test_runner import TestSchemaError, _execute_module
         from aqueduct.parser.models import Module
-        from unittest.mock import MagicMock
 
         mod = Module(id="jct", type="Junction", label="J", config={})
         with pytest.raises(TestSchemaError, match="expects exactly 1 input"):
             _execute_module(mod, {"a": MagicMock(), "b": MagicMock()}, MagicMock())
 
     def test_funnel_dispatch(self):
+        from unittest.mock import MagicMock, patch
+
         from aqueduct.executor.spark.test_runner import _execute_module
         from aqueduct.parser.models import Module
-        from unittest.mock import MagicMock, patch
 
         mod = Module(id="fn", type="Funnel", label="F", config={"mode": "union_all"})
         fake_df = MagicMock()
@@ -2162,9 +2163,10 @@ class TestExecuteModuleDispatch:
         assert result is not None
 
     def test_assert_too_many_inputs_raises(self):
+        from unittest.mock import MagicMock
+
         from aqueduct.executor.spark.test_runner import TestSchemaError, _execute_module
         from aqueduct.parser.models import Module
-        from unittest.mock import MagicMock
 
         mod = Module(id="ast", type="Assert", label="A", config={"rules": []})
         with pytest.raises(TestSchemaError, match="expects exactly 1 input"):
@@ -2224,6 +2226,7 @@ class TestExecutorBlockFullActionsParam:
 
     def test_execute_has_block_full_actions_param(self):
         import inspect
+
         from aqueduct.executor.spark.executor import execute
 
         sig = inspect.signature(execute)
@@ -2415,7 +2418,7 @@ def test_checkpoint_root_resume_missing_raises(spark: SparkSession, tmp_path):
 # ── Junction branch port → Channel (the 2.3.0 include-list bug) ──────────────
 # `_incoming_main` used to be an include-list (`e.port == "main"`), so every
 # module type except Egress/Handoff rejected a Junction branch-port edge with
-# "has no main-port incoming edges" — even though docs/specs.md's port table
+# "has no main-port incoming edges" — even though docs/specs/02-blueprint.md's port table
 # has always said a `<branch_id>` port is consumed by "Any downstream module".
 # It is now an exclude-list (any data edge that is not `signal`/`spillway`);
 # see `aqueduct/executor/edge_ports.py`. Mirrors the DuckDB fan-shape test in

@@ -1751,7 +1751,7 @@ def test_egress_table_ignored_when_register_as_table_also_set(duckdb_con, caplog
 # ── Junction branch port → Channel (the 2.3.0 include-list bug) ────────────
 # `_incoming_main` used to be an include-list (`e.port == "main"`), so every
 # module type except Egress/Handoff rejected a Junction branch-port edge with
-# "has no main-port incoming edges" — even though docs/specs.md's port table
+# "has no main-port incoming edges" — even though docs/specs/02-blueprint.md's port table
 # has always said a `<branch_id>` port is consumed by "Any downstream module".
 # It is now an exclude-list (any data edge that is not `signal`/`spillway`);
 # see `aqueduct/executor/edge_ports.py`.

@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from dataclasses import FrozenInstanceError
 
-pytestmark = pytest.mark.unit
-
-from aqueduct.agent.cascade import generate_cascade_patch
 from aqueduct.agent import AgentPatchResult
 from aqueduct.agent.budget import StopReason
+from aqueduct.agent.cascade import generate_cascade_patch
 from aqueduct.parser.models import CascadeTierConfig
+
+pytestmark = pytest.mark.unit
 
 
 def _tier(model: str, **kwargs) -> CascadeTierConfig:

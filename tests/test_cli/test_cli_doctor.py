@@ -1,11 +1,12 @@
 """Tests for aqueduct doctor command and store backend checks."""
 
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import patch, MagicMock
-from pathlib import Path
 from click.testing import CliRunner
+
 from aqueduct.cli import cli
-from aqueduct.doctor import _check_format_ext_mismatch, CheckResult
+from aqueduct.doctor import _check_format_ext_mismatch
 
 pytestmark = pytest.mark.unit
 
@@ -78,8 +79,8 @@ class TestDoctorStoreBackends:
     """Tests for check_store_backend — passes the store-level config object directly."""
 
     def test_check_store_backend_duckdb_reachable(self, tmp_path):
-        from aqueduct.doctor import check_store_backend
         from aqueduct.config import RelationalStoreConfig
+        from aqueduct.doctor import check_store_backend
 
         obs_dir = tmp_path / "obs"
         obs_dir.mkdir()
@@ -89,8 +90,8 @@ class TestDoctorStoreBackends:
         assert result.status == "ok"
 
     def test_check_store_backend_postgres_invalid_dsn(self):
-        from aqueduct.doctor import check_store_backend
         from aqueduct.config import RelationalStoreConfig
+        from aqueduct.doctor import check_store_backend
 
         store_cfg = RelationalStoreConfig(
             backend="postgres", path="postgresql://invalid:invalid@invalid/invalid"
@@ -100,8 +101,8 @@ class TestDoctorStoreBackends:
 
     def test_check_store_backend_redis_depot_ok_type(self):
         """Redis is valid for depot (is_kv_only=True). With no live Redis, it may fail — only check type."""
-        from aqueduct.doctor import check_store_backend
         from aqueduct.config import KVStoreConfig
+        from aqueduct.doctor import check_store_backend
 
         store_cfg = KVStoreConfig(backend="redis", path="redis://localhost:6379/0")
         result = check_store_backend("depot", store_cfg, is_kv_only=True)

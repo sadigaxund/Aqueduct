@@ -18,19 +18,18 @@ from pathlib import Path
 
 import duckdb
 import pytest
-
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
-
 from pyspark.sql import SparkSession
 
 from aqueduct.compiler.compiler import compile as ccompile
 from aqueduct.executor.duckdb_.egress import EgressError
 from aqueduct.executor.models import ExecutionStatus
-from aqueduct.executor.orchestrator import run_polyglot
 from aqueduct.executor.models import manifest_hash as _manifest_hash
+from aqueduct.executor.orchestrator import run_polyglot
 from aqueduct.models import ModuleType
 from aqueduct.parser.parser import parse_dict
 from aqueduct.surveyor.surveyor import Surveyor
+
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 
 def _bp(modules, edges):
@@ -342,7 +341,6 @@ def test_timestamp_tz_survives_duckdb_to_spark_handoff(spark: SparkSession, tmp_
     )
     assert result.status == ExecutionStatus.SUCCESS, result.module_results
 
-    row = spark.read.parquet(out_path).collect()[0]
     field_type = spark.read.parquet(out_path).schema["ts"].dataType.typeName()
     assert field_type == "timestamp"  # Spark's tz-aware instant type (hub timestamp_tz)
 

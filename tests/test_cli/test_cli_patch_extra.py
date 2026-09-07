@@ -5,13 +5,14 @@ Covers ⏳ items from TEST_MANIFEST.md Phase 18 git-lifecycle section.
 
 import json
 import subprocess
+
 import pytest
+from click.testing import CliRunner
+
+from aqueduct.cli import cli
 
 pytestmark = pytest.mark.integration
 
-from pathlib import Path
-from click.testing import CliRunner
-from aqueduct.cli import cli
 
 # ── shared fixture ─────────────────────────────────────────────────────────────
 

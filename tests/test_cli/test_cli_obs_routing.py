@@ -1,11 +1,12 @@
-import pytest
-import os
 import shutil
-import duckdb
 from pathlib import Path
 from unittest.mock import MagicMock
+
+import duckdb
+import pytest
 from click.testing import CliRunner
-from aqueduct.cli import cli, _resolve_obs_db
+
+from aqueduct.cli import _resolve_obs_db, cli
 
 pytestmark = [pytest.mark.integration]
 
@@ -123,9 +124,10 @@ def test_runs_command_unions_all_databases(tmp_path):
 
 def test_heal_command_per_pipeline_routing(tmp_path):
     """aqueduct heal successfully resolves database and finds FailureContext for per-pipeline routed run."""
-    from aqueduct.surveyor.surveyor import Surveyor
-    from aqueduct.compiler.models import Manifest
     import datetime
+
+    from aqueduct.compiler.models import Manifest
+    from aqueduct.surveyor.surveyor import Surveyor
 
     # Create the per-pipeline DB with FailureContext using Surveyor
     p1_dir = Path(".aqueduct/pipeline_1")
@@ -138,7 +140,7 @@ def test_heal_command_per_pipeline_routing(tmp_path):
     surveyor = Surveyor(manifest, store_dir=p1_dir, engine="spark")
     surveyor.start("run-fail-1")
 
-    now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    now_str = datetime.datetime.now(datetime.UTC).isoformat()
     db1 = p1_dir / "observability.db"
     conn = duckdb.connect(str(db1))
     conn.execute(

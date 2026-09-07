@@ -13,9 +13,9 @@ import tempfile
 import pytest
 import yaml
 
-pytestmark = pytest.mark.unit
-
 from aqueduct.parser.parser import ParseError, parse
+
+pytestmark = pytest.mark.unit
 
 
 def _parse_with_udf(udf: dict):
@@ -74,7 +74,7 @@ def test_java_udf_class_alias_round_trips():
     # `class` is the YAML key the executor reads back (aliased from class_name)
     assert entry["class"] == "com.example.GeoUDF"
     # A relative `jar:` path anchors to the Blueprint's own directory
-    # (specs.md's documented contract; audit-fixed 2026-08 — it previously
+    # (docs/specs/03-resolution.md's documented contract; audit-fixed 2026-08 — it previously
     # round-tripped completely unanchored, breaking "JAR not found" the
     # moment `aqueduct run` was invoked from any other CWD).
     assert entry["jar"] == str((pathlib.Path(bp.base_dir) / "libs/geo.jar").resolve())

@@ -1,13 +1,17 @@
 """Tests for the Compiler layer: SQL Macros expansion."""
 
 from __future__ import annotations
+
 from pathlib import Path
+
 import pytest
 
-pytestmark = pytest.mark.unit
-from aqueduct.compiler.macros import MacroError, resolve_macros, resolve_macros_in_config
 from aqueduct.compiler.compiler import compile
+from aqueduct.compiler.macros import MacroError, resolve_macros, resolve_macros_in_config
 from aqueduct.parser.parser import parse
+
+pytestmark = pytest.mark.unit
+
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 

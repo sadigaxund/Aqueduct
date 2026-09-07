@@ -15,8 +15,6 @@ Spark, and the unknown-engine fallback).
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from aqueduct.doctor import check_handoff_engine_access

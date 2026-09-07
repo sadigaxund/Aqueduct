@@ -21,9 +21,9 @@ import types
 
 import pytest
 
-pytestmark = pytest.mark.unit
-
 from aqueduct.surveyor.scenario import format_benchmark_table
+
+pytestmark = pytest.mark.unit
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 

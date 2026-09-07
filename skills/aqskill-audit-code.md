@@ -20,7 +20,7 @@ Tag each row **PROVEN**/**SUSPECTED**. Drop SUSPECTED unless cheap to check.
 ## Repo neutralizers — false-positive guards (check before flagging)
 
 - **Lazy pyspark is allowed.** A `import pyspark` is a violation only if it's **module-level (column 0)** AND outside `executor/spark/` AND not a documented exception. Documented/acceptable: `doctor/*` (function-body), `surveyor/surveyor.py` + `surveyor/error_extraction.py` (function-body), and `dashboard/app.py::main()` (lazy narwhals/plotly init). Before flagging, confirm the import is at top level, not inside a function.
-- **One-shot stderr is allowed.** `print(..., file=sys.stderr)` is a redaction concern only on **daemon-thread / repeated delivery** paths. One-shot CLI-exception prints (e.g. `openlineage.py` build-step failure, `patch/apply.py` archive warning) are accepted. Distinguish the two before flagging.
+- **One-shot stderr is allowed.** `print(..., file=sys.stderr)` is a redaction concern only on **daemon-thread / repeated delivery** paths. One-shot CLI-exception prints (e.g. the `patch/apply.py` archive warning) are accepted. Distinguish the two before flagging.
 - **Pydantic validator.** `raise ValueError` inside `@field_validator`/`@model_validator` is **required** — never recommend converting it to an `AqueductError` subclass.
 - **Known/tracked items.** The Executor→Surveyor `fire_webhook` import and a few others are already tracked in `.dev/`. Report once as "known," don't re-raise as newly discovered.
 - **Falsy-trap needs a distinct value.** `if not x` is a bug only if a falsy value (`0`/`""`/`[]`) is a **semantically distinct, reachable** state. Many are correct because falsy == unset there. Prove the distinct-value path or drop it.

@@ -197,7 +197,7 @@ class Array(HubType):
     element type shared by every item (Arrow ``list<element>``).
     """
 
-    element: "HubType | NativeType"
+    element: HubType | NativeType
 
 
 @dataclass(frozen=True)
@@ -205,7 +205,7 @@ class StructField:
     """One named field inside a ``Struct`` — not a type on its own."""
 
     name: str
-    type: "HubType | NativeType"
+    type: HubType | NativeType
 
 
 @dataclass(frozen=True)
@@ -216,8 +216,8 @@ class Map(HubType):
     concern.
     """
 
-    key: "HubType | NativeType"
-    value: "HubType | NativeType"
+    key: HubType | NativeType
+    value: HubType | NativeType
 
 
 @dataclass(frozen=True)
@@ -226,7 +226,7 @@ class Struct(HubType):
     ``struct<...>``) — a row type nested inside a column.
     """
 
-    fields: "tuple[StructField, ...]"
+    fields: tuple[StructField, ...]
 
 
 @dataclass(frozen=True)
@@ -370,7 +370,7 @@ _MAX_TYPE_NESTING_DEPTH = 64
 
 def _parse_one(
     spelling: str, *, suppress: Iterable[str] | None, _depth: int = 0
-) -> "HubType | NativeType":
+) -> HubType | NativeType:
     if _depth > _MAX_TYPE_NESTING_DEPTH:
         raise TypeSpellingError(
             f"Type spelling nests more than {_MAX_TYPE_NESTING_DEPTH} levels deep "
@@ -478,7 +478,7 @@ def _parse_one(
     raise TypeSpellingError(_unknown_spelling_message(s))
 
 
-def parse_type(spelling: str, *, suppress: Iterable[str] | None = None) -> "HubType | NativeType":
+def parse_type(spelling: str, *, suppress: Iterable[str] | None = None) -> HubType | NativeType:
     """Parse a user-written type spelling into a hub type (or a
     ``NativeType`` passthrough marker).
 
@@ -546,7 +546,7 @@ def constructor_names() -> frozenset[str]:
     }
 
 
-def render(t: "HubType | NativeType") -> str:
+def render(t: HubType | NativeType) -> str:
     """Render a hub type (or ``NativeType``) back to its canonical
     spelling. Round-trip stable: ``parse_type(render(parse_type(s)))``
     equals ``parse_type(s)`` for any valid ``s``.
@@ -581,7 +581,7 @@ _FLOAT_WIDENING: tuple[type, ...] = (FloatT, DoubleT)
 _WIDENING_FAMILIES: tuple[tuple[type, ...], ...] = (_INTEGER_WIDENING, _FLOAT_WIDENING)
 
 
-def widens_to(hint: "HubType | NativeType", actual: "HubType | NativeType") -> bool:
+def widens_to(hint: HubType | NativeType, actual: HubType | NativeType) -> bool:
     """True when ``actual`` is the SAME fixed-width numeric family as
     ``hint`` and at least as wide — every value ``hint``'s width can
     represent, ``actual``'s width can also represent.

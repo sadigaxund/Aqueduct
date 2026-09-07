@@ -36,7 +36,6 @@ Batching strategy:
 
 from __future__ import annotations
 
-import importlib
 import logging
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -192,7 +191,9 @@ def execute_assert(
                 )
                 cutoff = F.current_timestamp() - F.expr(interval)
                 col_type = passing_df.schema[col].dataType
-                if isinstance(col_type, (LongType, DoubleType, FloatType, IntegerType, ShortType)):
+                if isinstance(
+                    col_type, LongType | DoubleType | FloatType | IntegerType | ShortType
+                ):
                     col_expr = F.to_timestamp(F.col(col).cast("long"))
                 else:
                     col_expr = F.col(col)

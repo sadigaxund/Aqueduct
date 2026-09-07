@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import pytest
-
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
 import pyspark
+import pytest
 from pyspark.sql import SparkSession
 
 from aqueduct.executor.spark.channel import ChannelError, execute_channel
 from aqueduct.parser.models import Module
+
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 # Derived from the running interpreter's own pyspark, never a hardcoded CI
 # matrix value — same precedent as tests/conftest.py::_spark_line().

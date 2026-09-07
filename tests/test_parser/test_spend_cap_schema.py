@@ -1,9 +1,9 @@
 import pytest
 from pydantic import ValidationError
-from aqueduct.parser.schema import AgentSchema
+
 from aqueduct.config import AgentConnectionConfig
 from aqueduct.parser.parser import parse
-from pathlib import Path
+from aqueduct.parser.schema import AgentSchema
 
 pytestmark = pytest.mark.unit
 

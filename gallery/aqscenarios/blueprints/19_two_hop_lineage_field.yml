@@ -1,7 +1,7 @@
 aqueduct: "1.0"
 id: pipeline
 name: Pipeline
-# Defect (for scenario 19): raw_orders genuinely HAS a region_id column, but
+# Defect (for scenario 19, two_hop_lineage_field): raw_orders genuinely HAS a region_id column, but
 # stage_orders' explicit SELECT list drops it (only order_id/cust_id/amount/
 # order_time survive the projection). enrich_orders then joins on
 # stage_orders.region_id, which does not exist there — the column exists two

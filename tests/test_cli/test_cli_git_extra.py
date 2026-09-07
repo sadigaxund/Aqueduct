@@ -1,9 +1,9 @@
-import pytest
-from pathlib import Path
-from click.testing import CliRunner
-from unittest.mock import MagicMock, patch
-import subprocess
 import json
+from unittest.mock import MagicMock, patch
+
+import pytest
+from click.testing import CliRunner
+
 from aqueduct.cli import cli
 
 

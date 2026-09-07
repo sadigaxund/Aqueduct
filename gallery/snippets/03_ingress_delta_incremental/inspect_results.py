@@ -1,7 +1,8 @@
+import os
+
 import pandas as pd
 from rich.console import Console
 from rich.table import Table
-import os
 
 console = Console()
 
@@ -14,7 +15,7 @@ def main():
         )
         return
 
-    console.print(f"[bold green]✓[/bold green] Found results. Reading...\n")
+    console.print("[bold green]✓[/bold green] Found results. Reading...\n")
     df = pd.read_parquet(path)
     t = Table(title="Delta Time-Travel (Version 2)", header_style="bold cyan")
     for c in df.columns:

@@ -61,9 +61,9 @@ def _classify(inner: Any) -> tuple[str, str]:
         # CAST(x AS TYPE) — the only case where the type is explicit in the SQL.
         to = inner.args.get("to")
         return "CAST", (to.sql(dialect="spark").upper() if to is not None else "UNKNOWN")
-    if isinstance(inner, (exp.Concat, exp.DPipe)):
+    if isinstance(inner, exp.Concat | exp.DPipe):
         return "CONCAT", "STRING"
-    if isinstance(inner, (exp.Literal, exp.Boolean, exp.Null)):
+    if isinstance(inner, exp.Literal | exp.Boolean | exp.Null):
         return "literal", _literal_type(inner)
     if isinstance(inner, exp.Func):
         name = (inner.sql_name() or type(inner).__name__).upper()

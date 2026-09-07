@@ -399,8 +399,8 @@ def test_render_native_type_missing_mapper_is_a_defensive_error_not_silence():
     namespace still pass through, hub spellings are refused loudly."""
     from aqueduct.errors import EnginePluginError
     from aqueduct.executor.protocol import (
-        ExecutorProtocol,
         PROTOCOL_REGISTRY,
+        ExecutorProtocol,
         render_native_type,
     )
 

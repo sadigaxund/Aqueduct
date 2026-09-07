@@ -13,10 +13,10 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
-pytestmark = pytest.mark.unit
-
 from aqueduct import exit_codes
 from aqueduct.cli import cli
+
+pytestmark = pytest.mark.unit
 
 
 def _blueprint(path: Path) -> None:

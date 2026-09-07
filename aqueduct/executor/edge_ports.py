@@ -11,7 +11,7 @@ Junction mints one port per branch id, named by the Blueprint author. An
 include-list (the historical ``e.port == "main"``) silently dropped every
 branch-port edge, so a Channel/Assert/Regulator/Arcade wired downstream of a
 Junction branch failed with "has no main-port incoming edges" even though
-`docs/specs.md`'s port table has always said a ``<branch_id>`` port is
+`docs/specs/02-blueprint.md`'s port table has always said a ``<branch_id>`` port is
 consumed by "Any downstream module". The two ports that are genuinely NOT
 main input are closed sets and are named here:
 

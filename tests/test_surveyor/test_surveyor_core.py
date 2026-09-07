@@ -3,20 +3,20 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from aqueduct.compiler.models import Manifest
+
 pytestmark = pytest.mark.unit
 
-from aqueduct.compiler.models import Manifest
 
 try:
     from aqueduct.executor.models import ExecutionResult, ModuleResult
 except ImportError:
     pytest.skip("pyspark required", allow_module_level=True)
-from aqueduct.surveyor.surveyor import Surveyor
+from aqueduct.surveyor.surveyor import Surveyor  # noqa: E402
 
 
 @pytest.fixture
@@ -106,6 +106,8 @@ def test_surveyor_record_failure(manifest, tmp_path):
         assert ctx.failed_module == "m2"
         assert ctx.error_message == "Boom!"
         assert ctx.run_id == run_id
+        # No webhook_url configured on this Surveyor -> never fired
+        mock_hook.assert_not_called()
 
         # Verify DB persistence
         import duckdb
@@ -277,8 +279,8 @@ def test_surveyor_regulator_no_signal_port_edge(tmp_path):
 
 
 def test_surveyor_regulator_no_signals_db(tmp_path):
-    from aqueduct.parser.models import Edge, Module
     from aqueduct.compiler.models import Manifest
+    from aqueduct.parser.models import Edge
 
     manifest = Manifest(
         blueprint_id="p1",
@@ -303,8 +305,8 @@ def test_surveyor_regulator_no_rows(tmp_path):
     )
     conn.close()
 
-    from aqueduct.parser.models import Edge
     from aqueduct.compiler.models import Manifest
+    from aqueduct.parser.models import Edge
 
     manifest = Manifest(
         blueprint_id="p1",
@@ -321,7 +323,9 @@ def test_surveyor_regulator_no_rows(tmp_path):
 def test_surveyor_regulator_no_passed_key(tmp_path):
     store_dir = tmp_path / "store"
     store_dir.mkdir(parents=True)
-    import duckdb, json
+    import json
+
+    import duckdb
 
     conn = duckdb.connect(str(store_dir / "observability.db"))
     conn.execute(
@@ -333,8 +337,8 @@ def test_surveyor_regulator_no_passed_key(tmp_path):
     )
     conn.close()
 
-    from aqueduct.parser.models import Edge
     from aqueduct.compiler.models import Manifest
+    from aqueduct.parser.models import Edge
 
     manifest = Manifest(
         blueprint_id="p1",
@@ -351,7 +355,9 @@ def test_surveyor_regulator_no_passed_key(tmp_path):
 def test_surveyor_regulator_passed_none(tmp_path):
     store_dir = tmp_path / "store"
     store_dir.mkdir(parents=True)
-    import duckdb, json
+    import json
+
+    import duckdb
 
     conn = duckdb.connect(str(store_dir / "observability.db"))
     conn.execute(
@@ -363,8 +369,8 @@ def test_surveyor_regulator_passed_none(tmp_path):
     )
     conn.close()
 
-    from aqueduct.parser.models import Edge
     from aqueduct.compiler.models import Manifest
+    from aqueduct.parser.models import Edge
 
     manifest = Manifest(
         blueprint_id="p1",
@@ -381,7 +387,9 @@ def test_surveyor_regulator_passed_none(tmp_path):
 def test_surveyor_regulator_passed_false(tmp_path):
     store_dir = tmp_path / "store"
     store_dir.mkdir(parents=True)
-    import duckdb, json
+    import json
+
+    import duckdb
 
     conn = duckdb.connect(str(store_dir / "observability.db"))
     conn.execute(
@@ -393,8 +401,8 @@ def test_surveyor_regulator_passed_false(tmp_path):
     )
     conn.close()
 
-    from aqueduct.parser.models import Edge
     from aqueduct.compiler.models import Manifest
+    from aqueduct.parser.models import Edge
 
     manifest = Manifest(
         blueprint_id="p1",
@@ -411,7 +419,9 @@ def test_surveyor_regulator_passed_false(tmp_path):
 def test_surveyor_regulator_passed_true(tmp_path):
     store_dir = tmp_path / "store"
     store_dir.mkdir(parents=True)
-    import duckdb, json
+    import json
+
+    import duckdb
 
     conn = duckdb.connect(str(store_dir / "observability.db"))
     conn.execute(
@@ -423,8 +433,8 @@ def test_surveyor_regulator_passed_true(tmp_path):
     )
     conn.close()
 
-    from aqueduct.parser.models import Edge
     from aqueduct.compiler.models import Manifest
+    from aqueduct.parser.models import Edge
 
     manifest = Manifest(
         blueprint_id="p1",
@@ -441,7 +451,9 @@ def test_surveyor_regulator_passed_true(tmp_path):
 def test_surveyor_regulator_uses_newest_row(tmp_path):
     store_dir = tmp_path / "store"
     store_dir.mkdir(parents=True)
-    import duckdb, json
+    import json
+
+    import duckdb
 
     conn = duckdb.connect(str(store_dir / "observability.db"))
     conn.execute(
@@ -457,8 +469,8 @@ def test_surveyor_regulator_uses_newest_row(tmp_path):
     )
     conn.close()
 
-    from aqueduct.parser.models import Edge
     from aqueduct.compiler.models import Manifest
+    from aqueduct.parser.models import Edge
 
     manifest = Manifest(
         blueprint_id="p1",
@@ -476,8 +488,8 @@ def test_surveyor_regulator_duckdb_exception(tmp_path):
     store_dir = tmp_path / "store"
     store_dir.mkdir(parents=True)
 
-    from aqueduct.parser.models import Edge
     from aqueduct.compiler.models import Manifest
+    from aqueduct.parser.models import Edge
 
     manifest = Manifest(
         blueprint_id="p1",
@@ -498,7 +510,9 @@ def test_surveyor_regulator_duckdb_exception(tmp_path):
 def test_surveyor_regulator_respects_overrides(tmp_path):
     store_dir = tmp_path / "store"
     store_dir.mkdir(parents=True)
-    import duckdb, json
+    import json
+
+    import duckdb
 
     conn = duckdb.connect(str(store_dir / "observability.db"))
     # Probe says PASS (True)
@@ -519,8 +533,8 @@ def test_surveyor_regulator_respects_overrides(tmp_path):
     )
     conn.close()
 
-    from aqueduct.parser.models import Edge
     from aqueduct.compiler.models import Manifest
+    from aqueduct.parser.models import Edge
 
     manifest = Manifest(
         blueprint_id="p1",

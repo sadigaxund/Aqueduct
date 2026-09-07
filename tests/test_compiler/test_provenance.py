@@ -1,13 +1,14 @@
 import pytest
 
-pytestmark = pytest.mark.unit
 from aqueduct.compiler.provenance import (
-    ValueProvenance,
     ModuleProvenance,
     ProvenanceMap,
-    infer_value_provenance,
+    ValueProvenance,
     build_config_provenance,
+    infer_value_provenance,
 )
+
+pytestmark = pytest.mark.unit
 
 
 def test_infer_value_provenance_literal_string():
@@ -119,9 +120,10 @@ def test_provenance_map_to_dict_serializable():
 
 def test_audit_05_provenance_map(monkeypatch):
     """Verify deep provenance tracking for context, env, and arcade inheritance."""
-    from aqueduct.parser.parser import parse
-    from aqueduct.compiler.compiler import compile as aq_compile
     from pathlib import Path
+
+    from aqueduct.compiler.compiler import compile as aq_compile
+    from aqueduct.parser.parser import parse
 
     FIXTURES = Path(__file__).parent.parent / "fixtures"
     monkeypatch.setenv("MY_VAR", "real_env_value")

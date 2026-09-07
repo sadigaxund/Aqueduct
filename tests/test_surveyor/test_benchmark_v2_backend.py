@@ -25,17 +25,18 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.unit
-
 from aqueduct.surveyor.benchmark_store import (
-    BenchmarkStore,
     _PG_BENCHMARK_SCHEMA,
+    BenchmarkStore,
     compute_stats,
     default_store_path,
     diff_latest,
     format_stats,
     persist_results,
 )
+
+pytestmark = pytest.mark.unit
+
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 

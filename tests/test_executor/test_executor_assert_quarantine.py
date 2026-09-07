@@ -1,10 +1,11 @@
 from __future__ import annotations
-import pytest
-from datetime import datetime, timezone, timedelta
-from pyspark.sql import Row
-from pyspark.sql import functions as F
 
-from aqueduct.executor.spark.assert_ import execute_assert, AssertError
+from datetime import UTC, datetime, timedelta
+
+import pytest
+from pyspark.sql import Row
+
+from aqueduct.executor.spark.assert_ import AssertError, execute_assert
 from aqueduct.parser.models import Module
 
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
@@ -12,7 +13,7 @@ pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 def test_freshness_quarantine_success(spark):
     # Current time
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     # 1 row fresh, 1 row stale
     data = [Row(id=1, ts=now), Row(id=2, ts=now - timedelta(hours=48))]
     df = spark.createDataFrame(data)
@@ -39,7 +40,7 @@ def test_freshness_quarantine_success(spark):
 
 
 def test_freshness_quarantine_nulls(spark):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     df = spark.createDataFrame([Row(id=1, ts=now), Row(id=2, ts=None)])
     module = Module(
         id="a1",
@@ -62,7 +63,7 @@ def test_freshness_quarantine_nulls(spark):
 
 def test_freshness_quarantine_numeric(spark):
     # Use unix timestamps
-    now_ts = datetime.now(timezone.utc).timestamp()
+    now_ts = datetime.now(UTC).timestamp()
     df = spark.createDataFrame([Row(id=1, ts=now_ts), Row(id=2, ts=now_ts - 48 * 3600)])
     module = Module(
         id="a1",
@@ -81,7 +82,7 @@ def test_freshness_quarantine_numeric(spark):
 
 
 def test_freshness_quarantine_multiple_rules(spark):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     df = spark.createDataFrame(
         [
             Row(id=1, ts1=now, ts2=now),

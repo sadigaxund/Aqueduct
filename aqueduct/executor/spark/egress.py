@@ -80,7 +80,7 @@ def _apply_output_partitioning(df: DataFrame, module: Module) -> DataFrame:
 def _write_watermark_intent(module: Module, depot: Any, run_id: str) -> None:
     """Record a crash-consistency intent row before an append Egress's write starts.
 
-    No-op when ``watermark_key`` isn't set. See ``docs/specs.md``'s watermark
+    No-op when ``watermark_key`` isn't set. See ``docs/specs/07-stores-and-ops.md``'s watermark
     crash-consistency section and ``aqueduct.stores.base.depot_intent_key``.
     A declared intent that cannot be recorded (no depot wired) must not be
     silently skipped — it would leave the crash window wide open with no

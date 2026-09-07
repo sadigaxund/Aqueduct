@@ -649,7 +649,7 @@ class EgressConfigSchema(BaseModel):
     # if weaker-than-the-name-implies, reader) — see Pass C findings.
     repartition: int | bool | None = None
     coalesce: int | bool | None = None
-    # Watermark crash-consistency (see docs/specs.md). Names the depot key a
+    # Watermark crash-consistency (see docs/specs/07-stores-and-ops.md). Names the depot key a
     # DOWNSTREAM `format: depot` Egress writes to gate the next run's
     # incremental read range. Before this Egress's write starts, the
     # executor records an `__intent__:<watermark_key>` depot row; the
@@ -739,7 +739,7 @@ class IngressSchema(ModuleCommonSchema):
 class ChannelSchema(ModuleCommonSchema):
     type: Literal["Channel"]
     # Incremental watermark processing (2.40) — `op: sql` only; see
-    # docs/specs.md §4.4 Channel for the substitution semantics.
+    # docs/specs/02-blueprint.md §4.4 Channel for the substitution semantics.
     materialize: Literal["incremental"] | None = None
     # Required when `materialize: incremental` — column whose MAX() tracks
     # the incremental high-water mark.
@@ -1005,7 +1005,7 @@ class EngineBlockSchema(BaseModel):
 
 
 class WarningsSchema(BaseModel):
-    """Per-Blueprint compile-warning suppression (see `docs/specs.md` §4.2).
+    """Per-Blueprint compile-warning suppression (see `docs/specs/02-blueprint.md` §4.2).
 
     Mirrors the shape of the engine-level ``warnings:`` block in
     ``aqueduct.yml`` (`aqueduct/config.py::WarningsConfig`) but is a distinct
@@ -1032,7 +1032,7 @@ class WarningsSchema(BaseModel):
 
 class HookEntrySchema(BaseModel):
     """One lifecycle-hook action — exactly one of `blueprint:` / `webhook:` /
-    `command:` (see `docs/specs.md` §Hooks).
+    `command:` (see `docs/specs/02-blueprint.md` §Hooks).
 
     - `blueprint:` chains another Blueprint as a fresh `aqueduct run`
       subprocess (own session/run_id/report — loose coupling by design).
@@ -1132,7 +1132,7 @@ class HealedByRecordSchema(BaseModel):
     Blueprint that carries an ``engine_shaped`` patch from engine Y can be
     flagged at compile time before it ships a dialect mismatch to production
     (see ``aqueduct/compiler/capability_check.py::check_cross_engine_heal``
-    and ``docs/specs.md`` §8). Purely compiler-consumed metadata — no engine
+    and ``docs/specs/06-healing.md`` §8). Purely compiler-consumed metadata — no engine
     reads or executes this block at runtime.
 
     **BOUNDED BY CONSTRUCTION.** Only the fields the compile-time gate and

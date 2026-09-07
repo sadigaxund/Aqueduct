@@ -40,7 +40,7 @@ _SCALAR: dict[type, str] = {
 }
 
 
-def render_duckdb_type(t: "hub.HubType | hub.NativeType") -> str:
+def render_duckdb_type(t: hub.HubType | hub.NativeType) -> str:
     """Render one parsed hub type (or ``NativeType``) to DuckDB's SQL spelling.
 
     Registered as DuckDB's ``ExecutorProtocol.render_type``
@@ -114,7 +114,7 @@ def normalize_type_spelling(spelling: str) -> str:
 _REVERSE_SCALAR: dict[str, type] = {v: k for k, v in _SCALAR.items()}
 
 
-def parse_duckdb_scalar_type(native_spelling: str) -> "hub.HubType | None":
+def parse_duckdb_scalar_type(native_spelling: str) -> hub.HubType | None:
     """Best-effort reverse mapping from a CONCRETE DuckDB scalar type
     spelling (as returned by ``str(rel.types[i])``, e.g. ``"BIGINT"``,
     ``"VARCHAR"``) back to a hub type.

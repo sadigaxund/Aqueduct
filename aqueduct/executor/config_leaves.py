@@ -25,7 +25,7 @@ Roughly 88 of the 105 ``config.*`` leaves are CORE-ONLY: ``webhooks.*``,
 core code paths that never dispatch through an engine, so asking every
 registered engine for a verdict on webhook backoff is a category error, not
 a governance win. Narrowing the CHECKLIST (not adding a fourth ``Support``
-verdict — see ``docs/specs.md`` §10.9) is done via an explicit per-field tag
+verdict — see ``docs/specs/07-stores-and-ops.md`` §10.9) is done via an explicit per-field tag
 in ``aqueduct/config.py``::
 
     max_sample_rows: int = Field(..., json_schema_extra={"engine_scoped": True})
@@ -35,7 +35,7 @@ in ``aqueduct/config.py``::
 default and no "untagged means core" fallback** — that shape was tried and
 rejected: it let a brand-new field (or one that was in fact engine-scoped)
 silently fall into the core bucket with nobody deciding, the exact
-"all_leaves_default()" class of bug (see ``docs/specs.md`` §10.9 / AGENTS.md's
+"all_leaves_default()" class of bug (see ``docs/specs/07-stores-and-ops.md`` §10.9 / AGENTS.md's
 "Never make the break go away with a default") applied to classification
 instead of verdicts. A field discovered with NEITHER key present raises
 ``CapabilityScopeError`` (``aqueduct/errors.py``) naming the field and both
@@ -45,7 +45,7 @@ complement. Both derive from the SAME per-field tag read via
 ``model_fields[name].json_schema_extra`` so they cannot drift apart — there
 is no second list anywhere (a hand-maintained "known core leaf ids" module
 would be the identical bug in a new file), and no committed snapshot file
-either (see ``docs/specs.md`` §10.9's enforcement table for why one isn't
+either (see ``docs/specs/07-stores-and-ops.md`` §10.9's enforcement table for why one isn't
 needed: the invariant test in
 ``tests/test_capabilities/test_config_scope_invariant.py`` plus the existing
 orphaned-row check in ``capability_tooling.check()`` cover the hazard twice

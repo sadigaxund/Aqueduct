@@ -17,8 +17,6 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.unit
-
 from aqueduct import models
 from aqueduct.compiler.islands import Island as _CompilerIsland
 from aqueduct.compiler.models import Manifest as _CompilerManifest
@@ -26,6 +24,8 @@ from aqueduct.parser.models import Edge as _ParserEdge
 from aqueduct.parser.models import Module as _ParserModule
 from aqueduct.parser.models import ModuleType as _ParserModuleType
 from aqueduct.parser.models import RetryPolicy as _ParserRetryPolicy
+
+pytestmark = pytest.mark.unit
 
 
 def test_models_all_matches_re_exported_symbols():

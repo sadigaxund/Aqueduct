@@ -30,12 +30,14 @@ spillway columns via `try/except` instead of aborting the stage.
 
 ## Documentation map
 
-`docs/specs.md` is the **engine reference**; other docs own their surfaces
-and specs.md cross-references rather than duplicates.
+`docs/specs.md` is the **index** into the engine reference, split across
+`docs/specs/*.md` topic pages; other docs own their surfaces and
+cross-reference the relevant page rather than duplicating it.
 
 | Doc | Owns | When to read |
 |---|---|---|
-| `docs/specs.md` | Blueprint format, architecture §3, Modules §4, Context Registry §5, Self-Healing §8, Type System §9, Deployment/Engine Integration §10, Engine Scope §11 | Domain semantics |
+| `docs/specs.md` (index) + `docs/specs/*.md` | Overview/architecture §1-3 (`01-overview.md`), Blueprint format §4 (`02-blueprint.md`), Context Registry §5 (`03-resolution.md`), Observability §6 (`04-execution.md`), Lineage §7 (`05-lineage.md`), Self-Healing §8 (`06-healing.md`), Type System §9 + Deployment/Engine Integration §10 (`07-stores-and-ops.md`), Engine Scope §11 (`08-polyglot.md`) | Domain semantics |
+| `docs/glossary.md` | Aqueduct term → industry term mapping, one row per themed name | Onboarding a reader unfamiliar with the naming theme, or naming a new module/concept |
 | `docs/cli_reference.md` | Every CLI command/flag + defaults | New `@click.option`/subcommand |
 | `docs/observability_guide.md` | Store schemas + SQL cookbook | DDL changes, post-mortem queries |
 | `docs/spark_guide.md` | Compiler warnings, perf, Spark gotchas | Executor modules, new Channel ops |
@@ -43,7 +45,7 @@ and specs.md cross-references rather than duplicates.
 | `docs/compatibility.md` | Python × Spark matrix, pinning | Version pins in `pyproject.toml` |
 | `docs/extending.md` | Engine-author guide: `ExecutorProtocol`, capability workflow | Adding an execution engine |
 | `docs/failure_taxonomy.md` | Recurring defect classes + detection patterns | Triaging a bug fix |
-| `SKILL.md` (root) | Blueprint-authoring guide: grammar, module types, `agent:` block, providers | Grammar/`agent:`/provider changes — sync with specs.md |
+| `SKILL.md` (root) | Blueprint-authoring guide: grammar, module types, `agent:` block, providers | Grammar/`agent:`/provider changes — sync with docs/specs/02-blueprint.md and docs/specs/06-healing.md |
 
 AGENTS.md itself is process/constraint guidance only.
 
@@ -223,7 +225,7 @@ three are direct `AqueductError` subclasses.
 
 Enforcement differs: an `unsupported` grammar leaf is a compile-time
 `CompileError`; a non-`supported` config leaf only warns (`engine_key_ignored`).
-See `docs/specs.md` §10.9.
+See `docs/specs/07-stores-and-ops.md` §10.9.
 
 ## Error taxonomy (short)
 
@@ -365,7 +367,7 @@ named — do not rebuild it.
 - Schema/template sync at change time — enforced by
   `test_template_warning_sync.py`.
 - A breaking schema change ships as documentation (`extra="forbid"` + a
-  `CHANGELOG.md` **BREAKING** entry + specs.md update), not a back-compat
+  `CHANGELOG.md` **BREAKING** entry + the relevant docs/specs/ page update), not a back-compat
   shim, except a genuinely still-supported old format carrying its exact
   deletion condition in a comment.
 - Measure the hazard before building a guard — count the surface it
@@ -397,18 +399,18 @@ commit.
 | DDL/`ALTER TABLE` in `surveyor/`/`executor/` | `docs/observability_guide.md` schema table (+cookbook recipe if useful) |
 | `@click.option`/new subcommand | `docs/cli_reference.md` flag table |
 | A pydantic field in `config.py`/`parser/schema.py` | The matching template comment block |
-| `StopReason`/`BudgetConfig`/apply-gate behaviour | `docs/specs.md` §8 + `heal_attempts` section |
+| `StopReason`/`BudgetConfig`/apply-gate behaviour | `docs/specs/06-healing.md` §8 + `heal_attempts` section |
 | New/renamed `aqueduct.yml` key/block, or `stores.*` backend | `docs/specs.md` (bump `Version X.Y`) + the template block |
-| `agent.approval` modes, patch ops, exit-code contract | `docs/specs.md` §8 + §10.7 |
+| `agent.approval` modes, patch ops, exit-code contract | `docs/specs/06-healing.md` §8 + `docs/specs/07-stores-and-ops.md` §10.7 |
 | Production/deployment/danger-setting/cluster config | `docs/production_guide.md` |
 | Spark compiler-warning/perf/tuning behaviour | `docs/spark_guide.md` |
 | `pyproject.toml` version pins or Python/Spark range | `docs/compatibility.md` prose only — the capability matrix + `COMPAT_RESULTS` blocks are GENERATED |
 | New/registered execution engine | `version-matrix.yml` `compat` job + a pre-merge `test-suite.yml` lane — `test_meta_ci.py` enforces coverage |
-| Any newly deferred/aspirational item | The issue tracker — never inline "deferred" prose into specs.md |
+| Any newly deferred/aspirational item | The issue tracker — never inline "deferred" prose into docs/specs/*.md |
 | New file under `docs/` | `README.md` References list + this Documentation map |
 | Any testable feature | A real test, or a `todo`/`xfail` stub — never `TEST_MANIFEST.md` |
 | Any phase/sprint/shippable change | `CHANGELOG.md` `[Unreleased]` only — never bump version |
-| New `@aq.*` function in `compiler/runtime.py` | `docs/specs.md` §5.3 + `_DISPATCH` table |
+| New `@aq.*` function in `compiler/runtime.py` | `docs/specs/03-resolution.md` §5.3 + `_DISPATCH` table |
 | New path-key entry in `executor/path_keys.py` | The module's schema model (`Annotated[str, FsPath()]`) |
 | New exit code | `docs/cli_reference.md` exit-code reference (+`CHANGELOG.md` — v1.0 contract) |
-| Blueprint grammar / `agent:` block / provider wiring | `SKILL.md`, same commit as specs.md/schema |
+| Blueprint grammar / `agent:` block / provider wiring | `SKILL.md`, same commit as docs/specs/02-blueprint.md, docs/specs/06-healing.md, /schema |

@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
-from pyspark.sql import SparkSession
-
 from aqueduct.executor.spark.funnel import FunnelError, execute_funnel
 from aqueduct.parser.models import Module
+
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 
 @pytest.fixture

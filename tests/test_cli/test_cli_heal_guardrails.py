@@ -6,9 +6,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-pytestmark = pytest.mark.unit
-
 from aqueduct.cli import _check_heal_guardrails
+
+pytestmark = pytest.mark.unit
 
 
 def _make_ctx(error_type=None, stack_trace=None):
@@ -30,7 +30,6 @@ def _make_guardrails(heal_on=(), never_heal=()):
 
 def test_heal_on_errors_never_heal_parse_from_yaml(tmp_path):
     """heal_on_errors + never_heal_errors parse from YAML → GuardrailsConfig fields populated."""
-    import yaml
     from aqueduct.parser.schema import GuardrailsSchema
 
     data = {

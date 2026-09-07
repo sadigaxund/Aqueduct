@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-pytestmark = pytest.mark.integration
-
 from aqueduct.compiler.lineage import _extract_sql_lineage, write_lineage
 from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+
+pytestmark = pytest.mark.integration
+
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -170,6 +172,7 @@ class TestWriteLineage:
 
     def test_duckdb_failure_does_not_propagate(self, tmp_path, monkeypatch):
         import duckdb as _duckdb
+
         from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
 
         obs_store = DuckDBObservabilityStore(tmp_path / "observability.db")
@@ -217,9 +220,10 @@ class TestCliLineage:
         return store
 
     def test_table_output(self, tmp_path):
+
         from click.testing import CliRunner
+
         from aqueduct.cli import cli
-        import json
 
         store = self._make_lineage_db(tmp_path)
         result = CliRunner().invoke(cli, ["lineage", "pipe.a", "--store-dir", str(store)])
@@ -228,9 +232,11 @@ class TestCliLineage:
         assert "amount" in result.output
 
     def test_json_format(self, tmp_path):
-        from click.testing import CliRunner
-        from aqueduct.cli import cli
         import json
+
+        from click.testing import CliRunner
+
+        from aqueduct.cli import cli
 
         store = self._make_lineage_db(tmp_path)
         result = CliRunner().invoke(
@@ -243,6 +249,7 @@ class TestCliLineage:
 
     def test_from_filter(self, tmp_path):
         from click.testing import CliRunner
+
         from aqueduct.cli import cli
 
         store = self._make_lineage_db(tmp_path)
@@ -254,6 +261,7 @@ class TestCliLineage:
 
     def test_column_filter_no_match(self, tmp_path):
         from click.testing import CliRunner
+
         from aqueduct.cli import cli
 
         store = self._make_lineage_db(tmp_path)
@@ -265,6 +273,7 @@ class TestCliLineage:
 
     def test_missing_lineage_db_exits_1(self, tmp_path):
         from click.testing import CliRunner
+
         from aqueduct.cli import cli
 
         store = tmp_path / "empty"

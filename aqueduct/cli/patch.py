@@ -661,7 +661,7 @@ def patch_policy(engine_name: str | None, out_format: str) -> None:
     straight from each registered engine's core
     `engine_config_allowlist.yml` — the same file and evaluation logic Gate
     1 enforces against a `set_engine_config` patch op (see
-    `docs/specs.md` §8.5 "Permission model" /
+    `docs/specs/06-healing.md` §8.5 "Permission model" /
     `aqueduct/executor/engine_config_allowlist.py`). Operator extension and
     narrowing of this policy are not yet implemented, so what this command
     prints is the complete policy — not a preview of a configurable subset.

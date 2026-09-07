@@ -13,9 +13,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-pytestmark = pytest.mark.unit
-
 from aqueduct.cli import _uncommitted_applied_patches
+
+pytestmark = pytest.mark.unit
 
 
 def _write_patch(applied_dir: Path, name: str, applied_at: str) -> Path:
@@ -54,8 +54,8 @@ class TestUncommittedAppliedPatches:
         bp.write_text("")
         applied_dir = tmp_path / "patches" / "applied"
         applied_dir.mkdir(parents=True)
-        p1 = _write_patch(applied_dir, "p001.json", "2026-05-10T10:00:00+00:00")
-        p2 = _write_patch(applied_dir, "p002.json", "2026-05-10T11:00:00+00:00")
+        _write_patch(applied_dir, "p001.json", "2026-05-10T10:00:00+00:00")
+        _write_patch(applied_dir, "p002.json", "2026-05-10T11:00:00+00:00")
 
         def mock_run(args, **kwargs):
             return MagicMock(returncode=1, stdout="", stderr="fatal: not a git repo")
@@ -70,7 +70,7 @@ class TestUncommittedAppliedPatches:
         bp.write_text("")
         applied_dir = tmp_path / "patches" / "applied"
         applied_dir.mkdir(parents=True)
-        p1 = _write_patch(applied_dir, "p001.json", "2026-05-10T10:00:00+00:00")
+        _write_patch(applied_dir, "p001.json", "2026-05-10T10:00:00+00:00")
 
         def mock_run(args, **kwargs):
             # returncode=0 but stdout empty = blueprint never committed

@@ -1,8 +1,9 @@
+import glob
+import os
+
 import pandas as pd
 from rich.console import Console
 from rich.table import Table
-import os
-import glob
 
 console = Console()
 
@@ -17,7 +18,7 @@ def main():
         )
         return
 
-    console.print(f"[bold green]✓[/bold green] Found results. Reading both streams...\n")
+    console.print("[bold green]✓[/bold green] Found results. Reading both streams...\n")
 
     df_valid = pd.read_parquet(valid_path)
     t = Table(title="Valid Scores (Main Stream)", header_style="bold green")

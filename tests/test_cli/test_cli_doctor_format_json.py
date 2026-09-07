@@ -61,7 +61,6 @@ class TestDoctorFormatJson:
 
     def test_doctor_json_all_checks_included(self, tmp_path):
         """JSON shows ALL checks regardless of verbose (no collapsing)."""
-        result_text = RUNNER.invoke(cli, ["doctor", "--skip-spark"])
         result_json = RUNNER.invoke(cli, ["doctor", "--skip-spark", "--format", "json"])
         data = json.loads(result_json.output)
         json_check_count = len(data["checks"])

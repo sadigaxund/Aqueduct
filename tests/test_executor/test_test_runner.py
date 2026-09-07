@@ -1,9 +1,9 @@
 """Tests for the Aqueduct Test Runner (aqueduct test command logic)."""
 
 from __future__ import annotations
-import json
-from pathlib import Path
+
 from unittest.mock import MagicMock, patch
+
 import pytest
 
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
@@ -71,7 +71,6 @@ class TestTestRunnerHelpers:
 
         test_file = tmp_path / "t.yml"
         test_file.write_text("aqueduct_test: '1.0'\ntests: []\n", encoding="utf-8")
-        from unittest.mock import MagicMock
 
         with pytest.raises(TestSchemaError, match="blueprint"):
             run_test_file(test_file, spark=MagicMock())
@@ -84,7 +83,6 @@ class TestTestRunnerHelpers:
             "aqueduct_test: '1.0'\nblueprint: nonexistent.yml\ntests: []\n",
             encoding="utf-8",
         )
-        from unittest.mock import MagicMock
 
         with pytest.raises(TestSchemaError, match="not found"):
             run_test_file(test_file, spark=MagicMock())
@@ -100,10 +98,9 @@ class TestTestRunnerHelpers:
         )
         test_file = tmp_path / "t.yml"
         test_file.write_text(
-            f"aqueduct_test: '1.0'\nblueprint: bp.yml\ntests: []\n",
+            "aqueduct_test: '1.0'\nblueprint: bp.yml\ntests: []\n",
             encoding="utf-8",
         )
-        from unittest.mock import MagicMock
 
         suite = run_test_file(test_file, spark=MagicMock())
         assert suite.total == 0
@@ -120,7 +117,6 @@ class TestTestRunnerCaseExecution:
 
     def test_run_test_case_missing_module_field(self):
         from aqueduct.executor.spark.test_runner import _run_test_case
-        from unittest.mock import MagicMock
 
         result = _run_test_case({"id": "t1"}, {}, MagicMock())
         assert result.passed is False
@@ -128,7 +124,6 @@ class TestTestRunnerCaseExecution:
 
     def test_run_test_case_module_not_in_blueprint(self):
         from aqueduct.executor.spark.test_runner import _run_test_case
-        from unittest.mock import MagicMock
 
         result = _run_test_case({"id": "t1", "module": "nonexistent"}, {}, MagicMock())
         assert result.passed is False
@@ -137,7 +132,6 @@ class TestTestRunnerCaseExecution:
     def test_run_test_case_non_testable_type(self):
         from aqueduct.executor.spark.test_runner import _run_test_case
         from aqueduct.parser.models import Module
-        from unittest.mock import MagicMock
 
         mod = Module(id="src", type="Ingress", label="S", config={})
         result = _run_test_case(
@@ -150,7 +144,6 @@ class TestTestRunnerCaseExecution:
 
     def test_input_missing_schema_field(self):
         from aqueduct.executor.spark.test_runner import _run_test_case
-        from unittest.mock import MagicMock
 
         mod = self._channel_module()
         result = _run_test_case(
@@ -163,7 +156,6 @@ class TestTestRunnerCaseExecution:
 
     def test_create_df_failure_returns_error(self):
         from aqueduct.executor.spark.test_runner import _run_test_case
-        from unittest.mock import MagicMock, patch
 
         mod = self._channel_module()
         with patch(
@@ -183,7 +175,6 @@ class TestTestRunnerCaseExecution:
 
     def test_assertion_exception_captured_as_failure(self):
         from aqueduct.executor.spark.test_runner import _run_test_case
-        from unittest.mock import MagicMock, patch
 
         mod = self._channel_module()
         fake_df = MagicMock()
@@ -211,8 +202,7 @@ class TestRunTestFileLoop:
     """Tests for run_test_file when tests array is non-empty."""
 
     def test_run_test_file_with_passing_test(self, tmp_path):
-        from aqueduct.executor.spark.test_runner import run_test_file, TestCaseResult
-        from unittest.mock import MagicMock, patch
+        from aqueduct.executor.spark.test_runner import TestCaseResult, run_test_file
 
         bp = tmp_path / "bp.yml"
         bp.write_text(
@@ -235,8 +225,7 @@ class TestRunTestFileLoop:
         assert suite.success is True
 
     def test_run_test_file_with_failing_test(self, tmp_path):
-        from aqueduct.executor.spark.test_runner import run_test_file, TestCaseResult
-        from unittest.mock import MagicMock, patch
+        from aqueduct.executor.spark.test_runner import TestCaseResult, run_test_file
 
         bp = tmp_path / "bp.yml"
         bp.write_text(

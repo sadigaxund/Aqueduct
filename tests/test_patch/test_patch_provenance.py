@@ -4,19 +4,19 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.unit
-
 from aqueduct.patch.grammar import VALID_PATCH_OPS
 from aqueduct.patch.provenance import (
-    DIALECT_NEUTRAL,
-    ENGINE_SHAPED,
     _FIELD_SENSITIVE_OPS,
     _STATIC_OP_CLASSIFICATION,
+    DIALECT_NEUTRAL,
+    ENGINE_SHAPED,
     build_heal_provenance,
     classify_op,
     classify_ops,
     detect_engine_version,
 )
+
+pytestmark = pytest.mark.unit
 
 
 class _FakeOp:

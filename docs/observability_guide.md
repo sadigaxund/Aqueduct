@@ -184,7 +184,7 @@ treat them as archival.
 | `failure_signature`       | VARCHAR | exact signature hash of the pipeline failure this heal addressed (16-char sha1 of error class + module + normalized message) |
 | `failure_signature_coarse`| VARCHAR | coarse signature hash (error class + module, no message), enables per-signature-family analytics (which families are solved by which cascade tier) without joining `patch_index` |
 | `resolution`              | VARCHAR | `llm` (fresh agent patch) — the only value written since the signature-keyed heal cache was removed. A pre-2.3.0 database may still carry historical `cached` (pending-patch reuse) / `replayed` (archived patch re-validated through gates) rows; NULL on legacy rows, treat as `llm` (`COALESCE(resolution,'llm')`) |
-| `model_cascade_position`  | INTEGER | 0-based cascade tier index of the producing model. NULL outside cascade or when no LLM ran. `model` records the producing tier's model (previously the top-level `agent.model` even under cascade) |
+| `model_cascade_position`  | INTEGER | 0-based cascade tier index of the producing model. NULL outside cascade or when no LLM ran. `model` records the producing tier's model |
 | `engine`                  | VARCHAR | Execution engine this heal targeted (`spark` \| `duckdb`) |
 
 Zero-token heal coverage: `aqueduct runs --heal-coverage` aggregates
@@ -256,7 +256,7 @@ pipeline-only patch writes no engine config, so there is nothing for it to
 compare) and `pass` when the patch's write really does change the effective
 session config the target engine will run with (`aqueduct.yml`'s
 `engine.<name>` block merged under the Blueprint's own; see
-`docs/specs.md` §8.5). Its `fail` is a `set_engine_config` write whose
+`docs/specs/06-healing.md` §8.5). Its `fail` is a `set_engine_config` write whose
 effective before/after are identical: a clean apply that changes nothing an
 engine can see. That row is written for the record only: the refusal
 itself is enforced at apply time, so a `fail` here is always accompanied by
@@ -308,7 +308,7 @@ the same green-run stamp that updates the Blueprint's `validated_on`). The
 Blueprint's `healed_by` record still names the `patch_id`; these four
 columns are read back by `aqueduct doctor`'s `healed-config:<patch_id>`
 rows and by `aqueduct patch revert`. See `aqueduct/patch/index.py` and
-`docs/specs.md` §8.14.
+`docs/specs/06-healing.md` §8.14.
 
 #### `signal_overrides`
 

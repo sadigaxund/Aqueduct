@@ -13,7 +13,7 @@ Covers:
 - AqueductPatchSensor.resume_from_patch
 - aqueduct.integrations.airflow __getattr__ lazy-loading
 - pyproject optional-dependencies
-- specs.md §10.7 exit-code mapping validation
+- docs/specs/07-stores-and-ops.md §10.7 exit-code mapping validation
 - Example DAG import (DagBag)
 - Integration DAG runs (happy path and self-healing defer/resume flow)
 """
@@ -31,11 +31,11 @@ pytestmark = pytest.mark.unit
 
 # Check if real airflow is available
 try:
-    import airflow
+    import airflow  # noqa: F401
     from airflow.exceptions import AirflowException
-    from airflow.models import BaseOperator
-    from airflow.sensors.base import BaseSensorOperator
-    from airflow.triggers.base import BaseTrigger, TriggerEvent
+    from airflow.models import BaseOperator  # noqa: F401
+    from airflow.sensors.base import BaseSensorOperator  # noqa: F401
+    from airflow.triggers.base import BaseTrigger, TriggerEvent  # noqa: F401
 
     AIRFLOW_INSTALLED = True
 except ImportError:
@@ -474,7 +474,7 @@ def test_sensor_resume_from_patch():
         s.resume_from_patch(context={}, event={"status": "unknown"})
 
 
-# ── pyproject.toml & specs.md Verification Tests ────────────────────────────────
+# ── pyproject.toml & docs/specs/07-stores-and-ops.md Verification Tests ────────────────────────────────
 
 
 def test_pyproject_airflow_extras():
@@ -503,7 +503,7 @@ def test_specs_exit_codes():
     from aqueduct import exit_codes
 
     # The exit-code table lives in cli_reference.md per the documentation
-    # map (specs.md owns engine semantics; cli_reference.md owns the CLI
+    # map (docs/specs/07-stores-and-ops.md owns engine semantics; cli_reference.md owns the CLI
     # surface, exit codes included).
     cli_ref_path = Path(__file__).resolve().parents[1] / "docs" / "cli_reference.md"
     with open(cli_ref_path, encoding="utf-8") as f:
@@ -533,7 +533,7 @@ def test_specs_exit_codes():
     for k, v in expected_codes.items():
         assert (
             found_codes.get(k) == v
-        ), f"Exit code mismatch in specs.md for {k}: expected {v}, found {found_codes.get(k)}"
+        ), f"Exit code mismatch in docs/specs/07-stores-and-ops.md for {k}: expected {v}, found {found_codes.get(k)}"
 
 
 # ── Airflow Integration / Scenario Tests ──────────────────────────────────────

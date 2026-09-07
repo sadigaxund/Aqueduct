@@ -16,8 +16,6 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.unit
-
 from aqueduct.compiler.capability_check import (
     RULE_ID_CROSS_ENGINE_HEAL,
     check_cross_engine_heal,
@@ -25,6 +23,8 @@ from aqueduct.compiler.capability_check import (
 from aqueduct.compiler.compiler import CompileError
 from aqueduct.compiler.compiler import compile as ccompile
 from aqueduct.parser.parser import parse_dict
+
+pytestmark = pytest.mark.unit
 
 _BASE_BP: dict = {
     "aqueduct": "1.0",

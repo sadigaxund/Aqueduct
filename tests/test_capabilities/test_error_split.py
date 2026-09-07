@@ -208,7 +208,7 @@ def test_capability_scope_error_raised_for_any_untagged_field():
     'untagged means core' fallback anywhere. A field with neither True nor
     False is nobody's decision, and that must be loud everywhere in the
     model, not only inside a per-engine block."""
-    from pydantic import BaseModel, ConfigDict, Field
+    from pydantic import BaseModel, ConfigDict
 
     from aqueduct.executor import config_leaves as cfgl
 

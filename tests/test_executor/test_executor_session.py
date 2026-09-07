@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import pytest
+from pyspark.sql import SparkSession
+
+from aqueduct.executor.spark.session import make_spark_session
 
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
-
-from pyspark.sql import SparkSession
-from aqueduct.executor.spark.session import make_spark_session
 
 
 def _snapshot_conf(spark):
@@ -238,8 +238,9 @@ class TestSessionTimezone:
 
 class TestSessionQuietMode:
     def test_make_spark_session_quiet_injects_log4j_opts(self):
+        from unittest.mock import MagicMock
+
         from aqueduct.executor.spark.session import _LOG4J_QUIET_OPTS
-        from unittest.mock import MagicMock, patch
 
         mock_builder = MagicMock()
         mock_builder.master.return_value = mock_builder
@@ -252,8 +253,9 @@ class TestSessionQuietMode:
         assert "ERROR" in _LOG4J_QUIET_OPTS
 
     def test_suppress_stderr_context_manager(self):
-        from aqueduct.executor.spark.session import _suppress_stderr
         import sys
+
+        from aqueduct.executor.spark.session import _suppress_stderr
 
         original_stderr = sys.stderr
         ran = []
@@ -275,6 +277,7 @@ class TestStopSparkSessionGuard:
     def test_aq_testing_set_skips_stop(self, monkeypatch):
         """AQ_TESTING set → stop_spark_session returns without touching session."""
         from unittest.mock import MagicMock
+
         from aqueduct.executor.spark.session import stop_spark_session
 
         monkeypatch.setenv("AQ_TESTING", "1")
@@ -285,6 +288,7 @@ class TestStopSparkSessionGuard:
     def test_aq_testing_unset_calls_stop(self, monkeypatch):
         """AQ_TESTING unset → stop_spark_session calls spark.stop() once."""
         from unittest.mock import MagicMock
+
         from aqueduct.executor.spark.session import stop_spark_session
 
         monkeypatch.delenv("AQ_TESTING", raising=False)

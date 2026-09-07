@@ -1,10 +1,13 @@
 """Tests for the Parser layer: Schema validation, immutability, and structure."""
 
 from __future__ import annotations
+
 from dataclasses import FrozenInstanceError
 from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
+
 from aqueduct.parser.parser import ParseError, parse
 
 pytestmark = pytest.mark.unit

@@ -8,8 +8,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-pytestmark = pytest.mark.unit
-
 # Private names moved to sub-modules during the agent/ split.
 # Exported public API stays under aqueduct.agent.
 from aqueduct.agent import (
@@ -27,6 +25,8 @@ from aqueduct.agent.prompts import (
     _PATCH_SKELETON,
 )
 from aqueduct.config import AgentBudgetConfig, AgentConnectionConfig
+
+pytestmark = pytest.mark.unit
 
 # ── _detect_structural_error ──────────────────────────────────────────────────
 

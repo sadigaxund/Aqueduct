@@ -21,9 +21,9 @@ Both jobs carry `strategy.matrix.engine: [spark, duckdb]`, one task per engine r
 
 ## Engine capability framework (2.16)
 
-Not every module-config key / Channel op / write mode a Blueprint can express is guaranteed to run on every version of a dependency. `aqueduct doctor` (`aqueduct/doctor/checks_io.py::check_capabilities`) walks a compiled blueprint's used capabilities and checks each one's declared version requirement (e.g. `format: custom` needs `pyspark>=4.0`) against what's actually installed, reporting `fail`/`skip`/`ok` per capability. This is a runtime check, distinct from the compile-time capability gate (`aqueduct/compiler/capability_check.py`) that blocks a capability the engine does not support at all. See `docs/specs.md` §10.9 for the full contract.
+Not every module-config key / Channel op / write mode a Blueprint can express is guaranteed to run on every version of a dependency. `aqueduct doctor` (`aqueduct/doctor/checks_io.py::check_capabilities`) walks a compiled blueprint's used capabilities and checks each one's declared version requirement (e.g. `format: custom` needs `pyspark>=4.0`) against what's actually installed, reporting `fail`/`skip`/`ok` per capability. This is a runtime check, distinct from the compile-time capability gate (`aqueduct/compiler/capability_check.py`) that blocks a capability the engine does not support at all. See `docs/specs/07-stores-and-ops.md` §10.9 for the full contract.
 
-The matrix below also carries one `type.<constructor>` row per hub type constructor and one `type.native.<engine>` row per registered engine's native-namespace escape hatch. See `docs/specs.md` §9 for the type vocabulary itself and §10.9 for how it is gated.
+The matrix below also carries one `type.<constructor>` row per hub type constructor and one `type.native.<engine>` row per registered engine's native-namespace escape hatch. See `docs/specs/07-stores-and-ops.md` §9 for the type vocabulary itself and §10.9 for how it is gated.
 
 Each engine declares a verdict for every capability leaf in a YAML data file shipped with it (`aqueduct/executor/spark/capabilities.yml`). That file is the source of truth, so the matrix below is generated from it with `aqueduct dev capabilities docs` rather than hand-maintained.
 

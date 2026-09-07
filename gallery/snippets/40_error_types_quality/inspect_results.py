@@ -1,8 +1,9 @@
+import glob
+import os
+
 import pandas as pd
 from rich.console import Console
 from rich.table import Table
-import os
-import glob
 
 console = Console()
 

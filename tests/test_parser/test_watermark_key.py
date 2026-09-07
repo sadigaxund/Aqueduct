@@ -1,5 +1,5 @@
 """Schema + graph validation for Egress `watermark_key:` (watermark
-crash-consistency — see docs/specs.md)."""
+crash-consistency — see docs/specs/07-stores-and-ops.md)."""
 
 from __future__ import annotations
 

@@ -1,21 +1,22 @@
 """Tests for the Executor layer: Sub-DAG selectors and reachability."""
 
 from __future__ import annotations
+
 from pathlib import Path
+
 import pytest
 
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
-from pyspark.sql import SparkSession
-
+from aqueduct.compiler.models import Manifest
 from aqueduct.executor.spark.executor import (
-    ExecuteError,
     _reachable_backward,
     _reachable_forward,
     _selector_included,
     execute,
 )
 from aqueduct.parser.models import Edge, Module
-from aqueduct.compiler.models import Manifest
+
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
+
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 

@@ -371,7 +371,7 @@ def compile(  # noqa: A001
             continue
         # A directly-disabled Assert (enabled: false) never runs, so an
         # on_fail=quarantine/no-spillway-edge combination on it can't
-        # discard anything — specs.md §4's "a disabled module still
+        # discard anything — specs/02-blueprint.md §4's "a disabled module still
         # compiles" would otherwise be false for this one gate (see
         # validate_probes' matching guard for the cascade-closure caveat,
         # same limitation here: this checks the module's OWN flag, not the
@@ -570,7 +570,7 @@ def compile(  # noqa: A001
             f"{_ins.boundary.edge.to_id!r} ({_ins.boundary.to_engine}). The "
             "upstream island materializes its output as parquet; the "
             "downstream island reads it back — a real I/O cost, visible here "
-            "before the run. See docs/specs.md §10.9 (cross-engine handoff).",
+            "before the run. See docs/specs/07-stores-and-ops.md §10.9 (cross-engine handoff).",
         )
 
     # ── 7. Delivery semantics warning ─────────────────────────────────────────

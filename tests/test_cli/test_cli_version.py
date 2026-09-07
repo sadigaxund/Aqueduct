@@ -1,8 +1,7 @@
-import pytest
 from click.testing import CliRunner
-from aqueduct.cli import cli
+
 import aqueduct
-import importlib
+from aqueduct.cli import cli
 
 
 def test_cli_version():

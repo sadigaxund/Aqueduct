@@ -1,4 +1,5 @@
-import csv, os
+import csv
+import os
 
 DATA_DIR = "data"
 

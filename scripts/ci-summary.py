@@ -9,8 +9,8 @@ Writes to GITHUB_STEP_SUMMARY when in CI, otherwise stdout.
 
 from __future__ import annotations
 
-import sys
 import os
+import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 

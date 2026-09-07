@@ -16,7 +16,7 @@
 # `requires:` (dependency version constraints, checked by `aqueduct doctor`)
 # and `hint:` (actionable text shown to the user when the leaf is refused).
 #
-# Q4 STEP 2 (see AGENTS.md + docs/specs.md §10.9): only ENGINE-SCOPED
+# Q4 STEP 2 (see AGENTS.md + docs/specs/07-stores-and-ops.md §10.9): only ENGINE-SCOPED
 # `config.*` leaves appear below (17 today — genuinely dispatch through an
 # engine, e.g. probes.*, timezone, engine.spark.*). CORE config leaves
 # (webhooks.*, secrets.*, stores.*, most of agent.*/danger.*, ...) never

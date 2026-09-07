@@ -20,7 +20,7 @@
 #     engine and the executor never touches them — proven by end-to-end
 #     tests, not assumed.
 #
-# Q4 STEP 2 (see AGENTS.md + docs/specs.md §10.9): the CHECKLIST below only
+# Q4 STEP 2 (see AGENTS.md + docs/specs/07-stores-and-ops.md §10.9): the CHECKLIST below only
 # ever lists ENGINE-SCOPED `config.*` leaves (those genuinely dispatch
 # through an engine — probes.*, metrics.use_observe, timezone,
 # checkpoint_root, deployment.target, handoff.root,

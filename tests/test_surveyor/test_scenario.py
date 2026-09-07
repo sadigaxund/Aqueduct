@@ -7,8 +7,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-pytestmark = pytest.mark.unit
-
 from aqueduct.agent.budget import StopReason
 from aqueduct.errors import ScenarioError
 from aqueduct.surveyor.scenario import (
@@ -18,6 +16,8 @@ from aqueduct.surveyor.scenario import (
     load_scenario,
     run_scenario,
 )
+
+pytestmark = pytest.mark.unit
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 

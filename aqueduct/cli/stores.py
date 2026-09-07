@@ -108,7 +108,7 @@ def depot_clear_intent(
 
     KEY is the watermark's depot key (the same value the append Egress's
     `watermark_key:` and the depot Egress's `key:` both name), NOT the
-    already-prefixed `__intent__:<key>` row. See docs/specs.md's watermark
+    already-prefixed `__intent__:<key>` row. See docs/specs/07-stores-and-ops.md's watermark
     crash-consistency section.
 
     `--blueprint` is required because a depot is per blueprint either way:

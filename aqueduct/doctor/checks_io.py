@@ -586,7 +586,7 @@ def check_handoff_free_space(root: str, project_root: Path) -> CheckResult:
       every severity.
     - **Relative root resolution**: the default (``.aqueduct/handoff``) is
       relative. ``handoff.root`` is not yet wired into ``aqueduct run`` (see
-      docs/specs.md §10.9), so there is no established runtime resolution
+      docs/specs/07-stores-and-ops.md §10.9), so there is no established runtime resolution
       basis yet; this resolves it against ``project_root`` (the directory
       containing ``aqueduct.yml``), the same convention ``run_doctor`` already
       uses for ``secrets.resolver``'s ``base_dir``.

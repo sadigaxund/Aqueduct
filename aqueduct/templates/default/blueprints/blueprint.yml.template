@@ -207,7 +207,7 @@ engine:
 # the last green run before the patch, reported, never judged: Aqueduct
 # sets no regression threshold) is recorded in the observability store's
 # patch index, keyed by the same patch_id, and is readable with
-# `aqueduct doctor`, see docs/specs.md §8.14.
+# `aqueduct doctor`, see docs/specs/06-healing.md §8.14.
 #
 # `aqueduct patch revert <patch_id> --blueprint <this file>` undoes one such
 # patch's engine-config writes and stamps its record `reverted_at:`; the
@@ -417,7 +417,7 @@ modules: []
   #     # Types are Aqueduct's own portable hub vocabulary (boolean/int/bigint/
   #     # string/decimal(p,s)/timestamp_tz/timestamp_ntz/duration(unit)/
   #     # array<T>/map<K,V>/struct<...>/...), not raw engine DDL — see
-  #     # docs/specs.md §9. Bare
+  #     # docs/specs/07-stores-and-ops.md §9. Bare
   #     # `timestamp` is REJECTED at compile time (ambiguous instant-vs-naive
   #     # across engines) — write timestamp_tz/timestamp_ntz explicitly. Use
   #     # `<engine>:<spelling>` (e.g. duckdb:HUGEINT) only for an engine-native
@@ -721,7 +721,7 @@ modules: []
   #     format: parquet
   #     path: "s3a://bucket/orders_append/"
   #     mode: append
-  #     # Crash-consistency (see docs/specs.md §10.4.5): names the depot key
+  #     # Crash-consistency (see docs/specs/07-stores-and-ops.md §10.4.5): names the depot key
   #     # the downstream `format: depot` Egress below writes. Before this
   #     # write starts, an `__intent__:<key>` depot row is recorded; the
   #     # downstream depot Egress clears it in the same transaction as the
@@ -752,7 +752,7 @@ udf_registry: []
   #   lang: python
   #   module: udfs.parse_phone       # dotted module path relative to project root
   #   entry: parse_phone             # callable name within the module; defaults to id
-  #   return_type: string            # portable hub type spelling (omit if function uses @udf decorator); see docs/specs.md §9
+  #   return_type: string            # portable hub type spelling (omit if function uses @udf decorator); see docs/specs/07-stores-and-ops.md §9
   #   deterministic: true
 
   # Parameterized (context-aware) Python UDF — `entry` is a factory

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-pytestmark = [pytest.mark.spark, pytest.mark.integration]
-
 from aqueduct.executor.spark.egress import run_maintenance
+
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 
 class TestRunMaintenance:
@@ -35,6 +35,7 @@ class TestRunMaintenance:
         )
         calls = [str(c) for c in mock_spark.sql.call_args_list]
         assert any("ZORDER BY" in c and "event_date" in c for c in calls)
+        assert result["optimize_ms"] is not None
 
     def test_optimize_without_zorder_no_zorder_clause(self, spark):
         """zorder_by omitted → no ZORDER clause in SQL."""
@@ -78,10 +79,10 @@ class TestRunMaintenance:
 
 def test_egress_with_maintenance_block_calls_run_maintenance(spark, tmp_path):
     """Egress with maintenance: block → run_maintenance called after successful write."""
-    from aqueduct.executor.spark.executor import execute
     from aqueduct.compiler.models import Manifest
     from aqueduct.compiler.provenance import ProvenanceMap
-    from aqueduct.parser.models import Module, Edge, RetryPolicy
+    from aqueduct.executor.spark.executor import execute
+    from aqueduct.parser.models import Edge, Module, RetryPolicy
 
     in_path = str(tmp_path / "in_maint.parquet")
     out_path = str(tmp_path / "out_maint")
@@ -132,10 +133,10 @@ def test_egress_with_maintenance_block_calls_run_maintenance(spark, tmp_path):
 
 def test_egress_without_maintenance_block_no_call(spark, tmp_path):
     """Egress with no maintenance: block → run_maintenance NOT called."""
-    from aqueduct.executor.spark.executor import execute
     from aqueduct.compiler.models import Manifest
     from aqueduct.compiler.provenance import ProvenanceMap
-    from aqueduct.parser.models import Module, Edge, RetryPolicy
+    from aqueduct.executor.spark.executor import execute
+    from aqueduct.parser.models import Edge, Module, RetryPolicy
 
     in_path = str(tmp_path / "in_nomaint.parquet")
     out_path = str(tmp_path / "out_nomaint")
@@ -185,11 +186,12 @@ def test_egress_without_maintenance_block_no_call(spark, tmp_path):
 
 def test_maintenance_timing_written_to_obs_db(spark, tmp_path):
     """Egress with maintenance block → timing rows written to maintenance_metrics in obs.db."""
-    from aqueduct.executor.spark.executor import execute, _write_maintenance_metrics
+    import duckdb
+
     from aqueduct.compiler.models import Manifest
     from aqueduct.compiler.provenance import ProvenanceMap
-    from aqueduct.parser.models import Module, Edge, RetryPolicy
-    import duckdb
+    from aqueduct.executor.spark.executor import execute
+    from aqueduct.parser.models import Edge, Module, RetryPolicy
 
     in_path = str(tmp_path / "in_obs.parquet")
     out_path = str(tmp_path / "out_obs")
@@ -258,8 +260,9 @@ def test_write_maintenance_metrics_store_dir_none_no_crash():
 
 def test_write_maintenance_metrics_db_error_debug_only(tmp_path, caplog):
     """_write_maintenance_metrics failure → debug log only, no exception."""
-    from aqueduct.executor.spark.executor import _write_maintenance_metrics
     import logging
+
+    from aqueduct.executor.spark.executor import _write_maintenance_metrics
 
     store_dir = tmp_path / "store_fail"
     store_dir.mkdir()
