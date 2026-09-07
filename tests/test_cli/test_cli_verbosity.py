@@ -187,6 +187,8 @@ class TestHealBlockStreamRoutingSeam:
         # Phase 85 Wave 2 — the success footer gained a wall-clock-time +
         # healed-count suffix (`_footer_text`), still explicit stdout.
         assert "_style_success(_footer_text, err=False)" in src
-        assert (
-            'f"  failed_module={failure_ctx.failed_module}",\n                    err=False,' in src
-        )
+        # Formatting-tolerant: black may join or re-indent the call, the
+        # explicit `err=False` right after the failed_module text is the seam.
+        import re
+
+        assert re.search(r'failed_module=\{failure_ctx\.failed_module\}",\s*err=False,', src)
