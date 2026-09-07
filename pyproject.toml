@@ -164,6 +164,7 @@ ignore = ["E501"]
 # tmp_path_retention_* still trims within a session as a belt-and-braces measure.
 [tool.pytest.ini_options]
 addopts   = "--basetemp=/tmp/aqueduct-pytest"
+faulthandler_timeout = 900
 testpaths = ["tests"]
 cache_dir = "/tmp/pytest_cache_aqueduct"
 tmp_path_retention_count = 1

@@ -30,6 +30,7 @@ env:
 jobs:
   changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     outputs:
       parser:    ${{ steps.filter.outputs.parser }}
       compiler:  ${{ steps.filter.outputs.compiler }}
@@ -171,6 +172,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.parser == 'true' || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -200,6 +202,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.compiler == 'true' || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -229,6 +232,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.surveyor == 'true' || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -258,6 +262,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.agent == 'true' || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -287,6 +292,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.patch == 'true' || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -316,6 +322,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.drift == 'true' || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -345,6 +352,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.cli == 'true' || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -378,6 +386,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.config == 'true' || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -407,6 +416,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.capabilities == 'true' || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -440,6 +450,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.duckdb == 'true' || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -475,6 +486,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.typehub == 'true' || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -511,6 +523,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.misc == 'true' || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -565,6 +578,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.airflow == 'true' || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -596,6 +610,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.executor == 'true' || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     strategy:
       matrix:
         python-version: ["3.11"]
@@ -683,6 +698,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.gallery == 'true' || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -718,6 +734,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.stores == 'true' || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     continue-on-error: true
     services:
       postgres:
@@ -807,6 +824,7 @@ jobs:
     # rather than being cleanly deselected by -m "not spark".
     if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
