@@ -23,9 +23,11 @@ from aqueduct.cli.render.funnel import emit
 from aqueduct.cli.run_phases import (
     RunContext,
     acquire_run_lock,
+    announce_polyglot_sandbox_unavailable,
     check_from_to_island_guard,
     check_resume_hash_guard,
     execute_target,
+    fire_heal_hook,
     render_module_summary,
     run_sandbox_dryrun,
 )
@@ -603,6 +605,10 @@ def run(
         )
         _execute_target = functools.partial(execute_target, ctx)
         _render_module_summary = functools.partial(render_module_summary, ctx)
+        _fire_heal_hook = functools.partial(fire_heal_hook, ctx)
+        _announce_polyglot_sandbox_unavailable = functools.partial(
+            announce_polyglot_sandbox_unavailable, ctx
+        )
 
         # ── Self-healing run loop ─────────────────────────────────────────────────
         patch_count = 0
@@ -611,43 +617,6 @@ def run(
         patch_staged_for_review = False  # set when human/ci mode writes a patch to patches/pending/
         patch_rejected_by_gate = False  # set when a validation gate rejects a patch in auto (non-interactive) mode → VALIDATION_GATE(4)
         last_apply_error: str | None = None  # fed back to LLM on next multi-patch iteration
-
-        # One-shot flag for the polyglot sandbox-unavailable notice — the
-        # same patch/candidate can pass through the gate pyramid several
-        # times in one run (deep_loop's in-context validate_cb, the final
-        # multi-patch commit check); the underlying reason (this Blueprint
-        # has >1 island) never changes mid-run, so only the first
-        # occurrence needs to say so.
-        _polyglot_sandbox_unavailable_warned = False
-
-        def _fire_heal_hook(event: str, *, iter_run_id: str, hook_status: str, ctx) -> None:
-            """Fire `hooks.on_patch_pending` / `hooks.on_healed` — mid-run
-            heal-milestone hooks, mirroring the engine-level `webhooks:`
-            `on_patch_pending` vocabulary at the Blueprint.
-            Best-effort, never blocks the heal loop; never changes the exit
-            code (same contract as the terminal on_success/on_failure hooks).
-            """
-            entries = (
-                manifest.hooks.on_patch_pending
-                if event == "on_patch_pending"
-                else manifest.hooks.on_healed
-            )
-            if not entries:
-                return
-            from aqueduct.cli.hooks import run_hooks as _run_heal_hooks
-
-            _run_heal_hooks(
-                entries,
-                event,
-                run_id=iter_run_id,
-                status=hook_status,
-                blueprint_id=manifest.blueprint_id,
-                blueprint_path=blueprint,
-                allow_command_hooks=cfg.danger.allow_command_hooks,
-                failure_ctx=ctx,
-                session=_session_holder.session,
-                engine=engine,
-            )
 
         # Per-module resolved engine (islands.py stamps the fully-resolved
         # engine onto every enabled Module at compile time — see
@@ -667,38 +636,6 @@ def run(
         ctx.handoff_info = {
             m.id: m.config for m in manifest.modules if m.type == ModuleType.Handoff
         }
-
-        def _announce_polyglot_sandbox_unavailable(_gate_result) -> None:
-            """Gate 3 could not replay a patch against this polyglot
-            Blueprint (it replays through ONE engine's session and would
-            leave every other island unchecked — see
-            ``patch/preview.py::run_sandbox_gate``). Printed at the moment
-            it happens, not only recorded to `patch_simulation`, because a
-            user who has internalised "patches are sandbox-replayed before
-            they touch my Blueprint" needs to be told the guarantee did not
-            hold. Single-engine runs never reach this (only ever
-            `manifest.islands` == 1).
-
-            The status this reacts to used to be `skip` and was treated as
-            acceptance: the patch applied anyway, and this notice was the
-            only trace. It is now `unavailable` and BLOCKS auto-apply, so
-            the line below announces a patch that stopped, not one that
-            went through — the caller prints the stop itself. One-shot per
-            run: see `_polyglot_sandbox_unavailable_warned` above.
-            """
-            nonlocal _polyglot_sandbox_unavailable_warned
-            from aqueduct.patch.gate_status import GateStatus as _GateStatus
-
-            if (
-                not _polyglot_sandbox_unavailable_warned
-                and len(manifest.islands) > 1
-                and _gate_result is not None
-                and _gate_result.status == _GateStatus.UNAVAILABLE
-            ):
-                _polyglot_sandbox_unavailable_warned = True
-                from aqueduct.cli.render.style import warn as _style_warn
-
-                _style_warn(_gate_result.detail, err=True)
 
         # ── Pending-patch short-circuit — snapshot taken ONCE ────────────
         # A blueprint that already had an unreviewed patch sitting in
@@ -1515,7 +1452,7 @@ def run(
                         "on_patch_pending",
                         iter_run_id=iteration_run_id,
                         hook_status="pending",
-                        ctx=current_failure,
+                        hook_ctx=current_failure,
                     )
                     click.echo(
                         f"  ▸ Patch staged for human review → "
@@ -1555,7 +1492,7 @@ def run(
                         "on_patch_pending",
                         iter_run_id=iteration_run_id,
                         hook_status="pending",
-                        ctx=current_failure,
+                        hook_ctx=current_failure,
                     )
                     patch_staged_for_review = True
                     rel_bp = (
@@ -1612,7 +1549,7 @@ def run(
                             "on_patch_pending",
                             iter_run_id=iteration_run_id,
                             hook_status="pending",
-                            ctx=current_failure,
+                            hook_ctx=current_failure,
                         )
                         patch_staged_for_review = True
                         _rel_bp_defer = (
@@ -1855,7 +1792,7 @@ def run(
                             "on_healed",
                             iter_run_id=iteration_run_id,
                             hook_status="healed",
-                            ctx=current_failure,
+                            hook_ctx=current_failure,
                         )
                         _healed_attempt_num = (
                             agent_result.attempt_records[-1].attempt_num

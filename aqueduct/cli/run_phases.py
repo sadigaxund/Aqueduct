@@ -900,3 +900,67 @@ def render_module_summary(
         _flush_rows()
 
     _flush_rows()  # trailing queued metric rows
+
+
+def fire_heal_hook(
+    ctx: RunContext, event: str, *, iter_run_id: str, hook_status: str, hook_ctx
+) -> None:
+    """Fire `hooks.on_patch_pending` / `hooks.on_healed` — mid-run
+    heal-milestone hooks, mirroring the engine-level `webhooks:`
+    `on_patch_pending` vocabulary at the Blueprint.
+    Best-effort, never blocks the heal loop; never changes the exit
+    code (same contract as the terminal on_success/on_failure hooks).
+    """
+    entries = (
+        ctx.manifest.hooks.on_patch_pending
+        if event == "on_patch_pending"
+        else ctx.manifest.hooks.on_healed
+    )
+    if not entries:
+        return
+    from aqueduct.cli.hooks import run_hooks as _run_heal_hooks
+
+    _run_heal_hooks(
+        entries,
+        event,
+        run_id=iter_run_id,
+        status=hook_status,
+        blueprint_id=ctx.manifest.blueprint_id,
+        blueprint_path=ctx.blueprint,
+        allow_command_hooks=ctx.cfg.danger.allow_command_hooks,
+        failure_ctx=hook_ctx,
+        session=ctx.session_holder.session,
+        engine=ctx.engine,
+    )
+
+
+def announce_polyglot_sandbox_unavailable(ctx: RunContext, _gate_result) -> None:
+    """Gate 3 could not replay a patch against this polyglot
+    Blueprint (it replays through ONE engine's session and would
+    leave every other island unchecked — see
+    ``patch/preview.py::run_sandbox_gate``). Printed at the moment
+    it happens, not only recorded to `patch_simulation`, because a
+    user who has internalised "patches are sandbox-replayed before
+    they touch my Blueprint" needs to be told the guarantee did not
+    hold. Single-engine runs never reach this (only ever
+    `manifest.islands` == 1).
+
+    The status this reacts to used to be `skip` and was treated as
+    acceptance: the patch applied anyway, and this notice was the
+    only trace. It is now `unavailable` and BLOCKS auto-apply, so
+    the line below announces a patch that stopped, not one that
+    went through — the caller prints the stop itself. One-shot per
+    run: see `ctx.polyglot_sandbox_unavailable_warned`.
+    """
+    from aqueduct.patch.gate_status import GateStatus as _GateStatus
+
+    if (
+        not ctx.polyglot_sandbox_unavailable_warned
+        and len(ctx.manifest.islands) > 1
+        and _gate_result is not None
+        and _gate_result.status == _GateStatus.UNAVAILABLE
+    ):
+        ctx.polyglot_sandbox_unavailable_warned = True
+        from aqueduct.cli.render.style import warn as _style_warn
+
+        _style_warn(_gate_result.detail, err=True)
