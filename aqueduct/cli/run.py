@@ -31,7 +31,6 @@ from aqueduct.cli.run_setup import (
     _load_engine_config,
     _setup_surveyor,
 )
-from aqueduct.models import ModuleType
 
 # ── Phase 85 Wave 2 — classified failure label (SCREEN 2/6) ─────────────────
 # `mr.error` is free text; the ✗ line wants a SHORT classified label ("SQL
@@ -624,25 +623,6 @@ def run(
             resolved_agent_cascade=resolved_agent_cascade,
             resolved_sandbox_master_url=resolved_sandbox_master_url,
         )
-
-        # Per-module resolved engine (islands.py stamps the fully-resolved
-        # engine onto every enabled Module at compile time — see
-        # `compiler.py`'s `dataclasses.replace(m, engine=_resolved_engine[m.id])`).
-        # Only built/shown for a polyglot run — a single-engine run never
-        # gains this column, preserving the compat bar byte-for-byte.
-        _is_polyglot = len(manifest.islands) > 1
-        _module_engine: dict[str, str] = (
-            {m.id: m.engine for m in manifest.modules if m.engine} if _is_polyglot else {}
-        )
-        # Synthetic Handoff modules (§4.3/§10.9) — id -> {from_module,
-        # to_module, from_engine, to_engine}. Rendered as a first-class step
-        # (distinct marker, engine pair, bytes/duration), never folded into
-        # the Arcade tree-nesting below despite a handoff id containing
-        # "__" (`<from_id>__handoff__<to_id>`) the same way an Arcade
-        # child's namespaced id does.
-        ctx.handoff_info = {
-            m.id: m.config for m in manifest.modules if m.type == ModuleType.Handoff
-        }
 
         _heal = run_heal_loop(ctx)
         result = _heal.result

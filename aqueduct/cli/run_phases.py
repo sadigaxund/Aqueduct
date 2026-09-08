@@ -1342,15 +1342,6 @@ def run_heal_loop(ctx: RunContext) -> HealLoopResult:
     patch_rejected_by_gate = False  # set when a validation gate rejects a patch in auto (non-interactive) mode → VALIDATION_GATE(4)
     last_apply_error: str | None = None  # fed back to LLM on next multi-patch iteration
 
-    # Per-module resolved engine (islands.py stamps the fully-resolved
-    # engine onto every enabled Module at compile time — see
-    # `compiler.py`'s `dataclasses.replace(m, engine=_resolved_engine[m.id])`).
-    # Only built/shown for a polyglot run — a single-engine run never
-    # gains this column, preserving the compat bar byte-for-byte.
-    _is_polyglot = len(manifest.islands) > 1
-    _module_engine: dict[str, str] = (
-        {m.id: m.engine for m in manifest.modules if m.engine} if _is_polyglot else {}
-    )
     # Synthetic Handoff modules (§4.3/§10.9) — id -> {from_module,
     # to_module, from_engine, to_engine}. Rendered as a first-class step
     # (distinct marker, engine pair, bytes/duration), never folded into
